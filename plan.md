@@ -6,6 +6,9 @@
 > current code, `README.md`, and `docs/` are authoritative. In particular, the
 > flat path model, per-key policy/watch concepts, CA trust guidance, and exact
 > operational behavior below must not be treated as current contracts.
+> The `0.2.x` client-bound/token-file design recorded here is also superseded by
+> the `0.3.x` [binding-key plan](docs/plans/version-cohort-binding-keys.md) and
+> [current operator contract](docs/binding-keys.md).
 
 ## 1. Overview
 

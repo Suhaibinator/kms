@@ -294,15 +294,38 @@ func Defaults() *commonconfig.Config {
         DBPort:         5432,
         DBQueryTimeout: 30 * time.Second,
         RequestLimit:   1_000,
-        // Secrets intentionally come only from KMS.
+        // Secret plaintext intentionally comes only from KMS. This declaration
+        // carries only the binding key for the db_password release alias.
+        DBPassword: kmsclient.Secret{
+            BindKey: resolveFromEnvVar("DB_PASSWORD_KMS_BIND_KEY"),
+        },
     }
 }
 ```
 
-Every default `kmsclient.Secret` field must be its exact zero value: no
-plaintext, path, version, or content type. Generated `Start` rejects a non-zero
-secret default before starting the release loader. Secrets must come only from
-the exact release pins.
+Bindings are per secret declaration. For example, an application with two
+OAuth secret aliases can leave one unbound and supply a key only for the
+other:
+
+```go
+oauthDefaults := struct {
+    LinkedInOAuthClientSecret kmsclient.Secret
+    OktaOAuthClientSecret     kmsclient.Secret
+}{
+    LinkedInOAuthClientSecret: kmsclient.Secret{},
+    OktaOAuthClientSecret: kmsclient.Secret{
+        BindKey: resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"),
+    },
+}
+```
+
+Every default `kmsclient.Secret` must contain no plaintext, path, version, or
+content type. It may contain the declaration-only `BindKey`; `Secret.IsZero`
+still treats that as zero for secret-value purposes. Generated `Start` extracts
+non-empty keys into a private alias-keyed loader map, then clears them from its
+cloned defaults and every published snapshot. Directly fetched/resolved secrets
+also have an empty `BindKey`. Secrets themselves must come only from exact
+release pins.
 
 The generated store structurally deep-clones the defaults immediately and
 never publishes or mutates the caller's object. The declaration checks apply
@@ -382,6 +405,20 @@ if err != nil {
 logger := buildLogger(store.Current()) // the logger usually depends on config
 sink.Set(logger)                       // replays the buffered startup records
 ```
+
+`SecretTokenProvider` supplies only the independent access-token credential.
+Binding keys do not use a callback or generated `Options` field: put them in
+the corresponding `kmsclient.Secret{BindKey: ...}` declarations returned by
+`Defaults`. The generated store owns extraction and removal so callers cannot
+override the alias map through start options. KMS does not compare binding keys
+across aliases; each declaration may use any operator-chosen key.
+
+Before fetching a pinned secret, the underlying loader fresh-reads exact live
+metadata and verifies resource identity, version, enabled/destroyed state,
+expiry, and the version's independent bound/token flags. A missing required
+access token or binding key rejects the entire candidate; startup fails fast,
+while a hot-reload rejection keeps the prior snapshot. Secret plaintext is
+never cached.
 
 `Options` embeds `configstore.Callbacks`, so an application that wants its own
 observers writes them out; only `OnDefaultMismatch` is required:
@@ -853,7 +890,7 @@ parameter-store release activate prod/my-service runtime 15 \
 
 Activation is validation-gated. KMS repeats release validation immediately
 before moving `current`/`previous`, then rechecks immutable pins, digests,
-content types, secret state and expiry, and protection metadata in the same
+content types, and secret state/expiry in the same
 storage transaction that moves the labels. A failed activation returns
 `FAILED_PRECONDITION` (HTTP 412) with the same sanitized structured validation
 errors printed by `release validate`; labels and activation revision remain
@@ -886,7 +923,7 @@ sent to the server:
 | Category | Operator response |
 |---|---|
 | `resolution_failed` | Revalidate that every exact pin exists, is readable, and is authorized for the application identity. |
-| `token_unavailable` | Provision the local token used by `SecretTokenProvider` for the protected secret; never put it in the release. |
+| `token_unavailable` | Provision the exact version's missing access token through `SecretTokenProvider` or binding key through its `kmsclient.Secret.BindKey` declaration; neither belongs in the release. |
 | `version_mismatch` / `digest_mismatch` | Treat the pin or returned resource as inconsistent; validate again and investigate the server or storage before activating another release. |
 | `config_contract_mismatch` | Compare aliases, kinds, and literal `json` content types with the generated contract. This check happens before resource fetches. |
 | `config_decode_failed` | Publish a new complete group document fixing missing, unknown, duplicate, mistyped, out-of-range, or noncanonical values. |
@@ -910,10 +947,12 @@ source defaults, let old replicas reject restart-bound changes, start new
 replicas against the new matching release, and monitor subscriber state until
 rollout completion.
 
-Secret rotation creates a new immutable secret version and updates the exact
-secret pin in a release. A `reload=hot` secret pin can apply in-process; a
+Secret value rotation creates a new immutable secret version and updates the
+exact secret pin in a release. Binding/unbinding rewraps one version in place
+and does not require a release re-pin; binding-key rotation operates on a
+contiguous cohort. A `reload=hot` secret pin can apply in-process; a
 `reload=restart` secret pin is rejected by running replicas and adopted on the
-intended restart or rollout. Secret plaintext and tokens never enter parameter
+intended restart or rollout. Secret plaintext, access tokens, and binding keys never enter parameter
 JSON, defaults, generated schema/contract, drift reports, status, metrics, or
 acknowledgements.
 

@@ -7,7 +7,7 @@ For the encryption and authorization design behind these procedures, see
 [`http-api.md`](http-api.md).
 
 > **Status note.** Every command below matches the CLI implemented in
-> `internal/cli`. The offline commands (`init`, `migrate`, `check`, `backup`,
+> `internal/cli`. The offline commands (`init`, `check`, `backup`,
 > `restore`, `create-admin`, `rotate-admin`, `rotate-kek`, `import`) operate directly on the
 > SQLite file; the `admin` command group and the convenience commands
 > (`put-secret`, `get-secret`, `put-parameter`, `list`, `exec`, `env`,
@@ -30,7 +30,7 @@ parameter-store dev
 It creates a **dev store** — a single directory holding the SQLite database,
 a file-based master key, a throwaway TLS CA with a server keypair signed by
 it, and a marker file — then bootstraps that store exactly as `init` does
-(migrations, master key, built-in CA), creates a token-only admin identity,
+(current database baseline, master key, built-in CA), creates a token-only admin identity,
 seeds demo content, and starts the same `serve` wiring the production binary
 runs: TLS on both listeners, the embedded console, metrics, and hot reload.
 When the server answers its own health probe it prints a banner on **stderr**
@@ -92,7 +92,7 @@ replace `_` with `-` — so `storage.sqlite_path`, `KMS_SQLITE_PATH`, and
 They resolve highest-precedence first: **flag, then `KMS_*` environment
 variable, then the config file, then the built-in default**. The file is named
 by `--config FILE` or `KMS_CONFIG`. This order applies to `serve`, to every
-offline command that opens the database (`init`, `migrate`, `check`, `backup`,
+offline command that opens the database (`init`, `check`, `backup`,
 `restore`, `create-admin`, `rotate-admin`, `admin-cert`, `rotate-kek`,
 `import`), and to `config show` / `config validate`. Defaults come from
 `internal/config.Default()`.
@@ -525,11 +525,10 @@ codes every command shares, and the `--token-file` credential form.
 
 | Command | Flags | Purpose |
 |---|---|---|
-| `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional), `--cert-dir DIR` (optional, requires `--admin`) | Creates/migrates the database, the master key (generating a key file, or prompting for a new passphrase with confirmation), and the **built-in CA** — always, so every database has one from the moment it exists. With `--admin`, also creates a bootstrap admin identity and prints its token once; with `--cert-dir`, also issues that admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key`. Re-running `init` keeps the CA the database already has. |
-| `migrate` | `--sqlite-path` | Opens the database, applying any pending migrations, and exits. |
+| `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional), `--cert-dir DIR` (optional, requires `--admin`) | Materializes a fresh `0.3.x` baseline database, creates the master key (generating a key file, or prompting for a new passphrase with confirmation), and creates the **built-in CA**. With `--admin`, also creates a bootstrap admin identity and prints its token once; with `--cert-dir`, also issues that admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key`. A `0.2.x` database is not upgraded in place. |
 | `check` | `--sqlite-path`, `--kek-file` (optional) | Verifies the database is reachable and, whenever a key source resolves (a key file from the flag, `KMS_KEK_FILE`, or `encryption.kek_file`; `KMS_MASTER_PASSPHRASE`; or a TTY), verifies the master key against the stored key-check value. Never prints key material. |
 | `backup` | `--sqlite-path`, `--out` (required; an existing file is refused with exit `6`) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
-| `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination), `--yes` | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry — and an existing destination is refused before the prompt. **Confirms `[y/N]`** after printing the target; a script needs `--yes`, plus `--force` if the destination exists. |
+| `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination), `--yes` | Validates the input is a current-baseline KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens it to verify the baseline. Without `--force`, publication never replaces an existing or concurrently created entry — and an existing destination is refused before the prompt. **Confirms `[y/N]`** after printing the target; a script needs `--yes`, plus `--force` if the destination exists. |
 | `create-admin` | `--sqlite-path`, `--name` (required), `--kek-file`, `--cert-dir DIR` (optional) | Creates an admin identity directly against the database file and prints its token once. With `--cert-dir`, also issues the admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key` — that path unseals the master key and requires an existing CA. Without it the admin is token-only and no unseal (or passphrase prompt) happens, so it cannot sign in while `admin_require_client_cert` is enforced until `admin-cert issue` runs. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
 | `rotate-admin` | `--sqlite-path`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
 | `admin-cert issue` | `NAME` (positional), `--out DIR` (**required**), `--ttl` (default 90d), `--sqlite-path`, `--kek-file` | Issues a client certificate for an existing admin identity, offline. Unseals the master key, requires an existing CA, and refuses a non-admin, unknown, or disabled target without writing anything. Writes `DIR/NAME.crt` (`0644`) and `DIR/NAME.key` (`0600`), both created exclusively; the private key is never printed. Audited as `identity.cert.issue` with actor `cli` and `channel: local`. This is the **only** way to mint an admin certificate. |
@@ -554,10 +553,18 @@ only after all values succeed. If a later write or report write fails, inspect
 the destination before retrying. A retry creates additional versions and may
 rotate access tokens; preserve only the final successful report.
 
-The v1→v2 database migration adds content type, client-bound mode, and
-token-required state to each immutable secret-version row. Because v1 retained
-only the latest shared secret attributes, legacy versions are backfilled from
-those values; every version created after migration stores its own attributes.
+This importer is a greenfield bootstrap tool, not a KMS schema-compatibility
+path. Its SQLite reader understands only the separate SuhaibParameterStore
+`parameters(key, value)` source format; the other accepted source is neutral
+JSON. It creates ordinary current-model resources through `PutSecret` in an
+already recognized `0.3.x` destination. It neither reads a `0.2.x` KMS schema
+nor translates old KMS ciphertext, releases, protobufs, or metadata.
+
+`0.3.x` is a greenfield baseline. Initialize a fresh database and reseed or
+import the intended resources; `init` does not repair or mutate a `0.2.x`
+database. Old client-bound payloads and old release digests have no
+compatibility path. Keep the old database only as a separately controlled
+rollback/audit artifact. See [`migration.md`](migration.md#03x-database-cutover).
 
 `init`, `check`, `rotate-kek`, `import`, `admin-cert issue`, and
 `create-admin --cert-dir` all go through the same
@@ -657,7 +664,6 @@ above with `X` as each element:
 | `dev` | `{console_url, http_addr, grpc_addr, store_dir, ephemeral, ca_file, admin, demo_app, seeded, namespaces, examples}` — `admin` and `demo_app` are `{name, token}`, `demo_app` is `null` with `--no-seed`; printed once the server is ready, in place of the banner |
 | `init` | `{sqlite_path, sqlite_path_source, master_key, kek_file, ca, admin}` — `master_key` is `file` or `passphrase`, `kek_file` is absent in passphrase mode, `admin` is `null` without `--admin` |
 | `create-admin` | `{name, token, cert}` — the same object `init` nests under `admin`; `cert` is `{cert_file, key_file}` or `null` |
-| `migrate` | `{sqlite_path, sqlite_path_source, migrated}` |
 | `check` | `{database, master_key, sqlite_path, sqlite_path_source}` — `master_key` is `ok`, `not_initialized`, or `not_checked` |
 | `backup` | `{backup_file, sqlite_path}` |
 | `restore` | `{sqlite_path, backup_file}` |
@@ -672,7 +678,7 @@ above with `X` as each element:
 | `get-secret` | `{key, version, value, content_type, created_at, out_file}` — with `--out` the value went to the file, so `value` is `null` and `out_file` names it; otherwise `out_file` is absent |
 | `env` | the `--format json` object `{"NAME": "value", ...}` — with `--out` the assignments went to the file, so stdout carries `{out_file, variables}` instead |
 | `put-parameter` | `{key, version, revision}` |
-| `list` | items of `{type, path, current, note, client_bound}` — `type` is `parameter` or `secret` |
+| `list` | items of `{type, path, current, note, bound}` — `type` is `parameter` or `secret` |
 | `admin namespace create`, `admin namespace update` | `{env, app, auth_methods}` |
 | `admin namespace delete` | `{env, app, deleted}` |
 | `admin namespace list` | items of `{env, app, auth_methods, parameter_count, secret_count, description}` |
@@ -748,12 +754,13 @@ also accepts a file:
 | Flag | Environment | Holds |
 |---|---|---|
 | `--token-file FILE` | `KMS_TOKEN_FILE` | The identity bearer token. |
-| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token (`put-secret`, `get-secret` only). |
+| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token for `get-secret`. |
 
 `exec` and `env` read many secrets at once, so they spell the same idea as a
 repeatable `--secret-token-file KEY=PATH` with its own
-[`KMS_SECRET_TOKEN_<NAME>`](#per-secret-tokens) variables; the single-valued
-flag and `KMS_SECRET_TOKEN_FILE` below are `put-secret` and `get-secret` only.
+[`KMS_SECRET_TOKEN_<NAME>`](#bound-secrets-and-per-secret-access-tokens)
+variables; the single-valued
+flag and `KMS_SECRET_TOKEN_FILE` below are `get-secret` only.
 
 Prefer these over `--token`/`--secret-token` anywhere the command line is
 observable — a shared host, a CI runner, a container others can `exec` into.
@@ -777,8 +784,8 @@ The check covers the environment: exporting `KMS_TOKEN` and passing
 `--token-file` (or the reverse) fails the same way. Note that `--secret-token`
 has no environment fallback of its own; only `--secret-token-file` /
 `KMS_SECRET_TOKEN_FILE` does. `KMS_SECRET_TOKEN_FILE` is read only by
-`put-secret` and `get-secret`, the two commands that accept the single-valued
-`--secret-token-file`: a shell that exports it can still run `list`, `whoami`,
+`get-secret`, the command that accepts the single-valued
+`--secret-token-file`: a shell that exports it can still run `put-secret`, `list`, `whoami`,
 `exec`, `env`, or any `admin` command without those calls opening — or failing
 on — a file they would never use.
 
@@ -807,11 +814,11 @@ Type "prod/gradethis" to confirm:
 A mismatch exits `2` and the command does not act — for `admin namespace
 delete` the server is never even contacted.
 
-**Yes or no.** `restore` and `release activate` ask `[y/N]` after printing what
-they are about to do: `restore` prints its `Target database: ...` line first,
-and `release activate` prints the diff from the currently active release, or
-`No active release in ENV/APP; NAME vN will become the first.` The default is
-no; anything but `y`/`yes` aborts with exit `2`.
+**Yes or no.** `restore`, `release activate`, `binding-key rotate`, and
+`secret purge-binding-cohort` ask `[y/N]` after printing what they are about to
+do. Rotate and purge first print the preview's exact affected versions; purge
+also prints an explicit irreversible/admin warning. The default is no;
+anything but `y`/`yes` aborts with exit `2` and sends no mutation RPC.
 
 `--yes` answers both kinds. On a non-interactive stdin — a pipe, cron, a CI
 runner — a command that would prompt refuses before touching anything:
@@ -852,6 +859,10 @@ may notice are recorded here:
   takes the manifest as `FILE` or `--file`, not both.
 - `--output json`, `KMS_OUTPUT`, `--quiet`, `--token-file`,
   `--secret-token-file`, and the `whoami` command are new.
+- **`0.3.x` replaces client-bound mode.** `put-secret` no longer accepts
+  `--client-bound` or a write-side `--secret-token`; set `KMS_BINDING_KEY`
+  instead. There is no binding-key file option. New lifecycle commands are
+  documented in the convenience-command table above.
 
 ### Secure destination paths
 
@@ -1148,10 +1159,11 @@ rather than a tuning knob.
 
 ### Convenience commands (talk to a running server over gRPC)
 
-These operate over gRPC against `--endpoint` (default `localhost:8443`), not
-directly on the database file, so they need a server with the gRPC listener
-open (the default when running `serve`). They share the same connection flags
-as the `admin` group: `--endpoint`, `--token` (identity bearer token; env
+Except for the local, stdout-only `binding-key generate`, these operate over
+gRPC against `--endpoint` (default `localhost:8443`), not directly on the
+database file, so they need a server with the gRPC listener open (the default
+when running `serve`). They share the same connection flags as the `admin`
+group: `--endpoint`, `--token` (identity bearer token; env
 `KMS_TOKEN`) or `--token-file` (env `KMS_TOKEN_FILE`), `--insecure` (skip TLS,
 development only), `--ca`, `--cert`/`--key` (mTLS). Secrets and parameters are
 addressed by a **`/env/app/key` display path**, which the CLI splits into an
@@ -1161,12 +1173,29 @@ namespace.
 | Command | Extra flags | Purpose |
 |---|---|---|
 | `whoami` | — | Prints the identity the server resolves from the credential this invocation presents: `name`, `kind`, `namespace` (or `(unbound)`), and `auth_method` (`mtls` or `token`). Needs no permission, so it is the first command to run when a token or certificate does not behave as expected. |
-| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--client-bound`, `--generate-token`, `--secret-token`/`--secret-token-file` (for client-bound updates) | Stores a new secret version. A new client-bound secret requires `--client-bound --generate-token`; the server-minted token is its one-time client key share. Existing client-bound secrets require `--client-bound --secret-token`, and adding `--generate-token` rotates the token for the new version. |
-| `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`/`--secret-token-file`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches a secret value. Refuses to print raw secret bytes to an interactive terminal unless `--show` is passed or output is piped — `--out FILE` or piping (`\| cat`) works without `--show`. |
+| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--generate-token` | Stores a new version. Non-empty `KMS_BINDING_KEY` binds only the new version; empty creates it unbound. `--generate-token` independently creates/rotates the per-secret access token and prints it once. There is no write-side `--secret-token`, `--client-bound`, or binding-key file flag. |
+| `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`/`--secret-token-file`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches one secret. If exact live metadata says the selected version is bound, the key comes from `KMS_BINDING_KEY` or a no-echo terminal prompt. Access-token input remains independent. Refuses terminal plaintext unless `--show`; there is no offline secret-read/export command. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
-| `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, content-type/client-bound note. Pages through the full result set. |
+| `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, and content-type/bound note. Pages through the full result set. |
+| `binding-key generate` | — | Writes exactly one newly generated 256-bit Base64URL binding key plus newline to stdout, with no other output. |
+| `secret bind /env/app/key` | `--version` (`0` = current) | Binds one exact version in place using `KMS_BINDING_KEY` or a confirmed no-echo prompt. |
+| `secret unbind /env/app/key` | `--version` (`0` = current) | Unbinds one exact version in place using its current key. |
+| `binding-key rotate /env/app/key` | `--version` (`0` = current) | Obtains the current key, previews the contiguous cohort, prints exact versions, confirms, then obtains the new key separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits the preview revision/version CAS guards. |
+| `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
 | `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--strict`, `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
+
+Binding keys are opaque valid UTF-8 strings of at least 32 bytes. The CLI reads
+them only from the exact environment variables named above or from a no-echo
+terminal prompt; there is no key-file flag, key-file variable, key directory,
+or recovery source. KMS stores no key, hash, fingerprint, or cohort identity.
+Rotation and purge always preview the exact contiguous cryptographic cohort,
+confirm it, and replay both revision and affected-version CAS guards. A purge
+whose transaction committed but whose SQLite/WAL cleanup is still pending
+returns gRPC `Unavailable` with the fixed message `secret purge committed;
+database artifact cleanup is pending` and leaves the service fail-closed; do
+not repeat the purge with the retired key. See
+[`binding-keys.md`](binding-keys.md).
 
 Parameter content types are literal KMS tokens: `string`, `integer`, `float`,
 `boolean`, `json`, or `binary`. They are not MIME types. In particular, publish
@@ -1201,19 +1230,24 @@ non-deterministic in production — two replicas started a minute apart can get
 different values, and nothing records what either of them saw.
 
 `--release NAME` resolves the namespace's **active** release instead and pins
-every entry to the version it recorded. Each parameter is re-fetched by version
-and verified: same resource, same version, same content type, and a SHA-256
+every entry to the version it recorded. Before any resource read, the CLI
+recomputes the complete release digest from the deterministic alias-sorted
+manifest projection; an empty or mismatched digest rejects the whole
+invocation. Each parameter is then re-fetched by version and verified: same
+resource, same version, same content type, and a SHA-256
 digest equal to the one the release recorded. Each secret is fetched at its
 pinned version and checked the same way, minus the digest (a release never
-records one for secret material). Any mismatch aborts the invocation before a
-process is started, so a workload never runs on a mix of pinned and drifted
-values. In namespace mode `--prefix db/` narrows the selection to a subtree
+records one for secret material). Before any exact secret fetch, the CLI reads
+live metadata and verifies the response identity, exact version, state, expiry,
+and that version's `bound` and `has_access_token` flags. Any mismatch aborts
+the invocation before a process is started, so a workload never runs on a mix
+of pinned and drifted values. In namespace mode `--prefix db/` narrows the selection to a subtree
 exactly as it does for `list`; `--prefix` and `--release` are mutually
 exclusive, since a release fixes its own entries.
 
-Release entries are named by **alias**, so the variable names come from the
-contract the application owns rather than from wherever the values happen to
-live — including entries pinned from another namespace.
+Release entries are named by **alias**, so variable names come from the
+application contract. Both parameter and secret pins must be in the release's
+own namespace; cross-namespace release entries are invalid.
 
 #### Variable names
 
@@ -1240,12 +1274,18 @@ note: tls/keystore is not text; injected base64-encoded as TLS_KEYSTORE_B64
 Detection is content-based only: the stored content type carries no signal,
 since `application/octet-stream` is the default for every secret.
 
-#### Per-secret tokens
+#### Bound secrets and per-secret access tokens
 
-A secret that is client-bound or carries an access token needs that token
-before it can be read. Unlike `get-secret`, which reads one secret and takes a
-single-valued `--secret-token`, these two commands may read many, so the flags
-are keyed and repeatable:
+Bulk `env`/`exec` never accept or request binding keys and never call
+`GetSecret` for a bound version. The output variable remains present with an
+explicit empty value; it is not skipped and cannot fall through to a parent
+environment value or default, including with `--preserve-env`. Use an SDK
+release loader when a process must consume bound secrets.
+
+An unbound secret carrying the independent access-token gate needs its token
+before it can be read. Unlike `get-secret`, which takes one single-valued
+`--secret-token`, these commands may read many, so the flags are keyed and
+repeatable:
 
 | Source | Form | Notes |
 |---|---|---|
@@ -1263,11 +1303,12 @@ in the selection or does not need one (exit `1`): a stale token or a typo that
 lands on the wrong secret would otherwise leave the intended secret skipped
 with only a warning. `KMS_SECRET_TOKEN_<NAME>` variables are ambient and may
 be leftovers, so they are read only for a secret that needs a token and never
-cause a refusal. `KMS_SECRET_TOKEN_FILE`, which `put-secret` and `get-secret`
-read, is not consulted here.
+cause a refusal. `KMS_SECRET_TOKEN_FILE`, which only `get-secret` reads, is not
+consulted here.
 
-The token travels only in that secret's `GetSecret` protobuf request; no other
-call carries it. A secret whose token was not supplied is **skipped**, with a
+The token travels only in that unbound secret's `GetSecret` protobuf request;
+no other call carries it. A gated unbound secret whose token was not supplied
+is **skipped**, with a
 warning `--quiet` cannot suppress:
 
 ```text
@@ -1287,12 +1328,18 @@ selecting parameters only — and then makes any `--secret-token`/
 - The **injected value wins** over an existing variable of the same name. That
   is the point: a stale `DB_HOST` left in a unit file or a container image must
   not shadow the store.
-- `--preserve-env` inverts it — the parent's value is kept — and every shadowed
-  name is reported, so the difference is visible rather than assumed:
+- `--preserve-env` inverts it for ordinary resolved values — the parent's value
+  is kept — and every shadowed name is reported, so the difference is visible
+  rather than assumed. A bound-secret empty placeholder is the exception: it
+  always replaces an inherited value so the parent cannot masquerade as the
+  secret. For an ordinary value the diagnostic is:
   `note: DB_HOST is already set and kept (--preserve-env); the store's value was not injected`.
 - Every `KMS_SECRET_TOKEN_*` variable is **removed** from the command's
   environment (`KMS_SECRET_TOKEN_FILE` shares that prefix and goes too). They
   are inputs to the CLI, not credentials the workload should inherit.
+- The exact `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` variables are also
+  removed. Near-miss names are left alone; there is no binding-key file or
+  directory variable.
 - `KMS_TOKEN`, `KMS_TOKEN_FILE`, `KMS_ENDPOINT`, and the rest of the connection
   settings **are** inherited: the workload may legitimately call the store
   itself. Unset them explicitly
@@ -1317,6 +1364,7 @@ The command line is worse than the environment: `--secret-token KEY=TOKEN` and
 `--token TOKEN` are visible to **every** local user in `ps` and
 `/proc/PID/cmdline` for as long as the CLI runs. Use `--secret-token-file`,
 `--token-file`, or the `KMS_SECRET_TOKEN_<NAME>` variables in production.
+Binding keys are never accepted as command-line values.
 
 #### `env` output
 
@@ -1445,14 +1493,13 @@ entries:
     version: 3
 ```
 
-An absolute `key`, such as `/shared/platform/feature-flags`, creates a
-cross-namespace reference subject to independent resource authorization.
-Specify `version` or `label`, not both; omitting both resolves `current`.
-Creation persists the exact immutable namespace-row ID for every resolved
-reference. Deleting and recreating the same `env/app` therefore cannot retarget
-an existing pin. Releases migrated without those IDs remain readable and keep
-conservative name-based deletion guards, but activation fails closed; recreate
-such a release before activating it so every source obtains an exact pin.
+Every parameter and secret entry must refer to the release's own namespace.
+Relative keys are recommended; an absolute key is accepted only when its
+`env/app` exactly matches the release namespace. Specify `version` or `label`,
+not both; omitting both resolves `current`. Creation persists the exact
+immutable namespace-row ID for every resolved reference, so deleting and
+recreating the same `env/app` cannot retarget an existing pin. The greenfield
+`0.3.x` baseline has no migrated legacy release-entry form.
 
 ```bash
 parameter-store release schema create gradethis runtime.schema.json \
@@ -1544,8 +1591,7 @@ budgets, so do not retry in a loop) and requires the
 `configuration-release:verify-defaults` operation, which is **never** part of
 the implicit home-namespace grant. Mint a dedicated verify-only identity for
 CI **without** `--namespace` (an unbound token identity has no implicit
-access at all) and grant exactly that one operation on the target namespace
-(and on any namespace whose parameters the release pins cross-namespace).
+access at all) and grant exactly that one operation on the target namespace.
 The target namespace must allow `token` authentication for the identity to
 reach it:
 
@@ -1600,7 +1646,8 @@ end in the [managed Go configuration operator workflow](managed-go-configuration
 On `serve`, the process (`internal/cli/serve.go`):
 
 1. Loads and validates config, logs the redacted summary.
-2. Opens SQLite (`storage.Open`) — this also runs pending migrations.
+2. Opens SQLite (`storage.Open`) — this materializes an empty database or
+   verifies the exact current baseline before any other startup work.
 3. Constructs the core service (not yet ready — no keyring attached).
 4. **Acquires the master key** (below) and attaches it to the service,
    which is what flips readiness on.
@@ -1627,7 +1674,7 @@ On `serve`, the process (`internal/cli/serve.go`):
    [Hot reload (SIGHUP)](#hot-reload-sighup).
 
 `SIGHUP` is **ignored** from flag parsing (step 1) until the listeners are up.
-A hangup during the passphrase prompt, the migrations or the CA bootstrap is
+A hangup during the passphrase prompt, database baseline verification, or the CA bootstrap is
 discarded rather than killing a process that is halfway through starting.
 `SIGINT` is untouched throughout, so Ctrl-C at the passphrase prompt still
 works.
@@ -2217,9 +2264,9 @@ is the single most important operational fact about this system:
 
 ```text
 SQLite backup WITHOUT the master key:  cannot decrypt any secret.
-SQLite backup WITH the master key:     can decrypt every non-client-bound
-                                        secret (client-bound secrets still
-                                        also need each secret's client token).
+SQLite backup WITH the master key:     can decrypt every unbound secret;
+                                        each bound version also requires its
+                                        operator-held binding key.
 ```
 
 Treat the two backups as different security tiers. A database backup alone
@@ -2255,7 +2302,10 @@ destination parent must satisfy [secure destination-path](#secure-destination-pa
 checks. The backup is built in a private staging directory, restricted
 owner-only, then published atomically without replacement; an entry created at
 the destination during the backup wins. The command prints an explicit
-reminder that the master key is not included.
+reminder that the master key is not included. Purge can scrub only the active
+database and WAL: an older backup still contains the retired encrypted
+payload. Expire backups, filesystem/volume snapshots, copy-on-write copies,
+and replicas containing a compromised cohort under your incident policy.
 
 ## Restore
 
@@ -2286,8 +2336,8 @@ answer is never wasted.
 `restore` validates that `--in` is actually a SQLite file (checks the
 16-byte file header) before copying it into place, removes any stale
 `-wal`/`-shm` sidecar files left over from the previous database so the
-restored copy is self-consistent, then opens (and migrates) the restored
-file to confirm it's usable — all before you start the server against it.
+restored copy is self-consistent, then opens the restored file to confirm its
+baseline is accepted — all before you start the server against it.
 The destination must satisfy [secure destination-path](#secure-destination-paths)
 checks. Copying uses an owner-only staging file; without `--force`, atomic
 no-replace publication preserves any existing or concurrently created entry.
@@ -2305,8 +2355,9 @@ decryption errors later. Confirm `/readyz` reports ready after starting.
 |---|---|
 | Database lost, key intact, backup exists | Restore the backup; secrets decrypt normally. |
 | Database corrupted, no backup | Data loss. This is single-node embedded storage — back it up. |
-| **Master key lost, database intact** | **All secret versions are permanently unrecoverable, including client-bound versions** (which require the master key plus their client token). There is no escrow, recovery mechanism, or support path. Parameters and metadata are unaffected. The KEK-wrapped CA private key is also unrecoverable, so the old instance cannot start; a replacement instance bootstraps a new CA and all client certificates must be re-issued. This is why the key backup procedure above must never be skipped. |
-| **A client-bound version's client token is lost** | Every version encrypted under that token is **permanently unrecoverable**, even with the master key and database intact. Versions written under other retained tokens remain readable. This is by design; the frontend requires explicit acknowledgment at creation time. |
+| **Master key lost, database intact** | **All secret versions are permanently unrecoverable, including bound versions** (which require the master key plus their binding key). There is no escrow, recovery mechanism, or support path. Parameters and metadata are unaffected. The KEK-wrapped CA private key is also unrecoverable, so the old instance cannot start; a replacement instance bootstraps a new CA and all client certificates must be re-issued. This is why the key backup procedure above must never be skipped. |
+| **A binding key is lost** | The contiguous version cohorts wrapped by that key are permanently unreadable even with the master key and database intact. KMS stores no key, hash, fingerprint, or recovery copy. |
+| **A binding key is compromised** | Rotate the upstream application secret, preview the cohort around a known affected version, then use the admin-only guarded `secret purge-binding-cohort`. Separately expire backups, snapshots, copy-on-write copies, and replicas; active-database scrubbing cannot retract them. |
 | Wrong master key / passphrase supplied | Startup fails immediately at the key-check step (`VerifyKeyCheck`) with an actionable error — the service will not start in a half-unsealed state. |
 
 ## KEK rotation
@@ -2321,9 +2372,9 @@ without reissuing any certificate. Every rewrapped row receives the new
 `kek_id`; destroyed versions have already had their ciphertext and DEK nulled.
 No readable secret or CA row depends on the retired KEK after the transaction.
 
-For client-bound secrets, rotation **only touches the outer (KEK) layer**.
-The inner, client-token-derived layer is untouched — rotating the master key
-never requires contacting any client or invalidating any client token.
+For bound secrets, rotation **only touches the outer (KEK) layer**. The inner,
+binding-key-derived layer is untouched — rotating the master key never requires
+the binding key or invalidates it.
 
 ```bash
 parameter-store rotate-kek --sqlite-path /var/lib/parameter-store/kms.db \
@@ -2356,7 +2407,7 @@ rotation is audited as `key.rotate`.
 ## Monitoring and readiness
 
 - `GET /healthz` — liveness (plain text, no auth).
-- `GET /readyz` — readiness: store reachable, migrations applied, master
+- `GET /readyz` — readiness: current store baseline accepted, master
   key acquired and verified. Alert on this being unready for longer than a
   normal restart window. During an interactive passphrase prompt the listeners
   have not started, so probes see a connection failure rather than `not ready`.

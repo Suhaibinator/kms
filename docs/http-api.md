@@ -258,7 +258,7 @@ Taken from the `overview-incident.json` fixture (abridged):
 selected environments. `schema_json` is present only when the application
 pins a schema the registry still has. `release.active` is absent when nothing
 is active; `values[].key`, `content_type`, `current_version`,
-`pinned_version`, and `client_bound` are omitted when zero or empty.
+`pinned_version`, and `bound` are omitted when zero or empty.
 `rollout.applied_divergent` counts instances that applied the current
 revision while reporting `applied_divergent` (their generation differs from
 the application's source-owned defaults); it is a warning that never degrades
@@ -290,11 +290,12 @@ instances. The frontend renders these states and never re-derives them.
 Contract aliases are resolved to keys with one rule shared by readiness,
 Ship, and clone (**alias → key resolution**): the active release's entry for
 the alias → the latest release's entry → a resource whose key equals the
-alias in this namespace → the key another environment's active release uses
-for that alias → unresolved. `values[].key` carries the resolved key so the
-UI can show both; an unresolved alias has no `key` and `present: false`. A
-pin into another namespace counts as present only through the active entry,
-since the matrix rows cover this application alone.
+alias in this namespace → the key name another environment's active release
+uses for that alias → unresolved. The last fallback borrows only the key name:
+the resolved resource must still exist in the target environment's own
+namespace, because 0.3 release pins are always home-namespace. `values[].key`
+carries the resolved key so the UI can show both; an unresolved alias has no
+`key` and `present: false`.
 
 Three column states per environment:
 
@@ -721,7 +722,7 @@ described under [Authentication](#authentication) instead — certificate *and*
 token — so an admin reports `auth_method: "mtls"` from `/whoami` while the
 requirement is enforced.
 Admin identities never bypass auditing or the cryptographic impossibility of
-revealing a client-bound secret without its token.
+revealing a bound secret without its binding key.
 
 A namespace-bound client identity also carries an **implicit home-namespace
 grant**: it may read, list, and subscribe within its own namespace with no
@@ -749,17 +750,23 @@ Non-2xx responses carry:
 | rate_limited         | 429  |
 | internal             | 500  |
 | unavailable (not ready) | 503 |
+| purge_cleanup_pending | 503 |
 
 A `permission_denied` from the auth-method gate carries an explicit message
 (e.g. "namespace requires mtls"). Error messages never contain secret values or
-token material.
+token or binding-key material. A purge whose transaction committed but whose
+active SQLite/WAL scrub is still pending returns HTTP 503 with code
+`purge_cleanup_pending` and the fixed message
+`secret purge committed; database artifact cleanup is pending`;
+the service remains fail-closed until cleanup succeeds.
 
 ## Common types
 
 Timestamps are Unix milliseconds (`*_unix_ms`, integer). Binary values are
 base64 (`value_base64`). Parameter and secret resource references are flattened
 at the top level as `env`, `app`, `key`; configuration release entries retain a
-structured `ref` because a single release may point across namespaces. List
+structured `ref`; every release entry must nevertheless point into the
+release's own namespace. List
 queries use `env`, `app`, and `key_prefix`. The `key_prefix` is a plain browsing filter (`LIKE 'prefix%'` on
 the opaque key string), **not** an authorization boundary — a caller authorized
 for a namespace may list any key in it; the prefix only narrows what a page
@@ -802,7 +809,7 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
   "app": "gradethis",
   "key": "stripe-api-key",
   "content_type": "text/plain",
-  "client_bound": false,
+  "bound": false,
   "has_access_token": true,
   "metadata_json": "{}",
   "created_at_unix_ms": 0,
@@ -811,10 +818,17 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
   "versions": [
     { "version": 2, "state": "enabled", "created_by": "admin",
       "created_at_unix_ms": 0, "destroyed_at_unix_ms": 0,
-      "expires_at_unix_ms": 0, "metadata_json": "{}" }
+      "expires_at_unix_ms": 0, "metadata_json": "{}",
+      "bound": false, "has_access_token": true }
   ]
 }
 ```
+
+Top-level `bound` summarizes the version selected by `current`; top-level
+`has_access_token` reports whether the secret currently has an access-token
+hash. Exact-version decisions use both fields on that item in `versions`;
+binding is mutable live metadata, not an attribute of a release pin. Purged
+tombstones have `state: "destroyed"` with both version flags false.
 
 `Identity`:
 ```json
@@ -856,14 +870,12 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
       "ref": { "namespace": { "env": "prod", "app": "gradethis" },
                "key": "config/rate-limits" },
       "version": 8, "content_type": "json", "metadata_json": "{}",
-      "parameter_digest": "<sha256 hex>",
-      "client_bound": false, "has_access_token": false },
+      "parameter_digest": "<sha256 hex>" },
     { "alias": "db_password", "kind": "secret",
       "ref": { "namespace": { "env": "prod", "app": "gradethis" },
                "key": "db-password" },
       "version": 3, "content_type": "text/plain", "metadata_json": "{}",
-      "parameter_digest": "", "client_bound": false,
-      "has_access_token": true }
+      "parameter_digest": "" }
   ],
   "digest": "<deterministic sha256 hex>",
   "metadata_json": "{}", "created_by": "admin",
@@ -871,9 +883,11 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
 }
 ```
 
-Release values, secret plaintext, and per-secret access tokens never appear in
-this DTO. Creation selectors use the same `ref` shape, plus either `version` or
-`label`; an empty reference namespace means the release namespace.
+Release values, secret plaintext, credentials, and live protection flags never
+appear in this DTO or its digest. Creation selectors use the same `ref` shape,
+plus either `version` or `label`. Both parameter and secret references must
+exactly equal the release namespace; an empty selector namespace means that
+namespace.
 
 ## Endpoints
 
@@ -969,35 +983,54 @@ Listing is always namespace-scoped: `env` and `app` are required.
   ```json
   { "env": "prod", "app": "gradethis", "key": "stripe-api-key",
     "value_base64": "...", "content_type": "text/plain",
-    "metadata_json": "{}", "client_bound": false,
-    "generate_access_token": false, "expires_at_unix_ms": 0,
-    "secret_token": "" }
+    "metadata_json": "{}", "binding_key": "",
+    "generate_access_token": false, "expires_at_unix_ms": 0 }
   ```
   → `{"version": 1, "revision": 7, "access_token": "..."}`
   (`access_token` present only when `generate_access_token` was true — shown
-  once, never again.) Creating a client-bound secret requires both
-  `client_bound: true` and `generate_access_token: true`; the server-minted
-  token is its only client key share. Client-bound updates additionally require
-  the current token in the `secret_token` request-body field; setting
-  `generate_access_token: true` on an update rotates the token for the new
-  version and returns it once.
-- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","secret_token": "..."}` →
+  once, never again.) A non-empty `binding_key` creates a bound version; empty
+  creates an unbound version, independent of the preceding version. A non-empty
+  key must be opaque valid UTF-8 of at least 32 bytes. Access-token generation
+  is independent and there is no write-side `secret_token`.
+- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","secret_token": "...","binding_key":"..."}` →
   `{"env","app","key","version","value_base64","content_type"}`.
   Admin only. Every successful reveal and decryption failure is audited as a
-  reveal event. A client-bound version requires its client token in the
-  `secret_token` request-body field; the field may be omitted for standard
-  secrets. Per-secret credentials are not accepted in custom headers, avoiding
-  exposure through proxy configurations that log them. Request
-  bodies are not logged by the server, and the token is never included in the
-  response or audit event. Missing, wrong, and unusable client key material all
-  return the same generic `internal` (500) response.
+  reveal event. This administrator break-glass path deliberately bypasses the
+  access-token gate, so `secret_token` is accepted for transport symmetry but
+  ignored. A bound version still requires `binding_key`, because KMS cannot
+  decrypt it without that material. Per-secret credentials are not accepted in
+  custom headers, avoiding exposure through proxy configurations that log
+  them. Request bodies are not logged by the server, and credentials are never
+  included in the response or audit event. Missing, wrong, and unusable
+  binding-key material collapse to the same sanitized credential/decryption
+  response. By contrast, data-plane gRPC `GetSecret` enforces the exact
+  version's access-token and binding-key requirements independently and needs
+  both when both flags are set.
 - `POST /api/v1/secrets/disable` — `{"env","app","key","version": 0,"enable": false}` →
   `{"revision"}` (`version: 0` = all versions; `enable: true` re-enables.)
 - `POST /api/v1/secrets/destroy` — `{"env","app","key","version"}` →
   `{"revision"}` (irreversible)
 - `POST /api/v1/secrets/promote` — `{"env","app","key","version"}` →
   `{"current_version", "previous_version", "revision"}`
+- `POST /api/v1/secrets/bind` — `{"env","app","key","version":0,"binding_key":"..."}` →
+  `{"anchor_version","affected_versions":[N],"revision"}`. Rewraps one exact
+  version in place; `0` selects `current`.
+- `POST /api/v1/secrets/unbind` — the same shape and response; the supplied key
+  must open the selected bound version.
+- `POST /api/v1/secrets/binding-cohort/preview` —
+  `{"env","app","key","anchor_version":0,"binding_key":"..."}` →
+  `{"anchor_version","affected_versions":[...],"revision"}` without mutation.
+- `POST /api/v1/secrets/binding-key/rotate` — preview-shaped body plus
+  `new_binding_key` and optional paired `expected_revision` /
+  `expected_affected_versions` compare-and-swap guards → the cohort result.
+- `POST /api/v1/secrets/binding-cohort/purge` — admin only; preview-shaped body
+  plus the optional paired guards → the cohort result. This irreversibly
+  destroys the contiguous matching cohort even when immutable releases pin it.
 - `DELETE /api/v1/secrets?env=&app=&key=` → `{"revision"}`
+
+Binding keys are never stored, hashed, fingerprinted, or echoed. Cohorts are
+found by cryptographically opening adjacent bound versions and stopping at the
+first boundary; see [`binding-keys.md`](binding-keys.md).
 
 ### Policies
 

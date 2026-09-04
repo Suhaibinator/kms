@@ -154,6 +154,13 @@ This produces the intended grouping without storing key identity. For key epochs
   reported as an ordinary success until the committed tombstones have been
   checkpointed through a successful truncating WAL checkpoint, so the retired
   payload is absent from the active database and WAL files.
+- If the transaction commits but that physical cleanup does not, fail closed
+  with the canonical cleanup-pending sentinel: HTTP 503
+  `purge_cleanup_pending`, gRPC `Unavailable`, and fixed text
+  `secret purge committed; database artifact cleanup is pending`. SDKs expose
+  Go `ErrPurgeCleanupPending`, Python `PurgeCleanupPendingError`, and TypeScript
+  `PurgeCleanupPendingError`. The purge is logically committed; callers must
+  not retry with the retired key, and no RPC result accompanies the error.
 - This active-database guarantee cannot retract copies outside KMS: operators
   must separately expire backups and filesystem/volume snapshots, and use disk
   encryption or media destruction for raw-device remanence. They must also
@@ -195,6 +202,10 @@ func (c *Client) UnbindSecret(
     ctx context.Context, key string, version uint64, bindingKey string,
 ) (SecretVersionMutationResult, error)
 
+func (c *Client) PreviewSecretBindingCohort(
+    ctx context.Context, key string, anchorVersion uint64, bindingKey string,
+) (SecretBindingCohortResult, error)
+
 func (c *Client) RotateSecretBindingKey(
     ctx context.Context, key string, anchorVersion uint64,
     bindingKey, newBindingKey string,
@@ -203,9 +214,21 @@ func (c *Client) RotateSecretBindingKey(
 func (c *Client) PurgeSecretBindingCohort(
     ctx context.Context, key string, anchorVersion uint64, bindingKey string,
 ) (SecretBindingCohortResult, error)
+
+func (c *Client) RotateSecretBindingKeyIfUnchanged(
+    ctx context.Context, key string, anchorVersion uint64,
+    bindingKey, newBindingKey string, expected SecretBindingCohortResult,
+) (SecretBindingCohortResult, error)
+
+func (c *Client) PurgeSecretBindingCohortIfUnchanged(
+    ctx context.Context, key string, anchorVersion uint64,
+    bindingKey string, expected SecretBindingCohortResult,
+) (SecretBindingCohortResult, error)
 ```
 
-All successful mutations invalidate the complete secret cache entry.
+The `IfUnchanged` variants replay the preview's revision and sorted affected
+versions as a paired CAS guard. Secret plaintext caching is disabled entirely;
+successful mutations still invalidate compatibility bookkeeping.
 
 ### Secret types
 
@@ -303,13 +326,21 @@ Add sync and async methods:
 ```python
 bind_secret(key, *, version=0, binding_key, timeout=None)
 unbind_secret(key, *, version=0, binding_key, timeout=None)
-rotate_secret_binding_key(
-    key, *, anchor_version=0, binding_key, new_binding_key, timeout=None
-)
-purge_secret_binding_cohort(
+preview_secret_binding_cohort(
     key, *, anchor_version=0, binding_key, timeout=None
 )
+rotate_secret_binding_key(
+    key, *, anchor_version=0, binding_key, new_binding_key,
+    expected_revision=None, expected_affected_versions=None, timeout=None
+)
+purge_secret_binding_cohort(
+    key, *, anchor_version=0, binding_key,
+    expected_revision=None, expected_affected_versions=None, timeout=None
+)
 ```
+
+The two expected fields are optional but paired and represent the exact result
+of a prior preview.
 
 Remove `client_bound` and write-side `secret_token` arguments from `put_secret`.
 
@@ -369,13 +400,19 @@ Add:
 ```ts
 bindSecret(key, { version?, bindingKey, signal?, deadline? })
 unbindSecret(key, { version?, bindingKey, signal?, deadline? })
+previewSecretBindingCohort(
+  key,
+  { anchorVersion?, bindingKey, signal?, deadline? },
+)
 rotateSecretBindingKey(
   key,
-  { anchorVersion?, bindingKey, newBindingKey, signal?, deadline? },
+  { anchorVersion?, bindingKey, newBindingKey,
+    expectedRevision?, expectedAffectedVersions?, signal?, deadline? },
 )
 purgeSecretBindingCohort(
   key,
-  { anchorVersion?, bindingKey, signal?, deadline? },
+  { anchorVersion?, bindingKey,
+    expectedRevision?, expectedAffectedVersions?, signal?, deadline? },
 )
 ```
 
@@ -489,6 +526,12 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - Database initialization succeeds only for an empty/new database or a database already stamped with the exact `0.3.x` baseline schema.
 - Opening a `0.2.x`, unstamped non-empty, partially migrated, or otherwise legacy database fails before any schema or data mutation with a clear incompatible-baseline error.
 - Do not implement data copy, backfill, compatibility columns, dual reads/writes, legacy protobuf translation, or an in-place upgrade command.
+- The existing `parameter-store import` remains allowed only as a greenfield
+  bootstrap path: it reads the separate SuhaibParameterStore
+  `parameters(key, value)` format or neutral JSON and creates current-model
+  resources through normal service APIs in a fresh `0.3.x` database. It must
+  not recognize, copy, repair, or translate any `0.2.x` KMS database or
+  protocol representation.
 - Deployment documentation must require operators upgrading to `0.3.0` to create a fresh database and repopulate KMS through normal administrative/bootstrap workflows.
 
 ## Verification
@@ -500,7 +543,8 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - SDK tests in all three languages cover:
   - Direct get/put option mapping.
   - Both credentials together.
-  - Credential-aware cache bypass.
+  - Secret plaintext caching disabled, including live bind/token transitions
+    after a previously uncredentialed read.
   - Declarative `Secret` and `SecretValue` behavior.
   - Generated alias-map extraction and stripping.
   - Sync/async parity.

@@ -81,6 +81,27 @@ If a release contains access-token-protected secrets, also set
 credentials. The generated store, typed snapshots, and view access are
 otherwise unchanged.
 
+For a bound secret, put its key in the source declaration rather than a start
+option:
+
+```go
+oauthDefaults := struct {
+    LinkedInOAuthClientSecret kmsclient.Secret
+    OktaOAuthClientSecret     kmsclient.Secret
+}{
+    LinkedInOAuthClientSecret: kmsclient.Secret{}, // unbound
+    OktaOAuthClientSecret: kmsclient.Secret{       // bound
+        BindKey: os.Getenv("OKTA_OAUTH_KMS_BIND_KEY"),
+    },
+}
+```
+
+The generated store extracts the key into a private alias-keyed loader map and
+strips it from retained defaults and published snapshots. Access tokens and
+binding keys are independent, and secret plaintext is never cached. This
+example's current fake release uses unbound secrets, so it needs neither
+credential.
+
 The in-process fake exercises the client, release loader, generated decoder,
 and publication policy. It deliberately does **not** exercise TLS, auth,
 persistent storage, schema registration, or server-side release admission;

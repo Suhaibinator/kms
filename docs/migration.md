@@ -4,6 +4,10 @@ This service exists to replace SuhaibParameterStore. The migration is done
 when gradethis builds and runs with no dependency on
 `SuhaibParameterStoreClient`.
 
+> **`0.3.x` cutover:** initialize a fresh KMS database. There is no supported
+> in-place upgrade from a `0.2.x` SQLite database and no compatibility path for
+> its client-bound tokens or release digests.
+
 ## Concept mapping
 
 A namespace is a fixed `(env, app)` pair. Flat, prefixed keys become a
@@ -16,6 +20,7 @@ as a server-side wire or storage field.
 | flat key, e.g. `gradethis_TWILIO_ACCOUNT_SID` | namespace `prod/gradethis` + relative key `gradethis-twilio-account-sid` (`slug` lowercases and replaces `_` with `-`; it does not strip prefixes) |
 | `ParameterStoreKey` | `SecretValue` / `ParameterValue` key — a **relative** key (or an absolute `/env/app/key` for cross-namespace reads) |
 | `ParameterStoreSecret` (per-key access secret) | `SecretValue` token option (per-secret access token) |
+| — | optional declaration-only binding key (`BindKey` / `bind_key` / `bindKey`), independent of the access token |
 | `EnvironmentVariableKey` | `SecretValue` / `ParameterValue` environment-variable option |
 | `ParameterStoreValue` (dev default) | `SecretValue` / `ParameterValue` default option |
 | application-managed `config/release` manifest | native immutable configuration release + atomic activation revision + Go/Python `ReleaseLoader` |
@@ -80,6 +85,7 @@ func Load(ctx context.Context) (*Config, error) {
         StripeAPIKey: kmsclient.SecretValue{
             Key:     "gradethis-stripe-api-key",    // importer preserves the source prefix
             Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token if the secret requires one (from the import report)
+            BindKey: os.Getenv("STRIPE_API_KMS_BIND_KEY"), // only if this version is bound
             EnvVar:  "STRIPE_API_KEY",              // env override still wins
             Default: "sk_test_dev_only",            // dev only
         },
@@ -155,6 +161,9 @@ const config = {
     ...(process.env.STRIPE_API_KEY_TOKEN
       ? { token: process.env.STRIPE_API_KEY_TOKEN }
       : {}),
+    ...(process.env.STRIPE_API_KMS_BIND_KEY
+      ? { bindKey: process.env.STRIPE_API_KMS_BIND_KEY }
+      : {}),
     envVar: "STRIPE_API_KEY",
     default: "sk_test_dev_only",
   }),
@@ -184,8 +193,9 @@ release.
 2. Optionally register a Draft 2020-12 schema for the alias-keyed **parameter**
    object. Secrets are excluded from that object.
 3. Create and validate the immutable release without activating it.
-4. Deploy release-aware replicas with their existing, locally distributed
-   per-secret tokens, then activate with compare-and-swap.
+4. Deploy release-aware replicas with locally distributed access tokens and
+   alias-keyed binding keys required by the exact pinned versions, then
+   activate with compare-and-swap.
 5. Monitor per-instance `applied` state and remove the old manifest watcher
    only after the dual-run window succeeds.
 
@@ -224,6 +234,9 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := bootstrapSecretTokens[alias]
         return token, ok
     },
+    BindingKeys: map[string]string{
+        "db_password": os.Getenv("DB_PASSWORD_KMS_BIND_KEY"),
+    },
 })
 if err != nil { return err }
 return loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (
@@ -239,7 +252,7 @@ and synchronous `loader.run(prepare)`, or the event-loop-native
 prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
 lower-level Go and Python loaders decode explicitly and do not infer schemas.
 Go applications may opt into the additive [`kms-config-gen` managed
-layer](managed-go-configuration.md). Python v0.2 provides the equivalent
+layer](managed-go-configuration.md). Python v0.3 provides the equivalent
 Pydantic-based `kms-config-gen-py` layer, which emits a typed binding, strict
 release schema, and machine contract; see the
 [`Python managed configuration guide`](../sdk/python/MANAGED_CONFIG.md).
@@ -248,7 +261,8 @@ TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
 `await loader.run(prepare, signal)`. Decode and validate the complete
 `ReleaseSnapshot` before returning `{ commit, abort }`; keep `commit`
 synchronous and infallible so the application snapshot swaps atomically. Pass
-locally distributed per-secret tokens through `secretTokenProvider`. A complete
+locally distributed per-secret access tokens through `secretTokenProvider` and
+binding keys through the alias-keyed `bindingKeys` object. A complete
 compile-checked example is in
 [`sdk/typescript/examples/release.ts`](../sdk/typescript/examples/release.ts).
 
@@ -266,20 +280,28 @@ prod/gradethis runtime` until every expected instance reports the target as
 An activation racing immediately after a loader's final active read is handled
 as the next candidate, so do not treat activation as a distributed commit.
 
-## Database upgrade: structured schema ownership
+## `0.3.x` database cutover
 
-Schema version 8 replaces free-form schema IDs with separate
-`application_name` and `release_name` columns. Startup performs this rewrite
-and the v8 version stamp in one transaction, including recomputing immutable
-release digests without the removed `schema_id` field.
+`0.3.x` is a greenfield storage and protocol baseline. Its baseline
+materializer describes only the new schema; the old migration chain and repair
+paths are intentionally gone. A `0.3.x` binary recognizes a database only when
+that baseline was freshly materialized. It does not mutate, repair, or infer a
+transition from any `0.2.x` database.
 
-The upgrade deliberately refuses to guess. Every non-empty application pin
-must equal `<application>/<application release>`, every release pin must equal
-`<namespace app>/<release name>`, and every registry lineage must have exactly
-one matching application owner. Malformed or shared lineages, missing pinned
-versions, and duplicate digests stop startup with a repair-oriented error; the
-database remains in its pre-v8 shape. Repair those records with the older
-binary after taking a backup, then retry the upgrade.
+Back up the old installation for rollback/audit, initialize a new database
+with the `0.3.x` binary, and import or reseed the desired resources. Do not
+point `0.3.x` at the old SQLite file and do not copy old release rows: release
+digests and entries changed, and the old client-bound cryptographic payload has
+no compatibility contract. Distribute new binding keys separately and build
+new releases after the data is present. See
+[`binding-keys.md`](binding-keys.md) for the credential and purge model.
+
+`parameter-store import` is deliberately retained as a bootstrap ingestion
+tool, not as KMS schema compatibility. Its SQLite input is the distinct
+SuhaibParameterStore `parameters(key, value)` schema; it also accepts neutral
+JSON. It writes ordinary current-model secrets into the fresh `0.3.x`
+destination through `PutSecret`. It cannot open, repair, copy, or translate a
+`0.2.x` KMS database, release, ciphertext, or protocol message.
 
 ## Steps
 

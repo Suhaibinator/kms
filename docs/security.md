@@ -15,13 +15,12 @@ plaintext** without also obtaining the master key. The database still exposes
 parameters, configuration release/schema metadata, resource metadata,
 identities, policies, and audit records, so it
 must remain access-controlled. An attacker who *also* has the master key
-still cannot decrypt secrets that were opted into client-bound mode — that
-requires the plaintext client token as well, which never touches the
-database. This defends against **offline theft of secret data at rest**. It does
-**not** defend against a live compromise of the running server process: an
-attacker with code execution on the KMS host can read master key material
-from process memory, intercept client tokens as they arrive on requests, and
-decrypt anything the server itself can decrypt. Section
+still cannot decrypt a bound version without its operator-owned binding key,
+which never touches the database. This defends against **offline theft of
+secret data at rest**. It does **not** defend against a live compromise of the
+running server process or deployment: code execution can read unsealed key
+material or intercept a binding key as it arrives, and a compromised
+application already holds its own KMS identity and declared credentials. Section
 ["What this does not protect against"](#what-this-does-not-protect-against)
 spells this out further.
 
@@ -45,14 +44,15 @@ encrypted_dek                (stored in secret_versions.encrypted_dek)
 Implementation: `internal/crypto/aead.go` (`seal`/`open`, `sealPacked`/
 `openPacked` — nonce and ciphertext packed as `nonce || ciphertext`, GCM tag
 appended by the cipher) and `internal/crypto/envelope.go` (`Encrypt`,
-`EncryptClientBound`, `Decrypt`, `RewrapDEK`). The only algorithm implemented
+`EncryptBindingKey`, `Decrypt`, `BindDEK`, `UnbindDEK`,
+`RotateBindingKeyDEK`, `RewrapDEK`). The only algorithm implemented
 is AES-256-GCM (`crypto.AlgorithmAES256GCM`); there is no unauthenticated
 mode and no custom cipher.
 
 A fresh DEK per version means nonce reuse under the same key is structurally
 avoided — the nonce only ever needs to be unique per DEK, and each DEK is
-used to seal exactly one value plus (for client-bound secrets) wrap one
-inner layer.
+used to seal exactly one value. Bound versions additionally use it as the
+plaintext of one inner wrapping operation.
 
 ### Associated data (AAD) binding
 
@@ -65,7 +65,7 @@ env=<env>;app=<app>;key=<key>;version=<version>
 
 plus an internal domain-separation suffix appended per layer
 (`|layer:value`, `|layer:dek`, `|layer:dek-inner`) so the value ciphertext,
-the DEK wrap layer, and the client-bound inner layer can never be confused
+the DEK wrap layer, and the binding-key inner layer can never be confused
 for one another even though they may use overlapping key material. Because
 AES-GCM authenticates the AAD, a ciphertext blob copied into a different
 record, a different version, or a different layer fails authentication
@@ -146,9 +146,9 @@ every **non-destroyed** secret version's `encrypted_dek` from the old KEK to the
 ciphertext and DEK nulled. The CA keys are rewrapped in the same transaction.
 No readable secret or CA row depends on the retired KEK after commit. This runs
 inside one storage transaction (metadata swap + rewrap), so rotation is
-crash-safe. For client-bound
+crash-safe. For bound
 secrets, rotation only touches the outer (KEK) layer; the inner
-client-token-derived layer is untouched and requires no client
+binding-key-derived layer is untouched and requires no client
 participation.
 
 ## Filesystem output integrity
@@ -201,86 +201,51 @@ Platform enforcement is deliberately specific:
   NFSv4 or other extended ACL entries; operators must ensure separately that
   those ACLs grant no broader path-mutation or file-access authority.
 
-## Client-bound secrets (opt-in double wrapping)
+## Binding keys (opt-in inner wrapping)
 
-A secret opts into client-bound mode at creation (`client_bound: true`,
-`WithClientBound()` in the Go SDK). Creation must also request server-side
-token generation (`generate_access_token: true` / `WithGenerateAccessToken()`):
-the returned token is the only client key share, is shown once, and cannot be
-recovered. Its DEK is wrapped in two layers instead of one:
+A non-empty operator-supplied binding key adds an inner wrapping layer to one
+secret version's DEK:
 
 ```
 DEK
-   | HKDF-SHA256(client token, random 32-byte salt) -> client key
-   | AES-256-GCM seal under client key
+   | HKDF-SHA256(opaque binding-key bytes, fresh random 32-byte salt)
+   | AES-256-GCM seal under the derived 256-bit key
    v
 inner-wrapped DEK
-   | AES-256-GCM seal under the KEK
+   | AES-256-GCM seal under the version's KEK
    v
 stored encrypted_dek
 ```
 
-(`crypto.EncryptClientBound`, `deriveClientKey` — HKDF info string `"kms/v1
-client-bound key"`.) The random salt is stored per-version in
-`secret_versions.client_key_salt`; the client token itself is **never**
-stored — only `sha256(token)` in `secrets.access_token_hash` as a lookup/
-verification hash (`crypto.TokenHash`).
+The binding key must be valid UTF-8 and at least 32 bytes. It is otherwise
+opaque: KMS does not normalize, trim, prefix-check, compare across aliases,
+store, hash, fingerprint, or escrow it. Only the fresh per-version salt and
+encrypted layers are persisted. Derived mutable key, DEK, and inner buffers
+are zeroed promptly. Missing and incorrect credentials collapse to the same
+sanitized boundary and no error or audit event echoes request material.
 
-To decrypt, the server needs both the master key (to unwrap the outer layer)
-**and** the client-supplied token on the request (to derive the inner-layer
-key). It discards the request token and derived key after use. Because token
-rotation is per-version, `secrets.access_token_hash` represents only the latest
-token and is not used to validate historical client-bound reads. A missing
-token is rejected as `PermissionDenied`; a supplied wrong token fails the
-version-specific authenticated unwrap as a generic `ErrDecryptFailed`, the same
-failure class as corrupted ciphertext or a wrong KEK.
+Binding is a live per-version property. Bind and unbind rewrap the selected
+DEK in place without changing the version number, value ciphertext, or KEK ID.
+Rotation discovers and atomically rewraps a contiguous cohort using fresh
+independent salts. Cohort membership is proved only by opening adjacent bound
+versions with the supplied key and stops at the first boundary; KMS stores no
+cohort identifier.
 
-Layering rather than deriving one key from `master ⊕ token` is deliberate:
-KEK rotation rewraps only the outer layer as a pure server-side operation;
-client token rotation is independent and only requires the client to supply
-the old token when writing a new version.
+An administrator can preview and irreversibly purge the contiguous cohort for
+a compromised key. The mutation replays the preview revision and exact
+affected-version list as compare-and-swap guards, bypasses immutable-release
+deletion protection, leaves minimal tombstones, and preserves labels. Ordinary
+success is not returned until SQLite secure deletion and a truncating WAL
+checkpoint have removed the payload from the active database artifacts. This
+cannot retract backups, snapshots, copy-on-write layers, replicas, or raw-media
+remanence. The full credential, cohort, API, and physical-erasure contract is
+in [`binding-keys.md`](binding-keys.md).
 
-**Token rotation is per-version, not global.** The per-version HKDF key
-share is the token itself, bound to that version's own
-`client_key_salt` — not the secret-level `access_token_hash`, which only
-tracks the most recently minted token. Rotating (`PutSecret` with
-`generate_access_token: true` on an existing client-bound secret —
-requires the *current* token to authorize the write) encrypts only the
-**new** version under the new token; every prior version stays encrypted
-under whichever token was active when it was written
-(`internal/core/secrets.go`, `PutSecret`/`GetSecret`). Keep old tokens if
-you need to read historical versions after a rotation, and note that
-promoting an older version back to "current" (`PromoteSecretVersion`,
-which only moves a pointer — it never re-encrypts) means callers must
-present *that version's* token, not the latest one, to read it.
-
-**Threat model for client-bound secrets, specifically:**
-
-| Attacker has | Can decrypt? |
-|---|---|
-| SQLite DB only | No |
-| SQLite DB + master key | **No** — this is the whole point. The inner layer requires the client token, which lives only in the consuming application's configuration, never in the KMS database. |
-| A leaked client token alone | No — still needs the ciphertext (from the DB) and the master key (to unwrap the outer layer) to get anywhere, and even then only decrypts secrets bound to that specific token. |
-| Full live compromise of the running KMS host | Yes, for any request whose token arrives while the attacker has code execution — this defends against **offline** database+key theft, not a live host compromise (see below). |
-
-**No recovery escrow, by design.** Losing the master key makes every secret
-version irrecoverable. Losing a client token makes the versions encrypted under
-that token irrecoverable; versions written under other retained tokens remain
-readable. There is no backdoor, admin override, or support path around this.
-The audited admin `Service.RevealSecret` path can decrypt a client-bound
-version only when the operator supplies that version's client token with the
-request. Missing, wrong, and unusable client key material all surface as the
-same generic decryption failure. The frontend keeps the token transient, sends
-it only in the JSON body of that reveal request, clears the input, and never
-stores or displays the token. Per-secret credentials are accepted only in the
-exact JSON/protobuf request that consumes them; custom HTTP headers and gRPC
-metadata are ignored so deployments do not depend on proxies redacting them.
-This is a strict transport cutover: upgrade the server and protected-secret
-clients together because legacy clients that send only the custom header or
-metadata cannot authorize a protected operation.
-The "New secret" UI still
-requires an explicit checkbox acknowledgment of the no-escrow property before
-it will submit the form (`frontend/pages/secrets/new.tsx`).
+Access tokens remain completely independent. A version may be bound,
+token-gated, both, or neither. The access-token hash is never used as binding
+key material, and changing one credential does not rotate the other. SDK read
+caches are parameter-only: secret plaintext is never cached, so a live bind or
+token transition cannot be bypassed by a previously uncredentialed read.
 
 ## Token model
 
@@ -304,21 +269,15 @@ creation/rotation time and is not retrievable again:
   (hash-only) or a certificate (public key only; the leaf private key is
   returned once at issuance and never persisted).
 - **Per-secret access tokens** (`secrets.access_token_hash`, prefix
-  `kmss_`): optional, attached to an individual secret. Each immutable
-  version records whether a token was required when it was written, so first
-  enabling a token on a later standard-secret version does not retroactively
-  protect older versions. `GetSecret` for a standard-secret version marked
-  token-protected — **including when called by admins** — requires the matching
-  token in `GetSecretRequest.secret_token` (`tokenHashMatches`, constant-time
-  comparison via `hmac.Equal`). HTTP client-bound updates and admin reveals
-  use the equivalent `secret_token` JSON request-body field. Explicit rotation replaces the shared
-  credential for every standard-secret version already marked protected. For
-  client-bound secrets, writing another version requires the current token,
-  and reads use the token as the per-version key-derivation material described
-  above. The admin `RevealSecret` path
-  bypasses the standard per-secret token gate (a break-glass capability,
-  fully audited) but — as noted above — still cannot decrypt a client-bound
-  secret without that version's token.
+  `kmss_`): optional, attached to an individual secret. Each immutable version
+  records whether the access-token gate applies. `PutSecret` accepts only the
+  boolean `generate_access_token`; when true, the server creates or rotates the
+  token and returns it exactly once. `GetSecret` for a gated version requires
+  the matching `GetSecretRequest.secret_token` (`tokenHashMatches`,
+  constant-time comparison via `hmac.Equal`). The admin `RevealSecret` path
+  retains its fully audited access-token bypass, but a bound version still
+  cannot be opened without its independent `binding_key`. The token hash is
+  never used to derive a binding key, and the two credentials may coexist.
 
 Authentication failures are generic at the HTTP and gRPC boundaries regardless
 of whether a presented token was malformed, unknown, or belonged to a disabled
@@ -616,8 +575,8 @@ rule-only form used where the implicit grant must not apply.
 
 Admin identities (`Identity.Kind == "admin"`) bypass namespace method gates and
 data-plane policy — they are the management plane — except the one place that
-is cryptographically impossible regardless of privilege (revealing a
-client-bound secret without its token). Their secret and administrative actions
+is cryptographically impossible regardless of privilege (revealing a bound
+secret without its binding key). Their secret and administrative actions
 still follow the normal audit guarantees.
 
 **Delegating `admin:identity:cert` is delegating impersonation.** Whoever can
@@ -656,28 +615,28 @@ non-`"*"` labels are validated by `internal/keyutil`.
 A configuration release is an immutable set of exact references and
 non-sensitive metadata, not a capability. Permission to create, read,
 validate, activate, list, or watch a release does **not** grant access to any
-referenced parameter or secret. Creation and validation independently
-authorize resource reads, including every cross-namespace reference; each SDK
-loader fetches pinned values through the existing parameter and secret RPCs and
-their existing authorization and cryptographic checks.
+referenced parameter or secret. Both parameter and secret pins must belong to
+the release's home namespace. Creation and validation independently authorize
+resource reads; each SDK loader fetches pinned values through the existing
+parameter and secret RPCs and their existing authorization and cryptographic
+checks.
 
-Secret entries capture the exact version's resource identity, content type,
-non-sensitive metadata, and the booleans `client_bound` and
-`has_access_token`. Secret plaintext, token hashes, plaintext access tokens,
-and client-bound key shares never enter release rows, digests, watch events,
-validation errors, diffs, acknowledgement diagnostics, logs, or metrics. A
-loader's token provider is local application code and is invoked only for a
-protected secret; the credential is sent only on that secret's read RPC.
+Secret entries capture only the exact version's resource identity, content
+type, and non-sensitive metadata. Live `bound` and `has_access_token` flags are
+absent from release rows and digests. Secret plaintext, token hashes, plaintext
+access tokens, and binding keys never enter releases, watch events, validation
+errors, diffs, acknowledgement diagnostics, logs, or metrics. Before a value
+fetch, a loader obtains exact live metadata, verifies its identity/version/
+state/expiry, then resolves access tokens and binding keys independently by
+alias. Missing credentials or failed resolution reject the entire candidate;
+hot reload retains the last-known-good snapshot.
 
-Every release entry also persists the immutable `resource_namespace_id` that
-was independently authorized for its parameter or secret reference. Release
-creation rechecks all accumulated namespace bindings in its write transaction;
-activation joins the stored ID, textual address, resource key, and exact
-version, so a delete/recreate at the same address cannot retarget a pin.
-Current/previous-release deletion guards likewise prefer the exact ID. Migrated
-legacy entries with ID `0` remain readable and retain their conservative
-name-based deletion guard, but activation fails closed with
-`FailedPrecondition`; recreate the release to establish exact pins.
+Every release entry also persists the immutable `resource_namespace_id` for
+its home namespace. Release creation rechecks all namespace bindings in its
+write transaction; activation joins the stored ID, textual address, resource
+key, and exact version, so a delete/recreate at the same address cannot
+retarget a pin. There is no legacy entry compatibility path in the greenfield
+`0.3.x` database baseline.
 
 The deterministic release digest covers an alias-sorted protobuf projection of
 schema and resource pins, captured metadata, and parameter digests. It excludes
@@ -755,13 +714,10 @@ one-bit-per-alias oracle over parameter contents, so it is hardened as one:
   always affordable from a full bucket. Both buckets are in-memory and
   process-local: each server instance enforces the budget independently and
   a restart resets it.
-- **Cross-namespace pins.** Release access never grants access to a
-  referenced parameter: when the active release pins a parameter from
-  another namespace, a non-admin caller must also hold
-  `configuration-release:verify-defaults` on *that* namespace, otherwise the
-  whole call is denied (audited as `authz.denial`) and no verdict is
-  returned. Grant the verify operation there rather than `parameter:read`;
-  it is the least privilege that still lets CI cover shared parameters.
+- **Home-namespace pins.** Both parameter and secret entries must belong to
+  the release's own namespace. The verification oracle therefore needs only
+  `configuration-release:verify-defaults` on that namespace; it never follows
+  a cross-namespace release pin.
 - **Upgrade note.** Existing allow rules for the category wildcard
   `configuration-release:*` (or the global `*`) cover the new operation
   automatically. Review identities holding those wildcards before upgrading
@@ -916,10 +872,12 @@ Redaction is enforced by type, not by call-site discipline:
   endpoint that can return plaintext is the admin-only `POST
   /api/v1/secrets/reveal`, which is explicitly audited per call.
 - The frontend never renders a secret value outside the explicit reveal
-  flow. For a client-bound version, the confirmation dialog requires that
-  version's token and clears it as the request starts; it is neither persisted
-  nor included in UI notifications. The revealed value follows the same
-  30-second auto-forget behavior as a standard secret.
+  flow. For a bound version, the confirmation dialog requires that version's
+  binding key. The administrator break-glass path bypasses access-token gating,
+  so the console does not solicit that token. The binding-key input is cleared
+  as the request starts and is neither persisted nor included in UI
+  notifications. The revealed value follows the same 30-second auto-forget
+  behavior as a standard secret.
 - HTTP request logging (`internal/server/httpserver/server.go`) deliberately
   omits headers, bodies, and the query string. Per-secret credentials live only
   in bounded request bodies, while resource identifiers (`env`/`app`/`key`)
@@ -932,15 +890,14 @@ The security boundary explicitly does not protect against:
 
 - **A live, fully compromised KMS host.** If an attacker has code execution
   on the server process, they can read the unsealed KEK from memory,
-  observe client-bound tokens as they arrive on live requests, and decrypt
-  anything the server itself is currently able to decrypt. Client-bound
-  mode raises the bar (a leaked token alone, or a stolen DB+key alone, is
-  each insufficient) but does not create a boundary against the process
+  observe binding keys as they arrive on live requests, and decrypt
+  anything the server itself is currently able to decrypt. Binding keys do
+  not create a boundary against the process
   that holds the key material and sees the traffic.
 - **A malicious or compromised administrator.** Admin identities are the
   management plane: they stand outside the per-namespace method gate and
-  data-plane policy, and can reveal any standard secret. They can also reveal
-  a client-bound version if they obtain its client token; every action is
+  data-plane policy, and can reveal any unbound secret. They can also reveal
+  a bound version if they obtain its binding key; every action is
   audited, which gives detection, not prevention. Requiring a client
   certificate alongside the identity token raises
   the bar for *stealing* an admin credential — the token alone is worthless,
@@ -951,8 +908,8 @@ The security boundary explicitly does not protect against:
   `rotate-admin` for the token, either of which takes effect on the next
   request and closes open watch streams within a heartbeat.
 - **Loss of the master key**, which makes every secret version unrecoverable,
-  or loss of a client-bound version's client token, which makes versions
-  encrypted under that token unrecoverable. Both are by design (no escrow); see
+  or loss of a bound version's binding key, which makes that cryptographic
+  cohort unrecoverable. Both are by design (no escrow); see
   [`operations.md`](operations.md#disaster-recovery) for what this means
   operationally.
 - **This is not a replacement for a cloud KMS, HSM, or enterprise
