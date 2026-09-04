@@ -10,7 +10,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
-// §25.2.4 — a token-protected but NOT client-bound secret: GetSecret requires
+// §25.2.4 — a token-protected but unbound secret: GetSecret requires
 // the token even for an admin, while the audited RevealSecret break-glass path
 // bypasses it (because the server holds the key material for standard wrapping).
 func TestTokenProtectedSecret(t *testing.T) {
@@ -31,22 +31,22 @@ func TestTokenProtectedSecret(t *testing.T) {
 	}
 
 	// Admin GetSecret without the token is denied.
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("admin GetSecret without token err = %v, want ErrPermissionDenied", err)
 	}
 	// A wrong token is denied with the same generic error.
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "kmss_wrongwrongwrongwrongwrongwrong"); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "kmss_wrongwrongwrongwrongwrongwrong", ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("GetSecret wrong token err = %v, want ErrPermissionDenied", err)
 	}
 	// The correct token succeeds.
-	got, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", res.AccessToken)
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", res.AccessToken, "")
 	if err != nil || string(got.Value) != plaintext {
 		t.Fatalf("GetSecret with token = %q err=%v, want %q", got.Value, err, plaintext)
 	}
 
 	// RevealSecret (admin break-glass) bypasses the token gate for a standard
 	// secret and is audited.
-	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "")
+	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "", "", "")
 	if err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}

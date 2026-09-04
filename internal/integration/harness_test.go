@@ -261,7 +261,7 @@ func allowRule(op, env, app string) domain.PolicyRule {
 	return domain.PolicyRule{Operation: op, Env: env, App: app}
 }
 
-// stdSecret builds a plain (non-client-bound) secret write, ensuring the target
+// stdSecret builds an unbound secret write, ensuring the target
 // namespace exists first.
 func (h *harness) stdSecret(path, value string) core.PutSecretInput {
 	h.tb.Helper()

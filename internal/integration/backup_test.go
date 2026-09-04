@@ -61,7 +61,7 @@ func TestBackupAndRestore(t *testing.T) {
 		t.Errorf("restored revision = %d, want %d", gotRev, wantRev)
 	}
 
-	sec, err := svc.GetSecret(ctx, h.admin, h.ref("/prod/app/db"), 0, "")
+	sec, err := svc.GetSecret(ctx, h.admin, h.ref("/prod/app/db"), 0, "", "", "")
 	if err != nil {
 		t.Fatalf("restored GetSecret: %v", err)
 	}

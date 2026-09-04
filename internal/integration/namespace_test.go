@@ -13,7 +13,7 @@ import (
 )
 
 // §7 — the per-namespace auth-method gate is enforced end to end for a
-// token-authenticated client bound to an mTLS-only namespace: it is denied every
+// token-authenticated client assigned to an mTLS-only namespace: it is denied every
 // operation (even ones its implicit home grant would otherwise allow) until the
 // namespace admits tokens. Admins bypass the gate throughout.
 func TestNamespaceMethodGateEndToEnd(t *testing.T) {
@@ -29,7 +29,7 @@ func TestNamespaceMethodGateEndToEnd(t *testing.T) {
 		t.Fatalf("admin seed: %v", err)
 	}
 
-	// A token client bound to this namespace would have the implicit home grant,
+	// A token client assigned to this namespace would have the implicit home grant,
 	// but the method gate rejects it before authorization even runs.
 	client, _ := h.createBoundClient("locked-client", &ns)
 	if _, err := h.svc.GetParameter(ctx, client, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {

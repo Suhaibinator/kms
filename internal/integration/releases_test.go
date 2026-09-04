@@ -301,7 +301,7 @@ func assertReleasePins(t *testing.T, release domain.ConfigurationRelease, parame
 		t.Fatalf("parameter release pin = %+v, want version %d with digest", parameter, parameterVersion)
 	}
 	secret := entries["database_password"]
-	if secret.Kind != domain.ReleaseEntrySecret || secret.Version != secretVersion || secret.ParameterDigest != "" || !secret.HasAccessToken {
+	if secret.Kind != domain.ReleaseEntrySecret || secret.Version != secretVersion || secret.ParameterDigest != "" {
 		t.Fatalf("secret release pin = %+v, want metadata-only version %d", secret, secretVersion)
 	}
 	text := fmt.Sprintf("%+v", release)

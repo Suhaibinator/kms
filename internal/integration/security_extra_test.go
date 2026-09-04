@@ -28,7 +28,7 @@ func TestExpiredVersionUnreadable(t *testing.T) {
 		t.Fatalf("PutSecret: %v", err)
 	}
 	// Readable while unexpired.
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", ""); err != nil {
 		t.Fatalf("read before expiry: %v", err)
 	}
 	// Age the row so its expiry is in the past. Use the store's fixed-width
@@ -42,7 +42,7 @@ func TestExpiredVersionUnreadable(t *testing.T) {
 			t.Fatalf("age expiry: %v", err)
 		}
 	})
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read expired version err = %v, want ErrFailedPrecondition", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestDEKAndNonceTamperingFail(t *testing.T) {
 				t.Fatalf("PutSecret: %v", err)
 			}
 			h.reopen(func(db *sql.DB) { flipColumnByte(t, db, ref, 1, column) })
-			_, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "")
+			_, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", "")
 			if !errors.Is(err, domain.ErrDecryptFailed) {
 				t.Errorf("tampered %s err = %v, want ErrDecryptFailed", column, err)
 			}
@@ -119,7 +119,7 @@ func TestAADCrossWireFails(t *testing.T) {
 		}
 	})
 
-	if _, err := h.svc.GetSecret(ctx, h.admin, dstRef, 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, dstRef, 0, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Errorf("cross-wired read err = %v, want ErrDecryptFailed", err)
 	}
 }
@@ -138,8 +138,8 @@ func TestUnauthorizedDoesNotRevealExistence(t *testing.T) {
 	}
 
 	client, _ := h.createClient("prober")
-	_, errExisting := h.svc.GetSecret(ctx, client, h.ref(existing), 0, "")
-	_, errMissing := h.svc.GetSecret(ctx, client, h.ref(missing), 0, "")
+	_, errExisting := h.svc.GetSecret(ctx, client, h.ref(existing), 0, "", "", "")
+	_, errMissing := h.svc.GetSecret(ctx, client, h.ref(missing), 0, "", "", "")
 
 	if !errors.Is(errExisting, domain.ErrPermissionDenied) || !errors.Is(errMissing, domain.ErrPermissionDenied) {
 		t.Fatalf("existing=%v missing=%v, both want ErrPermissionDenied", errExisting, errMissing)
@@ -149,7 +149,7 @@ func TestUnauthorizedDoesNotRevealExistence(t *testing.T) {
 	}
 
 	// An authorized caller (admin) does see the distinction.
-	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref(missing), 0, ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref(missing), 0, "", "", ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("admin missing read err = %v, want ErrNotFound", err)
 	}
 }

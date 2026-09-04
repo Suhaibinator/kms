@@ -6,9 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
-	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -476,7 +474,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 }
 
-func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T) {
+func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 	e := newLoopbackTLSEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -488,111 +486,89 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 		t.Fatalf("create secret race namespace: %v", err)
 	}
 	secrets := kmsv1.NewSecretServiceClient(e.adminConn)
-
-	type writeResult struct {
-		value string
-		resp  *kmsv1.PutSecretResponse
-		err   error
+	ref := networkRef("prod", "secret-race", "bound")
+	created, err := secrets.PutSecret(rootCtx, &kmsv1.PutSecretRequest{
+		Ref: ref, Value: []byte("network-bound-value"), ContentType: "text/plain",
+		BindingKey: integrationBindingKeyA, GenerateAccessToken: true,
+	})
+	if err != nil {
+		t.Fatalf("PutSecret: %v", err)
 	}
-	runConcurrent := func(secretToken string, count int) []writeResult {
-		t.Helper()
-		start := make(chan struct{})
-		results := make(chan writeResult, count)
-		var wg sync.WaitGroup
-		for i := range count {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				<-start
-				value := fmt.Sprintf("candidate-%02d", i)
-				resp, err := secrets.PutSecret(rootCtx, &kmsv1.PutSecretRequest{
-					Ref: networkRef("prod", "secret-race", "bound"), Value: []byte(value),
-					ContentType: "text/plain", ClientBound: true, GenerateAccessToken: true,
-					SecretToken: secretToken,
-				})
-				results <- writeResult{value: value, resp: resp, err: err}
-			}(i)
-		}
-		close(start)
-		wg.Wait()
-		close(results)
-		out := make([]writeResult, 0, count)
-		for result := range results {
-			out = append(out, result)
-		}
-		return out
+	if created.GetVersion() != 1 || created.GetAccessToken() == "" {
+		t.Fatalf("PutSecret response = %+v", created)
 	}
 
-	assertOneWinner := func(phase string, results []writeResult, wantVersion uint64) writeResult {
-		t.Helper()
-		var winners []writeResult
-		for _, result := range results {
-			if result.err == nil {
-				winners = append(winners, result)
-				continue
-			}
-			switch status.Code(result.err) {
-			case codes.Aborted, codes.PermissionDenied:
-				// Aborted means the atomic expectation caught an overlapping
-				// transaction; PermissionDenied means this request observed the
-				// already-committed token before it entered its write.
-			default:
-				t.Fatalf("%s loser returned %v: %v", phase, status.Code(result.err), result.err)
-			}
-		}
-		if len(winners) != 1 {
-			t.Fatalf("%s winners = %+v, want exactly one", phase, winners)
-		}
-		winner := winners[0]
-		if winner.resp.GetVersion() != wantVersion || winner.resp.GetAccessToken() == "" {
-			t.Fatalf("%s winner = %+v, want version %d and one-time token", phase, winner, wantVersion)
-		}
-		return winner
-	}
-
-	created := assertOneWinner("concurrent create", runConcurrent("", 8), 1)
-	legacyCtx := grpcmetadata.AppendToOutgoingContext(rootCtx, "x-kms-secret-token", created.resp.GetAccessToken())
+	// Secret credentials are explicit request fields. A legacy metadata header
+	// is ignored and cannot satisfy the independent access-token gate.
+	legacyCtx := grpcmetadata.AppendToOutgoingContext(rootCtx, "x-kms-secret-token", created.GetAccessToken())
 	if _, err := secrets.GetSecret(legacyCtx, &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+		Ref: ref, BindingKey: integrationBindingKeyA,
 	}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("legacy secret-token metadata read code = %v, want PermissionDenied", status.Code(err))
 	}
 	metadata, err := secrets.GetSecretMetadata(rootCtx, &kmsv1.GetSecretMetadataRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+		Ref: ref,
 	})
 	if err != nil {
-		t.Fatalf("metadata after concurrent create: %v", err)
+		t.Fatalf("GetSecretMetadata: %v", err)
 	}
-	if len(metadata.GetSecret().GetVersions()) != 1 || metadata.GetSecret().GetLabels()[domain.LabelCurrent] != 1 {
-		t.Fatalf("concurrent create committed multiple versions: %+v", metadata.GetSecret())
+	if !metadata.GetSecret().GetBound() || !metadata.GetSecret().GetHasAccessToken() ||
+		len(metadata.GetSecret().GetVersions()) != 1 || !metadata.GetSecret().GetVersions()[0].GetBound() ||
+		!metadata.GetSecret().GetVersions()[0].GetHasAccessToken() {
+		t.Fatalf("bound/token metadata = %+v", metadata.GetSecret())
 	}
-	createdRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: created.resp.GetAccessToken(),
+	if _, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: ref, SecretToken: created.GetAccessToken(),
+	}); status.Code(err) != codes.Internal || status.Convert(err).Message() != "internal error" {
+		t.Fatalf("token-only read = %v, want sanitized Internal", err)
+	}
+	read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyA,
 	})
-	if err != nil || string(createdRead.GetValue()) != created.value {
-		t.Fatalf("read create winner = %q err=%v, want %q", createdRead.GetValue(), err, created.value)
+	if err != nil || string(read.GetValue()) != "network-bound-value" {
+		t.Fatalf("read with both credentials = %q err=%v", read.GetValue(), err)
 	}
 
-	rotated := assertOneWinner("concurrent token rotation", runConcurrent(created.resp.GetAccessToken(), 8), 2)
-	metadata, err = secrets.GetSecretMetadata(rootCtx, &kmsv1.GetSecretMetadataRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+	unbound, err := secrets.UnbindSecret(rootCtx, &kmsv1.UnbindSecretRequest{
+		Ref: ref, Version: 1, BindingKey: integrationBindingKeyA,
 	})
-	if err != nil {
-		t.Fatalf("metadata after concurrent rotation: %v", err)
+	if err != nil || unbound.GetAnchorVersion() != 1 || len(unbound.GetAffectedVersions()) != 1 || unbound.GetAffectedVersions()[0] != 1 {
+		t.Fatalf("UnbindSecret = %+v err=%v", unbound, err)
 	}
-	if len(metadata.GetSecret().GetVersions()) != 2 || metadata.GetSecret().GetLabels()[domain.LabelCurrent] != 2 {
-		t.Fatalf("concurrent rotation committed multiple versions: %+v", metadata.GetSecret())
+	if read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: ref, SecretToken: created.GetAccessToken(),
+	}); err != nil || string(read.GetValue()) != "network-bound-value" {
+		t.Fatalf("unbound token-only read = %q err=%v", read.GetValue(), err)
 	}
-	rotatedRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: rotated.resp.GetAccessToken(),
+	bound, err := secrets.BindSecret(rootCtx, &kmsv1.BindSecretRequest{
+		Ref: ref, Version: 0, BindingKey: integrationBindingKeyB,
 	})
-	if err != nil || string(rotatedRead.GetValue()) != rotated.value {
-		t.Fatalf("read rotation winner = %q err=%v, want %q", rotatedRead.GetValue(), err, rotated.value)
+	if err != nil || bound.GetAnchorVersion() != 1 {
+		t.Fatalf("BindSecret = %+v err=%v", bound, err)
 	}
-	if staleRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: created.resp.GetAccessToken(),
-	}); err == nil {
-		t.Fatalf("rotated-out token read current plaintext %q", staleRead.GetValue())
+	preview, err := secrets.PreviewSecretBindingCohort(rootCtx, &kmsv1.PreviewSecretBindingCohortRequest{
+		Ref: ref, AnchorVersion: 0, BindingKey: integrationBindingKeyB,
+	})
+	if err != nil || preview.GetAnchorVersion() != 1 || len(preview.GetAffectedVersions()) != 1 || preview.GetAffectedVersions()[0] != 1 {
+		t.Fatalf("PreviewSecretBindingCohort = %+v err=%v", preview, err)
+	}
+	expectedRevision := preview.GetRevision()
+	rotated, err := secrets.RotateSecretBindingKey(rootCtx, &kmsv1.RotateSecretBindingKeyRequest{
+		Ref: ref, AnchorVersion: 1, BindingKey: integrationBindingKeyB, NewBindingKey: integrationBindingKeyC,
+		ExpectedRevision: &expectedRevision, ExpectedAffectedVersions: preview.GetAffectedVersions(),
+	})
+	if err != nil || rotated.GetAnchorVersion() != 1 || rotated.GetRevision() <= preview.GetRevision() {
+		t.Fatalf("RotateSecretBindingKey = %+v err=%v", rotated, err)
+	}
+	if _, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyB,
+	}); status.Code(err) != codes.Internal {
+		t.Fatalf("old binding key read code = %v, want Internal", status.Code(err))
+	}
+	if read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyC,
+	}); err != nil || string(read.GetValue()) != "network-bound-value" {
+		t.Fatalf("rotated key read = %q err=%v", read.GetValue(), err)
 	}
 }
 

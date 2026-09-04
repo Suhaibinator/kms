@@ -12,7 +12,7 @@ import (
 )
 
 // §11.4 / §25.2 — KEK rotation rewraps every secret version under a fresh key.
-// All secrets (standard and client-bound) keep decrypting, key metadata reflects
+// All secrets (unbound and binding-key protected) keep decrypting, key metadata reflects
 // the new active / old retired keys, and the old key file can no longer unseal.
 func TestKEKRotationEndToEnd(t *testing.T) {
 	h := newHarness(t)
@@ -27,14 +27,14 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 
 	const boundPath = "/prod/app/bound"
 	const boundValue = "bound-rotate-value"
+	const bindingKey = "integration-kek-rotation-binding-key-0123456789abcdef"
 	boundRef := h.ref(boundPath)
-	boundRes, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Ref: h.ensureNS(boundPath), Value: []byte(boundValue), ClientBound: true, GenerateToken: true,
+	_, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
+		Ref: h.ensureNS(boundPath), Value: []byte(boundValue), BindingKey: bindingKey,
 	})
 	if err != nil {
-		t.Fatalf("PutSecret client-bound: %v", err)
+		t.Fatalf("PutSecret bound: %v", err)
 	}
-	boundToken := boundRes.AccessToken
 
 	// Record the KEK id in use before rotation.
 	_, verBefore, err := h.store.GetSecretVersion(ctx, stdRef, 0, "")
@@ -67,11 +67,11 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	}
 
 	// Both secrets still decrypt through the live (rotated) service.
-	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
+	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, "", "", ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("standard after rotate = %q err=%v, want %q", got.Value, err, stdValue)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, boundRef, 0, "", boundToken); err != nil || string(got.Value) != boundValue {
-		t.Errorf("client-bound after rotate = %q err=%v, want %q", got.Value, err, boundValue)
+	if got, err := h.svc.GetSecret(ctx, h.admin, boundRef, 0, "", "", bindingKey); err != nil || string(got.Value) != boundValue {
+		t.Errorf("bound after rotate = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 
 	// The stored version now references the new KEK id.
@@ -126,7 +126,10 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	}
 	svc2 := core.New(st2, newTestLogger(h.logBuf), "test")
 	svc2.SetKeyring(kr)
-	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
+	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, "", "", ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, stdValue)
+	}
+	if got, err := svc2.GetSecret(ctx, h.admin, boundRef, 0, "", "", bindingKey); err != nil || string(got.Value) != boundValue {
+		t.Errorf("bound decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 }

@@ -21,7 +21,7 @@ func TestAuditGeneration(t *testing.T) {
 	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret("/prod/app/secret", secretPlaintext)); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref("/prod/app/secret"), 0, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref("/prod/app/secret"), 0, "", "", ""); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 	mustPutParam(t, h, "/prod/app/param", "v")
@@ -74,7 +74,7 @@ func TestAuditEventCoverage(t *testing.T) {
 			t.Fatalf("PutSecret: %v", err)
 		}
 	}
-	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, ""); err != nil {
+	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", "", ""); err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}
 	if _, _, _, err := h.svc.PromoteSecretVersion(ctx, h.admin, ref, 1); err != nil {
@@ -117,7 +117,7 @@ func TestAuditRowsHaveNoPlaintext(t *testing.T) {
 	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret("/prod/x/secret", plaintext)); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref("/prod/x/secret"), 0, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, h.ref("/prod/x/secret"), 0, "", "", ""); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 

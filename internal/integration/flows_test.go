@@ -24,7 +24,7 @@ func TestSecretPutGetFlow(t *testing.T) {
 		t.Fatalf("first version = %d, want 1", r1.Version)
 	}
 
-	got, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, "")
+	got, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, "", "", "")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -44,15 +44,15 @@ func TestSecretPutGetFlow(t *testing.T) {
 		t.Fatalf("second version = %d, want 2", r2.Version)
 	}
 
-	cur, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, domain.LabelCurrent)
+	cur, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, domain.LabelCurrent, "", "")
 	if err != nil || string(cur.Value) != "v2-secret" {
 		t.Fatalf("current = %q err=%v, want v2-secret", cur.Value, err)
 	}
-	prev, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, domain.LabelPrevious)
+	prev, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, domain.LabelPrevious, "", "")
 	if err != nil || string(prev.Value) != "v1-secret" {
 		t.Fatalf("previous = %q err=%v, want v1-secret", prev.Value, err)
 	}
-	byVer, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 1, "")
+	byVer, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 1, "", "", "")
 	if err != nil || string(byVer.Value) != "v1-secret" {
 		t.Fatalf("v1 by number = %q err=%v", byVer.Value, err)
 	}
@@ -65,7 +65,7 @@ func TestSecretPutGetFlow(t *testing.T) {
 	if cur2 != 1 || prevVer != 2 {
 		t.Errorf("promote result current=%d previous=%d, want 1/2", cur2, prevVer)
 	}
-	afterPromote, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, "")
+	afterPromote, err := h.svc.GetSecret(ctx, h.admin, h.ref(path), 0, "", "", "")
 	if err != nil || string(afterPromote.Value) != "v1-secret" {
 		t.Fatalf("after promote current = %q err=%v, want v1-secret", afterPromote.Value, err)
 	}

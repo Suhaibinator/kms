@@ -71,7 +71,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 	value, err := restoredService.GetSecret(ctx, core.Principal{
 		Identity: domain.Identity{Name: "network-root", Kind: domain.IdentityKindAdmin},
 		Method:   domain.AuthMethodToken,
-	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "process-backup"}, Key: "database-password"}, 0, "")
+	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "process-backup"}, Key: "database-password"}, 0, "", "", "")
 	if err != nil {
 		t.Fatalf("read secret from restored process database: %v", err)
 	}
