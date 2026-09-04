@@ -107,14 +107,14 @@ message PutSecretRequest {
 ```
 
 The HTTP equivalents are `POST /api/v1/secrets/reveal` with
-`env`, `app`, `key`, `version` or `label`, `secret_token`, and `binding_key`;
+`env`, `app`, `key`, `version` or `label`, and `binding_key`;
 and `POST /api/v1/secrets` with `env`, `app`, `key`, `value_base64`,
 `content_type`, `metadata_json`, `binding_key`, `generate_access_token`, and
 `expires_at_unix_ms`. Credentials belong only in these request bodies, never
-in a URL or custom header. The admin-only reveal path accepts `secret_token`
-for transport symmetry but bypasses the access-token gate; it still requires
-the binding key for a bound version. Normal data-plane `GetSecret` enforces
-both independent requirements.
+in a URL or custom header. The admin-only reveal path bypasses the access-token
+gate and rejects `secret_token` as an unknown field; it still requires the
+binding key for a bound version. Normal data-plane `GetSecret` enforces both
+independent requirements.
 
 `SecretMetadata.bound` describes the version selected by `current`. Every
 `SecretVersionInfo` has its own live `bound` and `has_access_token` flags;

@@ -46,7 +46,7 @@ func TestTokenProtectedSecret(t *testing.T) {
 
 	// RevealSecret (admin break-glass) bypasses the token gate for a standard
 	// secret and is audited.
-	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "", "", "")
+	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "", "")
 	if err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}

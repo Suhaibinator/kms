@@ -451,6 +451,17 @@ func TestBoundRevealRequiresBindingKey(t *testing.T) {
 	}
 	body := map[string]any{"env": "prod", "app": "gradethis", "key": "bound"}
 
+	// Reveal does not accept the per-secret access token. Strict decoding keeps
+	// legacy clients from needlessly transmitting that sensitive credential.
+	legacyBody := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "bound", "secret_token": token,
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", legacyBody)
+	mustStatus(t, w, http.StatusBadRequest)
+	if got := errCode(t, w); got != "invalid_argument" {
+		t.Fatalf("legacy secret_token code = %s, want invalid_argument", got)
+	}
+
 	// Missing and wrong binding keys collapse to the same generic boundary
 	// response. The independently minted access token is not needed on the
 	// audited admin reveal path.

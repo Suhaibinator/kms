@@ -316,7 +316,7 @@ func TestRevealSecretNonAdminDenied(t *testing.T) {
 	withKeyring(t, s)
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
 
-	_, err := s.RevealSecret(ctx, clientPrincipal("app"), tref("s"), 0, "", "", "")
+	_, err := s.RevealSecret(ctx, clientPrincipal("app"), tref("s"), 0, "", "")
 	if !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("err = %v, want ErrPermissionDenied", err)
 	}
@@ -333,7 +333,7 @@ func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	withKeyring(t, s)
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain", GenerateToken: true})
 
-	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
+	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "")
 	if err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}
@@ -429,8 +429,8 @@ func TestRevealBoundSecretBypassesTokenOnly(t *testing.T) {
 	putSecret(t, s, PutSecretInput{
 		Ref: tref("bound-reveal"), Value: []byte("v"), BindingKey: testBindingKeyA, GenerateToken: true,
 	})
-	_, missingErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", "")
-	_, wrongErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", testBindingKeyB)
+	_, missingErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "")
+	_, wrongErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", testBindingKeyB)
 	if !errors.Is(missingErr, domain.ErrDecryptFailed) || !errors.Is(wrongErr, domain.ErrDecryptFailed) {
 		t.Fatalf("missing/wrong binding-key errors = %v / %v", missingErr, wrongErr)
 	}
@@ -439,7 +439,7 @@ func TestRevealBoundSecretBypassesTokenOnly(t *testing.T) {
 	}
 
 	// No secret access token is supplied: Reveal bypasses that independent gate.
-	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", testBindingKeyA)
+	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", testBindingKeyA)
 	if err != nil {
 		t.Fatalf("RevealSecret with binding key: %v", err)
 	}

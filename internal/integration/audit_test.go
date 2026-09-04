@@ -74,7 +74,7 @@ func TestAuditEventCoverage(t *testing.T) {
 			t.Fatalf("PutSecret: %v", err)
 		}
 	}
-	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", "", ""); err != nil {
+	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", ""); err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}
 	if _, _, _, err := h.svc.PromoteSecretVersion(ctx, h.admin, ref, 1); err != nil {

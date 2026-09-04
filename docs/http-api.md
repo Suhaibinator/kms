@@ -992,12 +992,12 @@ Listing is always namespace-scoped: `env` and `app` are required.
   creates an unbound version, independent of the preceding version. A non-empty
   key must be opaque valid UTF-8 of at least 32 bytes. Access-token generation
   is independent and there is no write-side `secret_token`.
-- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","secret_token": "...","binding_key":"..."}` →
+- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","binding_key":"..."}` →
   `{"env","app","key","version","value_base64","content_type"}`.
   Admin only. Every successful reveal and decryption failure is audited as a
   reveal event. This administrator break-glass path deliberately bypasses the
-  access-token gate, so `secret_token` is accepted for transport symmetry but
-  ignored. A bound version still requires `binding_key`, because KMS cannot
+  access-token gate, and `secret_token` is therefore rejected as an unknown
+  field. A bound version still requires `binding_key`, because KMS cannot
   decrypt it without that material. Per-secret credentials are not accepted in
   custom headers, avoiding exposure through proxy configurations that log
   them. Request bodies are not logged by the server, and credentials are never

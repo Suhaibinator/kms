@@ -556,10 +556,9 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		Version     uint64 `json:"version"`
-		Label       string `json:"label"`
-		SecretToken string `json:"secret_token"`
-		BindingKey  string `json:"binding_key"`
+		Version    uint64 `json:"version"`
+		Label      string `json:"label"`
+		BindingKey string `json:"binding_key"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
@@ -567,8 +566,7 @@ func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := principalFrom(r.Context())
 	// Credentials are operation-local request fields and are never retained.
-	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, body.SecretToken, body.BindingKey)
-	body.SecretToken = ""
+	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, body.BindingKey)
 	body.BindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)

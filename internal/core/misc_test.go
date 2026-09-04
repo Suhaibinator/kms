@@ -496,7 +496,7 @@ func TestRevealSecretErrorPaths(t *testing.T) {
 		store := newFakeStore()
 		s := newTestService(store)
 		withKeyring(t, s)
-		if _, err := s.RevealSecret(ctx, adminPrincipal(), tref("missing"), 0, "", "", ""); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := s.RevealSecret(ctx, adminPrincipal(), tref("missing"), 0, "", ""); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
 	})
@@ -507,7 +507,7 @@ func TestRevealSecretErrorPaths(t *testing.T) {
 		withKeyring(t, s)
 		putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
 		store.tamperCiphertext(tref("s"), 1)
-		if _, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
+		if _, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 			t.Fatalf("err = %v, want ErrDecryptFailed", err)
 		}
 		if !store.hasAudit("secret.reveal", "error") {
@@ -521,7 +521,7 @@ func TestRevealSecretErrorPaths(t *testing.T) {
 		withKeyring(t, s)
 		putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
 		store.auditErr = errors.New("audit down")
-		val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
+		val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "")
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("err = %v, want ErrFailedPrecondition", err)
 		}

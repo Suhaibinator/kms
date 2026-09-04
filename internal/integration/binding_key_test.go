@@ -67,10 +67,10 @@ func TestBindingKeyCredentialsAndLiveMetadata(t *testing.T) {
 
 	// Reveal bypasses only the independent access-token gate. It still cannot
 	// open a bound version without the operator-owned binding key.
-	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", created.AccessToken, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("RevealSecret(missing binding key) err = %v, want ErrDecryptFailed", err)
 	}
-	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", "deliberately-wrong-access-token", integrationBindingKeyA)
+	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", integrationBindingKeyA)
 	if err != nil || string(revealed.Value) != "bound-and-token-gated" {
 		t.Fatalf("RevealSecret(binding key only) = %q err=%v", revealed.Value, err)
 	}

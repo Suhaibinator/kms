@@ -102,7 +102,7 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 // RevealSecret is the audited admin break-glass path. It bypasses the
 // independent access-token gate, but a bound version still requires its
 // operator-owned binding key because the server cannot decrypt without it.
-func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, secretToken, bindingKey string) (domain.SecretValue, error) {
+func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -123,9 +123,6 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
-	// secretToken is intentionally accepted as an independent operation input
-	// for transport symmetry, then ignored by this break-glass path.
-	_ = secretToken
 	if ver.Bound {
 		if err := testVersionBindingKey(keyring, ref, ver, bindingKey); err != nil {
 			s.auditRefWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
