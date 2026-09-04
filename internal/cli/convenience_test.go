@@ -115,6 +115,7 @@ type secretStub struct {
 	putResp             *kmsv1.PutSecretResponse
 	err                 error
 	getErr              error
+	readErr             error
 }
 
 func (s *secretStub) record(ctx context.Context) {
@@ -138,6 +139,9 @@ func (s *secretStub) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest)
 	defer s.mu.Unlock()
 	s.record(ctx)
 	s.getReq = req
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
 	if s.getErr != nil {
 		return nil, s.getErr
 	}

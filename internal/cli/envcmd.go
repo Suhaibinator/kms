@@ -236,7 +236,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version, SecretToken: token}
 			resp, err := client.GetSecret(cf.authCtx(ctx), req)
 			if err != nil {
-				return resolvedEnvironment{}, fmt.Errorf("secret %s: %w", path, err)
+				return resolvedEnvironment{}, fmt.Errorf("secret %s: %w", path, redactSecretRPCError(err))
 			}
 			if s.version != 0 {
 				if resp.GetVersion() != s.version {

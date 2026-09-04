@@ -31,34 +31,39 @@ type bindingSecretStub struct {
 	purgeReq    *kmsv1.PurgeSecretBindingCohortRequest
 	previewAt   time.Time
 	mutationAt  time.Time
+	bindErr     error
+	unbindErr   error
+	previewErr  error
+	rotateErr   error
+	purgeErr    error
 }
 
 func (s *bindingSecretStub) BindSecret(_ context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
 	s.bindReq = req
-	return s.mutation, nil
+	return s.mutation, s.bindErr
 }
 
 func (s *bindingSecretStub) UnbindSecret(_ context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
 	s.unbindReq = req
-	return s.mutation, nil
+	return s.mutation, s.unbindErr
 }
 
 func (s *bindingSecretStub) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
 	s.previewReq = req
 	s.previewAt, _ = ctx.Deadline()
-	return s.previewResp, nil
+	return s.previewResp, s.previewErr
 }
 
 func (s *bindingSecretStub) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretBindingCohortResponse, error) {
 	s.rotateReq = req
 	s.mutationAt, _ = ctx.Deadline()
-	return s.cohort, nil
+	return s.cohort, s.rotateErr
 }
 
 func (s *bindingSecretStub) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.PurgeSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
 	s.purgeReq = req
 	s.mutationAt, _ = ctx.Deadline()
-	return s.cohort, nil
+	return s.cohort, s.purgeErr
 }
 
 func newBindingCLI(t *testing.T, stub *bindingSecretStub) *testCLI {

@@ -137,7 +137,7 @@ func (c *CLI) cmdSecretBind(args []string) int {
 		Ref: protoRef(ref), Version: *version, BindingKey: bindingKey,
 	})
 	if err != nil {
-		return c.failErr("secret bind", err)
+		return c.failSecretRPC("secret bind", err)
 	}
 	return c.printSecretMutation("Bound", ref.String(), resp)
 }
@@ -169,7 +169,7 @@ func (c *CLI) cmdSecretUnbind(args []string) int {
 		Ref: protoRef(ref), Version: *version, BindingKey: bindingKey,
 	})
 	if err != nil {
-		return c.failErr("secret unbind", err)
+		return c.failSecretRPC("secret unbind", err)
 	}
 	return c.printSecretMutation("Unbound", ref.String(), resp)
 }
@@ -202,7 +202,7 @@ func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	})
 	cancelPreview()
 	if err != nil {
-		return c.failErr("binding-key rotate preview", err)
+		return c.failSecretRPC("binding-key rotate preview", err)
 	}
 	if err := validateCohortPreview(preview); err != nil {
 		return c.fail("binding-key rotate preview: %v", err)
@@ -229,7 +229,7 @@ func (c *CLI) cmdBindingKeyRotate(args []string) int {
 		ExpectedAffectedVersions: affected,
 	})
 	if err != nil {
-		return c.failErr("binding-key rotate", err)
+		return c.failSecretRPC("binding-key rotate", err)
 	}
 	return c.printCohortMutation("Rotated binding key for", ref.String(), resp)
 }
@@ -262,7 +262,7 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 	})
 	cancelPreview()
 	if err != nil {
-		return c.failErr("secret purge-binding-cohort preview", err)
+		return c.failSecretRPC("secret purge-binding-cohort preview", err)
 	}
 	if err := validateCohortPreview(preview); err != nil {
 		return c.fail("secret purge-binding-cohort preview: %v", err)
@@ -285,7 +285,7 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 		ExpectedAffectedVersions: affected,
 	})
 	if err != nil {
-		return c.failErr("secret purge-binding-cohort", err)
+		return c.failPurgeSecretRPC("secret purge-binding-cohort", err)
 	}
 	return c.printCohortMutation("Purged binding-key cohort for", ref.String(), resp)
 }

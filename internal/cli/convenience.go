@@ -375,7 +375,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		GenerateAccessToken: *genToken,
 	})
 	if err != nil {
-		return c.failErr("put-secret", err)
+		return c.failSecretRPC("put-secret", err)
 	}
 	if c.jsonOutput() {
 		// The one-time warning is security-relevant, so it goes to stderr
@@ -480,7 +480,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 		BindingKey:  bindingKey,
 	})
 	if err != nil {
-		return c.failErr("get-secret", err)
+		return c.failSecretRPC("get-secret", err)
 	}
 	if resp.GetVersion() != selected.GetVersion() || !sameRef(resp.GetRef(), protoRef(ref)) {
 		return c.fail("get-secret: server returned a different secret version")
