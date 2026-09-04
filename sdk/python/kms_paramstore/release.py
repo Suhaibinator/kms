@@ -901,6 +901,7 @@ class ReleaseLoader:
             provider = self._config.secret_token_provider
             if provider is None:
                 raise _CandidateFailure("token_unavailable")
+            check_cancelled()
             try:
                 secret_token = _token_from_result(provider(entry.alias, entry.path))
             except Exception:
@@ -914,6 +915,7 @@ class ReleaseLoader:
             binding_key = self._binding_keys.get(entry.alias, "")
             if not isinstance(binding_key, str) or not binding_key:
                 raise _CandidateFailure("token_unavailable")
+        check_cancelled()
         try:
             secret = self._client.get_secret(
                 entry.path,
