@@ -702,6 +702,27 @@ describe("KmsClient", () => {
     }
   });
 
+  it("rejects secret metadata returned for a different resource", async () => {
+    const invalidResponses = [
+      wireSecretMetadata("other"),
+      wireSecretMetadata("target", { env: "prod", app: "other" }),
+    ] as const;
+
+    for (const invalid of invalidResponses) {
+      const transport = new FakeTransport((path) => {
+        if (!path.endsWith("/GetSecretMetadata")) throw new Error(`unexpected ${path}`);
+        return { secret: invalid };
+      });
+      const client = new KmsClient({ transport, namespace: "prod/api" });
+
+      await expect(client.getSecretMetadata("target")).rejects.toMatchObject({
+        code: "internal",
+        message: "KMS secret metadata response resource reference did not match request",
+      });
+      await client.close();
+    }
+  });
+
   it("does not let a parameter read repopulate the cache after a successful mutation", async () => {
     let finishFirstRead!: (response: unknown) => void;
     const firstRead = new Promise<unknown>((resolve) => {
@@ -929,5 +950,19 @@ function wireSecret(
     contentType: "text/plain",
     metadataJson: "{}",
     createdAtUnixMs: 0n,
+  };
+}
+
+function wireSecretMetadata(key: string, namespace = { env: "prod", app: "api" }) {
+  return {
+    ref: { namespace, key },
+    contentType: "text/plain",
+    bound: false,
+    hasAccessToken: false,
+    metadataJson: "{}",
+    createdAtUnixMs: 0n,
+    updatedAtUnixMs: 0n,
+    labels: {},
+    versions: [],
   };
 }

@@ -570,6 +570,7 @@ export class KmsClient {
       );
       if (!response.secret)
         throw new KmsError("internal", "KMS secret metadata response was empty");
+      assertResourceIdentity("secret metadata", ref, response.secret.ref);
       return secretInfoFromWire(response.secret);
     } catch (error) {
       throwMapped(error);
@@ -1240,16 +1241,7 @@ function assertReadIdentity(
   returnedVersion: bigint,
   selector: { readonly version: bigint; readonly label: string },
 ): void {
-  if (returnedWireRef === undefined) {
-    throw new KmsError("internal", `KMS ${kind} response omitted resource reference`);
-  }
-  const returnedRef = fromWireRef(returnedWireRef);
-  if (
-    returnedRef.key !== requestedRef.key ||
-    !namespaceEquals(returnedRef.namespace, requestedRef.namespace)
-  ) {
-    throw new KmsError("internal", `KMS ${kind} response resource reference did not match request`);
-  }
+  assertResourceIdentity(kind, requestedRef, returnedWireRef);
   if (
     typeof returnedVersion !== "bigint" ||
     returnedVersion <= 0n ||
@@ -1259,6 +1251,23 @@ function assertReadIdentity(
   }
   if (selector.version > 0n && returnedVersion !== selector.version) {
     throw new KmsError("internal", `KMS ${kind} response version did not match request`);
+  }
+}
+
+function assertResourceIdentity(
+  kind: string,
+  requestedRef: ResourceRef,
+  returnedWireRef: WireResourceRef | undefined,
+): void {
+  if (returnedWireRef === undefined) {
+    throw new KmsError("internal", `KMS ${kind} response omitted resource reference`);
+  }
+  const returnedRef = fromWireRef(returnedWireRef);
+  if (
+    returnedRef.key !== requestedRef.key ||
+    !namespaceEquals(returnedRef.namespace, requestedRef.namespace)
+  ) {
+    throw new KmsError("internal", `KMS ${kind} response resource reference did not match request`);
   }
 }
 

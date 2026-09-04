@@ -19,6 +19,7 @@ from .async_watch import AsyncSubscriptionManager, AsyncWatchCallback
 from .cache import Cache
 from .client import (
     _assert_read_identity,
+    _assert_ref_identity,
     _cohort_guard,
     _normalize_selector,
     _secret_binding_cohort_result,
@@ -396,6 +397,7 @@ class AsyncClient:
     ) -> Secret:
         version, label = _normalize_selector(version, label)
         ref = await self._resolve_ref(key)
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.GetSecret(
@@ -403,9 +405,9 @@ class AsyncClient:
                     ref=to_proto_ref(ref), version=version, label=label,
                     secret_token=secret_token, binding_key=binding_key,
                 ),
-                metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+                metadata=self._auth_metadata(), timeout=call_timeout,
             )
-        except grpc.RpcError as exc:
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -439,18 +441,19 @@ class AsyncClient:
         if isinstance(expires_at_unix_ms, bool) or not isinstance(expires_at_unix_ms, int) or not 0 <= expires_at_unix_ms < 2**63:
             raise errors.ConfigError("expires_at_unix_ms must be a non-negative int64 integer")
         ref = await self._resolve_ref(key)
-        plaintext = value.encode() if isinstance(value, str) else bytes(value)
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
+            plaintext = value.encode() if isinstance(value, str) else bytes(value)
             response = await self._secret_stub.PutSecret(
                 kms_pb2.PutSecretRequest(
                     ref=to_proto_ref(ref), value=plaintext, content_type=content_type,
                     metadata_json=metadata_json, binding_key=binding_key,
                     generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
-                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+                ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
-        except grpc.RpcError as exc:
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -484,6 +487,14 @@ class AsyncClient:
             raise errors.map_grpc_error(exc) from None
         if not response.HasField("secret"):
             raise errors.ParamStoreError("KMS secret metadata response was empty", code="internal")
+        if not response.secret.HasField("ref") or not response.secret.ref.HasField("namespace"):
+            raise errors.ParamStoreError(
+                "KMS secret metadata response omitted resource reference", code="internal"
+            )
+        _assert_ref_identity(
+            "secret metadata", ref, response.secret.ref.namespace.env,
+            response.secret.ref.namespace.app, response.secret.ref.key,
+        )
         return _secret_info_from_proto(response.secret)
 
     async def _secret_revision_mutation(self, method, request, ref: Ref, timeout) -> int:
@@ -547,14 +558,15 @@ class AsyncClient:
     ) -> SecretVersionMutationResult:
         _valid_uint64(version, "version")
         ref = await self._resolve_ref(key)
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.BindSecret(
                 kms_pb2.BindSecretRequest(
                     ref=to_proto_ref(ref), version=version, binding_key=binding_key,
-                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+                ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
-        except grpc.RpcError as exc:
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -567,14 +579,15 @@ class AsyncClient:
     ) -> SecretVersionMutationResult:
         _valid_uint64(version, "version")
         ref = await self._resolve_ref(key)
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.UnbindSecret(
                 kms_pb2.UnbindSecretRequest(
                     ref=to_proto_ref(ref), version=version, binding_key=binding_key,
-                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+                ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
-        except grpc.RpcError as exc:
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -587,15 +600,16 @@ class AsyncClient:
     ) -> SecretBindingCohortResult:
         _valid_uint64(anchor_version, "anchor_version")
         ref = await self._resolve_ref(key)
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.PreviewSecretBindingCohort(
                 kms_pb2.PreviewSecretBindingCohortRequest(
                     ref=to_proto_ref(ref), anchor_version=anchor_version,
                     binding_key=binding_key,
-                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+                ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
-        except grpc.RpcError as exc:
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -610,19 +624,20 @@ class AsyncClient:
         _valid_uint64(anchor_version, "anchor_version")
         guard = _cohort_guard(expected_revision, expected_affected_versions)
         ref = await self._resolve_ref(key)
-        request = kms_pb2.RotateSecretBindingKeyRequest(
-            ref=to_proto_ref(ref), anchor_version=anchor_version,
-            binding_key=binding_key, new_binding_key=new_binding_key,
-        )
-        if guard is not None:
-            request.expected_revision = guard[0]
-            request.expected_affected_versions.extend(guard[1])
+        call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
-            response = await self._secret_stub.RotateSecretBindingKey(
-                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            request = kms_pb2.RotateSecretBindingKeyRequest(
+                ref=to_proto_ref(ref), anchor_version=anchor_version,
+                binding_key=binding_key, new_binding_key=new_binding_key,
             )
-        except grpc.RpcError as exc:
+            if guard is not None:
+                request.expected_revision = guard[0]
+                request.expected_affected_versions.extend(guard[1])
+            response = await self._secret_stub.RotateSecretBindingKey(
+                request, metadata=self._auth_metadata(), timeout=call_timeout,
+            )
+        except Exception as exc:
             mapped_error = errors.map_secret_grpc_error(exc)
         if mapped_error is not None:
             raise mapped_error
@@ -638,24 +653,26 @@ class AsyncClient:
         _valid_uint64(anchor_version, "anchor_version")
         guard = _cohort_guard(expected_revision, expected_affected_versions)
         ref = await self._resolve_ref(key)
-        request = kms_pb2.PurgeSecretBindingCohortRequest(
-            ref=to_proto_ref(ref), anchor_version=anchor_version, binding_key=binding_key,
-        )
-        if guard is not None:
-            request.expected_revision = guard[0]
-            request.expected_affected_versions.extend(guard[1])
+        call_timeout = self._call_timeout(timeout)
+        mapped_error = None
         try:
-            response = await self._secret_stub.PurgeSecretBindingCohort(
-                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            request = kms_pb2.PurgeSecretBindingCohortRequest(
+                ref=to_proto_ref(ref), anchor_version=anchor_version, binding_key=binding_key,
             )
-        except grpc.RpcError as exc:
+            if guard is not None:
+                request.expected_revision = guard[0]
+                request.expected_affected_versions.extend(guard[1])
+            response = await self._secret_stub.PurgeSecretBindingCohort(
+                request, metadata=self._auth_metadata(), timeout=call_timeout,
+            )
+        except Exception as exc:
             mapped_error = errors.map_purge_grpc_error(exc)
         else:
             self._cache.invalidate_secret(str(ref))
             return _secret_binding_cohort_result(response)
         # Raise outside the exception handler so the public exception does not
-        # retain the server RpcError (and its potentially sensitive details) as
-        # ``__context__``.
+        # retain the transport failure (and its potentially sensitive details)
+        # as ``__context__``.
         raise mapped_error
 
     def _subs(self) -> AsyncSubscriptionManager:

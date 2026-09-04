@@ -178,9 +178,14 @@ def map_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     return exc_type(message, grpc_code=code)
 
 
-def _grpc_error_code(err: grpc.RpcError) -> Optional[grpc.StatusCode]:
+def _grpc_error_code(err: BaseException) -> Optional[grpc.StatusCode]:
+    if not isinstance(err, grpc.RpcError):
+        return None
     code = None
-    code_method = getattr(err, "code", None)
+    try:
+        code_method = getattr(err, "code", None)
+    except Exception:
+        code_method = None
     if callable(code_method):
         try:
             candidate = code_method()
@@ -202,8 +207,8 @@ def _secret_error_from_code(code: Optional[grpc.StatusCode]) -> ParamStoreError:
     return exc_type(message, grpc_code=code)
 
 
-def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
-    """Translate a secret-bearing RPC error without trusting remote details.
+def map_secret_grpc_error(err: BaseException) -> ParamStoreError:
+    """Translate a secret-bearing transport error without trusting its details.
 
     Only the structured gRPC status code affects the result.  In particular,
     neither ``details()`` nor ``str(err)`` is used because a misbehaving peer
@@ -212,7 +217,7 @@ def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     return _secret_error_from_code(_grpc_error_code(err))
 
 
-def map_purge_grpc_error(err: grpc.RpcError) -> ParamStoreError:
+def map_purge_grpc_error(err: BaseException) -> ParamStoreError:
     """Translate a purge RPC error, recognizing only the committed sentinel.
 
     Remote details are inspected solely for an exact comparison with KMS's
@@ -220,8 +225,11 @@ def map_purge_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     using the ordinary fixed-message secret error path.
     """
     code = _grpc_error_code(err)
-    if code is grpc.StatusCode.UNAVAILABLE:
-        details_method = getattr(err, "details", None)
+    if code is grpc.StatusCode.UNAVAILABLE and isinstance(err, grpc.RpcError):
+        try:
+            details_method = getattr(err, "details", None)
+        except Exception:
+            details_method = None
         if callable(details_method):
             try:
                 details = details_method()

@@ -228,6 +228,7 @@ class SecretValue(_DescriptorBase):
                     client._logf("secret %r resolved from env %s (store fetch skipped)", self._key, self._env_var)
                     return
             if self._key:
+                resolution_failed = False
                 try:
                     sec = client.get_secret(
                         self._key, secret_token=self._token,
@@ -235,11 +236,15 @@ class SecretValue(_DescriptorBase):
                     )
                 except Exception as err:
                     if self._default is not None and client._default_allowed_for_error(err):
-                        client._logf("secret %r fetch failed (%s); using default", self._key, err)
+                        client._logf("secret %r fetch failed; using default", self._key)
                         st.secret = Secret(self._default.encode("utf-8"), key=self._key)
                         st.initialized = True
                         return
-                    raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
+                    resolution_failed = True
+                if resolution_failed:
+                    raise errors.ParamStoreError(
+                        f"resolve secret {self._key!r}: secret operation failed"
+                    )
                 st.secret = sec
                 st.initialized = True
                 return
@@ -265,6 +270,7 @@ class SecretValue(_DescriptorBase):
                 st.initialized = True
             return
         if self._key:
+            resolution_failed = False
             try:
                 secret = await client.get_secret(
                     self._key, secret_token=self._token,
@@ -272,8 +278,13 @@ class SecretValue(_DescriptorBase):
                 )
             except Exception as err:
                 if self._default is None or not client._default_allowed_for_error(err):
-                    raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
-                secret = Secret(self._default.encode("utf-8"), key=self._key)
+                    resolution_failed = True
+                else:
+                    secret = Secret(self._default.encode("utf-8"), key=self._key)
+            if resolution_failed:
+                raise errors.ParamStoreError(
+                    f"resolve secret {self._key!r}: secret operation failed"
+                )
             with st.lock:
                 st.secret = secret
                 st.initialized = True
