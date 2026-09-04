@@ -154,7 +154,7 @@ export class ReadCache {
     return undefined;
   }
 
-  /** @internal Populate the secret cache only when no invalidation raced the RPC. */
+  /** @internal Compatibility no-op: secret plaintext is never cached. */
   cacheSecretIfUnchanged(
     generation: ReadGeneration,
     version: bigint,
