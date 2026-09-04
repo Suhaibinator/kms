@@ -40,7 +40,7 @@ type overviewValueDTO struct {
 	ContentType    string `json:"content_type,omitempty"`
 	CurrentVersion uint64 `json:"current_version,omitempty"`
 	PinnedVersion  uint64 `json:"pinned_version,omitempty"`
-	ClientBound    bool   `json:"client_bound,omitempty"`
+	Bound          bool   `json:"bound,omitempty"`
 }
 
 type overviewActiveReleaseDTO struct {
@@ -124,7 +124,7 @@ type environmentOverviewDTO struct {
 func toEnvironmentOverviewDTO(e domain.EnvironmentOverview) environmentOverviewDTO {
 	values := make([]overviewValueDTO, 0, len(e.Values))
 	for _, v := range e.Values {
-		values = append(values, overviewValueDTO{Alias: v.Alias, Kind: v.Kind, Key: v.Key, Present: v.Present, ContentType: v.ContentType, CurrentVersion: v.CurrentVersion, PinnedVersion: v.PinnedVersion, ClientBound: v.ClientBound})
+		values = append(values, overviewValueDTO{Alias: v.Alias, Kind: v.Kind, Key: v.Key, Present: v.Present, ContentType: v.ContentType, CurrentVersion: v.CurrentVersion, PinnedVersion: v.PinnedVersion, Bound: v.Bound})
 	}
 	release := environmentReleaseDTO{LatestVersion: e.LatestVersion, ReleaseCount: e.ReleaseCount}
 	if e.Active != nil {

@@ -143,7 +143,7 @@ func toProtoSecretMetadata(s domain.Secret) *kmsv1.SecretMetadata {
 	return &kmsv1.SecretMetadata{
 		Ref:             refToProto(s.Ref),
 		ContentType:     s.ContentType,
-		ClientBound:     s.ClientBound,
+		Bound:           s.Bound,
 		HasAccessToken:  s.HasAccessToken,
 		MetadataJson:    s.Metadata,
 		CreatedAtUnixMs: unixMS(s.CreatedAt),
@@ -162,6 +162,8 @@ func toProtoSecretVersionInfo(v domain.SecretVersionInfo) *kmsv1.SecretVersionIn
 		DestroyedAtUnixMs: unixMS(v.DestroyedAt),
 		ExpiresAtUnixMs:   unixMS(v.ExpiresAt),
 		MetadataJson:      v.Metadata,
+		Bound:             v.Bound,
+		HasAccessToken:    v.HasAccessToken,
 	}
 }
 
@@ -315,7 +317,7 @@ func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 // --- configuration releases ----------------------------------------------
 
 func toProtoConfigurationReleaseEntry(e domain.ConfigurationReleaseEntry) *kmsv1.ConfigurationReleaseEntry {
-	return &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: refToProto(e.Ref), Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound, HasAccessToken: e.HasAccessToken}
+	return &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: refToProto(e.Ref), Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest}
 }
 
 func toProtoConfigurationRelease(r domain.ConfigurationRelease) *kmsv1.ConfigurationRelease {

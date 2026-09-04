@@ -299,7 +299,7 @@ func (s *Service) collectApplicationRows(ctx context.Context, environments []dom
 					row = &domain.ApplicationConfigurationRow{Key: secret.Ref.Key, Kind: domain.ResourceSecret, Cells: map[string]domain.ApplicationConfigurationCell{}}
 					rows[rowKey] = row
 				}
-				row.Cells[ns.Env] = domain.ApplicationConfigurationCell{Environment: ns.Env, Present: true, ContentType: secret.ContentType, Version: secret.Labels[domain.LabelCurrent], ClientBound: secret.ClientBound, HasAccessToken: secret.HasAccessToken}
+				row.Cells[ns.Env] = domain.ApplicationConfigurationCell{Environment: ns.Env, Present: true, ContentType: secret.ContentType, Version: secret.Labels[domain.LabelCurrent], Bound: secret.Bound, HasAccessToken: secret.HasAccessToken}
 			}
 			if next == "" {
 				break

@@ -64,7 +64,7 @@ func TestToProtoApplicationReleaseCreateResult(t *testing.T) {
 		Name:      "runtime", Version: 1, SchemaVersion: 2,
 		Entries: []domain.ConfigurationReleaseEntry{
 			{Alias: "runtime", Kind: "parameter", Ref: domain.Ref{NS: domain.NamespaceRef{Env: "dev", App: "worker"}, Key: "runtime"}, Version: 3, ContentType: "json", ParameterDigest: strings.Repeat("a", 64)},
-			{Alias: "db", Kind: "secret", Ref: domain.Ref{NS: domain.NamespaceRef{Env: "dev", App: "worker"}, Key: "db"}, Version: 4, ClientBound: true, HasAccessToken: true},
+			{Alias: "db", Kind: "secret", Ref: domain.Ref{NS: domain.NamespaceRef{Env: "dev", App: "worker"}, Key: "db"}, Version: 4},
 		},
 		Digest: strings.Repeat("b", 64), Metadata: `{"ticket":"OPS-1"}`,
 		CreatedBy: "admin", CreatedAt: time.Unix(1_700_000_000, 0),

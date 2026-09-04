@@ -151,7 +151,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		value.Present = true
 		value.ContentType = cell.ContentType
 		value.CurrentVersion = cell.Version
-		value.ClientBound = cell.ClientBound
+		value.Bound = cell.Bound
 		switch field.Kind {
 		case domain.ReleaseEntryParameter:
 			if cell.ContentType != field.ContentType {

@@ -183,6 +183,14 @@ func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in do
 		if err := validateRef(sel.Ref); err != nil {
 			return ctx, nil, nil, err
 		}
+		// A configuration release is a complete, namespace-owned unit. Cross-
+		// namespace pins would let an otherwise immutable manifest depend on a
+		// separately administered namespace and are forbidden for both parameters
+		// and secrets, including for administrators.
+		if sel.Ref.NS != in.Namespace {
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument,
+				"release alias %q must reference its release namespace %s", sel.Alias, in.Namespace)
+		}
 		label := sel.Label
 		if sel.Version == 0 && label == "" {
 			label = domain.LabelCurrent
@@ -242,7 +250,7 @@ func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in do
 				}
 				continue
 			}
-			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
+			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata})
 		default:
 			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
 		}
@@ -415,6 +423,13 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 	validation := make([]domain.ReleaseValidationError, 0)
 	obj := map[string]any{}
 	for _, entry := range rel.Entries {
+		if entry.Ref.NS != rel.Namespace {
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is outside the release namespace",
+			})
+			continue
+		}
 		entryCtx := ctx
 		if entry.ResourceNamespaceID > 0 {
 			bound, bindErr := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
@@ -487,9 +502,6 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 			if ver.ContentType != entry.ContentType {
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationContentType, Message: "secret content type does not match release pin"})
 				continue
-			}
-			if ver.ClientBound != entry.ClientBound || ver.HasAccessToken != entry.HasAccessToken {
-				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "secret protection metadata does not match release pin"})
 			}
 		default:
 			validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "release entry kind is invalid"})
@@ -880,7 +892,7 @@ func releaseDigest(r domain.ConfigurationRelease) (string, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
 	pb := &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: r.Namespace.Env, App: r.Namespace.App}, Name: r.Name, SchemaVersion: r.SchemaVersion, MetadataJson: r.Metadata}
 	for _, e := range entries {
-		pb.Entries = append(pb.Entries, &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: e.Ref.NS.Env, App: e.Ref.NS.App}, Key: e.Ref.Key}, Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound, HasAccessToken: e.HasAccessToken})
+		pb.Entries = append(pb.Entries, &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: e.Ref.NS.Env, App: e.Ref.NS.App}, Key: e.Ref.Key}, Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest})
 	}
 	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(pb)
 	if err != nil {

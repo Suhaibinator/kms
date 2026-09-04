@@ -139,7 +139,7 @@ type applicationCellDTO struct {
 	Value          string `json:"value,omitempty"`
 	ContentType    string `json:"content_type"`
 	Version        uint64 `json:"version"`
-	ClientBound    bool   `json:"client_bound,omitempty"`
+	Bound          bool   `json:"bound,omitempty"`
 	HasAccessToken bool   `json:"has_access_token,omitempty"`
 }
 
@@ -162,7 +162,7 @@ func toApplicationRowDTOs(in []domain.ApplicationConfigurationRow) []application
 	for _, row := range in {
 		cells := make(map[string]applicationCellDTO, len(row.Cells))
 		for env, cell := range row.Cells {
-			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, ClientBound: cell.ClientBound, HasAccessToken: cell.HasAccessToken}
+			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, Bound: cell.Bound, HasAccessToken: cell.HasAccessToken}
 		}
 		rows = append(rows, applicationRowDTO{Key: row.Key, Kind: row.Kind, Environments: cells})
 	}
@@ -250,6 +250,8 @@ func toParameterInfoDTO(p domain.ParameterInfo) parameterInfoDTO {
 type secretVersionDTO struct {
 	Version           uint64 `json:"version"`
 	State             string `json:"state"`
+	Bound             bool   `json:"bound"`
+	HasAccessToken    bool   `json:"has_access_token"`
 	CreatedBy         string `json:"created_by"`
 	CreatedAtUnixMS   int64  `json:"created_at_unix_ms"`
 	DestroyedAtUnixMS int64  `json:"destroyed_at_unix_ms"`
@@ -262,7 +264,7 @@ type secretMetadataDTO struct {
 	App             string             `json:"app"`
 	Key             string             `json:"key"`
 	ContentType     string             `json:"content_type"`
-	ClientBound     bool               `json:"client_bound"`
+	Bound           bool               `json:"bound"`
 	HasAccessToken  bool               `json:"has_access_token"`
 	MetadataJSON    string             `json:"metadata_json"`
 	CreatedAtUnixMS int64              `json:"created_at_unix_ms"`
@@ -277,6 +279,8 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 		versions = append(versions, secretVersionDTO{
 			Version:           v.Version,
 			State:             v.State,
+			Bound:             v.Bound,
+			HasAccessToken:    v.HasAccessToken,
 			CreatedBy:         v.CreatedBy,
 			CreatedAtUnixMS:   unixMS(v.CreatedAt),
 			DestroyedAtUnixMS: unixMS(v.DestroyedAt),
@@ -289,7 +293,7 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 		App:             s.Ref.NS.App,
 		Key:             s.Ref.Key,
 		ContentType:     s.ContentType,
-		ClientBound:     s.ClientBound,
+		Bound:           s.Bound,
 		HasAccessToken:  s.HasAccessToken,
 		MetadataJSON:    rawJSON(s.Metadata),
 		CreatedAtUnixMS: unixMS(s.CreatedAt),
@@ -502,8 +506,6 @@ type releaseEntryDTO struct {
 	ContentType     string         `json:"content_type"`
 	MetadataJSON    string         `json:"metadata_json"`
 	ParameterDigest string         `json:"parameter_digest"`
-	ClientBound     bool           `json:"client_bound"`
-	HasAccessToken  bool           `json:"has_access_token"`
 }
 
 type releaseDTO struct {
@@ -524,8 +526,7 @@ func toReleaseDTO(r domain.ConfigurationRelease) releaseDTO {
 		entries = append(entries, releaseEntryDTO{
 			Alias: e.Alias, Kind: e.Kind, Ref: refDTO(e.Ref), Version: e.Version,
 			ContentType: e.ContentType, MetadataJSON: rawJSON(e.Metadata),
-			ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound,
-			HasAccessToken: e.HasAccessToken,
+			ParameterDigest: e.ParameterDigest,
 		})
 	}
 	return releaseDTO{
