@@ -448,8 +448,11 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   - A non-echoing prompt when the variable is absent and stdin is a terminal.
   - `KMS_NEW_BINDING_KEY` or a second prompt for rotation.
 - Online operations use existing bearer-token/mTLS administrator authentication; the running server uses its configured KEK.
-- Offline single-secret reads use the existing KEK-loading mechanism plus the supplied binding key.
-- Bulk `env`, `exec`, and offline export never request binding keys:
+- There is no offline secret-read or secret-export command in the current CLI.
+  If a single-secret offline read is introduced later, it must use the existing
+  KEK-loading mechanism plus the supplied binding key; this design does not add
+  that interface.
+- Bulk `env` and `exec` never request binding keys:
   - Emit parameters normally.
   - Resolve unbound secrets normally, including access-token handling.
   - Emit an empty string for every bound-secret output.
@@ -496,7 +499,8 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   - Redaction under every supported formatter/serializer.
   - Missing versus wrong release credential categories.
   - Startup failure and last-known-good hot reload.
-- CLI tests cover prompts, environment-string inputs, stdout-only generation, online/offline KEK separation, bulk empty bound values, and child-environment scrubbing.
+- CLI tests cover prompts, environment-string inputs, stdout-only generation,
+  bulk empty bound values, and child-environment scrubbing.
 - Run race-enabled Go tests, Python sync/async tests, TypeScript tests and type checks, frontend tests/build, protobuf generation checks, and configuration-generator golden tests.
 
 ## Explicit consequences
