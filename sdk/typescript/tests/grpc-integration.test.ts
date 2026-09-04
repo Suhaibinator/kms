@@ -528,9 +528,9 @@ describe("protocol-faithful gRPC integration", () => {
       await expect(client.setSecretEnabled("password", true)).resolves.toBe(
         firstExactInteger + 22n,
       );
-      await expect(
-        client.destroySecretVersion("password", firstExactInteger + 10n),
-      ).resolves.toBe(firstExactInteger + 23n);
+      await expect(client.destroySecretVersion("password", firstExactInteger + 10n)).resolves.toBe(
+        firstExactInteger + 23n,
+      );
       const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n);
       expect(promoted).toEqual({
         currentVersion: firstExactInteger + 12n,
