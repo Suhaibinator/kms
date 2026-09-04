@@ -125,9 +125,9 @@ type secretItem struct {
 	protectionKnown bool // namespace listings include exact version metadata; release entries do not
 }
 
-// names lists every spelling a token flag may use for this secret. In
-// release mode the ref may live in another namespace, so the relative key
-// is only offered when the secret is in the selected namespace.
+// names lists every spelling a token flag may use for this secret. Release
+// pins are namespace-local, but keep the namespace check here so malformed
+// inputs never gain a surprising relative-key spelling.
 func (s secretItem) names(ns *kmsv1.NamespaceRef) []string {
 	out := []string{displayPath(s.ref)}
 	if s.alias != "" {
@@ -244,7 +244,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				if !sameRef(resp.GetRef(), s.ref) {
 					return resolvedEnvironment{}, fmt.Errorf("secret %s: server returned a different resource", path)
 				}
-				if s.contentType != "" && resp.GetContentType() != s.contentType {
+				if resp.GetContentType() != s.contentType {
 					return resolvedEnvironment{}, fmt.Errorf("secret %s: content type %q does not match the release's %q", path, resp.GetContentType(), s.contentType)
 				}
 			}
@@ -337,6 +337,17 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 	if rel == nil {
 		return nil, nil, fmt.Errorf("release %s has no active version", name)
 	}
+	if !sameNamespace(rel.GetNamespace(), ns) {
+		return nil, nil, fmt.Errorf("release %s: server returned a different namespace", name)
+	}
+	// Validate the whole manifest's namespace boundary before fetching any
+	// resource. A malformed foreign pin must not become a resource-existence
+	// oracle or leave the caller with a partially verified candidate.
+	for _, e := range rel.GetEntries() {
+		if e.GetRef() == nil || !sameNamespace(e.GetRef().GetNamespace(), rel.GetNamespace()) {
+			return nil, nil, fmt.Errorf("release entry %s must reference its home namespace", e.GetAlias())
+		}
+	}
 	params := kmsv1.NewParameterServiceClient(conn)
 	var items []envinject.Item
 	var secrets []secretItem
@@ -359,7 +370,7 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 			if e.GetParameterDigest() == "" || !strings.EqualFold(hex.EncodeToString(sum[:]), e.GetParameterDigest()) {
 				return nil, nil, fmt.Errorf("parameter %s (alias %s): value does not match the release digest", path, e.GetAlias())
 			}
-			if e.GetContentType() != "" && p.GetContentType() != e.GetContentType() {
+			if p.GetContentType() != e.GetContentType() {
 				return nil, nil, fmt.Errorf("parameter %s (alias %s): content type %q does not match the release's %q", path, e.GetAlias(), p.GetContentType(), e.GetContentType())
 			}
 			items = append(items, envinject.Item{Alias: e.GetAlias(), Value: []byte(p.GetValue()), ContentType: p.GetContentType()})
@@ -376,8 +387,11 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 
 func sameRef(a, b *kmsv1.ResourceRef) bool {
 	return a != nil && b != nil && a.GetKey() == b.GetKey() &&
-		a.GetNamespace().GetEnv() == b.GetNamespace().GetEnv() &&
-		a.GetNamespace().GetApp() == b.GetNamespace().GetApp()
+		sameNamespace(a.GetNamespace(), b.GetNamespace())
+}
+
+func sameNamespace(a, b *kmsv1.NamespaceRef) bool {
+	return a != nil && b != nil && a.GetEnv() == b.GetEnv() && a.GetApp() == b.GetApp()
 }
 
 // secretTokenSource holds the per-secret tokens the flags supplied, keyed by

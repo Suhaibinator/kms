@@ -298,9 +298,8 @@ func (f *envFixture) run(args ...string) int {
 	return f.Run(append([]string{"env", "prod/app", "--insecure", "--token", "id-token"}, args...))
 }
 
-// releaseFor builds the standard "runtime" release: an in-namespace parameter,
-// a parameter from another namespace, and a token-gated secret whose alias
-// differs from its key.
+// envTestRelease builds the standard namespace-local "runtime" release. The
+// token-gated secret's alias deliberately differs from its key.
 func envTestRelease() *kmsv1.ConfigurationRelease {
 	return &kmsv1.ConfigurationRelease{
 		Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "app"},
@@ -312,8 +311,8 @@ func envTestRelease() *kmsv1.ConfigurationRelease {
 				ContentType: "string", ParameterDigest: envTestDigest(envTestHostValue),
 			},
 			{
-				Alias: "api-url", Kind: "parameter", Ref: envTestRef("shared", "data", "api/url"), Version: 5,
-				ParameterDigest: strings.ToUpper(envTestDigest(envTestAPIURLValue)),
+				Alias: "api-url", Kind: "parameter", Ref: envTestRef("prod", "app", "api/url"), Version: 5,
+				ContentType: "string", ParameterDigest: strings.ToUpper(envTestDigest(envTestAPIURLValue)),
 			},
 			{
 				Alias: "billing-key", Kind: "secret", Ref: envTestRef("prod", "app", "stripe-key"), Version: 9,
@@ -329,10 +328,8 @@ func (f *envFixture) installRelease() {
 	f.params.get["/prod/app/db/host"] = &kmsv1.Parameter{
 		Ref: envTestRef("prod", "app", "db/host"), Value: envTestHostValue, ContentType: "string", Version: 3,
 	}
-	// The release records no content type for this entry, so the server's is
-	// accepted as-is rather than compared.
-	f.params.get["/shared/data/api/url"] = &kmsv1.Parameter{
-		Ref: envTestRef("shared", "data", "api/url"), Value: envTestAPIURLValue, Version: 5, ContentType: "string",
+	f.params.get["/prod/app/api/url"] = &kmsv1.Parameter{
+		Ref: envTestRef("prod", "app", "api/url"), Value: envTestAPIURLValue, Version: 5, ContentType: "string",
 	}
 	f.secrets.get["/prod/app/stripe-key"] = &kmsv1.GetSecretResponse{
 		Ref: envTestRef("prod", "app", "stripe-key"), Version: 9, Value: []byte(envTestStripeValue),
@@ -977,7 +974,7 @@ func TestEnvSecretTokenFileMustBePrivate(t *testing.T) {
 // --- release mode -----------------------------------------------------------
 
 // TestEnvReleaseInjectsVerifiedPins: --release names entries by alias, pins the
-// exact version of each, spans namespaces, and verifies the parameter digest
+// exact version of each, stays in its home namespace, and verifies the parameter digest
 // (case-insensitively, since the hex casing is not normalised on the wire).
 func TestEnvReleaseInjectsVerifiedPins(t *testing.T) {
 	t.Parallel()
@@ -999,8 +996,8 @@ func TestEnvReleaseInjectsVerifiedPins(t *testing.T) {
 	if got := f.rec.call(t, "GetParameter", "/prod/app/db/host").version; got != 3 {
 		t.Fatalf("GetParameter version = %d, want the pinned 3", got)
 	}
-	if got := f.rec.call(t, "GetParameter", "/shared/data/api/url").version; got != 5 {
-		t.Fatalf("cross-namespace GetParameter version = %d, want 5", got)
+	if got := f.rec.call(t, "GetParameter", "/prod/app/api/url").version; got != 5 {
+		t.Fatalf("GetParameter version = %d, want 5", got)
 	}
 	secret := f.rec.call(t, "GetSecret", "/prod/app/stripe-key")
 	if secret.version != 9 {
@@ -1144,6 +1141,13 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			want: "content type \"json\" does not match the release's \"string\"",
 		},
 		{
+			name: "empty parameter content type mismatch",
+			set: func(f *envFixture) {
+				f.releases.release.Entries[0].ContentType = ""
+			},
+			want: "content type \"string\" does not match the release's \"\"",
+		},
+		{
 			name: "secret version mismatch",
 			set: func(f *envFixture) {
 				f.secrets.get["/prod/app/stripe-key"].Version = 8
@@ -1163,6 +1167,13 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 				f.secrets.get["/prod/app/stripe-key"].ContentType = "text/plain"
 			},
 			want: "content type \"text/plain\" does not match the release's \"application/octet-stream\"",
+		},
+		{
+			name: "empty secret content type mismatch",
+			set: func(f *envFixture) {
+				f.releases.release.Entries[2].ContentType = ""
+			},
+			want: "content type \"application/octet-stream\" does not match the release's \"\"",
 		},
 		{
 			name: "unknown entry kind",
@@ -1196,6 +1207,59 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			}
 			if strings.Contains(f.stderr(), envTestStripeValue) || strings.Contains(f.stderr(), envTestStripeToken) {
 				t.Fatalf("stderr leaked secret material: %s", f.stderr())
+			}
+		})
+	}
+}
+
+// TestEnvReleaseRejectsForeignPinsBeforeReads proves the namespace boundary is
+// checked for the complete manifest before any pinned resource is fetched.
+// This avoids both partial candidate resolution and a foreign-resource oracle.
+func TestEnvReleaseRejectsForeignPinsBeforeReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		set  func(*kmsv1.ConfigurationRelease)
+		want string
+	}{
+		{
+			name: "release namespace",
+			set: func(release *kmsv1.ConfigurationRelease) {
+				release.Namespace = &kmsv1.NamespaceRef{Env: "staging", App: "app"}
+			},
+			want: "server returned a different namespace",
+		},
+		{
+			name: "foreign entry",
+			set: func(release *kmsv1.ConfigurationRelease) {
+				release.Entries[1].Ref = envTestRef("shared", "data", "api/url")
+			},
+			want: "release entry api-url must reference its home namespace",
+		},
+		{
+			name: "missing entry ref",
+			set: func(release *kmsv1.ConfigurationRelease) {
+				release.Entries[1].Ref = nil
+			},
+			want: "release entry api-url must reference its home namespace",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFixture(t)
+			f.installRelease()
+			tc.set(f.releases.release)
+			if code := f.run("--release", "runtime", "--secret-token", "billing-key="+envTestStripeToken); code != exitError {
+				t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
+			}
+			if !strings.Contains(f.stderr(), tc.want) {
+				t.Fatalf("stderr = %s, want %q", f.stderr(), tc.want)
+			}
+			if got := f.rec.count("GetParameter") + f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); got != 0 {
+				t.Fatalf("malformed release caused %d resource reads: %+v", got, f.rec.snapshot())
+			}
+			if f.stdout() != "" {
+				t.Fatalf("stdout = %q, want no partial candidate", f.stdout())
 			}
 		})
 	}
