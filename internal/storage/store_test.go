@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
 // ---- helpers --------------------------------------------------------------
@@ -428,6 +429,13 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 	createRaw := func(t *testing.T, statements ...string) string {
 		t.Helper()
 		path := filepath.Join(t.TempDir(), "legacy.db")
+		file, err := fileutil.OpenPrivateExclusive(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 		db, err := gorm.Open(sqlite.Open(sqliteFileURI(filepath.ToSlash(path))), &gorm.Config{SkipDefaultTransaction: true})
 		if err != nil {
 			t.Fatal(err)
@@ -442,9 +450,6 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := sqlDB.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(path, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		return path
