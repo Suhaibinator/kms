@@ -1637,9 +1637,21 @@ func TestPromoteSecretVersion(t *testing.T) {
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "s")
-	putSecret(t, st, r, false) // v1
-	putSecret(t, st, r, false) // v2 current, previous 1
-	putSecret(t, st, r, false) // v3 current, previous 2
+	for _, version := range []struct {
+		contentType string
+		metadata    string
+	}{
+		{contentType: "text/plain", metadata: `{"generation":1}`},
+		{contentType: "application/json", metadata: `{"generation":2}`},
+		{contentType: "application/yaml", metadata: `{"generation":3}`},
+	} {
+		if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+			Ref: r, ContentType: version.contentType, Metadata: version.metadata,
+			CreatedBy: "tester", Encrypt: encryptStub(nil),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	cur, prev, rev, err := st.PromoteSecretVersion(ctx, r, 1)
 	if err != nil {
@@ -1652,6 +1664,23 @@ func TestPromoteSecretVersion(t *testing.T) {
 	if rec.Labels[domain.LabelCurrent] != 1 || rec.Labels[domain.LabelPrevious] != 3 {
 		t.Fatalf("labels after promote = %v", rec.Labels)
 	}
+	if rec.ContentType != "text/plain" || rec.Metadata != `{"generation":1}` {
+		t.Fatalf("secret projection after promote = content type %q metadata %q", rec.ContentType, rec.Metadata)
+	}
+	info, err := st.GetSecretInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ContentType != "text/plain" || info.Metadata != `{"generation":1}` {
+		t.Fatalf("secret info projection after promote = content type %q metadata %q", info.ContentType, info.Metadata)
+	}
+	listed, _, err := st.ListSecrets(ctx, r.NS, r.Key, ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ContentType != "text/plain" || listed[0].Metadata != `{"generation":1}` {
+		t.Fatalf("listed secret projection after promote = %+v", listed)
+	}
 
 	// Promote requires an enabled, existing target.
 	if _, err := st.SetSecretVersionState(ctx, r, 2, domain.StateDisabled); err != nil {
@@ -1659,6 +1688,13 @@ func TestPromoteSecretVersion(t *testing.T) {
 	}
 	_, _, _, err = st.PromoteSecretVersion(ctx, r, 2)
 	mustErrIs(t, err, domain.ErrFailedPrecondition, "promote disabled")
+	row3 := rawSecretVersion(t, st, r, 3)
+	if err := st.db.Model(&secretVersionModel{}).Where("id = ?", row3.ID).
+		Update("destroyed_at", fmtTime(nowUTC())).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = st.PromoteSecretVersion(ctx, r, 3)
+	mustErrIs(t, err, domain.ErrFailedPrecondition, "promote contradictory destroyed timestamp")
 	_, _, _, err = st.PromoteSecretVersion(ctx, r, 99)
 	mustErrIs(t, err, domain.ErrNotFound, "promote missing")
 }

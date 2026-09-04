@@ -547,6 +547,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 		ParameterContentType      sql.NullString
 		SecretVersionID           sql.NullInt64
 		SecretState               sql.NullString
+		SecretDestroyedAt         sql.NullString
 		SecretExpiresAt           sql.NullString
 		SecretContentType         sql.NullString
 	}
@@ -566,6 +567,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 			pv.content_type AS parameter_content_type,
 			sv.id AS secret_version_id,
 			sv.state AS secret_state,
+			sv.destroyed_at AS secret_destroyed_at,
 			sv.expires_at AS secret_expires_at,
 			sv.content_type AS secret_content_type
 		FROM configuration_release_entries e
@@ -600,7 +602,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 			if !pin.ParameterVersionID.Valid {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing parameter version")
 			}
-			if pin.PinnedContentType != "" && (!pin.ParameterContentType.Valid || pin.ParameterContentType.String != pin.PinnedContentType) {
+			if !pin.ParameterContentType.Valid || pin.ParameterContentType.String != pin.PinnedContentType {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationContentType, "parameter content type does not match release pin")
 			}
 			if pin.PinnedParameterDigest != "" {
@@ -613,7 +615,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 			if !pin.SecretVersionID.Valid {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing secret version")
 			}
-			if !pin.SecretState.Valid || pin.SecretState.String != domain.StateEnabled {
+			if !pin.SecretState.Valid || pin.SecretState.String != domain.StateEnabled || pin.SecretDestroyedAt.Valid {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret version is not readable")
 			}
 			if pin.SecretExpiresAt.Valid {
@@ -622,7 +624,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 					return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret version is expired")
 				}
 			}
-			if pin.PinnedContentType != "" && (!pin.SecretContentType.Valid || pin.SecretContentType.String != pin.PinnedContentType) {
+			if !pin.SecretContentType.Valid || pin.SecretContentType.String != pin.PinnedContentType {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationContentType, "secret content type does not match release pin")
 			}
 		default:

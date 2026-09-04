@@ -27,7 +27,7 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 	create := func(digest string) domain.ConfigurationRelease {
 		r, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: digest, Metadata: "{}", Entries: []domain.ConfigurationReleaseEntry{
 			{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "json", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(`{"n":1}`))), Metadata: "{}"},
-			{Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, Metadata: "{}"},
+			{Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, ContentType: "application/octet-stream", Metadata: "{}"},
 		}})
 		if err != nil {
 			t.Fatal(err)
@@ -225,7 +225,7 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 		t.Fatalf("activate previous changed=%v err=%v", changed, err)
 	}
 	current := create("current", []domain.ConfigurationReleaseEntry{{
-		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, Metadata: "{}",
+		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, ContentType: "application/octet-stream", Metadata: "{}",
 	}})
 	activated, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, nil)
 	if err != nil || !changed {
@@ -299,6 +299,115 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 		afterRejectedActive.ActivationRevision != beforeRejectedActive.ActivationRevision ||
 		afterRejectedActive.PreviousVersion != beforeRejectedActive.PreviousVersion {
 		t.Fatalf("rejected idempotent activation changed active labels: before=%+v after=%+v", beforeRejectedActive, afterRejectedActive)
+	}
+}
+
+func TestConfigurationReleaseActivationRejectsEnabledDestroyedSecretVersion(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "prod", "app")
+	ns := nsRef("prod", "app")
+	secretRef := ref("prod", "app", "secret")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: secretRef, ContentType: "text/plain", CreatedBy: "tester", Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+		Namespace: ns, Name: "runtime", Digest: "destroyed-at", Metadata: "{}",
+		Entries: []domain.ConfigurationReleaseEntry{{
+			Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef,
+			Version: 1, ContentType: "text/plain", Metadata: "{}",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rawSecretVersion(t, st, secretRef, 1)
+	if err := st.db.Model(&secretVersionModel{}).Where("id = ?", row.ID).
+		Update("destroyed_at", fmtTime(nowUTC())).Error; err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", release.Version, nil)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+		t.Fatalf("activation changed=%v err=%v, want unreadable failure", changed, err)
+	}
+	var validationFailed *domain.ReleaseValidationFailedError
+	if !errors.As(err, &validationFailed) {
+		t.Fatalf("activation error = %T %v, want structured validation", err, err)
+	}
+	violations := validationFailed.Violations()
+	if len(violations) != 1 || violations[0].Alias != "secret" || violations[0].Code != domain.ReleaseValidationUnreadable {
+		t.Fatalf("activation violations = %+v, want secret/unreadable", violations)
+	}
+	after, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("rejected activation appended revision: %d -> %d", before, after)
+	}
+	if _, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("rejected activation created active label: %v", err)
+	}
+}
+
+func TestConfigurationReleaseActivationRequiresExactContentTypeIncludingEmptyPin(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		kind string
+	}{
+		{name: "parameter", kind: domain.ReleaseEntryParameter},
+		{name: "secret", kind: domain.ReleaseEntrySecret},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newStore(t)
+			seedNS(t, st, "prod", "app")
+			ns := nsRef("prod", "app")
+			resourceRef := ref("prod", "app", test.name)
+			entry := domain.ConfigurationReleaseEntry{
+				Alias: test.name, Kind: test.kind, Ref: resourceRef,
+				Version: 1, ContentType: "", Metadata: "{}",
+			}
+			switch test.kind {
+			case domain.ReleaseEntryParameter:
+				if _, _, err := st.PutParameter(ctx, resourceRef, "value", "text/plain", "{}", "tester"); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256([]byte("value"))
+				entry.ParameterDigest = fmt.Sprintf("%x", digest)
+			case domain.ReleaseEntrySecret:
+				if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+					Ref: resourceRef, ContentType: "text/plain", CreatedBy: "tester", Encrypt: encryptStub(nil),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+				Namespace: ns, Name: "runtime", Digest: "empty-content-type-" + test.name,
+				Metadata: "{}", Entries: []domain.ConfigurationReleaseEntry{entry},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", release.Version, nil)
+			if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+				t.Fatalf("activation changed=%v err=%v, want content-type failure", changed, err)
+			}
+			var validationFailed *domain.ReleaseValidationFailedError
+			if !errors.As(err, &validationFailed) {
+				t.Fatalf("activation error = %T %v, want structured validation", err, err)
+			}
+			violations := validationFailed.Violations()
+			if len(violations) != 1 || violations[0].Alias != test.name || violations[0].Code != domain.ReleaseValidationContentType {
+				t.Fatalf("activation violations = %+v, want %s/content_type", violations, test.name)
+			}
+		})
 	}
 }
 

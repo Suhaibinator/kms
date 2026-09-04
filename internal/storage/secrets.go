@@ -595,11 +595,22 @@ func (s *SQLStore) PromoteSecretVersion(ctx context.Context, ref domain.Ref, ver
 			}
 			return err
 		}
-		if sv.State != domain.StateEnabled {
+		if sv.State != domain.StateEnabled || sv.DestroyedAt != nil {
 			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is not enabled", ref, version)
 		}
 		labels, err := loadSecretLabels(tx, sec.ID)
 		if err != nil {
+			return err
+		}
+		// Secret-level content type and metadata are a current-version
+		// projection used by metadata/listing clients. Move that projection in
+		// the same transaction as the current label so it cannot describe the
+		// version that happened to be written most recently.
+		if err := tx.Model(&secretModel{}).Where("id = ?", sec.ID).Updates(map[string]any{
+			"content_type":  sv.ContentType,
+			"metadata_json": sv.MetadataJSON,
+			"updated_at":    fmtTime(time.Now()),
+		}).Error; err != nil {
 			return err
 		}
 		if err := setSecretLabel(tx, sec.ID, domain.LabelCurrent, version); err != nil {
