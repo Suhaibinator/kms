@@ -83,7 +83,7 @@ type Principal struct {
 
 // IsAdmin reports whether the principal has the admin kind. Admin-kind
 // identities are the management plane: they bypass the per-namespace
-// auth-method gate and data-plane policy, but not audit or client-bound
+// auth-method gate and data-plane policy, but not audit or binding-key
 // cryptography. Instead of the namespace gate they are subject to the global
 // admin client-certificate requirement, enforced when the principal is built
 // (see ResolvePrincipal and admitAdmin), so a principal that reaches an

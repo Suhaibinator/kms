@@ -139,8 +139,8 @@ type SecretBindingPurgeAudit struct {
 
 // SecretWriteExpectation is the secret state observed by the service before it
 // prepares a write. Storage compares it inside the write transaction so an
-// absent secret cannot silently become an update and a client-bound write
-// cannot commit after its validated token has been rotated.
+// absent secret cannot silently become an update and a token-gated write
+// cannot commit after its validated access token has been rotated.
 type SecretWriteExpectation struct {
 	Exists bool
 	// ID is the immutable row identity observed by the service. Comparing it

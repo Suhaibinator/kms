@@ -93,16 +93,16 @@ func boundEncryptStub(gotVersion *uint64) func(uint64) (EncryptedPayload, error)
 	}
 }
 
-func putSecret(t *testing.T, st *SQLStore, r domain.Ref, clientBound bool) (uint64, uint64) {
+func putSecret(t *testing.T, st *SQLStore, r domain.Ref, bound bool) (uint64, uint64) {
 	t.Helper()
 	encrypt := encryptStub(nil)
-	if clientBound {
+	if bound {
 		encrypt = boundEncryptStub(nil)
 	}
 	v, rev, err := st.CreateSecretVersion(context.Background(), CreateSecretParams{
 		Ref:       r,
 		CreatedBy: "tester",
-		Bound:     clientBound,
+		Bound:     bound,
 		Encrypt:   encrypt,
 	})
 	if err != nil {
