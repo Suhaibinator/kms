@@ -398,7 +398,7 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 		Version:     o.version,
 		Label:       o.label,
 		SecretToken: o.secretToken,
-		BindingKey:  o.bindingKey,
+		BindingKey:  o.bindingKey.plaintext(),
 	})
 	if err != nil {
 		return Secret{}, mapSecretError(err)
@@ -469,7 +469,7 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 		Value:               value,
 		ContentType:         o.contentType,
 		MetadataJson:        o.metadataJSON,
-		BindingKey:          o.bindingKey,
+		BindingKey:          o.bindingKey.plaintext(),
 		GenerateAccessToken: o.generateAccessToken,
 		ExpiresAtUnixMs:     o.expiresAtUnixMS,
 	})

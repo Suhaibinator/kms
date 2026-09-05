@@ -138,12 +138,12 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	if !defaults.Password.IsZero() || defaults.Password.Path() != "" || defaults.Password.Version() != 0 || defaults.Password.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret Password must be zero")
 	}
-	bindingKeys := make(map[string]string)
-	if defaults.Password.BindKey != "" {
+	bindingKeys := make(map[string]kmsclient.BindingKey)
+	if defaults.Password.BindKey.IsSet() {
 		bindingKeys["database_password"] = defaults.Password.BindKey
 	}
 	sanitizedDefaults := cloneRoot(defaults)
-	sanitizedDefaults.Password.BindKey = ""
+	sanitizedDefaults.Password.BindKey = kmsclient.BindingKey{}
 	store := &Store{defaults: sanitizedDefaults}
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
@@ -190,7 +190,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing secret alias database_password"))
 	}
 	candidate.Password = secret0.Clone()
-	candidate.Password.BindKey = ""
+	candidate.Password.BindKey = kmsclient.BindingKey{}
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
@@ -199,7 +199,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.Password = secret0.Clone()
-	effectiveDefaults.Password.BindKey = ""
+	effectiveDefaults.Password.BindKey = kmsclient.BindingKey{}
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}

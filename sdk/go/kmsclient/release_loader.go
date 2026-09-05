@@ -66,7 +66,7 @@ type ReleaseLoaderConfig struct {
 	SecretTokenProvider SecretTokenProvider
 	// BindingKeys contains operator-owned binding keys indexed by release alias.
 	// It is defensively copied and never exposed through loader diagnostics.
-	BindingKeys map[string]string
+	BindingKeys map[string]BindingKey
 	// ValidateManifest optionally validates the immutable unresolved manifest.
 	// It runs after release identity, digest, and basic entry validation, but
 	// before any resource fetch or secret-token lookup.
@@ -934,14 +934,14 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 				return out, ReleaseRejectTokenUnavailable, errors.New("secret token unavailable")
 			}
 		}
-		bindingKey := ""
+		var bindingKey BindingKey
 		if exact.Bound {
 			bindingKey = l.cfg.BindingKeys[entry.GetAlias()]
-			if bindingKey == "" {
+			if !bindingKey.IsSet() {
 				return out, ReleaseRejectTokenUnavailable, errors.New("secret binding key unavailable")
 			}
 		}
-		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token), WithBindingKey(bindingKey))
+		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token), WithBindingKeyValue(bindingKey))
 		if err != nil {
 			if errors.Is(err, errSecretResponseIdentityMismatch) {
 				return out, ReleaseRejectVersionMismatch, err

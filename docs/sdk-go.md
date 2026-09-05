@@ -140,6 +140,9 @@ Both accept `GetOption`s (`sdk/go/kmsclient/options.go`):
   `GetParameter` for compatibility but is never transmitted there.
 - `WithBindingKey(key string)` — supplies the opaque operator-owned key needed
   by a bound version. It is independent of `WithSecretToken`.
+- `WithBindingKeyValue(key BindingKey)` — supplies an already wrapped credential
+  without exposing its plaintext. Like the string option, it is never sent by
+  `GetParameter`.
 
 `GetParameter` returns `(string, error)`. `GetSecret` returns `(Secret,
 error)`. `Secret` (`secret.go`) is a value type carrying plaintext plus
@@ -151,6 +154,31 @@ to read plaintext. `Secret.BindKey` is declaration-only support for generated
 managed configuration: `Clone` preserves it while building declarations, but
 generated stores extract and clear it before retaining defaults or publishing
 snapshots. A `Secret` returned by `GetSecret` always has an empty `BindKey`.
+
+`Secret.BindKey` and `SecretValue.BindKey` have type `kmsclient.BindingKey`.
+Construct credentials with `kmsclient.NewBindingKey(os.Getenv("KMS_BIND_KEY"))`.
+Use `IsSet()` to check presence and `kmsclient.BindingKey{}` to clear one copy.
+The constructor preserves the string exactly; validation belongs to the server
+for the requested operation. There is no public plaintext getter. For writes,
+`WithPutBindingKeyValue(key)` accepts a wrapped credential; the existing
+`WithPutBindingKey(string)` remains available.
+
+`BindingKey` has immutable private pointer-backed storage and value-receiver
+redaction for `fmt`, JSON v1/v2, YAML (`gopkg.in/yaml.v3`), TOML
+(`github.com/pelletier/go-toml/v2` through `encoding.TextMarshaler`), and `slog`.
+Tests also cover Zap's `Any` and `Reflect` paths. Serializers that respect field
+visibility cannot discover an exported plaintext field. Private pointer-backed
+storage avoids inline plaintext when `fmt` bypasses methods on an unexported
+field in an enclosing struct. Deliberate reflection, debuggers, and memory dumps
+can still inspect the credential; arbitrary inspection libraries are not
+guaranteed to redact. Serialized output is diagnostic and cannot restore a key.
+Use a zero `BindingKey` for absence, rather than a nil pointer (some serializers,
+including YAML v3 with an interface-held typed nil, may invoke methods on nil).
+
+Go strings cannot be reliably erased. Clearing a credential releases only that
+copy's reference; other copies and the loader's defensively copied map retain
+their keys for as long as they are needed. Wrapping a key does not shorten its
+memory lifetime or erase the caller's environment variable/string.
 
 Writes (mainly for tooling, not typical application code):
 
@@ -248,7 +276,7 @@ cfg := Config{
     StripeAPIKey: kmsclient.SecretValue{
         Key:     "stripe-api-key",
         Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token, if required
-        BindKey: os.Getenv("STRIPE_API_KMS_BIND_KEY"), // binding key, if required
+        BindKey: kmsclient.NewBindingKey(os.Getenv("STRIPE_API_KMS_BIND_KEY")), // binding key, if required
         EnvVar:  "STRIPE_API_KEY",                  // env override still wins
         Default: "sk_test_dev_only",                // dev-only fallback
     },
@@ -512,8 +540,8 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := bootstrapSecretTokens[alias]
         return token, ok
     },
-    BindingKeys: map[string]string{
-        "db_password": os.Getenv("DB_PASSWORD_KMS_BIND_KEY"),
+    BindingKeys: map[string]kmsclient.BindingKey{
+        "db_password": kmsclient.NewBindingKey(os.Getenv("DB_PASSWORD_KMS_BIND_KEY")),
     },
 })
 if err != nil {

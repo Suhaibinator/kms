@@ -71,12 +71,12 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 		t.Fatal("generated public Options exposes the private binding-key map")
 	}
 	for _, want := range [][]byte{
-		[]byte(`if defaults.Password.BindKey != "" {`),
+		[]byte(`if defaults.Password.BindKey.IsSet() {`),
 		[]byte(`bindingKeys["database_password"] = defaults.Password.BindKey`),
-		[]byte(`sanitizedDefaults.Password.BindKey = ""`),
+		[]byte(`sanitizedDefaults.Password.BindKey = kmsclient.BindingKey{}`),
 		[]byte(`BindingKeys:          bindingKeys,`),
-		[]byte(`candidate.Password.BindKey = ""`),
-		[]byte(`effectiveDefaults.Password.BindKey = ""`),
+		[]byte(`candidate.Password.BindKey = kmsclient.BindingKey{}`),
+		[]byte(`effectiveDefaults.Password.BindKey = kmsclient.BindingKey{}`),
 	} {
 		if !bytes.Contains(first.Binding, want) {
 			t.Fatalf("generated binding-key extraction/stripping is missing %q", want)

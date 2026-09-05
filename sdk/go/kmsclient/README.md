@@ -180,6 +180,16 @@ reconnects in the background.
 
 ## Atomic configuration releases
 
+Store declaration credentials as `BindingKey` values using
+`NewBindingKey(value)`; `Secret.BindKey` and `SecretValue.BindKey` both use this
+type. The zero value means absent (`IsSet()` is false). Wrapped keys have no
+public plaintext getter; pass them to `WithBindingKeyValue` or
+`WithPutBindingKeyValue`. The string request options remain supported.
+Formatting, JSON, YAML, supported TOML encoding, and `slog` redact the credential.
+This protects against accidental disclosure, not deliberate reflective/debugger
+inspection, and does not guarantee erasure of immutable Go strings. See the
+[credential contract](../../../docs/sdk-go.md) for details.
+
 Use a release loader when related values must be resolved and installed
 together rather than through independent key callbacks:
 
@@ -190,7 +200,7 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := localTokens[alias]
         return token, ok
     },
-    BindingKeys: map[string]string{"openai_api_key": openAIBindingKey},
+    BindingKeys: map[string]kmsclient.BindingKey{"openai_api_key": kmsclient.NewBindingKey(openAIBindingKey)},
 })
 if err != nil { return err }
 

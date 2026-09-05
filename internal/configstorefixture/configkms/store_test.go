@@ -254,8 +254,8 @@ func TestGeneratedStartExtractsAndStripsDeclarationBindingKeys(t *testing.T) {
 	initial.passwordBound = true
 	initial.runtimeTokenBound = true
 	declaration := fixtureconfig.Defaults()
-	declaration.Password.BindKey = "database-password-binding-key"
-	declaration.RuntimeToken.BindKey = "runtime-token-binding-key"
+	declaration.Password.BindKey = kmsclient.NewBindingKey("database-password-binding-key")
+	declaration.RuntimeToken.BindKey = kmsclient.NewBindingKey("runtime-token-binding-key")
 
 	fixture := startFixture(t, initial, func() *fixtureconfig.Config { return declaration }, func(configstore.DefaultMismatchReport) {})
 	passwordToken, passwordKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
@@ -266,14 +266,14 @@ func TestGeneratedStartExtractsAndStripsDeclarationBindingKeys(t *testing.T) {
 	if passwordKey != "database-password-binding-key" || runtimeKey != "runtime-token-binding-key" {
 		t.Fatalf("binding keys by alias = password:%q runtime:%q", passwordKey, runtimeKey)
 	}
-	if declaration.Password.BindKey == "" || declaration.RuntimeToken.BindKey == "" {
+	if !declaration.Password.BindKey.IsSet() || !declaration.RuntimeToken.BindKey.IsSet() {
 		t.Fatal("generated startup mutated the application-owned declaration")
 	}
-	if fixture.store.defaults.Password.BindKey != "" || fixture.store.defaults.RuntimeToken.BindKey != "" {
+	if fixture.store.defaults.Password.BindKey.IsSet() || fixture.store.defaults.RuntimeToken.BindKey.IsSet() {
 		t.Fatal("generated store retained binding keys in its defaults")
 	}
 	resolved := fixture.store.Current().Config()
-	if resolved.Password.BindKey != "" || resolved.RuntimeToken.BindKey != "" {
+	if resolved.Password.BindKey.IsSet() || resolved.RuntimeToken.BindKey.IsSet() {
 		t.Fatal("published configuration retained declaration binding keys")
 	}
 }
@@ -317,7 +317,7 @@ func TestMissingHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
 
 func TestWrongHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
 	declaration := fixtureconfig.Defaults()
-	declaration.Password.BindKey = strings.Repeat("w", 32)
+	declaration.Password.BindKey = kmsclient.NewBindingKey(strings.Repeat("w", 32))
 	fixture := startFixture(t, matchingRelease(1, 41), func() *fixtureconfig.Config { return declaration }, func(configstore.DefaultMismatchReport) {})
 	candidate := matchingRelease(2, 42)
 	candidate.passwordBound = true

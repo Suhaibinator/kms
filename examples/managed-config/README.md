@@ -91,7 +91,7 @@ oauthDefaults := struct {
 }{
     LinkedInOAuthClientSecret: kmsclient.Secret{}, // unbound
     OktaOAuthClientSecret: kmsclient.Secret{       // bound
-        BindKey: os.Getenv("OKTA_OAUTH_KMS_BIND_KEY"),
+        BindKey: kmsclient.NewBindingKey(os.Getenv("OKTA_OAUTH_KMS_BIND_KEY")),
     },
 }
 ```

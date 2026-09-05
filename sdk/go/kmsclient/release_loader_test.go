@@ -577,7 +577,7 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 	server.expectedToken = "access-token"
 	server.expectedBindKey = "binding-key"
 	client := newReleaseTestClient(t, server)
-	bindingKeys := map[string]string{"password": "binding-key", "unused": "never-sent"}
+	bindingKeys := map[string]BindingKey{"password": NewBindingKey("binding-key"), "unused": NewBindingKey("never-sent")}
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
 		SecretTokenProvider: func(alias, path string) (string, bool) {
@@ -592,14 +592,14 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Loader construction must sever the caller's map alias.
-	bindingKeys["password"] = "mutated-after-construction"
+	bindingKeys["password"] = NewBindingKey("mutated-after-construction")
 
 	snapshot, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
 	if err != nil || category != "" {
 		t.Fatalf("resolveCandidate category=%q error=%v", category, err)
 	}
 	secret, ok := snapshot.Secret("password")
-	if !ok || secret.StringValue() != "very-secret" || secret.BindKey != "" {
+	if !ok || secret.StringValue() != "very-secret" || secret.BindKey.IsSet() {
 		t.Fatalf("resolved secret = %v, present=%t, BindKey=%q", secret, ok, secret.BindKey)
 	}
 	server.mu.Lock()
@@ -616,7 +616,7 @@ func TestReleaseLoaderConfigurationAndLoaderFormattingRedactBindingKeys(t *testi
 	server, _ := newExactProtectionResolution(t, false, false)
 	client := newReleaseTestClient(t, server)
 	cfg := ReleaseLoaderConfig{
-		Name: "runtime", BindingKeys: map[string]string{"password": canary},
+		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
 		SecretTokenProvider: func(string, string) (string, bool) { return canary, true },
 		ValidateManifest:    func(context.Context, ReleaseManifest) error { return nil },
 	}
@@ -664,9 +664,9 @@ func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
 			server, candidate := newExactProtectionResolution(t, test.bound, test.hasToken)
 			server.expectedBindKey = test.expectKey
 			client := newReleaseTestClient(t, server)
-			keys := map[string]string{}
+			keys := map[string]BindingKey{}
 			if test.bindingKey != "" {
-				keys["password"] = test.bindingKey
+				keys["password"] = NewBindingKey(test.bindingKey)
 			}
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: test.provider, BindingKeys: keys})
 			if err != nil {
@@ -730,7 +730,7 @@ func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *test
 			var providerCalls atomic.Int32
 			client := newReleaseTestClient(t, server)
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-				Name: "runtime", BindingKeys: map[string]string{"password": "binding-key"},
+				Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
 				SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
 			})
 			if err != nil {
@@ -758,7 +758,7 @@ func TestReleaseLoaderRejectsForeignEntryBeforeAnyCallback(t *testing.T) {
 	var validatorCalls, providerCalls atomic.Int32
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime", BindingKeys: map[string]string{"password": "binding-key"},
+		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
 		ValidateManifest:    func(context.Context, ReleaseManifest) error { validatorCalls.Add(1); return nil },
 		SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
 	})

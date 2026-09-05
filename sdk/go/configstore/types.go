@@ -62,7 +62,7 @@ type Options struct {
 	SecretTokenProvider kmsclient.SecretTokenProvider
 	// BindingKeys is an internal alias-keyed credential map assembled by
 	// generated stores from declaration-only Secret.BindKey fields.
-	BindingKeys          map[string]string
+	BindingKeys          map[string]kmsclient.BindingKey
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
 	InstanceID           string

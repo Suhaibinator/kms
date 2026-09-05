@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.uber.org/zap v1.28.0

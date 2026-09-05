@@ -5,7 +5,7 @@ type getOptions struct {
 	version     uint64
 	label       string
 	secretToken string
-	bindingKey  string
+	bindingKey  BindingKey
 }
 
 // GetOption customizes a single GetParameter / GetSecret call.
@@ -34,6 +34,12 @@ func WithSecretToken(token string) GetOption {
 // GetSecret request. GetParameter accepts this shared option but never
 // transmits the key.
 func WithBindingKey(key string) GetOption {
+	return WithBindingKeyValue(NewBindingKey(key))
+}
+
+// WithBindingKeyValue supplies an opaque binding credential in a GetSecret
+// request without exposing its plaintext. GetParameter never transmits it.
+func WithBindingKeyValue(key BindingKey) GetOption {
 	return func(o *getOptions) { o.bindingKey = key }
 }
 
@@ -77,7 +83,7 @@ func applyPutOptions(opts []PutOption) putOptions {
 type putSecretOptions struct {
 	contentType         string
 	metadataJSON        string
-	bindingKey          string
+	bindingKey          BindingKey
 	generateAccessToken bool
 	expiresAtUnixMS     int64
 }
@@ -98,6 +104,12 @@ func WithSecretMetadataJSON(j string) PutSecretOption {
 // WithPutBindingKey creates the new version bound to key. An empty key creates
 // an unbound version; the server validates non-empty keys.
 func WithPutBindingKey(key string) PutSecretOption {
+	return WithPutBindingKeyValue(NewBindingKey(key))
+}
+
+// WithPutBindingKeyValue creates the new version bound to an opaque credential.
+// The zero BindingKey creates an unbound version; the server validates keys.
+func WithPutBindingKeyValue(key BindingKey) PutSecretOption {
 	return func(o *putSecretOptions) { o.bindingKey = key }
 }
 

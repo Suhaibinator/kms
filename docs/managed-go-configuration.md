@@ -297,7 +297,7 @@ func Defaults() *commonconfig.Config {
         // Secret plaintext intentionally comes only from KMS. This declaration
         // carries only the binding key for the db_password release alias.
         DBPassword: kmsclient.Secret{
-            BindKey: resolveFromEnvVar("DB_PASSWORD_KMS_BIND_KEY"),
+            BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("DB_PASSWORD_KMS_BIND_KEY")),
         },
     }
 }
@@ -314,7 +314,7 @@ oauthDefaults := struct {
 }{
     LinkedInOAuthClientSecret: kmsclient.Secret{},
     OktaOAuthClientSecret: kmsclient.Secret{
-        BindKey: resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"),
+        BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY")),
     },
 }
 ```

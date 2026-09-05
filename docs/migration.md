@@ -35,6 +35,17 @@ as a server-side wire or storage field.
 | — (client just held the store secret) | **client identity credential**: a per-client certificate bundle (mTLS, recommended) or a bearer token, presented on connect |
 | — (keys existed as bare paths) | **namespace registration**: ordinary writes require the `(env, app)` namespace to exist; the offline importer creates it if absent |
 
+In Go 0.3, `Secret.BindKey` and `SecretValue.BindKey` use `kmsclient.BindingKey`,
+and the loader/configstore `BindingKeys` maps use `map[string]kmsclient.BindingKey`.
+Wrap strings with `kmsclient.NewBindingKey(value)`, replace `key != ""` with
+`key.IsSet()`, and clear declarations with `kmsclient.BindingKey{}`. Regenerate
+Go configuration bindings with the updated generator. The request-scoped
+`WithBindingKey(string)` and `WithPutBindingKey(string)` options remain available;
+`WithBindingKeyValue(BindingKey)` and `WithPutBindingKeyValue(BindingKey)` accept
+wrapped keys. The wrapper redacts supported serializers and loggers but does
+not prevent deliberate reflection or guarantee memory erasure. See the
+[Go SDK credential contract](sdk-go.md) for the supported paths and limits.
+
 The new SDK is not API-compatible with `ParameterStoreConfig` by design; the
 rewrite is mechanical but the API stands on its own merits. The two new rows
 are the substantive additions: a machine client now proves its identity with
@@ -92,7 +103,7 @@ func Load(ctx context.Context) (*Config, error) {
         StripeAPIKey: kmsclient.SecretValue{
             Key:     "gradethis-stripe-api-key",    // importer preserves the source prefix
             Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token if the secret requires one (from the import report)
-            BindKey: os.Getenv("STRIPE_API_KMS_BIND_KEY"), // only if this version is bound
+            BindKey: kmsclient.NewBindingKey(os.Getenv("STRIPE_API_KMS_BIND_KEY")), // only if this version is bound
             EnvVar:  "STRIPE_API_KEY",              // env override still wins
             Default: "sk_test_dev_only",            // dev only
         },
@@ -241,8 +252,8 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := bootstrapSecretTokens[alias]
         return token, ok
     },
-    BindingKeys: map[string]string{
-        "db_password": os.Getenv("DB_PASSWORD_KMS_BIND_KEY"),
+    BindingKeys: map[string]kmsclient.BindingKey{
+        "db_password": kmsclient.NewBindingKey(os.Getenv("DB_PASSWORD_KMS_BIND_KEY")),
     },
 })
 if err != nil { return err }

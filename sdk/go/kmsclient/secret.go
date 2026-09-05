@@ -20,7 +20,7 @@ const redactedText = "[REDACTED]"
 type Secret struct {
 	// BindKey is a declaration-only credential used by generated configuration
 	// stores. Secrets fetched from KMS always leave it empty.
-	BindKey string
+	BindKey BindingKey
 
 	value       []byte
 	path        string

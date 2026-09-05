@@ -40,7 +40,7 @@ Commit the regenerated `config_kms.gen.go`, `runtime.schema.json`, and
 
 For every bound secret alias, set the declaration-only credential on the
 application defaults, for example
-`kmsclient.Secret{BindKey: resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY")}`. Leave
+`kmsclient.Secret{BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"))}`. Leave
 unbound secrets as `kmsclient.Secret{}`. Generated startup extracts this map and
 clears it from retained defaults and published snapshots; do not add a custom
 binding-key provider or file convention. Access-token providers remain

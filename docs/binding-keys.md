@@ -50,7 +50,7 @@ type Config struct {
 defaults := Config{
     LinkedInOAuthClientSecret: config.Secret{},
     OktaOAuthClientSecret: config.Secret{
-        BindKey: resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"),
+        BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY")),
     },
 }
 ```
@@ -76,7 +76,16 @@ const defaults = {
 Generated stores extract these declaration-only values into a private,
 alias-keyed loader map. They clear the key from retained defaults and every
 published snapshot. Directly fetched secrets never carry the supplied key,
-and secret formatting, JSON, inspection, and enumeration remain redacted.
+and supported secret formatting and serialization paths redact credentials.
+
+Go declarations hold an opaque `kmsclient.BindingKey` created with
+`kmsclient.NewBindingKey(value)`. Generated stores move these immutable values
+without extracting plaintext; only `kmsclient` unwraps them to construct RPCs.
+The zero value means absent and `IsSet()` reports presence. The wrapper protects
+supported logging/serialization paths from accidental disclosure, but deliberate
+reflection and debugging can still read private storage. Clearing a copy drops
+its reference; it does not securely erase immutable Go strings or other copies.
+See the [Go SDK](sdk-go.md) for serializer support and request options.
 
 ## Reads, writes, and metadata
 

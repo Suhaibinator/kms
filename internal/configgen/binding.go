@@ -283,14 +283,14 @@ func (r *bindingRenderer) renderStart() {
 		r.line("\t\treturn nil, fmt.Errorf(%s)", strconv.Quote("generated config store: default secret "+field.GoPath+" must be zero"))
 		r.line("\t}")
 	}
-	r.line("\tbindingKeys := make(map[string]string)")
+	r.line("\tbindingKeys := make(map[string]kmsclient.BindingKey)")
 	for _, field := range r.model.Secrets {
 		selector := r.fieldSelector("defaults", field)
-		r.line("\tif %s.BindKey != \"\" { bindingKeys[%s] = %s.BindKey }", selector, strconv.Quote(field.Source), selector)
+		r.line("\tif %s.BindKey.IsSet() { bindingKeys[%s] = %s.BindKey }", selector, strconv.Quote(field.Source), selector)
 	}
 	r.line("\tsanitizedDefaults := cloneRoot(defaults)")
 	for _, field := range r.model.Secrets {
-		r.line("\t%s.BindKey = \"\"", r.fieldSelector("sanitizedDefaults", field))
+		r.line("\t%s.BindKey = kmsclient.BindingKey{}", r.fieldSelector("sanitizedDefaults", field))
 	}
 	r.line("\tstore := &Store{defaults: sanitizedDefaults}")
 	r.line("\tmanager, err := configstore.Start(ctx, client, configstore.Options{")
@@ -335,7 +335,7 @@ func (r *bindingRenderer) renderPrepare() {
 		r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf(%s))", strconv.Quote("missing secret alias "+field.Source))
 		r.line("\t}")
 		r.line("\t%s = secret%d.Clone()", r.fieldSelector("candidate", field), secretIndex)
-		r.line("\t%s.BindKey = \"\"", r.fieldSelector("candidate", field))
+		r.line("\t%s.BindKey = kmsclient.BindingKey{}", r.fieldSelector("candidate", field))
 	}
 	r.line("\tif err := candidate.Validate(); err != nil {")
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate KMS configuration: %w"))
@@ -349,7 +349,7 @@ func (r *bindingRenderer) renderPrepare() {
 		// of the same fetched plaintext. Application validation may mutate its
 		// receiver, including Secret.Value() buffers.
 		r.line("\t%s = secret%d.Clone()", r.fieldSelector("effectiveDefaults", field), secretIndex)
-		r.line("\t%s.BindKey = \"\"", r.fieldSelector("effectiveDefaults", field))
+		r.line("\t%s.BindKey = kmsclient.BindingKey{}", r.fieldSelector("effectiveDefaults", field))
 	}
 	r.line("\tif err := effectiveDefaults.Validate(); err != nil {")
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate effective application defaults: %w"))

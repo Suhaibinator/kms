@@ -28,7 +28,7 @@ type SecretValue struct {
 	// Token is the per-secret access token.
 	Token string
 	// BindKey is the independent operator-owned binding key.
-	BindKey string
+	BindKey BindingKey
 	// EnvVar is an optional environment variable that, when set and non-empty,
 	// overrides the store value.
 	EnvVar string
@@ -82,7 +82,7 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 	}
 
 	if v.Key != "" {
-		sec, err := client.GetSecret(ctx, v.Key, WithSecretToken(v.Token), WithBindingKey(v.BindKey))
+		sec, err := client.GetSecret(ctx, v.Key, WithSecretToken(v.Token), WithBindingKeyValue(v.BindKey))
 		if err == nil {
 			st.value = sec.StringValue()
 			st.initialized = true

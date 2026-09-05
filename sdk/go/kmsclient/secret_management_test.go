@@ -26,8 +26,47 @@ func TestSecretCredentialsMapToIndependentRequestFields(t *testing.T) {
 	if got := server.LastBindingKey("GetSecret"); got != "binding-key" {
 		t.Fatalf("binding key = %q", got)
 	}
-	if secret.BindKey != "" {
+	if secret.BindKey.IsSet() {
 		t.Fatal("fetched Secret retained the request binding key")
+	}
+}
+
+func TestOpaqueBindingKeyRequestOptions(t *testing.T) {
+	for name, plaintext := range map[string]string{
+		"set":   "  binding-key-with-spaces-" + strings.Repeat("é", 16) + "  ",
+		"empty": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, server := newTestClient(t, Config{})
+			ctx := context.Background()
+			key := NewBindingKey(plaintext)
+			// An opaque zero must override earlier string options, and a set
+			// key must reach the wire byte-for-byte, never as a redaction.
+			_, err := client.PutSecret(ctx, "opaque-key", []byte("value"),
+				WithPutBindingKey("overridden"), WithPutBindingKeyValue(key))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if server.LastBindingKey("PutSecret") != plaintext {
+				t.Fatal("PutSecret did not send the exact opaque credential")
+			}
+			secret, err := client.GetSecret(ctx, "opaque-key",
+				WithBindingKey("overridden"), WithBindingKeyValue(key))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if server.LastBindingKey("GetSecret") != plaintext {
+				t.Fatal("GetSecret did not send the exact opaque credential")
+			}
+			if secret.BindKey.IsSet() || secret.StringValue() != "value" {
+				t.Fatal("resolved secret retained a credential or lost its value")
+			}
+			for _, method := range []string{"GetSecret", "PutSecret"} {
+				if plaintext != "" && strings.Contains(fmt.Sprint(server.LastMetadata(method)), plaintext) {
+					t.Fatal("binding key was sent in RPC metadata")
+				}
+			}
+		})
 	}
 }
 
@@ -145,7 +184,7 @@ func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
 func TestSecretValueSendsBothCredentialsAndEnvSkipsKMS(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecret(testNS, "declarative", []byte("value"))
-	value := SecretValue{Key: "declarative", Token: "access-token", BindKey: "binding-key"}
+	value := SecretValue{Key: "declarative", Token: "access-token", BindKey: NewBindingKey("binding-key")}
 	if err := value.InitContext(context.Background(), client); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +194,7 @@ func TestSecretValueSendsBothCredentialsAndEnvSkipsKMS(t *testing.T) {
 
 	client2, server2 := newTestClient(t, Config{})
 	t.Setenv("KMSCLIENT_BINDING_TEST_OVERRIDE", "from-env")
-	override := SecretValue{Key: "declarative", Token: "token-must-not-be-used", BindKey: "key-must-not-be-used", EnvVar: "KMSCLIENT_BINDING_TEST_OVERRIDE"}
+	override := SecretValue{Key: "declarative", Token: "token-must-not-be-used", BindKey: NewBindingKey("key-must-not-be-used"), EnvVar: "KMSCLIENT_BINDING_TEST_OVERRIDE"}
 	if err := override.InitContext(context.Background(), client2); err != nil {
 		t.Fatal(err)
 	}

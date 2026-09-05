@@ -126,12 +126,12 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	if !defaults.Token.IsZero() || defaults.Token.Path() != "" || defaults.Token.Version() != 0 || defaults.Token.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret Token must be zero")
 	}
-	bindingKeys := make(map[string]string)
-	if defaults.Token.BindKey != "" {
+	bindingKeys := make(map[string]kmsclient.BindingKey)
+	if defaults.Token.BindKey.IsSet() {
 		bindingKeys["token"] = defaults.Token.BindKey
 	}
 	sanitizedDefaults := cloneRoot(defaults)
-	sanitizedDefaults.Token.BindKey = ""
+	sanitizedDefaults.Token.BindKey = kmsclient.BindingKey{}
 	store := &Store{defaults: sanitizedDefaults}
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
@@ -171,7 +171,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing secret alias token"))
 	}
 	candidate.Token = secret0.Clone()
-	candidate.Token.BindKey = ""
+	candidate.Token.BindKey = kmsclient.BindingKey{}
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
@@ -180,7 +180,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.Token = secret0.Clone()
-	effectiveDefaults.Token.BindKey = ""
+	effectiveDefaults.Token.BindKey = kmsclient.BindingKey{}
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}

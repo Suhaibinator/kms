@@ -79,7 +79,7 @@ func TestSecretRedactionInStruct(t *testing.T) {
 
 func TestSecretCloneDeepCopiesPlaintextAndPreservesMetadata(t *testing.T) {
 	original := Secret{
-		BindKey:     "declaration-binding-key",
+		BindKey:     NewBindingKey("declaration-binding-key"),
 		value:       []byte("secret"),
 		path:        "/prod/app/password",
 		version:     17,
@@ -103,14 +103,14 @@ func TestSecretCloneDeepCopiesPlaintextAndPreservesMetadata(t *testing.T) {
 	if clone.BindKey != original.BindKey {
 		t.Fatalf("clone BindKey = %q, want declaration credential preserved", clone.BindKey)
 	}
-	if !(Secret{BindKey: "credential-only"}).IsZero() {
+	if !(Secret{BindKey: NewBindingKey("credential-only")}).IsZero() {
 		t.Fatal("declaration-only Secret must remain zero for value validation")
 	}
 }
 
 func TestSecretFormattingRedactsDeclarationBindingKey(t *testing.T) {
 	const bindingKey = "binding-key-that-must-never-appear"
-	secret := Secret{BindKey: bindingKey}
+	secret := Secret{BindKey: NewBindingKey(bindingKey)}
 	for name, rendered := range map[string]string{
 		"String": secret.String(), "GoString": secret.GoString(), "%v": fmt.Sprintf("%v", secret),
 		"%+v": fmt.Sprintf("%+v", secret), "%#v": fmt.Sprintf("%#v", secret), "%q": fmt.Sprintf("%q", secret),
@@ -130,7 +130,7 @@ func TestSecretFormattingRedactsDeclarationBindingKey(t *testing.T) {
 
 func TestSecretValueRedaction(t *testing.T) {
 	const bindingKey = "secret-value-binding-key"
-	sv := SecretValue{Key: "x", BindKey: bindingKey, Default: leak}
+	sv := SecretValue{Key: "x", BindKey: NewBindingKey(bindingKey), Default: leak}
 	// Init via default so it holds plaintext.
 	c, _ := newTestClient(t, Config{})
 	if err := sv.Init(c); err != nil {
@@ -185,7 +185,7 @@ func TestSecretValueYAMLRedaction(t *testing.T) {
 	secret := SecretValue{
 		Key:     "service/api-key",
 		Token:   token,
-		BindKey: bindKey,
+		BindKey: NewBindingKey(bindKey),
 		Default: fallback,
 	}
 
@@ -236,9 +236,9 @@ func TestSecretValuePanicsBeforeInit(t *testing.T) {
 
 func TestSecretYAMLRedaction(t *testing.T) {
 	const bindingKey = "binding-key-must-never-appear-in-yaml"
-	declaration := Secret{BindKey: bindingKey}
+	declaration := Secret{BindKey: NewBindingKey(bindingKey)}
 	resolved := NewSecret([]byte(leak))
-	resolved.BindKey = bindingKey
+	resolved.BindKey = NewBindingKey(bindingKey)
 	for name, secret := range map[string]Secret{"declaration": declaration, "resolved": resolved, "clone": resolved.Clone()} {
 		t.Run(name, func(t *testing.T) {
 			for _, value := range []any{secret, &secret, struct {
