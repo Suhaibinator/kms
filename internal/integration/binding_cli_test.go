@@ -41,7 +41,7 @@ func TestBindingCLIExplicitGuardNeedsNoSecretReadPermission(t *testing.T) {
 		t.Fatalf("create policy: %v", err)
 	}
 	ref := networkRef("prod", "binding-cli", "credential")
-	if _, err := secrets.PutSecret(rootCtx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("value")}); err != nil {
+	if _, err := secrets.PutSecretV03(rootCtx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("value")}); err != nil {
 		t.Fatalf("seed secret: %v", err)
 	}
 

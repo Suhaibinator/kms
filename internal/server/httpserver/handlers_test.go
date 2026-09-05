@@ -1077,6 +1077,29 @@ func TestSecretBindingUnlockFailuresAreIndistinguishable(t *testing.T) {
 	}
 }
 
+func TestOversizedBindingKeyIsRejectedAndRedactedAcrossHTTP(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	const bindingKey = "binding-key-a-0123456789-0123456789"
+	put := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "oversized-binding-key",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("value")), "binding_key": bindingKey,
+	})
+	mustStatus(t, put, http.StatusOK)
+	oversized := strings.Repeat("http-binding-size-canary-", 45)
+	got := e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "oversized-binding-key",
+		"anchor_version": uint64(1), "binding_key": oversized,
+	})
+	mustStatus(t, got, http.StatusBadRequest)
+	if code := errCode(t, got); code != "invalid_argument" {
+		t.Fatalf("error code = %q, want invalid_argument", code)
+	}
+	if strings.Contains(got.Body.String(), oversized) || strings.Contains(got.Body.String(), "size-canary") {
+		t.Fatalf("HTTP error reflected binding key: %s", got.Body.String())
+	}
+}
+
 func TestSecretUnboundVersionsPreviewAndGuardedPurge(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")

@@ -13,6 +13,14 @@ import (
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
+const (
+	// Cohort discovery is a credential-testing operation. A burst of ten keeps
+	// ordinary preview/retry workflows responsive; one-token-per-minute refill
+	// bounds sustained per-identity cryptographic work to 60 requests per hour.
+	defaultBindingCohortPreviewRequestsPerHour = 60.0
+	defaultBindingCohortPreviewBurst           = 10.0
+)
+
 // PutSecretInput describes a secret write (creation or new version).
 type PutSecretInput struct {
 	Ref         domain.Ref
@@ -45,6 +53,9 @@ type PutSecretResult struct {
 // admins (the audited admin path is RevealSecret).
 func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, secretToken, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
+		return domain.SecretValue{}, err
+	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
 		return domain.SecretValue{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
@@ -108,6 +119,9 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 // operator-owned binding key because the server cannot decrypt without it.
 func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
+		return domain.SecretValue{}, err
+	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
 		return domain.SecretValue{}, err
 	}
 	if !pr.IsAdmin() {
@@ -184,7 +198,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	bound := in.BindingKey != ""
 	if bound {
 		if err := crypto.ValidateBindingKey(in.BindingKey); err != nil {
-			return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
+			return PutSecretResult{}, invalidBindingKeyArgument()
 		}
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, in.Ref)
@@ -322,6 +336,10 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 		s.auditRef(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, expectedCurrentVersion, "error", nil)
 		return SecretVersionTransitionResult{}, err
 	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
+		s.auditRef(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, expectedCurrentVersion, "error", nil)
+		return SecretVersionTransitionResult{}, err
+	}
 	return s.transitionSecretProtection(ctx, pr, ref, expectedCurrentVersion, storage.SecretTransitionUnbind, bindingKey, "", "secret.unbind")
 }
 
@@ -332,9 +350,19 @@ func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, 
 		s.auditRef(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, anchor, "error", nil)
+		return SecretBindingCohortResult{}, err
+	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretBindingManage, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretBindingCohortResult{}, err
+	}
+	if !s.bindingCohortPreviews.Allow(pr.Identity.Kind + "\x00" + pr.Identity.Name) {
+		s.m().RateLimited(LimiterBindingCohortPreview)
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, anchor, "deny", nil)
+		return SecretBindingCohortResult{}, domain.Errorf(domain.ErrResourceExhausted,
+			"binding-cohort preview request budget exhausted for identity")
 	}
 
 	// A read lock keeps the keyring view stable while storage holds its read
@@ -364,6 +392,10 @@ func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, 
 // key. Historical versions continue requiring their old key.
 func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref domain.Ref, expectedCurrentVersion uint64, bindingKey, newBindingKey string) (SecretVersionTransitionResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, expectedCurrentVersion, "error", nil)
+		return SecretVersionTransitionResult{}, err
+	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
 		s.auditRef(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, expectedCurrentVersion, "error", nil)
 		return SecretVersionTransitionResult{}, err
 	}
@@ -460,6 +492,10 @@ func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, re
 	if !pr.IsAdmin() {
 		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "deny", nil)
 		return SecretBindingCohortResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
+	}
+	if err := validateBindingKeySizeArgument(bindingKey); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "error", nil)
+		return SecretBindingCohortResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref)
 	if err != nil {
@@ -599,9 +635,22 @@ func (s *Service) recordRequiredBindingAuditFailure(err error) {
 
 func validateNewBindingKeyArgument(bindingKey string) error {
 	if err := crypto.ValidateBindingKey(bindingKey); err != nil {
-		return domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
+		return invalidBindingKeyArgument()
 	}
 	return nil
+}
+
+func validateBindingKeySizeArgument(bindingKey string) error {
+	if len(bindingKey) > crypto.MaxBindingKeyBytes {
+		return invalidBindingKeyArgument()
+	}
+	return nil
+}
+
+func invalidBindingKeyArgument() error {
+	return domain.Errorf(domain.ErrInvalidArgument,
+		"binding_key must be valid UTF-8 and between %d and %d bytes",
+		crypto.MinBindingKeyBytes, crypto.MaxBindingKeyBytes)
 }
 
 func sanitizeBindingMutationError(err error) error {

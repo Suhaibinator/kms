@@ -401,7 +401,7 @@ describe("protocol-faithful gRPC integration", () => {
     server.addService(SecretServiceService, {
       listSecrets,
       getSecretMetadata,
-      putSecret,
+      putSecretV03: putSecret,
       deleteSecret,
       disableSecret,
       destroySecretVersion,

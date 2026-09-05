@@ -434,7 +434,7 @@ export class KmsClient {
       const ref = await this.#resolveResourceRefForCall(key, options);
       try {
         const response = await this.#transport.unary(
-          SecretServiceService.putSecret,
+          SecretServiceService.putSecretV03,
           {
             ref: toWireRef(ref),
             value: plaintext,

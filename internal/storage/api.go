@@ -116,6 +116,11 @@ type SecretBindingResult struct {
 	Revision         uint64
 }
 
+// MaxSecretBindingCohortVersions caps the exact version set returned by a
+// cohort operation. Discovery may test one adjacent matching version to prove
+// the cohort exceeds this limit, then fails without returning a partial set.
+const MaxSecretBindingCohortVersions = 128
+
 // SecretVersionTransitionKind identifies a protection transition. Each
 // transition clones the current source into one new immutable version.
 type SecretVersionTransitionKind string

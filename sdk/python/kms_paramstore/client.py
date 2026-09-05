@@ -630,7 +630,7 @@ class Client:
                 value = value.encode("utf-8")
             elif isinstance(value, bytearray):
                 value = bytes(value)
-            resp = self._secret_stub.PutSecret(
+            resp = self._secret_stub.PutSecretV03(
                 kms_pb2.PutSecretRequest(
                     ref=to_proto_ref(ref),
                     value=value,

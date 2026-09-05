@@ -23,11 +23,16 @@ const (
 	hkdfInfoBindingKey = "kms/v1 binding key"
 	BindingKeySaltSize = 32
 	MinBindingKeyBytes = 32
+	// MaxBindingKeyBytes keeps caller-controlled HKDF input small. A generated
+	// 256-bit Base64URL key is only 43 bytes; 1 KiB leaves ample room for opaque
+	// operator formats without allowing multi-megabyte derivation work.
+	MaxBindingKeyBytes = 1024
 )
 
 var (
 	ErrBindingKeyRequired    = errors.New("binding key required")
 	ErrBindingKeyTooShort    = errors.New("binding key must be at least 32 UTF-8 bytes")
+	ErrBindingKeyTooLong     = errors.New("binding key must be at most 1024 UTF-8 bytes")
 	ErrBindingKeyInvalidUTF8 = errors.New("binding key must be valid UTF-8")
 )
 
@@ -44,6 +49,9 @@ func BuildAAD(env, app, key string, version uint64) string {
 func ValidateBindingKey(bindingKey string) error {
 	if bindingKey == "" {
 		return ErrBindingKeyRequired
+	}
+	if len(bindingKey) > MaxBindingKeyBytes {
+		return ErrBindingKeyTooLong
 	}
 	if !utf8.ValidString(bindingKey) {
 		return ErrBindingKeyInvalidUTF8

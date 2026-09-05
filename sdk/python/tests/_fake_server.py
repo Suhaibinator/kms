@@ -250,7 +250,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             ref=_proto_ref(rk), version=version, value=value, content_type=ct,
         )
 
-    def PutSecret(self, request, context):
+    def PutSecretV03(self, request, context):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
             sec = self.store.secrets.get(rk)

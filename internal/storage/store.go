@@ -283,7 +283,7 @@ func readBaselineSchema(db *gorm.DB) ([]baselineSchemaObject, error) {
 	err := db.Raw(`SELECT type, name, tbl_name AS table_name, COALESCE(sql, '') AS sql
 		FROM sqlite_master
 		WHERE type IN ('table', 'index', 'trigger', 'view')
-		  AND name NOT LIKE 'sqlite_%'
+		  AND name NOT GLOB 'sqlite_*'
 		ORDER BY type, name`).Scan(&objects).Error
 	return objects, err
 }
@@ -392,7 +392,7 @@ func initializeBaseline(db *gorm.DB) error {
 func initializeBaselineWithVerifier(db *gorm.DB, verify func(*gorm.DB) error) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var count int64
-		if err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'index', 'trigger', 'view') AND name NOT LIKE 'sqlite_%'").Scan(&count).Error; err != nil {
+		if err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'index', 'trigger', 'view') AND name NOT GLOB 'sqlite_*'").Scan(&count).Error; err != nil {
 			return fmt.Errorf("inspect empty database: %w", err)
 		}
 		if count != 0 {

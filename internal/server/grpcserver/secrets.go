@@ -3,6 +3,9 @@ package grpcserver
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -33,6 +36,10 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 }
 
 func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+	return nil, status.Error(codes.FailedPrecondition, "PutSecret is incompatible with KMS v0.3; use PutSecretV03")
+}
+
+func (h *secretServer) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err

@@ -2245,8 +2245,9 @@ func (x *SecretVersionTransitionResponse) GetRevision() uint64 {
 	return 0
 }
 
-// PreviewSecretBindingCohort discovers the contiguous bound-version cohort
-// around anchor_version without mutating it. anchor_version 0 selects current.
+// PreviewSecretBindingCohort discovers up to 128 contiguous bound versions
+// around anchor_version without mutating them. anchor_version 0 selects
+// current. A larger cohort is rejected rather than returned partially.
 type PreviewSecretBindingCohortRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ref           *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
@@ -9754,11 +9755,11 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\fPutParameter\x12\x1b.kms.v1.PutParameterRequest\x1a\x1c.kms.v1.PutParameterResponse\x12O\n" +
 	"\x0eListParameters\x12\x1d.kms.v1.ListParametersRequest\x1a\x1e.kms.v1.ListParametersResponse\x12R\n" +
 	"\x0fDeleteParameter\x12\x1e.kms.v1.DeleteParameterRequest\x1a\x1f.kms.v1.DeleteParameterResponse\x12a\n" +
-	"\x14GetParameterMetadata\x12#.kms.v1.GetParameterMetadataRequest\x1a$.kms.v1.GetParameterMetadataResponse2\xd8\n" +
-	"\n" +
+	"\x14GetParameterMetadata\x12#.kms.v1.GetParameterMetadataRequest\x1a$.kms.v1.GetParameterMetadataResponse2\xa2\v\n" +
 	"\rSecretService\x12@\n" +
-	"\tGetSecret\x12\x18.kms.v1.GetSecretRequest\x1a\x19.kms.v1.GetSecretResponse\x12@\n" +
-	"\tPutSecret\x12\x18.kms.v1.PutSecretRequest\x1a\x19.kms.v1.PutSecretResponse\x12F\n" +
+	"\tGetSecret\x12\x18.kms.v1.GetSecretRequest\x1a\x19.kms.v1.GetSecretResponse\x12E\n" +
+	"\tPutSecret\x12\x18.kms.v1.PutSecretRequest\x1a\x19.kms.v1.PutSecretResponse\"\x03\x88\x02\x01\x12C\n" +
+	"\fPutSecretV03\x12\x18.kms.v1.PutSecretRequest\x1a\x19.kms.v1.PutSecretResponse\x12F\n" +
 	"\vListSecrets\x12\x1a.kms.v1.ListSecretsRequest\x1a\x1b.kms.v1.ListSecretsResponse\x12I\n" +
 	"\fDeleteSecret\x12\x1b.kms.v1.DeleteSecretRequest\x1a\x1c.kms.v1.DeleteSecretResponse\x12L\n" +
 	"\rDisableSecret\x12\x1c.kms.v1.DisableSecretRequest\x1a\x1d.kms.v1.DisableSecretResponse\x12a\n" +
@@ -10086,109 +10087,111 @@ var file_kms_v1_kms_proto_depIdxs = []int32{
 	14,  // 114: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
 	16,  // 115: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
 	18,  // 116: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
-	20,  // 117: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
-	22,  // 118: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
-	24,  // 119: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
-	26,  // 120: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
-	28,  // 121: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
-	30,  // 122: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
-	32,  // 123: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
-	33,  // 124: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
-	35,  // 125: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
-	36,  // 126: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
-	37,  // 127: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
-	39,  // 128: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
-	40,  // 129: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
-	76,  // 130: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
-	45,  // 131: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
-	47,  // 132: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
-	50,  // 133: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
-	52,  // 134: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
-	54,  // 135: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
-	56,  // 136: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
-	65,  // 137: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
-	60,  // 138: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
-	70,  // 139: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
-	72,  // 140: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
-	74,  // 141: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
-	86,  // 142: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
-	88,  // 143: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
-	90,  // 144: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
-	92,  // 145: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
-	99,  // 146: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
-	101, // 147: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
-	103, // 148: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
-	105, // 149: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
-	107, // 150: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
-	109, // 151: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
-	111, // 152: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
-	113, // 153: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
-	115, // 154: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
-	117, // 155: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
-	119, // 156: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
-	121, // 157: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
-	124, // 158: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
-	127, // 159: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
-	130, // 160: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
-	94,  // 161: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
-	134, // 162: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
-	132, // 163: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
-	7,   // 164: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
-	9,   // 165: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
-	11,  // 166: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
-	13,  // 167: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
-	15,  // 168: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
-	17,  // 169: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
-	19,  // 170: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
-	21,  // 171: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
-	23,  // 172: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
-	25,  // 173: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
-	27,  // 174: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
-	29,  // 175: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
-	31,  // 176: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
-	34,  // 177: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	34,  // 178: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 179: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	34,  // 180: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 181: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	41,  // 182: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	41,  // 183: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	77,  // 184: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
-	46,  // 185: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
-	49,  // 186: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
-	51,  // 187: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
-	53,  // 188: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
-	55,  // 189: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
-	58,  // 190: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
-	68,  // 191: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
-	62,  // 192: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
-	71,  // 193: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
-	73,  // 194: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
-	75,  // 195: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
-	87,  // 196: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
-	89,  // 197: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
-	91,  // 198: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
-	93,  // 199: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
-	100, // 200: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
-	102, // 201: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
-	104, // 202: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
-	106, // 203: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
-	108, // 204: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
-	110, // 205: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
-	112, // 206: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
-	114, // 207: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
-	116, // 208: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
-	118, // 209: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
-	120, // 210: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
-	122, // 211: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
-	125, // 212: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
-	128, // 213: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
-	131, // 214: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
-	96,  // 215: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
-	136, // 216: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
-	133, // 217: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
-	164, // [164:218] is the sub-list for method output_type
-	110, // [110:164] is the sub-list for method input_type
+	18,  // 117: kms.v1.SecretService.PutSecretV03:input_type -> kms.v1.PutSecretRequest
+	20,  // 118: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
+	22,  // 119: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
+	24,  // 120: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
+	26,  // 121: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
+	28,  // 122: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
+	30,  // 123: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
+	32,  // 124: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
+	33,  // 125: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
+	35,  // 126: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
+	36,  // 127: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
+	37,  // 128: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
+	39,  // 129: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
+	40,  // 130: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
+	76,  // 131: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
+	45,  // 132: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
+	47,  // 133: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
+	50,  // 134: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
+	52,  // 135: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
+	54,  // 136: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
+	56,  // 137: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
+	65,  // 138: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
+	60,  // 139: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
+	70,  // 140: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
+	72,  // 141: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
+	74,  // 142: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
+	86,  // 143: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
+	88,  // 144: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
+	90,  // 145: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
+	92,  // 146: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
+	99,  // 147: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
+	101, // 148: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
+	103, // 149: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
+	105, // 150: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
+	107, // 151: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
+	109, // 152: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
+	111, // 153: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
+	113, // 154: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
+	115, // 155: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
+	117, // 156: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
+	119, // 157: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
+	121, // 158: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
+	124, // 159: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
+	127, // 160: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
+	130, // 161: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
+	94,  // 162: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
+	134, // 163: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
+	132, // 164: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
+	7,   // 165: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
+	9,   // 166: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
+	11,  // 167: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
+	13,  // 168: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
+	15,  // 169: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
+	17,  // 170: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
+	19,  // 171: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
+	19,  // 172: kms.v1.SecretService.PutSecretV03:output_type -> kms.v1.PutSecretResponse
+	21,  // 173: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
+	23,  // 174: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
+	25,  // 175: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
+	27,  // 176: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
+	29,  // 177: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
+	31,  // 178: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
+	34,  // 179: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	34,  // 180: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 181: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	34,  // 182: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 183: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	41,  // 184: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	41,  // 185: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	77,  // 186: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
+	46,  // 187: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
+	49,  // 188: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
+	51,  // 189: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
+	53,  // 190: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
+	55,  // 191: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
+	58,  // 192: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
+	68,  // 193: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
+	62,  // 194: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
+	71,  // 195: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
+	73,  // 196: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
+	75,  // 197: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
+	87,  // 198: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
+	89,  // 199: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
+	91,  // 200: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
+	93,  // 201: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
+	100, // 202: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
+	102, // 203: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
+	104, // 204: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
+	106, // 205: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
+	108, // 206: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
+	110, // 207: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
+	112, // 208: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
+	114, // 209: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
+	116, // 210: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
+	118, // 211: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
+	120, // 212: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
+	122, // 213: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
+	125, // 214: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
+	128, // 215: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
+	131, // 216: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
+	96,  // 217: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
+	136, // 218: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
+	133, // 219: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
+	165, // [165:220] is the sub-list for method output_type
+	110, // [110:165] is the sub-list for method input_type
 	110, // [110:110] is the sub-list for extension type_name
 	110, // [110:110] is the sub-list for extension extendee
 	0,   // [0:110] is the sub-list for field type_name

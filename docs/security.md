@@ -216,12 +216,18 @@ inner-wrapped DEK
 stored encrypted_dek
 ```
 
-The binding key must be valid UTF-8 and at least 32 bytes. It is otherwise
+The binding key must be valid UTF-8 and contain 32 to 1024 bytes. It is otherwise
 opaque: KMS does not normalize, trim, prefix-check, compare across aliases,
 store, hash, fingerprint, or escrow it. Only the fresh per-version salt and
 encrypted layers are persisted. Derived mutable key, DEK, and inner buffers
 are zeroed promptly. Missing and incorrect credentials collapse to the same
 sanitized boundary and no error or audit event echoes request material.
+
+Contiguous bound-cohort discovery is capped at 128 versions and rejects a
+larger cohort without returning a partial result. Its preview endpoint has a
+process-local per-identity token bucket: burst 10, then 60 requests per hour.
+Together with the 1024-byte credential ceiling, this bounds both one request's
+key-derivation work and sustained probing by a delegated binding operator.
 
 `bound` and `has_access_token` are immutable while a version is live. Bind,
 unbind, and binding-key rotation clone the current version into one new
@@ -289,7 +295,11 @@ creation/rotation time and is not retrievable again:
   returned once at issuance and never persisted).
 - **Per-secret access tokens** (`secrets.access_token_hash`, prefix
   `kmss_`): optional, attached to an individual secret. Each immutable version
-  records whether the access-token gate applies. `PutSecret` accepts only the
+  records whether the access-token gate applies. The public `PutSecret` client
+  APIs use the versioned `PutSecretV03` wire method; the legacy `PutSecret` RPC
+  is rejection-only because v0.2 encoded `client_bound` at field 5, where v0.3
+  encodes `binding_key`. This prevents stale clients from silently creating an
+  unbound version. The v0.3 write API accepts only the
   boolean `generate_access_token`; when true, the server creates or rotates the
   token and returns it exactly once. `GetSecret` for a gated version requires
   the matching `GetSecretRequest.secret_token` (`tokenHashMatches`,

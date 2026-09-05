@@ -5,6 +5,7 @@ import {
   api,
   PURGE_CLEANUP_PENDING_MESSAGE,
   PurgeCleanupPendingApiError,
+  SECRET_ALREADY_EXISTS_MESSAGE,
   SECRET_OPERATION_FAILED_MESSAGE,
 } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
@@ -112,9 +113,9 @@ function keyColumn(): string[] {
 }
 
 /** Renders the secret detail page and opens its new-version form. */
-async function openNewVersion(): Promise<HTMLElement> {
-  mocks.router.query = { env: SECRET.env, app: SECRET.app, key: SECRET.key };
-  vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+async function openNewVersion(secret: SecretMetadata = SECRET): Promise<HTMLElement> {
+  mocks.router.query = { env: secret.env, app: secret.app, key: secret.key };
+  vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret });
 
   render(<SecretDetailPage />);
   fireEvent.click(await screen.findByRole("button", { name: "New version" }));
@@ -424,6 +425,28 @@ describe("new secret validation", () => {
     expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
     expect(input).toHaveValue("");
     await act(async () => finish({ version: 1, revision: 1 }));
+  });
+
+  it("creates only a new key and keeps the form usable after an existing-secret conflict", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockRejectedValue(new ApiError("already_exists", SECRET_OPERATION_FAILED_MESSAGE, 409));
+    await renderReadyForm();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create secret" }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({ create_only: true });
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        SECRET_ALREADY_EXISTS_MESSAGE,
+        "Secret already exists",
+      ),
+    );
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Key")).toHaveValue("api-key");
+    expect(screen.getByRole("textbox", { name: "Value" })).toHaveValue("a value");
+    expect(screen.getByRole("button", { name: "Create secret" })).toBeEnabled();
   });
 });
 
@@ -817,6 +840,42 @@ describe("new secret version dialog", () => {
     expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
     expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
     expect(key).toHaveValue("");
+  });
+
+  it("preserves binding protection by default when the current version is bound", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 2, revision: 3 });
+    const boundSecret: SecretMetadata = {
+      ...SECRET,
+      bound: true,
+      versions: [{ ...SECRET.versions[0], bound: true }],
+    };
+    const dialog = await openNewVersion(boundSecret);
+
+    expect(
+      within(dialog).getByRole("checkbox", { name: /Bind only this new version/ }),
+    ).toBeChecked();
+    expect(within(dialog).getByText("Advanced options").closest("details")).toHaveAttribute("open");
+    expect(within(dialog).getByLabelText("Binding key")).toBeVisible();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "next value" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save new version" }));
+
+    expect(createSecret).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText("Binding key")).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "Binding key must be at least 32 UTF-8 bytes.",
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save new version" }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({ binding_key: BINDING_KEY });
   });
 });
 

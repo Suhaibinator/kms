@@ -168,6 +168,11 @@ func (v SecretValue) MarshalJSONTo(out *jsontext.Encoder) error {
 	return json.MarshalEncode(out, redactedText)
 }
 
+// MarshalYAML redacts secret credentials and fallback plaintext in YAML exports.
+func (v SecretValue) MarshalYAML() (any, error) {
+	return redactedText, nil
+}
+
 // ParameterValue is a declarative, store-backed non-secret field. By default it
 // hot-reloads over the client's shared Subscribe stream, so Get always returns
 // the latest value without an RPC. Set Static to opt out and resolve once at

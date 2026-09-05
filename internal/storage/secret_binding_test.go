@@ -249,6 +249,43 @@ func TestPreviewSecretBindingCohortBoundaries(t *testing.T) {
 	}
 }
 
+func TestPreviewSecretBindingCohortCapsContiguousWork(t *testing.T) {
+	const maxCohortVersions = 128
+	for _, tc := range []struct {
+		name       string
+		versions   int
+		wantErr    error
+		wantCalls  int
+		wantResult int
+	}{
+		{name: "exact limit", versions: maxCohortVersions, wantCalls: maxCohortVersions, wantResult: maxCohortVersions},
+		{name: "over limit", versions: maxCohortVersions + 1, wantErr: domain.ErrResourceExhausted, wantCalls: maxCohortVersions + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			seedNS(t, st, "prod", "app")
+			r := ref("prod", "app", "bounded-cohort")
+			for range tc.versions {
+				putBindingVersion(t, st, r, 'A')
+			}
+			calls := 0
+			result, err := st.PreviewSecretBindingCohort(context.Background(), r, 1, func(rec SecretVersionRecord) error {
+				calls++
+				return bindingKeyTest('A')(rec)
+			})
+			if !errors.Is(err, tc.wantErr) || tc.wantErr == nil && err != nil {
+				t.Fatalf("PreviewSecretBindingCohort error = %v, want %v", err, tc.wantErr)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("binding tests = %d, want %d", calls, tc.wantCalls)
+			}
+			if len(result.AffectedVersions) != tc.wantResult {
+				t.Fatalf("affected versions = %d, want %d", len(result.AffectedVersions), tc.wantResult)
+			}
+		})
+	}
+}
+
 func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

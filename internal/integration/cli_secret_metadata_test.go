@@ -28,7 +28,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 	ref := networkRef("prod", "review", "history")
 	// Legal per-version metadata accumulates beyond the default 4 MiB gRPC limit.
 	for i := 0; i < 300; i++ {
-		_, err = secrets.PutSecret(actx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte(fmt.Sprintf("value-%d", i+1)), ContentType: "text/plain", MetadataJson: `{"description":"` + strings.Repeat("a", 16350) + `"}`})
+		_, err = secrets.PutSecretV03(actx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte(fmt.Sprintf("value-%d", i+1)), ContentType: "text/plain", MetadataJson: `{"description":"` + strings.Repeat("a", 16350) + `"}`})
 		if err != nil {
 			t.Fatal(err)
 		}

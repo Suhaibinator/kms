@@ -289,7 +289,7 @@ class SecretServiceStub:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
-    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
+    Any supplied binding key must be valid UTF-8 and contain 32-1024 bytes.
 
     """
 
@@ -306,6 +306,11 @@ class SecretServiceStub:
                 _registered_method=True)
         self.PutSecret = channel.unary_unary(
                 '/kms.v1.SecretService/PutSecret',
+                request_serializer=kms_dot_v1_dot_kms__pb2.PutSecretRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.PutSecretResponse.FromString,
+                _registered_method=True)
+        self.PutSecretV03 = channel.unary_unary(
+                '/kms.v1.SecretService/PutSecretV03',
                 request_serializer=kms_dot_v1_dot_kms__pb2.PutSecretRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.PutSecretResponse.FromString,
                 _registered_method=True)
@@ -384,7 +389,7 @@ class SecretServiceServicer:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
-    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
+    Any supplied binding key must be valid UTF-8 and contain 32-1024 bytes.
 
     """
 
@@ -395,6 +400,15 @@ class SecretServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def PutSecret(self, request, context):
+        """PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+        receive an explicit rejection instead of silently losing client_bound.
+        v0.3 clients must use PutSecretV03.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PutSecretV03(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -491,6 +505,11 @@ def add_SecretServiceServicer_to_server(servicer, server):
                     request_deserializer=kms_dot_v1_dot_kms__pb2.PutSecretRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.PutSecretResponse.SerializeToString,
             ),
+            'PutSecretV03': grpc.unary_unary_rpc_method_handler(
+                    servicer.PutSecretV03,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.PutSecretRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.PutSecretResponse.SerializeToString,
+            ),
             'ListSecrets': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSecrets,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.ListSecretsRequest.FromString,
@@ -572,7 +591,7 @@ class SecretService:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
-    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
+    Any supplied binding key must be valid UTF-8 and contain 32-1024 bytes.
 
     """
 
@@ -618,6 +637,33 @@ class SecretService:
             request,
             target,
             '/kms.v1.SecretService/PutSecret',
+            kms_dot_v1_dot_kms__pb2.PutSecretRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.PutSecretResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PutSecretV03(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.SecretService/PutSecretV03',
             kms_dot_v1_dot_kms__pb2.PutSecretRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.PutSecretResponse.FromString,
             options,

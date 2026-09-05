@@ -176,6 +176,54 @@ func TestSecretValueRedaction(t *testing.T) {
 	}
 }
 
+func TestSecretValueYAMLRedaction(t *testing.T) {
+	const (
+		token    = "secret-value-token-must-never-appear-in-yaml"
+		bindKey  = "secret-value-binding-key-must-never-appear-in-yaml"
+		fallback = "secret-value-default-must-never-appear-in-yaml"
+	)
+	secret := SecretValue{
+		Key:     "service/api-key",
+		Token:   token,
+		BindKey: bindKey,
+		Default: fallback,
+	}
+
+	type nested struct {
+		Value   SecretValue  `yaml:"value"`
+		Pointer *SecretValue `yaml:"pointer"`
+	}
+	var interfaceValue any = secret
+	var interfacePointer any = &secret
+
+	for name, value := range map[string]any{
+		"value":                  secret,
+		"pointer":                &secret,
+		"nested struct":          nested{Value: secret, Pointer: &secret},
+		"map of values":          map[string]SecretValue{"credential": secret},
+		"map of pointers":        map[string]*SecretValue{"credential": &secret},
+		"interface-held value":   interfaceValue,
+		"interface-held pointer": interfacePointer,
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := yaml.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for field, sensitive := range map[string]string{
+				"Token": token, "BindKey": bindKey, "Default": fallback,
+			} {
+				if strings.Contains(string(encoded), sensitive) {
+					t.Errorf("YAML leaked %s: %s", field, encoded)
+				}
+			}
+			if !strings.Contains(string(encoded), redactedText) {
+				t.Errorf("YAML missing redaction marker: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestSecretValuePanicsBeforeInit(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

@@ -1062,7 +1062,7 @@ func (s *Server) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecretMeta
 	return &kmsv1.GetSecretMetadataResponse{Secret: proto.Clone(metadata).(*kmsv1.SecretMetadata)}, nil
 }
 
-func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+func (s *Server) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.recordMD(ctx, "PutSecret")
 	display := displayOf(req.GetRef())
 	ns, key := splitDisplay(display)

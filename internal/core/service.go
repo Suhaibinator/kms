@@ -28,6 +28,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/policy"
+	"github.com/Suhaibinator/kms/internal/ratelimit"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -129,6 +130,9 @@ type Service struct {
 	// verifyLimits holds the per-identity request and mismatch budgets for
 	// VerifyReleaseDefaults (see release_verify.go). Process-local.
 	verifyLimits atomic.Pointer[verifyLimiters]
+	// bindingCohortPreviews bounds the cryptographic discovery requests one
+	// identity may start. Process-local, like the verify-defaults limiter.
+	bindingCohortPreviews *ratelimit.Limiter
 	// metrics is the operational-signal exporter (see metrics.go); no-op
 	// until SetMetrics attaches one.
 	metrics atomic.Pointer[metricsHolder]
@@ -142,7 +146,11 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier()}
+	s := &Service{
+		store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() },
+		filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier(),
+		bindingCohortPreviews: ratelimit.New(defaultBindingCohortPreviewRequestsPerHour/60.0, defaultBindingCohortPreviewBurst),
+	}
 	s.auditEnabled.Store(true)
 	s.adminRequireClientCert.Store(true)
 	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))

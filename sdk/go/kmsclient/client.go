@@ -464,7 +464,7 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
-	resp, err := c.secrets.PutSecret(cctx, &kmsv1.PutSecretRequest{
+	resp, err := c.secrets.PutSecretV03(cctx, &kmsv1.PutSecretRequest{
 		Ref:                 r.resourceProto(),
 		Value:               value,
 		ContentType:         o.contentType,

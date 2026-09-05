@@ -1187,12 +1187,15 @@ namespace.
 | `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
-Binding keys are opaque valid UTF-8 strings of at least 32 bytes. The CLI reads
+Binding keys are opaque valid UTF-8 strings containing 32 to 1024 bytes. The CLI reads
 them only from the exact environment variables named above or from a no-echo
 terminal prompt; there is no key-file flag, key-file variable, key directory,
 or recovery source. KMS stores no key, hash, fingerprint, or cohort identity.
 Bound-cohort purge previews the exact contiguous cryptographic cohort, confirms
-it, and replays both revision and affected-version CAS guards. Unbound purge
+it, and replays both revision and affected-version CAS guards. A bound cohort
+may contain at most 128 versions; larger cohorts fail without a partial result.
+Preview allows a per-identity burst of 10 and refills at 60 requests per hour,
+with an independent process-local bucket on each server instance. Unbound purge
 does the same for the full unbound set without requesting a binding key.
 Transitions instead submit the current version observed immediately before the
 operation. A purge

@@ -443,7 +443,7 @@ describe("KmsClient", () => {
 
   it("invalidates writes and preserves one-time access tokens", async () => {
     const transport = new FakeTransport((path, request) => {
-      if (path.endsWith("/PutSecret")) {
+      if (path.endsWith("/PutSecretV03")) {
         expect(request).toMatchObject({
           bindingKey: "operator-binding-key",
           generateAccessToken: true,
@@ -813,7 +813,7 @@ describe("KmsClient", () => {
         if (reads === 1) return firstRead;
         return wireSecret("target", "fresh", 2n);
       }
-      if (path.endsWith("/PutSecret")) {
+      if (path.endsWith("/PutSecretV03")) {
         return { version: 2n, revision: 2n, accessToken: "" };
       }
       throw new Error(`unexpected ${path}`);

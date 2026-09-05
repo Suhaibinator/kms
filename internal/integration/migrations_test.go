@@ -245,7 +245,7 @@ func readBaselineSchema(t *testing.T, path string) []baselineSchemaObject {
 	rows, err := db.Query(`SELECT type, name, tbl_name, COALESCE(sql, '')
 		FROM sqlite_master
 		WHERE type IN ('table', 'index', 'trigger', 'view')
-		  AND name NOT LIKE 'sqlite_%'
+		  AND name NOT GLOB 'sqlite_*'
 		ORDER BY type, name`)
 	if err != nil {
 		t.Fatalf("read physical schema: %v", err)

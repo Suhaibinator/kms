@@ -33,7 +33,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create backup namespace: %v", err)
 	}
-	if _, err := kmsv1.NewSecretServiceClient(e.adminConn).PutSecret(rootCtx, &kmsv1.PutSecretRequest{
+	if _, err := kmsv1.NewSecretServiceClient(e.adminConn).PutSecretV03(rootCtx, &kmsv1.PutSecretRequest{
 		Ref:   networkRef("prod", "process-backup", "database-password"),
 		Value: []byte("process-backup-secret-canary"), ContentType: "text/plain",
 	}); err != nil {

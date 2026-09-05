@@ -106,6 +106,8 @@ func TestValidateBindingKeyOpaqueUTF8Bytes(t *testing.T) {
 		"missing":       {key: "", want: ErrBindingKeyRequired},
 		"31 bytes":      {key: strings.Repeat("x", 31), want: ErrBindingKeyTooShort},
 		"32 bytes":      {key: strings.Repeat("x", 32)},
+		"1024 bytes":    {key: strings.Repeat("x", 1024)},
+		"1025 bytes":    {key: strings.Repeat("x", 1025), want: ErrBindingKeyTooLong},
 		"16 unicode":    {key: strings.Repeat("é", 16)}, // 32 UTF-8 bytes
 		"opaque spaces": {key: strings.Repeat(" ", 32)},
 		"not trimmed":   {key: strings.Repeat("x", 31) + " "},

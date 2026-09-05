@@ -79,19 +79,19 @@ func TestPutSecretKeepsHistoricalTokenRequirementImmutable(t *testing.T) {
 	ctx := context.Background()
 	ref := resourceProto("prod/app", "token-history")
 
-	if _, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v1")}); err != nil {
+	if _, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v1")}); err != nil {
 		t.Fatal(err)
 	}
-	firstToken, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{
+	firstToken, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{
 		Ref: ref, Value: []byte("v2"), GenerateAccessToken: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v3")}); err != nil {
+	if _, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v3")}); err != nil {
 		t.Fatal(err)
 	}
-	secondToken, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{
+	secondToken, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{
 		Ref: ref, Value: []byte("v4"), GenerateAccessToken: true,
 	})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestPutSecretInheritsAccessTokenAfterEveryGatedVersionIsPurged(t *testing.T
 			ctx := context.Background()
 			ref := resourceProto("prod/app", "token-after-purge")
 
-			created, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{
+			created, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{
 				Ref: ref, Value: []byte("v1"), BindingKey: test.bindingKey, GenerateAccessToken: true,
 			})
 			if err != nil {
@@ -183,7 +183,7 @@ func TestPutSecretInheritsAccessTokenAfterEveryGatedVersionIsPurged(t *testing.T
 				t.Fatalf("metadata after purge = %+v, want persistent secret token and ungated tombstone", purged.GetSecret())
 			}
 
-			next, err := server.PutSecret(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v2")})
+			next, err := server.PutSecretV03(ctx, &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("v2")})
 			if err != nil {
 				t.Fatal(err)
 			}

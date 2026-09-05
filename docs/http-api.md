@@ -995,8 +995,8 @@ Listing is always namespace-scoped: `env` and `app` are required.
   (`access_token` present only when `generate_access_token` was true — shown
   once, never again.) A non-empty `binding_key` creates a bound version; empty
   creates an unbound version, independent of the preceding version. A non-empty
-  key must be opaque valid UTF-8 of at least 32 bytes. Access-token generation
-  is independent and there is no write-side `secret_token`. Set `create_only`
+  key must be opaque valid UTF-8 containing 32 to 1024 bytes. Access-token
+  generation is independent and there is no write-side `secret_token`. Set `create_only`
   to reject an existing key instead of appending a version; the absence check
   is enforced atomically with creation.
 - `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","binding_key":"..."}` →

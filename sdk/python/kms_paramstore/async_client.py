@@ -447,7 +447,7 @@ class AsyncClient:
         mapped_error = None
         try:
             plaintext = value.encode() if isinstance(value, str) else bytes(value)
-            response = await self._secret_stub.PutSecret(
+            response = await self._secret_stub.PutSecretV03(
                 kms_pb2.PutSecretRequest(
                     ref=to_proto_ref(ref), value=plaintext, content_type=content_type,
                     metadata_json=metadata_json, binding_key=binding_key,

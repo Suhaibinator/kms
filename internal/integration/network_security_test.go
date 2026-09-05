@@ -487,7 +487,7 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 	}
 	secrets := kmsv1.NewSecretServiceClient(e.adminConn)
 	ref := networkRef("prod", "secret-race", "bound")
-	created, err := secrets.PutSecret(rootCtx, &kmsv1.PutSecretRequest{
+	created, err := secrets.PutSecretV03(rootCtx, &kmsv1.PutSecretRequest{
 		Ref: ref, Value: []byte("network-bound-value"), ContentType: "text/plain",
 		BindingKey: integrationBindingKeyA, GenerateAccessToken: true,
 	})

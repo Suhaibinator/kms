@@ -167,7 +167,7 @@ func (s *secretStub) GetSecretMetadata(ctx context.Context, _ *kmsv1.GetSecretMe
 	}}, nil
 }
 
-func (s *secretStub) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+func (s *secretStub) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.record(ctx)

@@ -146,7 +146,7 @@ func (h *adversarialManagedApp) seedParameterBypassingWriteValidation(key, docum
 
 func (h *adversarialManagedApp) putSecret(alias, key, plaintext string) uint64 {
 	h.t.Helper()
-	response, err := h.secrets.PutSecret(h.authCtx, &kmsv1.PutSecretRequest{
+	response, err := h.secrets.PutSecretV03(h.authCtx, &kmsv1.PutSecretRequest{
 		Ref: networkRef("prod", h.app, key), Value: []byte(plaintext),
 		ContentType: "text/plain", GenerateAccessToken: true,
 	})

@@ -9,7 +9,7 @@ import { SecretValueField } from "@/components/secrets/SecretValueField";
 import { Checkbox, Field, Input, PageHeader } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
-import { api } from "@/lib/api";
+import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import { secretValueBase64, validateSecretValue } from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
@@ -145,6 +145,7 @@ export default function NewSecretPage() {
         metadata_json: metadataJson.trim() || "{}",
         ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
         generate_access_token: generateToken,
+        create_only: true,
         expires_at_unix_ms: expiresMs,
       });
       // Clear plaintext inputs from the DOM immediately.
@@ -161,7 +162,11 @@ export default function NewSecretPage() {
         await router.push(links.secretDetail(ref));
       }
     } catch (err) {
-      toast.error(err, "Failed to create secret");
+      if (isSecretAlreadyExists(err)) {
+        toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+      } else {
+        toast.error(err, "Failed to create secret");
+      }
     } finally {
       setSaving(false);
     }

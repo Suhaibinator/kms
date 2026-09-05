@@ -324,6 +324,7 @@ func discoverSecretBindingCohort(tx *gorm.DB, ref domain.Ref, requestedAnchor ui
 	if err := test(bindingCallbackRecord(anchor)); err != nil {
 		return secretModel{}, 0, nil, err
 	}
+	cohortSize := 1
 
 	down := make([]secretVersionModel, 0)
 	for version := anchor.VersionNumber - 1; version > 0; version-- {
@@ -338,7 +339,12 @@ func discoverSecretBindingCohort(tx *gorm.DB, ref domain.Ref, requestedAnchor ui
 		if !validBoundWrapping(row) || test(bindingCallbackRecord(row)) != nil {
 			break
 		}
+		if cohortSize == MaxSecretBindingCohortVersions {
+			return secretModel{}, 0, nil, domain.Errorf(domain.ErrResourceExhausted,
+				"binding cohort exceeds the %d-version limit", MaxSecretBindingCohortVersions)
+		}
 		down = append(down, row)
+		cohortSize++
 	}
 	slices.Reverse(down)
 	rows := append(down, anchor)
@@ -354,7 +360,12 @@ func discoverSecretBindingCohort(tx *gorm.DB, ref domain.Ref, requestedAnchor ui
 		if !validBoundWrapping(row) || test(bindingCallbackRecord(row)) != nil {
 			break
 		}
+		if cohortSize == MaxSecretBindingCohortVersions {
+			return secretModel{}, 0, nil, domain.Errorf(domain.ErrResourceExhausted,
+				"binding cohort exceeds the %d-version limit", MaxSecretBindingCohortVersions)
+		}
 		rows = append(rows, row)
+		cohortSize++
 		if version == math.MaxInt64 {
 			break
 		}

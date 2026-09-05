@@ -544,7 +544,7 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 			t.Fatalf("initialization err = %v, want exact-baseline failure", err)
 		}
 		var count int64
-		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&count).Error; err != nil {
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").Scan(&count).Error; err != nil {
 			t.Fatal(err)
 		}
 		if count != 0 {
@@ -567,6 +567,83 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 			t.Fatalf("schema drift err = %v, want incompatibility", err)
 		}
 	})
+}
+
+func TestBaselineSchemaDoesNotHideSQLiteWildcardLookalikes(t *testing.T) {
+	newMemoryDB := func(t *testing.T) *gorm.DB {
+		t.Helper()
+		dsn := fmt.Sprintf("file:baseline-name-filter-%d?mode=memory&cache=shared", baselineReferenceID.Add(1))
+		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{SkipDefaultTransaction: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		return db
+	}
+
+	tests := map[string]struct {
+		exact          []string
+		initialization []string
+	}{
+		"table": {
+			exact:          []string{`CREATE TABLE sqliteXtable (id INTEGER PRIMARY KEY)`},
+			initialization: []string{`CREATE TABLE sqliteXtable (id INTEGER PRIMARY KEY)`},
+		},
+		"view": {
+			exact:          []string{`CREATE VIEW sqliteXview AS SELECT 1 AS value`},
+			initialization: []string{`CREATE VIEW sqliteXview AS SELECT 1 AS value`},
+		},
+		"index": {
+			exact: []string{`CREATE INDEX sqliteXindex ON namespaces(env)`},
+			initialization: []string{
+				`CREATE TABLE sqliteXindex_host (value TEXT)`,
+				`CREATE INDEX sqliteXindex ON sqliteXindex_host(value)`,
+			},
+		},
+		"trigger": {
+			exact: []string{`CREATE TRIGGER sqliteXtrigger AFTER INSERT ON namespaces BEGIN SELECT 1; END`},
+			initialization: []string{
+				`CREATE TABLE sqliteXtrigger_host (value TEXT)`,
+				`CREATE TRIGGER sqliteXtrigger AFTER INSERT ON sqliteXtrigger_host BEGIN SELECT 1; END`,
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run("exact verification/"+name, func(t *testing.T) {
+			db := newMemoryDB(t)
+			if err := db.Transaction(materializeBaseline); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range test.exact {
+				if err := db.Exec(statement).Error; err != nil {
+					t.Fatalf("execute setup statement %q: %v", statement, err)
+				}
+			}
+			if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+				t.Fatalf("schema lookalike err = %v, want incompatibility", err)
+			}
+		})
+
+		t.Run("empty database initialization/"+name, func(t *testing.T) {
+			db := newMemoryDB(t)
+			for _, statement := range test.initialization {
+				if err := db.Exec(statement).Error; err != nil {
+					t.Fatalf("execute setup statement %q: %v", statement, err)
+				}
+			}
+			if err := initializeBaseline(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+				t.Fatalf("initialization err = %v, want incompatibility", err)
+			}
+			if db.Migrator().HasTable("schema_migrations") {
+				t.Fatal("rejected initialization created KMS schema")
+			}
+		})
+	}
 }
 
 func TestReferenceBaselineSchemaConcurrent(t *testing.T) {

@@ -201,7 +201,7 @@ func TestClosedSetsCoverTheirSources(t *testing.T) {
 			t.Errorf("AuditDecisionLabel(%q) = %q", decision, got)
 		}
 	}
-	for _, limiter := range []string{core.LimiterVerifyDefaultsRequests, core.LimiterVerifyDefaultsMismatch} {
+	for _, limiter := range []string{core.LimiterVerifyDefaultsRequests, core.LimiterVerifyDefaultsMismatch, core.LimiterBindingCohortPreview} {
 		if got := LimiterLabel(limiter); got != limiter {
 			t.Errorf("LimiterLabel(%q) = %q", limiter, got)
 		}

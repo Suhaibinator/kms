@@ -15,7 +15,7 @@ there is no in-place migration from a `0.2.x` database.
 
 ## Supplying a binding key
 
-A non-empty binding key is opaque UTF-8 text containing at least 32 bytes. KMS
+A non-empty binding key is opaque UTF-8 text containing 32 to 1024 bytes. KMS
 does not trim or normalize it and requires no prefix or encoding. The CLI can
 generate a suitable 256-bit Base64URL value:
 
@@ -198,6 +198,13 @@ at the first unbound, missing, destroyed, corrupt, or differently bound
 version. It never jumps over that boundary, even if a later version reuses the
 same key. For `v1=A`, `v2-v3=B`, and `v4-v5=A`, anchoring at v5 with A affects
 only v4 and v5.
+
+One bound-cohort operation may contain at most 128 versions. Discovery tests at
+most one additional matching version before returning `resource_exhausted`; it
+never returns or purges a partial cohort. Preview is also limited per identity
+to an immediate burst of 10 requests and a sustained refill of 60 requests per
+hour. These process-local limits reset on restart and apply independently on
+each server instance.
 
 The RPCs are `BindSecret`, `UnbindSecret`, `RotateSecretBindingKey`,
 `PreviewSecretBindingCohort`, `PurgeSecretBindingCohort`,

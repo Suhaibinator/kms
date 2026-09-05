@@ -157,11 +157,17 @@ message GetParameterMetadataResponse {
 // Identity authentication travels in standard gRPC metadata:
 //   "authorization": "Bearer <per-client token>"
 // Per-secret credentials are fields on only the requests that consume them.
-// Any supplied binding key must be valid UTF-8 and at least 32 bytes.
+// Any supplied binding key must be valid UTF-8 and contain 32-1024 bytes.
 
 service SecretService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
-  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+  // PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+  // receive an explicit rejection instead of silently losing client_bound.
+  // v0.3 clients must use PutSecretV03.
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse) {
+    option deprecated = true;
+  }
+  rpc PutSecretV03(PutSecretRequest) returns (PutSecretResponse);
   rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
   rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
   rpc DisableSecret(DisableSecretRequest) returns (DisableSecretResponse);
@@ -316,8 +322,9 @@ message SecretVersionTransitionResponse {
   uint64 revision = 3;
 }
 
-// PreviewSecretBindingCohort discovers the contiguous bound-version cohort
-// around anchor_version without mutating it. anchor_version 0 selects current.
+// PreviewSecretBindingCohort discovers up to 128 contiguous bound versions
+// around anchor_version without mutating them. anchor_version 0 selects
+// current. A larger cohort is rejected rather than returned partially.
 message PreviewSecretBindingCohortRequest {
   ResourceRef ref = 1;
   uint64 anchor_version = 2;

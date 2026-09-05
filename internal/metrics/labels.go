@@ -180,6 +180,7 @@ var LimiterNames = []string{
 	LimiterSSEGlobal,
 	core.LimiterVerifyDefaultsRequests,
 	core.LimiterVerifyDefaultsMismatch,
+	core.LimiterBindingCohortPreview,
 }
 
 var limiterSet = stringSet(LimiterNames)

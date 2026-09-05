@@ -28,7 +28,7 @@ func TestSecretBindingTransitionsCreateVersions(t *testing.T) {
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "credentials")
 	expiresAt := time.Now().Add(time.Hour).UnixMilli()
-	put, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), ContentType: "text/plain", MetadataJson: `{"epoch":1}`, ExpiresAtUnixMs: expiresAt})
+	put, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), ContentType: "text/plain", MetadataJson: `{"epoch":1}`, ExpiresAtUnixMs: expiresAt})
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestSecretBindingTransitionAuditFailureRollsBack(t *testing.T) {
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "audit-rollback")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	env.store.mu.Lock()
@@ -150,7 +150,7 @@ func TestSecretBindingCohortPurgeRequiresPreviewAndAuditsAffectedVersions(t *tes
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "purge-guard")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	preview, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{
@@ -193,13 +193,13 @@ func TestUnboundVersionPreviewAndPurge(t *testing.T) {
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "unbound")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v1")}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v1")}); err != nil {
 		t.Fatalf("put v1: %v", err)
 	}
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v2"), BindingKey: grpcBindingKeyA}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v2"), BindingKey: grpcBindingKeyA}); err != nil {
 		t.Fatalf("put v2: %v", err)
 	}
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v3")}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v3")}); err != nil {
 		t.Fatalf("put v3: %v", err)
 	}
 	preview, err := client.PreviewSecretUnboundVersions(adminCtx(), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: secretRef})
@@ -259,7 +259,7 @@ func TestBindingCredentialFailuresRemainIndistinguishable(t *testing.T) {
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "credential-errors")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	guard, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA})
@@ -302,12 +302,32 @@ func TestBindingCredentialFailuresRemainIndistinguishable(t *testing.T) {
 	}
 }
 
+func TestOversizedBindingKeyIsRejectedAndRedactedAcrossGRPC(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	secretRef := pRef("prod", "svc", "oversized-binding-key")
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	oversized := strings.Repeat("grpc-binding-size-canary-", 45)
+	_, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{
+		Ref: secretRef, AnchorVersion: 1, BindingKey: oversized,
+	})
+	if codeOf(err) != codes.InvalidArgument {
+		t.Fatalf("oversized binding key error = %v, want InvalidArgument", err)
+	}
+	if strings.Contains(status.Convert(err).Message(), oversized) || strings.Contains(status.Convert(err).Message(), "size-canary") {
+		t.Fatalf("gRPC error reflected binding key: %v", err)
+	}
+}
+
 func TestPurgeCleanupPendingMapsAcrossGRPC(t *testing.T) {
 	env := newTestEnv(t, true)
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "cleanup-pending")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
+	if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	preview, err := client.PreviewSecretUnboundVersions(adminCtx(), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: secretRef})
@@ -327,7 +347,7 @@ func TestSecretMetadataSelectors(t *testing.T) {
 	client := env.secret()
 	ref := pRef("prod", "svc", "metadata")
 	for _, key := range []string{"", grpcBindingKeyA} {
-		if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("value"), BindingKey: key}); err != nil {
+		if _, err := client.PutSecretV03(adminCtx(), &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("value"), BindingKey: key}); err != nil {
 			t.Fatal(err)
 		}
 	}

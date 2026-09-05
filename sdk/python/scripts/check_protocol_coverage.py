@@ -17,7 +17,7 @@ CORE = {
     },
     "kms.v1.SecretService": {
         "GetSecret": "get_secret",
-        "PutSecret": "put_secret",
+        "PutSecretV03": "put_secret",
         "ListSecrets": "list_secrets",
         "DeleteSecret": "delete_secret",
         "DisableSecret": "set_secret_enabled",
@@ -41,6 +41,7 @@ CORE = {
 CORE["kms.v1.AdminService"]["ApplyApplicationDefaults"] = "apply_application_defaults"
 
 CLASSIFIED = {
+    "kms.v1.SecretService": {"PutSecret": "stale-client-rejection-only"},
     "kms.v1.WatchService": {"Subscribe": "internal-watch"},
     "kms.v1.ConfigurationReleaseService": {
         "CreateRelease": "release-tooling-out-of-scope",

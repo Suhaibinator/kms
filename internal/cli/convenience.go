@@ -367,7 +367,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	resp, err := kmsv1.NewSecretServiceClient(conn).PutSecret(cf.authCtx(ctx), &kmsv1.PutSecretRequest{
+	resp, err := kmsv1.NewSecretServiceClient(conn).PutSecretV03(cf.authCtx(ctx), &kmsv1.PutSecretRequest{
 		Ref:                 protoRef(ref),
 		Value:               value,
 		ContentType:         *contentType,

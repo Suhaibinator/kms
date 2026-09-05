@@ -340,8 +340,9 @@ export interface SecretVersionTransitionResponse {
 }
 
 /**
- * PreviewSecretBindingCohort discovers the contiguous bound-version cohort
- * around anchor_version without mutating it. anchor_version 0 selects current.
+ * PreviewSecretBindingCohort discovers up to 128 contiguous bound versions
+ * around anchor_version without mutating them. anchor_version 0 selects
+ * current. A larger cohort is rejected rather than returned partially.
  */
 export interface PreviewSecretBindingCohortRequest {
   ref: ResourceRef | undefined;
@@ -18355,8 +18356,24 @@ export const SecretServiceService = {
     responseSerialize: (value: GetSecretResponse): Buffer => Buffer.from(GetSecretResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetSecretResponse => GetSecretResponse.decode(value),
   },
+  /**
+   * PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+   * receive an explicit rejection instead of silently losing client_bound.
+   * v0.3 clients must use PutSecretV03.
+   *
+   * @deprecated
+   */
   putSecret: {
     path: "/kms.v1.SecretService/PutSecret" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PutSecretRequest): Buffer => Buffer.from(PutSecretRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PutSecretRequest => PutSecretRequest.decode(value),
+    responseSerialize: (value: PutSecretResponse): Buffer => Buffer.from(PutSecretResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): PutSecretResponse => PutSecretResponse.decode(value),
+  },
+  putSecretV03: {
+    path: "/kms.v1.SecretService/PutSecretV03" as const,
     requestStream: false as const,
     responseStream: false as const,
     requestSerialize: (value: PutSecretRequest): Buffer => Buffer.from(PutSecretRequest.encode(value).finish()),
@@ -18512,7 +18529,15 @@ export const SecretServiceService = {
 
 export interface SecretServiceServer extends UntypedServiceImplementation {
   getSecret: handleUnaryCall<GetSecretRequest, GetSecretResponse>;
+  /**
+   * PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+   * receive an explicit rejection instead of silently losing client_bound.
+   * v0.3 clients must use PutSecretV03.
+   *
+   * @deprecated
+   */
   putSecret: handleUnaryCall<PutSecretRequest, PutSecretResponse>;
+  putSecretV03: handleUnaryCall<PutSecretRequest, PutSecretResponse>;
   listSecrets: handleUnaryCall<ListSecretsRequest, ListSecretsResponse>;
   deleteSecret: handleUnaryCall<DeleteSecretRequest, DeleteSecretResponse>;
   disableSecret: handleUnaryCall<DisableSecretRequest, DisableSecretResponse>;
@@ -19029,5 +19054,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 656203ab65daa6adea10356b29e973648414d4c2aab2a63c284695950c6a01ce
+// source-sha256: 1de1b0ab2fa3fe630aab055b10615080ba27c735f901f41cd28761c4f984ce6e
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

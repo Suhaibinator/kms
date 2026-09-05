@@ -641,6 +641,95 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestOversizedBindingKeysAreRejectedBeforeCryptoOrStorage(t *testing.T) {
+	oversized := strings.Repeat("binding-key-size-canary-", 45) // 1,080 bytes.
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("oversized-binding-key")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+	storeCalls := 0
+	store.beforeBindingOperation = func(string) { storeCalls++ }
+
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "get", run: func() error {
+			_, err := s.GetSecret(context.Background(), adminPrincipal(), ref, 1, "", "", oversized)
+			return err
+		}},
+		{name: "reveal", run: func() error {
+			_, err := s.RevealSecret(context.Background(), adminPrincipal(), ref, 1, "", oversized)
+			return err
+		}},
+		{name: "put", run: func() error {
+			_, err := s.PutSecret(context.Background(), adminPrincipal(), PutSecretInput{Ref: tref("oversized-put"), Value: []byte("value"), BindingKey: oversized})
+			return err
+		}},
+		{name: "bind", run: func() error {
+			_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, oversized)
+			return err
+		}},
+		{name: "unbind", run: func() error {
+			_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, oversized)
+			return err
+		}},
+		{name: "preview", run: func() error {
+			_, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, oversized)
+			return err
+		}},
+		{name: "rotate current", run: func() error {
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, oversized, testBindingKeyB)
+			return err
+		}},
+		{name: "rotate replacement", run: func() error {
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, oversized)
+			return err
+		}},
+		{name: "purge", run: func() error {
+			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, oversized, store.revision, []uint64{1})
+			return err
+		}},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			err := operation.run()
+			if !errors.Is(err, domain.ErrInvalidArgument) {
+				t.Fatalf("error = %v, want ErrInvalidArgument", err)
+			}
+			if strings.Contains(err.Error(), oversized) || strings.Contains(err.Error(), "size-canary") {
+				t.Fatalf("error reflected binding key: %v", err)
+			}
+		})
+	}
+	if storeCalls != 0 {
+		t.Fatalf("oversized binding keys reached binding storage %d times", storeCalls)
+	}
+}
+
+func TestBindingCohortPreviewHasPerIdentityBurstLimit(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("preview-rate-limit")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+
+	for i := 0; i < 10; i++ {
+		if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+			t.Fatalf("preview %d: %v", i+1, err)
+		}
+	}
+	if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); !errors.Is(err, domain.ErrResourceExhausted) {
+		t.Fatalf("preview after burst error = %v, want ErrResourceExhausted", err)
+	}
+	other := adminPrincipal()
+	other.Identity.Name = "other-admin"
+	if _, err := s.PreviewSecretBindingCohort(context.Background(), other, ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("independent identity was rate limited: %v", err)
+	}
+}
+
 func TestBindingTransitionsAuditMissingExpectedCurrentVersion(t *testing.T) {
 	tests := []struct {
 		name      string

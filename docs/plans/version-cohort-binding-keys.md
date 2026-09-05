@@ -55,6 +55,12 @@ sorted, unique affected-version CAS guard. There is no unguarded public SDK
 path. A revision or version-set mismatch aborts atomically. The CLI and console
 also require confirmation. Historical bound rows retain this console action.
 
+Binding keys contain 32 to 1024 UTF-8 bytes. A bound cohort contains at most
+128 versions; discovery tests one additional matching version only to reject
+an over-limit cohort without exposing a partial guard. Preview also uses the
+shared process-local per-identity limiter (burst 10, refill 60 requests/hour),
+so both single-request and sustained cryptographic work are bounded.
+
 ## Unbound-version purge
 
 `PreviewSecretUnboundVersions(ref)` returns every non-destroyed `bound=false`

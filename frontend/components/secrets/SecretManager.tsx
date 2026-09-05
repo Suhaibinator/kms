@@ -1027,15 +1027,21 @@ function NewVersionModal({
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const currentVersion = secret.labels?.current;
+  const currentVersionBound =
+    typeof currentVersion === "number"
+      ? (secret.versions.find((version) => version.version === currentVersion)?.bound ??
+        secret.bound)
+      : secret.bound;
   const [value, setValue] = useState("");
   const [alreadyBase64, setAlreadyBase64] = useState(false);
   const [contentType, setContentType] = useState(secret.content_type || "text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
-  const [bindVersion, setBindVersion] = useState(false);
+  const [bindVersion, setBindVersion] = useState(currentVersionBound);
   const [bindingKey, setBindingKey] = useState("");
   const [generateToken, setGenerateToken] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(currentVersionBound);
   const [confirmTokenRotation, setConfirmTokenRotation] = useState(false);
   const [mintedToken, setMintedToken] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1053,10 +1059,10 @@ function NewVersionModal({
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
       setExpires("");
-      setBindVersion(false);
+      setBindVersion(currentVersionBound);
       setBindingKey("");
       setGenerateToken(false);
-      setAdvancedOpen(false);
+      setAdvancedOpen(currentVersionBound);
       setConfirmTokenRotation(false);
       setMintedToken(null);
       resetErrors();
@@ -1072,7 +1078,7 @@ function NewVersionModal({
       // token in whichever secret happens to be mounted next.
       formInstance.current += 1;
     };
-  }, [open, secret.content_type, resetErrors]);
+  }, [open, secret.content_type, currentVersionBound, resetErrors]);
 
   // A secret value has no parse rule server-side — only the size cap (and the
   // base64 alphabet when passed through) — and the message reports the size
@@ -1097,13 +1103,12 @@ function NewVersionModal({
   const advancedHasError = !!(shownMetadataError || shownExpiresError || shownBindingKeyError);
   const dirty =
     value !== "" ||
-    bindVersion ||
+    bindVersion !== currentVersionBound ||
     bindingKey !== "" ||
     !isEmptyJson(metadataJson) ||
     expires !== "" ||
     generateToken ||
     contentType !== (secret.content_type || "text/plain");
-  const currentVersion = secret.labels?.current;
   const nextVersion = Math.max(0, ...secret.versions.map((v) => v.version)) + 1;
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
 
@@ -1295,8 +1300,9 @@ function NewVersionModal({
                   <label htmlFor="bind-new-version">
                     <strong>Bind only this new version</strong>
                     <div className="faint text-sm">
-                      Protection does not carry forward from the current version. Choose it for each
-                      new version.
+                      {currentVersionBound
+                        ? "The current version is bound, so protection is selected here too. Enter its binding key below, or clear this option to create an unbound version."
+                        : "Requires a binding key to decrypt only this new version."}
                     </div>
                   </label>
                 </div>
