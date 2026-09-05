@@ -55,8 +55,8 @@ type Config struct {
 	// AdminClientCertRequired reports whether admin identities must present a
 	// client certificate alongside their bearer token on this listener. It is
 	// the *effective* value computed by serve (the configured setting AND TLS
-	// being on), used only to tell an unauthenticated caller — the login page —
-	// why its token alone will be refused. Enforcement itself lives in core.
+	// being on), retained in the health API for compatibility. The login page
+	// uses transport-only diagnostics instead. Enforcement lives in core.
 	AdminClientCertRequired bool
 	// MTLSEnabled records that the listener was configured with a client CA
 	// (security.mtls_enabled), so the TLS stack demands and verifies a client
@@ -171,6 +171,9 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Exempt routes: no auth, no readiness gate.
 	switch r.URL.Path {
+	case "/api/v1/auth/connection":
+		s.handleConnection(w, r)
+		return
 	case "/api/v1/health":
 		s.handleHealth(w, r)
 		return
@@ -313,11 +316,12 @@ func (s *server) observe(next http.Handler) http.Handler {
 // exemptRoutes are the paths route and serveAPI dispatch by name rather than
 // through the API mux, so the mux cannot name them for the route label.
 var exemptRoutes = map[string]bool{
-	"/healthz":       true,
-	"/readyz":        true,
-	"/metrics":       true,
-	"/api/v1/health": true,
-	"/api/v1/ca":     true,
+	"/healthz":                true,
+	"/readyz":                 true,
+	"/metrics":                true,
+	"/api/v1/health":          true,
+	"/api/v1/auth/connection": true,
+	"/api/v1/ca":              true,
 }
 
 // routeLabel resolves a request to its metrics route label: the path itself

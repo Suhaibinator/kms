@@ -26,6 +26,7 @@ import type {
   DefaultsArtifactBody,
   FleetOverview,
   HealthResponse,
+  ConnectionResponse,
   Identity,
   IssueCertResponse,
   KeysResponse,
@@ -399,6 +400,10 @@ export interface ResourceRef {
 }
 
 export const api = {
+  connection(request?: ApiRequestOptions): Promise<ConnectionResponse> {
+    return apiFetch<ConnectionResponse>("/auth/connection", { ...request, auth: false });
+  },
+
   // --- Auth & health ---
   login(token: string): Promise<LoginResponse> {
     return apiFetch<LoginResponse>("/auth/login", {

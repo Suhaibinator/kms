@@ -32,7 +32,7 @@ rendering, and the frontend; the server never parses it.
 
 ## Authentication
 
-Every request (except `/api/v1/auth/login`, `/api/v1/health`, and
+Every request (except `/api/v1/auth/login`, `/api/v1/auth/connection`, `/api/v1/health`, and
 `/api/v1/ca`) requires:
 
 ```
@@ -906,6 +906,8 @@ namespace.
   as the token, `token` otherwise — and is `mtls` for every admin while the
   client-certificate requirement is enforced. Every failure is the same
   `401 unauthenticated`.
+- `GET /api/v1/auth/connection` — no auth — reports this request's TLS certificate
+  metadata only; see [Connection certificate diagnostics](#connection-certificate-diagnostics).
 - `GET /api/v1/health` — no auth →
   `{"healthy": true, "ready": true, "version": "...", "current_revision": 42,
     "grpc_addr": "0.0.0.0:8443", "tls_enabled": true,
@@ -919,9 +921,8 @@ namespace.
   `client_cert_presented` is true when *this* connection carried a client
   certificate the TLS layer chain-verified against the built-in CA; it says
   nothing about whether that certificate is enrolled, unrevoked, or names an
-  admin. Together they let the login page explain a refusal before it
-  happens (`required && !presented` → the browser has no certificate loaded)
-  without revealing anything about any token's validity.
+  admin. These fields remain available for compatibility; the login page uses
+  the independent connection diagnostics endpoint instead.
 - `GET /api/v1/whoami` →
   `{"name": "...", "kind": "admin|client",
     "namespace": {"env": "...", "app": "..."} | null, "auth_method": "mtls|token"}`
@@ -1312,3 +1313,34 @@ bidirectional `WatchRelease` contract.
   unauthenticated. It is absent (and the path falls through to the frontend
   catch-all) when `metrics.enabled` is false. See
   [`operations.md`](operations.md#prometheus-metrics).
+
+### Connection certificate diagnostics
+
+`GET /api/v1/auth/connection` is unauthenticated and available before readiness
+(including while sealed). It reports only the transport of this request:
+
+```json
+{
+  "tls_enabled": true,
+  "client_certificate": {
+    "identity_uri": "kms://identity/operator",
+    "fingerprint_sha256": "<64 lowercase hexadecimal SHA-256 characters>",
+    "not_after": "2027-01-01T00:00:00Z"
+  }
+}
+```
+
+`client_certificate` is null without a chain-verified TLS leaf certificate.
+`identity_uri` is null when the certificate has no unambiguous KMS identity URI;
+CommonName is not a fallback. No account, token, enrollment, or revocation checks
+are performed. These fields do not confirm account access. Responses use
+`Cache-Control: no-store`; proxies must not cache them or enable cross-origin
+reads. Forwarded certificate headers are ignored. Only GET is supported.
+
+The login page displays this snapshot separately from generic sign-in errors.
+Refresh repeats the connection check; it cannot force browser certificate
+reselection or guarantee subsequent requests use the same connection. Expired
+or untrusted certificates can fail during the TLS handshake before HTTP reaches
+the application. A TLS-terminating proxy can hide the browser certificate; if it
+connects upstream using its own certificate, diagnostics describe that certificate.
+When the upstream request is plain HTTP, certificate information is unavailable.

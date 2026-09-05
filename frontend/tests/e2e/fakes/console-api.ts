@@ -825,6 +825,8 @@ function handle(
   switch (`${method} ${path}`) {
     case "GET /whoami":
       return { status: 200, body: { ...state.identity, namespace: null } };
+    case "GET /auth/connection":
+      return { status: 200, body: { tls_enabled: true, client_certificate: null } };
     case "GET /health":
       return {
         status: 200,

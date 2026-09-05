@@ -47,37 +47,58 @@ test("login exposes a labelled identity-token form with the intended font", asyn
   expect(fontFamily.toLowerCase()).not.toContain("times");
 });
 
-test("explains a missing admin client certificate without taking the form away", async ({
+test("shows neutral certificate diagnostics and generic login failures", async ({
   page,
-}) => {
-  // The server asks admins for a client certificate; this browser has none in
-  // its keystore, so the handshake carried no chain-verified certificate.
-  await page.route("**/api/v1/health", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        healthy: true,
-        ready: true,
-        version: "e2e",
-        current_revision: 0,
-        grpc_addr: "127.0.0.1:8443",
+}, testInfo) => {
+  const identity = `kms://identity/${"long-admin-name-".repeat(12)}`;
+  await page.route("**/api/v1/auth/connection", (route) =>
+    route.fulfill({
+      json: {
         tls_enabled: true,
-        admin_client_cert_required: true,
-        client_cert_presented: false,
-      }),
-    });
-  });
+        client_certificate: {
+          identity_uri: identity,
+          fingerprint_sha256: "ab".repeat(32),
+          not_after: "2027-01-01T00:00:00Z",
+        },
+      },
+    }),
+  );
+  await page.route("**/api/v1/auth/login", (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: { code: "unauthenticated", message: "invalid credentials" } },
+    }),
+  );
   await page.goto("/login");
-
-  const notice = page
-    .getByRole("status")
-    .filter({ hasText: "Admin sign-in needs a client certificate" });
-  await expect(notice).toBeVisible();
-  await expect(notice).toContainText("parameter-store admin-cert issue NAME --out DIR");
-  // Client identity tokens are unaffected, so nothing about the form is gated.
-  await expect(page.getByLabel("Identity token")).toBeEditable();
-  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  await expect(page.getByText(identity, { exact: true })).toBeVisible();
+  await page.getByText("Certificate details", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Copy fingerprint" })).toBeVisible();
+  await page.getByLabel("Identity token").fill("bad-token");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator("[data-slot=field-error]")).toContainText(
+    "Sign-in failed. Check your credentials and try again.",
+  );
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (value) => document.documentElement.classList.toggle("dark", value === "dark"),
+      theme,
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`certificate-${theme}.png`),
+      fullPage: true,
+    });
+  }
+  await page.route("**/api/v1/auth/connection", (route) =>
+    route.fulfill({ json: { tls_enabled: true, client_certificate: null } }),
+  );
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("No client certificate received", { exact: true })).toBeVisible();
+  await expect(page.getByText(identity, { exact: true })).toHaveCount(0);
 });
 
 test("portalled dropdowns and filter controls stay visually consistent", async ({
