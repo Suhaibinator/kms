@@ -122,6 +122,10 @@ describe("NamespacesPage", () => {
   it("links each namespace to its parameters and secrets", () => {
     mocks.namespaces.namespaces = [namespace("dev", { parameters: 3, secrets: 2 })];
     render(<NamespacesPage />);
+    expect(screen.getByRole("link", { name: "Manage payments-api/dev" })).toHaveAttribute(
+      "href",
+      "/applications?app=payments-api&env=dev",
+    );
     expect(screen.getByRole("link", { name: "3" })).toHaveAttribute(
       "href",
       "/parameters?env=dev&app=payments-api",
