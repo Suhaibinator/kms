@@ -1091,18 +1091,18 @@
   /* A hover tint that leads nowhere reads as a broken affordance. Only rows that
      actually contain something clickable get one. */
   table.data tbody tr:has(a, button):hover,
-  table.data tbody tr.application-row:hover {
+  table.data tbody tr.navigable-row:hover {
     background: var(--surface-hover);
   }
   /* Composes with the hover above, which an inline style could never do. */
   table.data tbody tr.stale {
     background: var(--warning-soft);
   }
-  table.data tbody tr.application-row {
+  table.data tbody tr.navigable-row {
     position: relative;
     cursor: pointer;
   }
-  table.data tbody tr.application-row:focus-within {
+  table.data tbody tr.navigable-row:focus-within {
     background: var(--surface-hover);
     outline: 2px solid var(--primary);
     outline-offset: -2px;
@@ -1111,36 +1111,54 @@
      underline on hover, or draw a second ring — tr:focus-within above already
      rings the whole row. The base a:not([data-slot=button]) rules are (0,1,1),
      so a bare class cannot beat them; the element qualifier is load-bearing. */
-  a.application-row-link,
-  a.application-row-link:hover {
+  a.navigable-row-link,
+  a.navigable-row-link:hover {
     color: inherit;
     text-decoration: none;
   }
-  a.application-row-link:focus-visible {
+  a.navigable-row-link:focus-visible {
     outline: none;
   }
-  .application-row-link::after {
+  .navigable-row-link::after {
     position: absolute;
     inset: 0;
+    z-index: 1;
     content: "";
   }
-  table.data td.application-row-chevron {
+  /* Explicit row controls must win hit-testing over the stretched primary link. */
+  .navigable-row a:not(.navigable-row-link),
+  .navigable-row button {
+    position: relative;
+    z-index: 2;
+  }
+  table.data td.navigable-row-chevron {
     width: 1%;
     color: var(--text-faint);
     text-align: right;
     white-space: nowrap;
   }
-  table.data td.application-row-chevron > svg {
+  table.data td.navigable-row-chevron > svg {
     display: block;
     margin-left: auto;
   }
-  .application-row-chevron svg {
+  .navigable-row-end {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .navigable-row-end > .navigable-row-chevron {
+    display: flex;
+    flex: none;
+    color: var(--text-faint);
+  }
+  .navigable-row-chevron svg {
     transition:
       color 0.12s ease,
       transform 0.12s ease;
   }
-  .application-row:hover .application-row-chevron svg,
-  .application-row:focus-within .application-row-chevron svg {
+  .navigable-row:hover .navigable-row-chevron svg,
+  .navigable-row:focus-within .navigable-row-chevron svg {
     color: var(--text);
     transform: translateX(2px);
   }
@@ -1154,6 +1172,27 @@
   table.data td.num,
   table.data th.num {
     text-align: right;
+  }
+  table.namespace-table {
+    table-layout: fixed;
+  }
+  .namespace-table .namespace-col-env {
+    width: 12%;
+  }
+  .namespace-table .namespace-col-methods {
+    width: 15%;
+  }
+  .namespace-table .namespace-col-count {
+    width: 11%;
+  }
+  .namespace-table .namespace-col-created {
+    width: 190px;
+  }
+  .namespace-table .namespace-col-actions {
+    width: 154px;
+  }
+  .namespace-table td[data-label="Description"] {
+    overflow-wrap: anywhere;
   }
   .cell-path {
     font-family: var(--mono);
@@ -3183,6 +3222,9 @@
       display: block;
       width: 100%;
     }
+    .table-wrap.card-table .namespace-table colgroup {
+      display: none;
+    }
     .table-wrap.card-table tr {
       border-bottom: 1px solid var(--border);
       padding: 12px 14px;
@@ -3193,8 +3235,8 @@
     .table-wrap.card-table tbody tr:hover {
       background: none;
     }
-    .table-wrap.card-table tbody tr.application-row:hover,
-    .table-wrap.card-table tbody tr.application-row:focus-within {
+    .table-wrap.card-table tbody tr.navigable-row:hover,
+    .table-wrap.card-table tbody tr.navigable-row:focus-within {
       background: var(--surface-hover);
     }
     .table-wrap.card-table td {
@@ -3223,14 +3265,23 @@
     }
     /* The chevron is lifted out of flow and pinned right; the card's own content
        has to stay clear of it. */
-    .table-wrap.card-table tr.application-row {
+    .table-wrap.card-table tr.navigable-row {
       padding-right: 40px;
     }
-    .table-wrap.card-table td.application-row-chevron {
+    .table-wrap.card-table td.navigable-row-chevron {
       position: absolute;
       top: 50%;
       right: 14px;
       width: auto;
+      transform: translateY(-50%);
+    }
+    .table-wrap.card-table .navigable-row-end {
+      justify-content: flex-start;
+    }
+    .table-wrap.card-table .navigable-row-end > .navigable-row-chevron {
+      position: absolute;
+      top: 50%;
+      right: 14px;
       transform: translateY(-50%);
     }
     .table-wrap.card-table .action-unavailable {

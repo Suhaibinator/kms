@@ -1,4 +1,4 @@
-import { MoreHorizontal, Pencil } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
@@ -300,9 +300,18 @@ export default function NamespacesPage() {
                 </span>
               </div>
               <div className="table-wrap card-table">
-                <table className="data">
+                <table className="data namespace-table">
                   {/* The whole list is loaded, so "of" is the real total. */}
                   <TableSummary shown={group.list.length} noun="environments" />
+                  <colgroup>
+                    <col className="namespace-col-env" />
+                    <col />
+                    <col className="namespace-col-methods" />
+                    <col className="namespace-col-count" />
+                    <col className="namespace-col-count" />
+                    <col className="namespace-col-created" />
+                    <col className="namespace-col-actions" />
+                  </colgroup>
                   <thead>
                     <SortHeaderRow controller={sort} after={<th />} />
                   </thead>
@@ -313,9 +322,15 @@ export default function NamespacesPage() {
                       const deleteReason = `Namespace holds ${ns.parameter_count} parameter(s) and ${ns.secret_count} secret(s). Empty it before deleting.`;
                       const deleteReasonId = `delete-reason-${ns.env}-${ns.app}`;
                       return (
-                        <tr key={`${ns.env}/${ns.app}`}>
+                        <tr key={`${ns.env}/${ns.app}`} className="navigable-row">
                           <td className="mono" data-label="Environment">
-                            {ns.env}
+                            <Link
+                              className="navigable-row-link"
+                              href={links.application(ns.app, { env: ns.env })}
+                              aria-label={`Manage ${ns.app}/${ns.env}`}
+                            >
+                              {ns.env}
+                            </Link>
                           </td>
                           <td data-label="Description">
                             {ns.description || <span className="faint">—</span>}
@@ -333,41 +348,46 @@ export default function NamespacesPage() {
                             {formatUnixMs(ns.created_at_unix_ms)}
                           </td>
                           <td>
-                            <div className="row-actions">
-                              <Button variant="outline" size="sm" onClick={() => openEdit(ns)}>
-                                <Pencil size={14} aria-hidden />
-                                Edit
-                              </Button>
-                              <ActionMenu
-                                label={`More for ${ns.env}/${ns.app}`}
-                                trigger={
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={`More for ${ns.env}/${ns.app}`}
-                                  >
-                                    <MoreHorizontal size={16} />
-                                  </Button>
-                                }
-                                items={[
-                                  {
-                                    key: "delete",
-                                    label: canDelete ? (
-                                      "Delete environment"
-                                    ) : (
-                                      <>
-                                        <span>Delete environment</span>
-                                        <span id={deleteReasonId} className="faint text-xs">
-                                          {deleteReason}
-                                        </span>
-                                      </>
-                                    ),
-                                    disabled: !canDelete,
-                                    onSelect: () => setDeleteTarget(ns),
-                                  },
-                                ]}
-                              />
+                            <div className="navigable-row-end">
+                              <div className="row-actions">
+                                <Button variant="outline" size="sm" onClick={() => openEdit(ns)}>
+                                  <Pencil size={14} aria-hidden />
+                                  Edit
+                                </Button>
+                                <ActionMenu
+                                  label={`More for ${ns.env}/${ns.app}`}
+                                  trigger={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={`More for ${ns.env}/${ns.app}`}
+                                    >
+                                      <MoreHorizontal size={16} />
+                                    </Button>
+                                  }
+                                  items={[
+                                    {
+                                      key: "delete",
+                                      label: canDelete ? (
+                                        "Delete environment"
+                                      ) : (
+                                        <>
+                                          <span>Delete environment</span>
+                                          <span id={deleteReasonId} className="faint text-xs">
+                                            {deleteReason}
+                                          </span>
+                                        </>
+                                      ),
+                                      disabled: !canDelete,
+                                      onSelect: () => setDeleteTarget(ns),
+                                    },
+                                  ]}
+                                />
+                              </div>
+                              <span className="navigable-row-chevron" aria-hidden="true">
+                                <ChevronRight size={18} />
+                              </span>
                             </div>
                           </td>
                         </tr>

@@ -152,10 +152,10 @@ export function ApplicationList({
             </thead>
             <tbody>
               {filtered.map((app) => (
-                <tr key={app.name} className="application-row">
+                <tr key={app.name} className="navigable-row">
                   <td>
                     <Link
-                      className="application-row-link"
+                      className="navigable-row-link"
                       href={{ pathname: "/applications", query: { app: app.name } }}
                       aria-label={`Manage ${app.name}`}
                     >
@@ -172,7 +172,7 @@ export function ApplicationList({
                       : "—"}
                   </td>
                   <td>{app.contract.length} aliases</td>
-                  <td className="application-row-chevron" aria-hidden="true">
+                  <td className="navigable-row-chevron" aria-hidden="true">
                     <ChevronRight size={18} />
                   </td>
                 </tr>
