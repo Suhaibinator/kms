@@ -72,4 +72,4 @@ prefer byte-oriented consumers where possible.
 Release candidates must pass `npm ci` and `npm run check` from
 `sdk/typescript`, including generated-contract verification, strict type
 checking, lint and formatting, unit tests, consumer type tests, and a clean
-build. CI runs the SDK on every supported Node.js major listed in its matrix.
+build. CI runs the SDK on the current Node.js release used by the release job.

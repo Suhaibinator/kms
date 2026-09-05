@@ -225,8 +225,9 @@ npm run test:browser
 ```
 
 CI additionally builds every documented Next.js/React peer tuple using the
-packed SDK and runs `npm run check` on Node 22, 24, and 26. The repository-wide
-Go suite remains a separate compatibility guard for the server and Go SDK.
+packed SDK and runs `npm run check` on the current Node 26 release. The
+repository-wide Go suite remains a separate compatibility guard for the server
+and Go SDK.
 
 ## Intentional, user-visible limitations
 

@@ -28,8 +28,9 @@ snapshot. The existing repository frontend remains a static export and is not a
 host for this adapter; consumers need a serverful Next.js deployment.
 
 The package is ESM-only. Node 22 is the oldest supported runtime; CI runs the
-complete release gate on Node 22, 24, and 26. The declaration syntax requires
-TypeScript 5.2 or newer (`const` type parameters and `Symbol.asyncDispose`);
+complete release gate on the current Node 26 release. The declaration syntax
+requires TypeScript 5.2 or newer (`const` type parameters and
+`Symbol.asyncDispose`);
 the release gate compiles built-package consumers with both TypeScript 5.2.2
 and the pinned current compiler. Next.js and React are
 optional peers and are needed only for their respective adapter entry points.
