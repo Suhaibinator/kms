@@ -1007,3 +1007,12 @@ export interface SubscriberStreamSnapshot {
   current_revision: number;
   server_time_unix_ms: number;
 }
+
+export interface ConnectionResponse {
+  tls_enabled: boolean;
+  client_certificate: {
+    identity_uri: string | null;
+    fingerprint_sha256: string;
+    not_after: string;
+  } | null;
+}

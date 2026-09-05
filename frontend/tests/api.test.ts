@@ -19,6 +19,22 @@ afterEach(() => {
 });
 
 describe("apiFetch", () => {
+  it("fetches connection diagnostics without a stored bearer token or caching", async () => {
+    setToken("stored-secret");
+    const data = { tls_enabled: true, client_certificate: null };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(data)));
+    await expect(api.connection()).resolves.toEqual(data);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/auth/connection",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      }),
+    );
+  });
+
   it("sends BOM and invalid UTF-8 artifact bytes as the exact raw request body", async () => {
     const artifact = Uint8Array.from([
       0xef,

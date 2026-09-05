@@ -204,7 +204,7 @@ func TestRouteLabelsAreUniqueAndMethodQualified(t *testing.T) {
 			// Only the auth-exempt endpoints the server dispatches by path are
 			// registered without a method.
 			switch route {
-			case "/api/v1/health", "/api/v1/ca":
+			case "/api/v1/health", "/api/v1/ca", "/api/v1/auth/connection":
 			default:
 				t.Errorf("API route %q should be method-qualified", route)
 			}

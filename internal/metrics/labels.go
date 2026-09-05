@@ -70,6 +70,7 @@ var RouteLabels = []string{
 	"/readyz",
 	"/metrics",
 	"/api/v1/health",
+	"/api/v1/auth/connection",
 	"/api/v1/ca",
 
 	"POST /api/v1/auth/login",

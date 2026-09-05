@@ -1999,7 +1999,7 @@ no matching certificate connects normally and, if it presents an admin token,
 is refused by the core admission rule. The handshake *does* reject a presented
 certificate that the client-CA pool cannot verify — **expired**, not yet valid,
 or issued by another CA: the browser or CLI then fails at the TLS layer with a
-certificate error and never reaches the login page or the console's notice,
+certificate error and never reaches the login page or its certificate diagnostics,
 until the certificate is removed from the keystore or replaced. Revocation is
 the other way round: a revoked certificate still passes the handshake
 (revocation is a database check) and core refuses it. Admins need no reverse
@@ -2245,11 +2245,13 @@ Caveats worth knowing before you hand this to an administrator:
 - The browser picks a certificate **per TLS connection** and there is no
   "sign out" for it; closing the browser is what stops it being presented.
   (Server-side sessions with an explicit logout are a planned follow-up.)
-- The console's login page detects the situation and says so: it reads the
-  unauthenticated `GET /api/v1/health`, and when
-  `admin_client_cert_required` is true while `client_cert_presented` is
-  false it shows a notice explaining that a certificate is needed. Client
-  identity tokens still sign in without one.
+- The console's login page shows a neutral client-certificate panel using
+  unauthenticated `GET /api/v1/auth/connection`. It displays the presented
+  certificate's identity URI, fingerprint, and expiration, without checking
+  enrollment or revocation. Sign-in failures stay generic. Refresh repeats
+  the check; it does not force the browser to select a different certificate.
+  See [connection diagnostics](http-api.md#connection-certificate-diagnostics)
+  for TLS handshake and proxy limitations.
 - Linux keystores (Chrome and Firefox via NSS) are verified to accept these
   certificates. macOS Keychain and the Windows store should be verified by
   the operator before rolling this out to a fleet.

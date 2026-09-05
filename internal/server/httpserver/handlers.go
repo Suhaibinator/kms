@@ -289,8 +289,8 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHealth is the API health endpoint (no auth). It reports the admin
-// client-certificate posture so the login page can explain a refusal before one
-// happens: admin_client_cert_required is the server's effective setting, and
+// client-certificate posture for compatibility with existing consumers:
+// admin_client_cert_required is the server's effective setting, and
 // client_cert_presented says whether *this* connection carried a chain-verified
 // certificate. Neither reveals anything about a token's validity.
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

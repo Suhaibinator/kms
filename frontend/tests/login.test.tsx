@@ -1,13 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HealthResponse } from "@/lib/types";
+import type { ConnectionResponse } from "@/lib/types";
 import LoginPage from "@/pages/login";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
   replace: vi.fn(async () => true),
   login: vi.fn(),
-  health: vi.fn(),
+  connection: vi.fn(),
   token: null as string | null,
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
@@ -31,28 +31,20 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     getToken: () => mocks.token,
-    api: { ...actual.api, health: mocks.health },
+    api: { ...actual.api, connection: mocks.connection },
   };
 });
 
 const { ApiError } = await import("@/lib/api");
 
-/** A server that does not ask admins for a client certificate. */
-function health(overrides: Partial<HealthResponse> = {}): HealthResponse {
-  return {
-    healthy: true,
-    ready: true,
-    version: "test",
-    current_revision: 0,
-    grpc_addr: "127.0.0.1:8443",
-    tls_enabled: true,
-    admin_client_cert_required: false,
-    client_cert_presented: false,
-    ...overrides,
-  };
+function connection(overrides: Partial<ConnectionResponse> = {}): ConnectionResponse {
+  return { tls_enabled: true, client_certificate: null, ...overrides };
 }
-
-const CERT_NOTICE = /Admin sign-in needs a client certificate/;
+const certificate = {
+  identity_uri: "kms://identity/admin",
+  fingerprint_sha256: "a".repeat(64),
+  not_after: "2027-01-01T00:00:00Z",
+};
 
 describe("LoginPage", () => {
   beforeEach(() => {
@@ -60,8 +52,8 @@ describe("LoginPage", () => {
     mocks.token = null;
     mocks.replace.mockClear();
     mocks.login.mockReset();
-    mocks.health.mockReset();
-    mocks.health.mockResolvedValue(health());
+    mocks.connection.mockReset();
+    mocks.connection.mockResolvedValue(connection());
     mocks.toast.success.mockClear();
     mocks.toast.error.mockClear();
   });
@@ -120,7 +112,9 @@ describe("LoginPage", () => {
     render(<LoginPage />);
     submit("bad-token");
 
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(error, "Sign-in failed"));
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.any(Error), "Sign-in failed"),
+    );
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 
@@ -147,106 +141,71 @@ describe("LoginPage", () => {
     render(<LoginPage />);
     submit("bad-token");
 
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(error, "Sign-in failed"));
-    expect(screen.getByRole("alert")).toHaveTextContent("That token was not recognised.");
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.any(Error), "Sign-in failed"),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Sign-in failed. Check your credentials and try again.",
+    );
     expect(screen.getByLabelText("Identity token")).toHaveAttribute("aria-invalid", "true");
 
     fireEvent.change(screen.getByLabelText("Identity token"), { target: { value: "x" } });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("warns that admin sign-in needs a client certificate when required and none was presented", async () => {
-    mocks.health.mockResolvedValue(
-      health({ admin_client_cert_required: true, client_cert_presented: false }),
-    );
+  it.each([null, certificate])(
+    "keeps credential errors generic with certificate %j",
+    async (cert) => {
+      mocks.connection.mockResolvedValue(connection({ client_certificate: cert }));
+      mocks.login.mockRejectedValue(new ApiError("invalid_credentials", "internal reason", 401));
+      render(<LoginPage />);
+      submit("bad-token");
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Sign-in failed. Check your credentials and try again.",
+      );
+      expect(screen.queryByText(/internal reason|Admin sign-in needs/)).toBeNull();
+    },
+  );
 
+  it("shows certificate details and copies the fingerprint", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    mocks.connection.mockResolvedValue(connection({ client_certificate: certificate }));
     render(<LoginPage />);
-
-    const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent(CERT_NOTICE);
-    expect(notice).toHaveTextContent("parameter-store admin-cert issue NAME --out DIR");
-    expect(notice).toHaveTextContent(/Client identity tokens still sign in without a certificate/);
-    // The requirement only affects admins, so the form stays live for everyone else.
-    expect(screen.getByLabelText("Identity token")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
-    // Nothing has failed yet: a notice must not announce itself as an error.
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(await screen.findByText(certificate.identity_uri)).toBeVisible();
+    const disclosure = screen.getByText("Certificate details").closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Certificate details"));
+    fireEvent.click(screen.getByRole("button", { name: "Copy fingerprint" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(certificate.fingerprint_sha256));
   });
 
-  it("stays quiet when the browser presented a certificate", async () => {
-    mocks.health.mockResolvedValue(
-      health({ admin_client_cert_required: true, client_cert_presented: true }),
-    );
-
+  it.each([
+    [connection(), "No client certificate received"],
+    [connection({ tls_enabled: false }), "This request reached the server without TLS."],
+    [
+      connection({ client_certificate: { ...certificate, identity_uri: null } }),
+      "No unambiguous KMS identity URI.",
+    ],
+  ])("describes transport facts", async (data, message) => {
+    mocks.connection.mockResolvedValue(data);
     render(<LoginPage />);
-
-    await waitFor(() => expect(mocks.health).toHaveBeenCalled());
-    expect(screen.queryByText(CERT_NOTICE)).toBeNull();
+    expect(await screen.findByText(String(message), { exact: false })).toBeVisible();
   });
 
-  it("stays quiet when the requirement is off", async () => {
-    mocks.health.mockResolvedValue(
-      health({ admin_client_cert_required: false, client_cert_presented: false }),
-    );
-
-    render(<LoginPage />);
-
-    await waitFor(() => expect(mocks.health).toHaveBeenCalled());
-    expect(screen.queryByText(CERT_NOTICE)).toBeNull();
-  });
-
-  it("keeps the form usable when health cannot be loaded", async () => {
-    // Health is advisory. A sealed, starting or proxied server that cannot
-    // answer it must not cost the visitor the sign-in form.
-    mocks.health.mockRejectedValue(new Error("connection refused"));
+  it("clears stale details on refresh and keeps sign-in usable after failure", async () => {
+    mocks.connection
+      .mockResolvedValueOnce(connection({ client_certificate: certificate }))
+      .mockRejectedValueOnce(new Error("offline"));
     mocks.login.mockResolvedValue({ name: "admin", kind: "admin" });
-
     render(<LoginPage />);
-
-    await waitFor(() => expect(mocks.health).toHaveBeenCalled());
-    expect(screen.queryByText(CERT_NOTICE)).toBeNull();
-    expect(screen.getByLabelText("Identity token")).toBeEnabled();
-    expect(mocks.toast.error).not.toHaveBeenCalled();
-
-    submit("kms_admin_token");
+    await screen.findByText(certificate.identity_uri);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(screen.queryByText(certificate.identity_uri)).toBeNull();
+    expect(await screen.findByText("Could not check the client certificate.")).toBeVisible();
+    expect(screen.queryByText("No client certificate received")).toBeNull();
+    submit("token");
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/"));
-  });
-
-  it("mentions the certificate in the 401 message when one is required but missing", async () => {
-    mocks.health.mockResolvedValue(
-      health({ admin_client_cert_required: true, client_cert_presented: false }),
-    );
-    mocks.login.mockRejectedValue(new ApiError("invalid_credentials", "nope", 401));
-
-    render(<LoginPage />);
-    await screen.findByRole("status");
-    submit("kms_admin_token");
-
-    // The server answers every bad credential identically, so the copy offers
-    // the certificate as a possibility rather than a diagnosis.
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That token was not recognised — or it belongs to an administrator and this browser presented no client certificate.",
-    );
-  });
-
-  it("names the presented certificate as a possible cause when one was presented and sign-in still fails", async () => {
-    mocks.health.mockResolvedValue(
-      health({ admin_client_cert_required: true, client_cert_presented: true }),
-    );
-    mocks.login.mockRejectedValue(new ApiError("invalid_credentials", "nope", 401));
-
-    render(<LoginPage />);
-    await waitFor(() => expect(mocks.health).toHaveBeenCalled());
-    submit("kms_admin_token");
-
-    // Presenting a certificate is not the same as it being accepted, and the
-    // generic 401 cannot tell them apart — so the copy must not blame the token
-    // alone when a certificate was on the connection.
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That token was not recognised — or the client certificate this browser presented is not valid for that administrator (revoked, replaced, or issued for another identity).",
-    );
-    // The notice is only for a *missing* certificate: one was presented here.
-    expect(screen.queryByText(CERT_NOTICE)).toBeNull();
   });
 
   it("skips the form when a session is already stored", async () => {
