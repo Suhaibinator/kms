@@ -57,8 +57,6 @@ function projectEntry(entry: ConfigurationReleaseEntry): ConfigurationReleaseEnt
     contentType: entry.contentType,
     metadataJson: entry.metadataJson,
     parameterDigest: entry.parameterDigest,
-    clientBound: entry.clientBound,
-    hasAccessToken: entry.hasAccessToken,
   };
 }
 

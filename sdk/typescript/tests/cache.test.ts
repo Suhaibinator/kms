@@ -38,14 +38,15 @@ describe("ReadCache", () => {
     expect(cache.parameterSize).toBe(0);
   });
 
-  it("bounds parameter and secret entries independently", () => {
+  it("bounds parameter entries and never retains secret plaintext", () => {
     const cache = new ReadCache({ ttlMs: 1_000, maxEntries: 8 });
     for (let i = 0; i < 1_000; i++) {
       cache.setParameter(`/prod/app/p${i}`, "value", { version: BigInt(i) });
       cache.setSecret(`/prod/app/s${i}`, new Secret(`secret-${i}`), { version: BigInt(i) });
     }
     expect(cache.parameterSize).toBeLessThanOrEqual(8);
-    expect(cache.secretSize).toBeLessThanOrEqual(8);
+    expect(cache.secretSize).toBe(0);
+    expect(cache.getSecret("/prod/app/s999")).toBeUndefined();
   });
 
   it("invalidates all selectors for a path", () => {
@@ -59,13 +60,13 @@ describe("ReadCache", () => {
     expect(cache.secretSize).toBe(0);
   });
 
-  it("only invalidates secrets in requested namespaces", () => {
+  it("keeps secret caching disabled regardless of invalidation scope", () => {
     const cache = new ReadCache(1_000);
     cache.setSecret("/prod/app/scoped", new Secret("one"));
     cache.setSecret("/prod/other/kept", new Secret("two"));
     cache.invalidateSecretsInNamespaces([{ env: "prod", app: "app" }]);
     expect(cache.getSecret("/prod/app/scoped")).toBeUndefined();
-    expect(cache.getSecret("/prod/other/kept")?.text()).toBe("two");
+    expect(cache.getSecret("/prod/other/kept")).toBeUndefined();
   });
 
   it("only invalidates parameters in requested namespaces", () => {
@@ -77,16 +78,12 @@ describe("ReadCache", () => {
     expect(cache.getParameter("/prod/other/kept")).toBe("two");
   });
 
-  it("returns independent Secret objects", () => {
+  it("never returns stored Secret objects", () => {
     const cache = new ReadCache(1_000);
     const original = new Secret("secret", { version: 7n });
     cache.setSecret("/prod/app/s", original);
-    const first = cache.getSecret("/prod/app/s");
-    const second = cache.getSecret("/prod/app/s");
-    expect(first).not.toBe(original);
-    expect(second).not.toBe(first);
-    expect(second?.text()).toBe("secret");
-    expect(second?.version).toBe(7n);
+    expect(cache.getSecret("/prod/app/s")).toBeUndefined();
+    expect(cache.secretSize).toBe(0);
   });
 
   it("fences every parameter selector when point invalidation races an in-flight read", () => {
@@ -110,67 +107,66 @@ describe("ReadCache", () => {
     expect(cache.parameterSize).toBe(0);
   });
 
-  it("fences namespace-scoped parameter and secret reads without fencing later reads", () => {
+  it("fences namespace-scoped parameter reads while secret fills stay disabled", () => {
     const cache = new ReadCache(1_000);
     const parameterPath = "/prod/app/parameter";
     const secretPath = "/prod/app/secret";
     const staleParameter = cache.beginParameterRead(parameterPath);
     const staleSecret = cache.beginSecretRead(secretPath);
-    if (staleParameter === undefined || staleSecret === undefined) {
+    if (staleParameter === undefined) {
       throw new Error("cache unexpectedly disabled");
     }
+    expect(staleSecret).toBeUndefined();
 
     cache.invalidateParametersInNamespaces(["prod/app"]);
     cache.invalidateSecretsInNamespaces(["prod/app"]);
 
     const freshParameter = cache.beginParameterRead(parameterPath);
     const freshSecret = cache.beginSecretRead(secretPath);
-    if (freshParameter === undefined || freshSecret === undefined) {
+    if (freshParameter === undefined) {
       throw new Error("cache unexpectedly disabled");
     }
+    expect(freshSecret).toBeUndefined();
     expect(cache.cacheParameterIfUnchanged(staleParameter, 0n, "", "stale")).toBe(false);
-    expect(cache.cacheSecretIfUnchanged(staleSecret, 0n, "", new Secret("stale"))).toBe(false);
     expect(cache.cacheParameterIfUnchanged(freshParameter, 0n, "", "fresh")).toBe(true);
-    expect(cache.cacheSecretIfUnchanged(freshSecret, 0n, "", new Secret("fresh"))).toBe(true);
 
-    for (const generation of [staleParameter, staleSecret, freshParameter, freshSecret]) {
+    for (const generation of [staleParameter, freshParameter]) {
       cache.endRead(generation);
       cache.endRead(generation);
     }
     expect(cache.getParameter(parameterPath)).toBe("fresh");
-    expect(cache.getSecret(secretPath)?.text()).toBe("fresh");
+    expect(cache.getSecret(secretPath)).toBeUndefined();
   });
 
-  it("keeps invalidation generations isolated by resource kind and path", () => {
+  it("keeps parameter invalidation generations isolated by path", () => {
     const cache = new ReadCache(1_000);
     const parameter = cache.beginParameterRead("/prod/app/shared");
     const secret = cache.beginSecretRead("/prod/app/shared");
     const other = cache.beginParameterRead("/prod/app/other");
-    if (parameter === undefined || secret === undefined || other === undefined) {
+    if (parameter === undefined || other === undefined) {
       throw new Error("cache unexpectedly disabled");
     }
+    expect(secret).toBeUndefined();
 
     cache.invalidateParam("/prod/app/shared");
 
     expect(cache.cacheParameterIfUnchanged(parameter, 0n, "", "stale")).toBe(false);
-    expect(cache.cacheSecretIfUnchanged(secret, 0n, "", new Secret("secret"))).toBe(true);
     expect(cache.cacheParameterIfUnchanged(other, 0n, "", "other")).toBe(true);
-    for (const generation of [parameter, secret, other]) cache.endRead(generation);
+    for (const generation of [parameter, other]) cache.endRead(generation);
   });
 
-  it("fences active parameter and secret fills when cleared", () => {
+  it("fences active parameter fills when cleared while secret fills stay disabled", () => {
     const cache = new ReadCache(1_000);
     const parameter = cache.beginParameterRead("/prod/app/parameter");
     const secret = cache.beginSecretRead("/prod/app/secret");
-    if (parameter === undefined || secret === undefined) {
+    if (parameter === undefined) {
       throw new Error("cache unexpectedly disabled");
     }
+    expect(secret).toBeUndefined();
 
     cache.clear();
 
     expect(cache.cacheParameterIfUnchanged(parameter, 0n, "", "stale")).toBe(false);
-    expect(cache.cacheSecretIfUnchanged(secret, 0n, "", new Secret("stale"))).toBe(false);
     cache.endRead(parameter);
-    cache.endRead(secret);
   });
 });

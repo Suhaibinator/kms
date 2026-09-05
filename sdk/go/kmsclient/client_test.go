@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,6 +40,63 @@ func TestGetParameterAndSecret(t *testing.T) {
 	}
 	if sec.Path() != "/prod/app/db/password" {
 		t.Errorf("Secret.Path = %q", sec.Path())
+	}
+}
+
+func TestGetSecretRejectsUnauthoritativeResponseIdentity(t *testing.T) {
+	validRef := testResource("password")
+	tests := []struct {
+		name     string
+		response *kmsv1.GetSecretResponse
+		options  []GetOption
+	}{
+		{
+			name:     "missing ref",
+			response: &kmsv1.GetSecretResponse{Version: 7, Value: []byte("response-secret-canary")},
+		},
+		{
+			name: "missing namespace",
+			response: &kmsv1.GetSecretResponse{
+				Ref: &kmsv1.ResourceRef{Key: "password"}, Version: 7, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "wrong ref",
+			response: &kmsv1.GetSecretResponse{
+				Ref: testResource("different"), Version: 7, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "zero version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: validRef, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "wrong exact version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: validRef, Version: 8, Value: []byte("response-secret-canary"),
+			},
+			options: []GetOption{WithVersion(7)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			server.secrets["password"] = tt.response
+			client := newReleaseTestClient(t, server)
+			secret, err := client.GetSecret(context.Background(), "password", tt.options...)
+			if !errors.Is(err, errSecretResponseIdentityMismatch) {
+				t.Fatalf("GetSecret error = %v, want identity mismatch", err)
+			}
+			if err.Error() != "kmsclient: secret response identity mismatch" || strings.Contains(err.Error(), "response-secret-canary") {
+				t.Fatalf("GetSecret returned unsafe error %q", err)
+			}
+			if secret.StringValue() != "" || secret.Version() != 0 || secret.Path() != "" {
+				t.Fatalf("GetSecret returned partial secret: %v", secret)
+			}
+		})
 	}
 }
 
@@ -185,18 +243,18 @@ func TestCacheTTL(t *testing.T) {
 		t.Errorf("cached read = %q, want first (served from cache)", v)
 	}
 
-	// A secret is cached similarly.
+	// Secret plaintext is never cached, even when parameter caching is enabled.
 	srv.SetSecret(testNS, "cached-secret", []byte("s1"))
 	if s, _ := c.GetSecret(context.Background(), "cached-secret"); s.StringValue() != "s1" {
 		t.Fatalf("first secret read = %q", s.StringValue())
 	}
 	srv.SetSecret(testNS, "cached-secret", []byte("s2"))
-	if s, _ := c.GetSecret(context.Background(), "cached-secret"); s.StringValue() != "s1" {
-		t.Errorf("cached secret read = %q, want s1", s.StringValue())
+	if s, _ := c.GetSecret(context.Background(), "cached-secret"); s.StringValue() != "s2" {
+		t.Errorf("fresh secret read = %q, want s2", s.StringValue())
 	}
 }
 
-func TestCachedExactVersionSecretIsMutationIsolated(t *testing.T) {
+func TestExactVersionSecretResponsesAreMutationIsolated(t *testing.T) {
 	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
 	srv.SetSecretVersion(testNS, "cached-exact-secret", []byte("original"), "text/plain", 7)
 
@@ -211,7 +269,7 @@ func TestCachedExactVersionSecretIsMutationIsolated(t *testing.T) {
 		t.Fatalf("second GetSecret: %v", err)
 	}
 	if got := second.StringValue(); got != "original" {
-		t.Fatalf("caller mutation changed cached exact-version secret: got %q, want %q", got, "original")
+		t.Fatalf("caller mutation changed a later exact-version response: got %q, want %q", got, "original")
 	}
 	second.Value()[0] = 'Y'
 
@@ -220,16 +278,15 @@ func TestCachedExactVersionSecretIsMutationIsolated(t *testing.T) {
 		t.Fatalf("third GetSecret: %v", err)
 	}
 	if got := third.StringValue(); got != "original" {
-		t.Fatalf("cache-hit mutation changed later exact-version secret: got %q, want %q", got, "original")
+		t.Fatalf("caller mutation changed a later exact-version response: got %q, want %q", got, "original")
 	}
 }
 
-func TestTokenGatedSecretBypassesCache(t *testing.T) {
+func TestSecretCredentialsAlwaysReachServer(t *testing.T) {
 	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
 	srv.SetSecret(testNS, "bound", []byte("v1"))
 
-	// A token-gated read must not populate the cache: a later read without the
-	// token has to reach the server (and its token check), not the cache.
+	// A later read without the token must reach the server and its live check.
 	if _, err := c.GetSecret(context.Background(), "bound", WithSecretToken("tok")); err != nil {
 		t.Fatalf("GetSecret with token: %v", err)
 	}
@@ -237,19 +294,31 @@ func TestTokenGatedSecretBypassesCache(t *testing.T) {
 		t.Fatalf("GetSecret without token: %v", err)
 	}
 	if got := srv.LastSecretToken("GetSecret"); got != "" {
-		t.Errorf("token-less read served from token-gated cache entry; last RPC secret token = %q, want empty (RPC per read)", got)
+		t.Errorf("token-less read did not reach server; last RPC secret token = %q, want empty", got)
 	}
 
-	// A token-gated read must not be served from a cache entry either: after a
-	// token-less read primes the cache, a read with the token still sees the
-	// server's current value.
+	// A later credentialed read sees the server's current value.
 	srv.SetSecret(testNS, "bound", []byte("v2"))
 	s, err := c.GetSecret(context.Background(), "bound", WithSecretToken("tok"))
 	if err != nil {
 		t.Fatalf("GetSecret with token after prime: %v", err)
 	}
 	if s.StringValue() != "v2" {
-		t.Errorf("token read = %q, want v2 (must bypass cache)", s.StringValue())
+		t.Errorf("token read = %q, want v2", s.StringValue())
+	}
+}
+
+func TestSecretNeverUsesCacheAfterLiveProtectionChange(t *testing.T) {
+	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
+	srv.SetSecret(testNS, "live-protection", []byte("plaintext"))
+	if _, err := c.GetSecret(context.Background(), "live-protection"); err != nil {
+		t.Fatal(err)
+	}
+	// Model another client binding or token-gating the same version: the next
+	// read must reach KMS and observe its credential rejection.
+	srv.SetSecretError(testNS, "live-protection", status.Error(codes.PermissionDenied, "credential required"))
+	if _, err := c.GetSecret(context.Background(), "live-protection"); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("second GetSecret error = %v, want ErrPermissionDenied", err)
 	}
 }
 
@@ -280,7 +349,8 @@ func TestPutParameterAndSecret(t *testing.T) {
 		t.Errorf("readback = %q, want 42", v)
 	}
 
-	sres, err := c.PutSecret(ctx, "new-secret", []byte("shh"), WithGenerateAccessToken(), WithClientBound())
+	bindingKey := strings.Repeat("k", 32)
+	sres, err := c.PutSecret(ctx, "new-secret", []byte("shh"), WithGenerateAccessToken(), WithPutBindingKey(bindingKey))
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
@@ -288,11 +358,26 @@ func TestPutParameterAndSecret(t *testing.T) {
 		t.Errorf("expected minted access token")
 	}
 	calls := srv.PutSecretCalls()
-	if len(calls) != 1 || !calls[0].ClientBound || !calls[0].GenerateAccessToken {
+	if len(calls) != 1 || calls[0].BindingKey != bindingKey || !calls[0].GenerateAccessToken {
 		t.Errorf("PutSecret call not recorded with flags: %+v", calls)
 	}
 	if calls[0].Namespace != testNS || calls[0].Key != "new-secret" {
 		t.Errorf("PutSecret call ref = %s/%s, want %s/new-secret", calls[0].Namespace, calls[0].Key, testNS)
+	}
+	metadata, err := c.GetSecretMetadata(ctx, "new-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.Bound || !metadata.HasAccessToken || len(metadata.Versions) != 1 ||
+		!metadata.Versions[0].Bound || !metadata.Versions[0].HasAccessToken {
+		t.Fatalf("PutSecret live metadata = %+v", metadata)
+	}
+	if _, err := c.GetSecret(ctx, "new-secret"); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("uncredentialed bound read error = %v", err)
+	}
+	secret, err := c.GetSecret(ctx, "new-secret", WithSecretToken(sres.AccessToken), WithBindingKey(bindingKey))
+	if err != nil || secret.StringValue() != "shh" {
+		t.Fatalf("credentialed bound read = %v, %v", secret, err)
 	}
 }
 

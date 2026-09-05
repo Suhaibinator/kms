@@ -292,6 +292,17 @@ func (s *Service) collectApplicationRows(ctx context.Context, environments []dom
 				return nil, nil, err
 			}
 			for _, secret := range page {
+				current := secret.Labels[domain.LabelCurrent]
+				if current == 0 {
+					return nil, nil, fmt.Errorf("secret %s has no current version", secret.Ref)
+				}
+				_, currentVersion, err := s.store.GetSecretVersion(ctx, secret.Ref, current, "")
+				if err != nil {
+					return nil, nil, err
+				}
+				if currentVersion.Version != current {
+					return nil, nil, fmt.Errorf("secret %s current version changed identity", secret.Ref)
+				}
 				secrets[secret.Ref.Key] = secret
 				rowKey := domain.ResourceSecret + "\x00" + secret.Ref.Key
 				row := rows[rowKey]
@@ -299,7 +310,10 @@ func (s *Service) collectApplicationRows(ctx context.Context, environments []dom
 					row = &domain.ApplicationConfigurationRow{Key: secret.Ref.Key, Kind: domain.ResourceSecret, Cells: map[string]domain.ApplicationConfigurationCell{}}
 					rows[rowKey] = row
 				}
-				row.Cells[ns.Env] = domain.ApplicationConfigurationCell{Environment: ns.Env, Present: true, ContentType: secret.ContentType, Version: secret.Labels[domain.LabelCurrent], ClientBound: secret.ClientBound, HasAccessToken: secret.HasAccessToken}
+				row.Cells[ns.Env] = domain.ApplicationConfigurationCell{
+					Environment: ns.Env, Present: true, ContentType: currentVersion.ContentType,
+					Version: currentVersion.Version, Bound: currentVersion.Bound, HasAccessToken: currentVersion.HasAccessToken,
+				}
 			}
 			if next == "" {
 				break
@@ -325,16 +339,17 @@ func (s *Service) collectApplicationRows(ctx context.Context, environments []dom
 // clone: the env's active release entry → the latest release entry → an
 // existing resource in env whose key equals the alias (same kind) → the key
 // another environment's active release uses for that alias (rebased into env)
-// → unresolved (absent from the result). otherActive is keyed by environment
-// and is consulted in sorted order so the result is deterministic.
+// → unresolved (absent from the result). Every accepted release entry must
+// be in its release's home namespace. otherActive is keyed by environment and
+// is consulted in sorted order so the result is deterministic.
 func resolveContractRefs(app domain.Application, env string, active, latest *domain.ConfigurationRelease, otherActive map[string]domain.ConfigurationRelease, rows []domain.ApplicationConfigurationRow) map[string]domain.Ref {
 	out := make(map[string]domain.Ref, len(app.Contract))
-	entryRef := func(rel *domain.ConfigurationRelease, alias string) (domain.Ref, bool) {
-		if rel == nil {
+	entryRef := func(rel *domain.ConfigurationRelease, home domain.NamespaceRef, alias string) (domain.Ref, bool) {
+		if rel == nil || rel.Namespace != home {
 			return domain.Ref{}, false
 		}
 		for _, entry := range rel.Entries {
-			if entry.Alias == alias {
+			if entry.Alias == alias && entry.Ref.NS == home {
 				return entry.Ref, true
 			}
 		}
@@ -349,11 +364,11 @@ func resolveContractRefs(app domain.Application, env string, active, latest *dom
 	sort.Strings(otherEnvs)
 	here := domain.NamespaceRef{Env: env, App: app.Name}
 	for _, field := range app.Contract {
-		if ref, ok := entryRef(active, field.Alias); ok {
+		if ref, ok := entryRef(active, here, field.Alias); ok {
 			out[field.Alias] = ref
 			continue
 		}
-		if ref, ok := entryRef(latest, field.Alias); ok {
+		if ref, ok := entryRef(latest, here, field.Alias); ok {
 			out[field.Alias] = ref
 			continue
 		}
@@ -370,7 +385,8 @@ func resolveContractRefs(app domain.Application, env string, active, latest *dom
 		}
 		for _, otherEnv := range otherEnvs {
 			rel := otherActive[otherEnv]
-			if ref, ok := entryRef(&rel, field.Alias); ok {
+			otherHome := domain.NamespaceRef{Env: otherEnv, App: app.Name}
+			if ref, ok := entryRef(&rel, otherHome, field.Alias); ok {
 				out[field.Alias] = domain.Ref{NS: here, Key: ref.Key}
 				resolved = true
 				break

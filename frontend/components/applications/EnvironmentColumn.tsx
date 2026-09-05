@@ -22,6 +22,7 @@ import { ValuesSection } from "./ValuesSection";
 export interface EnvironmentCallbacks {
   onAddValue: (env: string, alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
+  onOpenSecret?: (env: string, key: string) => void;
   onShip: (env: string, alias?: string) => void;
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
@@ -132,6 +133,7 @@ export function EnvironmentColumn({
         otherKeys={countOtherKeys(environment, rows)}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
+        onOpenSecret={callbacks.onOpenSecret}
         onShip={callbacks.onShip}
       />
       <ReleaseSection

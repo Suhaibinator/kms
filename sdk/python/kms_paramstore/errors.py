@@ -1,8 +1,8 @@
 """Exception types for the paramstore SDK.
 
-Every exception here, and any message it carries, is guaranteed free of secret
-plaintext: the SDK maps server ``grpc`` status errors onto these types using only
-the status code and the server's (non-secret) message.
+RPCs that carry secret plaintext or credentials use a fixed-message mapper so a
+buggy or hostile server cannot reflect request material into an SDK exception.
+Other RPCs preserve the server's status message for operational context.
 """
 
 from __future__ import annotations
@@ -18,11 +18,19 @@ __all__ = [
     "UnauthenticatedError",
     "FailedPreconditionError",
     "RateLimitedError",
+    "PurgeCleanupPendingError",
     "NotInitializedError",
     "ConfigError",
     "NoNamespaceError",
     "map_grpc_error",
+    "map_secret_grpc_error",
+    "map_purge_grpc_error",
 ]
+
+
+_PURGE_CLEANUP_PENDING_MESSAGE = (
+    "secret purge committed; database artifact cleanup is pending"
+)
 
 
 class ParamStoreError(Exception):
@@ -63,7 +71,7 @@ class UnauthenticatedError(ParamStoreError):
 class FailedPreconditionError(ParamStoreError):
     """The request is well-formed but server state forbids it.
 
-    For example, a client-bound mode mismatch or a disabled version.
+    For example, an invalid binding transition or a disabled version.
     """
 
     code = "failed_precondition"
@@ -97,6 +105,24 @@ class RateLimitedError(ParamStoreError):
     """The server exhausted a per-identity operation budget."""
 
     code = "resource_exhausted"
+
+
+class PurgeCleanupPendingError(ParamStoreError):
+    """The purge committed, but active database artifacts need cleanup.
+
+    The server is fail-closed until it can finish cleanup. The caller must not
+    retry either purge: its bound-cohort or unbound-version preview guard is
+    now stale, and a retired binding key may already have been discarded. No
+    mutation result accompanies this error.
+    """
+
+    code = "purge_cleanup_pending"
+
+    def __init__(self) -> None:
+        super().__init__(
+            _PURGE_CLEANUP_PENDING_MESSAGE,
+            grpc_code=grpc.StatusCode.UNAVAILABLE,
+        )
 
 
 # Map gRPC status codes to SDK exception types. Codes not listed here surface as
@@ -152,3 +178,65 @@ def map_grpc_error(err: grpc.RpcError) -> ParamStoreError:
             f"{stable_code}: {message}", code=stable_code, grpc_code=code
         )
     return exc_type(message, grpc_code=code)
+
+
+def _grpc_error_code(err: BaseException) -> Optional[grpc.StatusCode]:
+    if not isinstance(err, grpc.RpcError):
+        return None
+    code = None
+    try:
+        code_method = getattr(err, "code", None)
+    except Exception:
+        code_method = None
+    if callable(code_method):
+        try:
+            candidate = code_method()
+        except Exception:
+            candidate = None
+        if isinstance(candidate, grpc.StatusCode):
+            code = candidate
+    return code
+
+
+def _secret_error_from_code(code: Optional[grpc.StatusCode]) -> ParamStoreError:
+    """Build a fixed-message secret error from structured status only."""
+
+    exc_type = _CODE_MAP.get(code, ParamStoreError)
+    stable_code = _CODE_NAMES.get(code, "unknown")
+    message = f"secret operation failed ({stable_code})"
+    if exc_type is ParamStoreError:
+        return ParamStoreError(message, code=stable_code, grpc_code=code)
+    return exc_type(message, grpc_code=code)
+
+
+def map_secret_grpc_error(err: BaseException) -> ParamStoreError:
+    """Translate a secret-bearing transport error without trusting its details.
+
+    Only the structured gRPC status code affects the result.  In particular,
+    neither ``details()`` nor ``str(err)`` is used because a misbehaving peer
+    could reflect secret plaintext, an access token, or a binding key there.
+    """
+    return _secret_error_from_code(_grpc_error_code(err))
+
+
+def map_purge_grpc_error(err: BaseException) -> ParamStoreError:
+    """Translate a purge RPC error, recognizing only the committed sentinel.
+
+    Remote details are inspected solely for an exact comparison with KMS's
+    fixed cleanup-pending message. Every other detail is discarded and mapped
+    using the ordinary fixed-message secret error path.
+    """
+    code = _grpc_error_code(err)
+    if code is grpc.StatusCode.UNAVAILABLE and isinstance(err, grpc.RpcError):
+        try:
+            details_method = getattr(err, "details", None)
+        except Exception:
+            details_method = None
+        if callable(details_method):
+            try:
+                details = details_method()
+            except Exception:
+                details = None
+            if details == _PURGE_CLEANUP_PENDING_MESSAGE:
+                return PurgeCleanupPendingError()
+    return _secret_error_from_code(code)

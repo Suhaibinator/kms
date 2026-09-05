@@ -150,7 +150,7 @@ export interface ApplicationConfigurationCell {
   value?: string;
   content_type: string;
   version: number;
-  client_bound?: boolean;
+  bound?: boolean;
   has_access_token?: boolean;
 }
 
@@ -243,6 +243,8 @@ export type SecretVersionState = "enabled" | "disabled" | "destroyed";
 export interface SecretVersion {
   version: number;
   state: SecretVersionState;
+  bound: boolean;
+  has_access_token: boolean;
   created_by: string;
   created_at_unix_ms: number;
   destroyed_at_unix_ms: number;
@@ -255,7 +257,7 @@ export interface SecretMetadata {
   app: string;
   key: string;
   content_type: string;
-  client_bound: boolean;
+  bound: boolean;
   has_access_token: boolean;
   metadata_json: string;
   created_at_unix_ms: number;
@@ -276,10 +278,10 @@ export interface CreateSecretRequest {
   value_base64: string;
   content_type: string;
   metadata_json: string;
-  client_bound: boolean;
+  binding_key?: string;
   generate_access_token: boolean;
+  create_only?: boolean;
   expires_at_unix_ms: number;
-  secret_token?: string;
 }
 
 export interface CreateSecretResponse {
@@ -300,6 +302,23 @@ export interface RevealSecretResponse {
 export interface PromoteSecretResponse {
   current_version: number;
   previous_version: number;
+  revision: number;
+}
+
+export interface SecretVersionTransitionResponse {
+  current_version: number;
+  previous_version: number;
+  revision: number;
+}
+
+export interface SecretBindingCohortResponse {
+  anchor_version: number;
+  affected_versions: number[];
+  revision: number;
+}
+
+export interface SecretVersionSetResponse {
+  affected_versions: number[];
   revision: number;
 }
 
@@ -556,8 +575,6 @@ export interface ConfigurationReleaseEntry {
   content_type: string;
   metadata_json: string;
   parameter_digest: string;
-  client_bound: boolean;
-  has_access_token: boolean;
 }
 
 export interface ConfigurationRelease {
@@ -752,7 +769,7 @@ export interface OverviewValue {
   content_type?: string;
   current_version?: number;
   pinned_version?: number;
-  client_bound?: boolean;
+  bound?: boolean;
 }
 
 export interface OverviewActiveRelease {

@@ -134,6 +134,22 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		return domain.VerifyReleaseDefaultsResult{}, err
 	}
 	release := active.Release
+	// A release pin is always scoped to its owning namespace. Creation and
+	// storage validation enforce this invariant, but verify it again here so a
+	// corrupt row or alternate ReleaseStore implementation cannot turn this
+	// endpoint into a cross-namespace comparison oracle.
+	if release.Namespace != in.Namespace {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
+		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
+			"active release violates namespace ownership invariants")
+	}
+	for _, entry := range release.Entries {
+		if entry.Ref.NS != in.Namespace || entry.ResourceNamespaceID <= 0 {
+			s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
+			return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
+				"active release violates namespace ownership invariants")
+		}
+	}
 
 	// Schema check against the application-pinned version (falling back to the
 	// release's own pin when the application has none). The generator's
@@ -170,7 +186,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	mentioned := make(map[string]struct{}, len(in.Entries))
 	for _, req := range in.Entries {
 		mentioned[req.Alias] = struct{}{}
-		verdict, err := s.verifyDefaultsEntry(ctx, pr, in.Namespace, req, releaseEntries, contract)
+		verdict, err := s.verifyDefaultsEntry(ctx, req, releaseEntries, contract)
 		if err != nil {
 			return domain.VerifyReleaseDefaultsResult{}, err
 		}
@@ -234,7 +250,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 
 // verifyDefaultsEntry produces the verdict for one requested alias. It reads
 // parameters only; a secret alias is answered before any storage access.
-func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, releaseNS domain.NamespaceRef, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
+func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
 	entry, ok := releaseEntries[req.Alias]
 	if !ok {
 		if _, inContract := contract[req.Alias]; inContract {
@@ -245,27 +261,14 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, release
 	if entry.Kind != domain.ReleaseEntryParameter {
 		return domain.VerifyVerdictSecretAlias, nil
 	}
-	// Release access never grants access to a referenced parameter. A pin
-	// from another namespace is only probed when the caller also holds the
-	// verify operation there; otherwise the whole call is denied (and audited
-	// by authorize) so the verdict set stays closed.
-	if entry.Ref.NS != releaseNS && !pr.IsAdmin() {
-		if _, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseVerifyDefaults, domain.ResourceParameter, entry.Ref); err != nil {
-			// authorize has audited the denial; the caller must not learn which
-			// namespace the pin targets, whether it still exists, or which auth
-			// methods it allows, so every failure collapses to the neutral text.
-			return "", domain.Errorf(domain.ErrPermissionDenied, "access denied")
-		}
+	if entry.ResourceNamespaceID <= 0 {
+		return domain.VerifyVerdictMissingInRelease, nil
 	}
-	entryCtx := ctx
-	if entry.ResourceNamespaceID > 0 {
-		bound, err := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
-		if err != nil {
-			// The pinned namespace incarnation is gone: the pin no longer
-			// resolves, which from the caller's perspective is a missing entry.
-			return domain.VerifyVerdictMissingInRelease, nil
-		}
-		entryCtx = bound
+	entryCtx, err := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
+	if err != nil {
+		// The pinned namespace incarnation is gone: the pin no longer
+		// resolves, which from the caller's perspective is a missing entry.
+		return domain.VerifyVerdictMissingInRelease, nil
 	}
 	p, err := s.store.GetParameter(entryCtx, entry.Ref, entry.Version, "")
 	if err != nil {

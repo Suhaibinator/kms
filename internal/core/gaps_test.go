@@ -8,49 +8,6 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-func TestClientBoundTokenRotation(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	s := newTestService(store)
-	withKeyring(t, s)
-
-	res := putSecret(t, s, PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v1"), ContentType: "text/plain",
-		ClientBound: true, GenerateToken: true,
-	})
-	t1 := res.AccessToken
-
-	// Rotate: new version, supply the current token, request a fresh one.
-	res2, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain",
-		ClientBound: true, GenerateToken: true, SecretToken: t1,
-	})
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	t2 := res2.AccessToken
-	if t2 == "" || t2 == t1 {
-		t.Fatalf("rotation did not mint a distinct token (t1=%q t2=%q)", t1, t2)
-	}
-
-	val, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, "", t2)
-	if err != nil {
-		t.Fatalf("read with new token: %v", err)
-	}
-	if string(val.Value) != "v2" {
-		t.Fatalf("value = %q, want v2", val.Value)
-	}
-
-	// The old token cannot decrypt the new current version.
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, "", t1); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("read current with rotated-away token err = %v, want ErrDecryptFailed", err)
-	}
-	// But the old token still reads the version it originally encrypted (v1).
-	if val, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 1, "", t1); err != nil || string(val.Value) != "v1" {
-		t.Fatalf("read v1 with old token = %q err=%v, want v1", val.Value, err)
-	}
-}
-
 func TestPutSecretRejectsOversizeValue(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

@@ -183,18 +183,20 @@ class SecretValue(_DescriptorBase):
 
     Args:
         key: relative key (``"stripe-api-key"``) or absolute ``"/env/app/key"``.
-        token: per-secret access token; for client-bound secrets it is also the
-            client key share.
+        token: optional per-secret access token.
+        bind_key: optional binding key, independent from the access token.
         env_var: optional environment variable that, when set and non-empty,
             overrides the store value (no namespace resolution is needed then).
         default: optional fallback (development only).
     """
 
-    def __init__(self, key: str = "", *, token: Optional[str] = None, env_var: Optional[str] = None,
+    def __init__(self, key: str = "", *, token: Optional[str] = None,
+                 bind_key: Optional[str] = None, env_var: Optional[str] = None,
                  default: Optional[str] = None) -> None:
         super().__init__()
         self._key = key
         self._token = token or ""
+        self._bind_key = bind_key or ""
         self._env_var = env_var or ""
         self._default = default
 
@@ -226,15 +228,23 @@ class SecretValue(_DescriptorBase):
                     client._logf("secret %r resolved from env %s (store fetch skipped)", self._key, self._env_var)
                     return
             if self._key:
+                resolution_failed = False
                 try:
-                    sec = client.get_secret(self._key, secret_token=self._token, timeout=timeout)
+                    sec = client.get_secret(
+                        self._key, secret_token=self._token,
+                        binding_key=self._bind_key, timeout=timeout,
+                    )
                 except Exception as err:
                     if self._default is not None and client._default_allowed_for_error(err):
-                        client._logf("secret %r fetch failed (%s); using default", self._key, err)
+                        client._logf("secret %r fetch failed; using default", self._key)
                         st.secret = Secret(self._default.encode("utf-8"), key=self._key)
                         st.initialized = True
                         return
-                    raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
+                    resolution_failed = True
+                if resolution_failed:
+                    raise errors.ParamStoreError(
+                        f"resolve secret {self._key!r}: secret operation failed"
+                    )
                 st.secret = sec
                 st.initialized = True
                 return
@@ -260,14 +270,21 @@ class SecretValue(_DescriptorBase):
                 st.initialized = True
             return
         if self._key:
+            resolution_failed = False
             try:
                 secret = await client.get_secret(
-                    self._key, secret_token=self._token, timeout=timeout
+                    self._key, secret_token=self._token,
+                    binding_key=self._bind_key, timeout=timeout,
                 )
             except Exception as err:
                 if self._default is None or not client._default_allowed_for_error(err):
-                    raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
-                secret = Secret(self._default.encode("utf-8"), key=self._key)
+                    resolution_failed = True
+                else:
+                    secret = Secret(self._default.encode("utf-8"), key=self._key)
+            if resolution_failed:
+                raise errors.ParamStoreError(
+                    f"resolve secret {self._key!r}: secret operation failed"
+                )
             with st.lock:
                 st.secret = secret
                 st.initialized = True

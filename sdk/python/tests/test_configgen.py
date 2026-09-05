@@ -19,7 +19,9 @@ class GeneratedConfig(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True)
 
     port: Annotated[int, Field(ge=1, le=65535), Parameter("runtime", views=("server",))] = 8080
-    password: Annotated[Secret, SecretField("password", reload="restart", views=("server",))]
+    password: Annotated[Secret, SecretField("password", reload="restart", views=("server",))] = Secret(
+        bind_key="generator-binding-key-canary"
+    )
 
 
 def test_generation_is_deterministic_and_contract_matches_other_sdks(tmp_path: Path) -> None:
@@ -31,6 +33,7 @@ def test_generation_is_deterministic_and_contract_matches_other_sdks(tmp_path: P
     assert first.schema_sha256 in first.contract
     assert "GeneratedConfigStore" in first.binding
     assert '"minimum": 1' in first.schema and '"maximum": 65535' in first.schema
+    assert "generator-binding-key-canary" not in first.binding + first.schema + first.contract
 
     binding, schema, contract = tmp_path / "generated.py", tmp_path / "schema.json", tmp_path / "contract.json"
     write_artifacts(first, binding=binding, schema=schema, contract=contract)
@@ -77,6 +80,8 @@ def test_committed_generated_binding_is_a_typed_runtime_consumer() -> None:
     assert view.port == 9000
     assert view.debug is True
     assert str(view.password) == "[REDACTED]"
+    assert view.password.bind_key == ""
+    assert "fixture-binding-key-never-generated" not in repr(store)
     assert all(isinstance(entry, ContractEntry) for entry in CONTRACT)
     assert store.defaults_artifact("dev").endswith("\n")
 

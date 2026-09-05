@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const leak = "super-secret-plaintext"
@@ -77,6 +79,7 @@ func TestSecretRedactionInStruct(t *testing.T) {
 
 func TestSecretCloneDeepCopiesPlaintextAndPreservesMetadata(t *testing.T) {
 	original := Secret{
+		BindKey:     NewBindingKey("declaration-binding-key"),
 		value:       []byte("secret"),
 		path:        "/prod/app/password",
 		version:     17,
@@ -97,10 +100,37 @@ func TestSecretCloneDeepCopiesPlaintextAndPreservesMetadata(t *testing.T) {
 			clone.Path(), clone.Version(), clone.ContentType(),
 			original.Path(), original.Version(), original.ContentType())
 	}
+	if clone.BindKey != original.BindKey {
+		t.Fatalf("clone BindKey = %q, want declaration credential preserved", clone.BindKey)
+	}
+	if !(Secret{BindKey: NewBindingKey("credential-only")}).IsZero() {
+		t.Fatal("declaration-only Secret must remain zero for value validation")
+	}
+}
+
+func TestSecretFormattingRedactsDeclarationBindingKey(t *testing.T) {
+	const bindingKey = "binding-key-that-must-never-appear"
+	secret := Secret{BindKey: NewBindingKey(bindingKey)}
+	for name, rendered := range map[string]string{
+		"String": secret.String(), "GoString": secret.GoString(), "%v": fmt.Sprintf("%v", secret),
+		"%+v": fmt.Sprintf("%+v", secret), "%#v": fmt.Sprintf("%#v", secret), "%q": fmt.Sprintf("%q", secret),
+	} {
+		if strings.Contains(rendered, bindingKey) || !strings.Contains(rendered, redactedText) {
+			t.Errorf("%s rendered declaration credential: %q", name, rendered)
+		}
+	}
+	encoded, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), bindingKey) {
+		t.Fatalf("JSON rendered declaration credential: %s", encoded)
+	}
 }
 
 func TestSecretValueRedaction(t *testing.T) {
-	sv := SecretValue{Key: "x", Default: leak}
+	const bindingKey = "secret-value-binding-key"
+	sv := SecretValue{Key: "x", BindKey: NewBindingKey(bindingKey), Default: leak}
 	// Init via default so it holds plaintext.
 	c, _ := newTestClient(t, Config{})
 	if err := sv.Init(c); err != nil {
@@ -118,6 +148,9 @@ func TestSecretValueRedaction(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	assertRedacted(t, "SecretValue json", string(j))
+	if strings.Contains(fmt.Sprintf("%#v", sv), bindingKey) || strings.Contains(string(j), bindingKey) {
+		t.Fatal("SecretValue formatting exposed BindKey")
+	}
 	legacyPath, err := sv.MarshalJSON()
 	if err != nil {
 		t.Fatalf("SecretValue.MarshalJSON: %v", err)
@@ -143,6 +176,54 @@ func TestSecretValueRedaction(t *testing.T) {
 	}
 }
 
+func TestSecretValueYAMLRedaction(t *testing.T) {
+	const (
+		token    = "secret-value-token-must-never-appear-in-yaml"
+		bindKey  = "secret-value-binding-key-must-never-appear-in-yaml"
+		fallback = "secret-value-default-must-never-appear-in-yaml"
+	)
+	secret := SecretValue{
+		Key:     "service/api-key",
+		Token:   token,
+		BindKey: NewBindingKey(bindKey),
+		Default: fallback,
+	}
+
+	type nested struct {
+		Value   SecretValue  `yaml:"value"`
+		Pointer *SecretValue `yaml:"pointer"`
+	}
+	var interfaceValue any = secret
+	var interfacePointer any = &secret
+
+	for name, value := range map[string]any{
+		"value":                  secret,
+		"pointer":                &secret,
+		"nested struct":          nested{Value: secret, Pointer: &secret},
+		"map of values":          map[string]SecretValue{"credential": secret},
+		"map of pointers":        map[string]*SecretValue{"credential": &secret},
+		"interface-held value":   interfaceValue,
+		"interface-held pointer": interfacePointer,
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := yaml.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for field, sensitive := range map[string]string{
+				"Token": token, "BindKey": bindKey, "Default": fallback,
+			} {
+				if strings.Contains(string(encoded), sensitive) {
+					t.Errorf("YAML leaked %s: %s", field, encoded)
+				}
+			}
+			if !strings.Contains(string(encoded), redactedText) {
+				t.Errorf("YAML missing redaction marker: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestSecretValuePanicsBeforeInit(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -151,4 +232,27 @@ func TestSecretValuePanicsBeforeInit(t *testing.T) {
 	}()
 	var sv SecretValue
 	_ = sv.Value()
+}
+
+func TestSecretYAMLRedaction(t *testing.T) {
+	const bindingKey = "binding-key-must-never-appear-in-yaml"
+	declaration := Secret{BindKey: NewBindingKey(bindingKey)}
+	resolved := NewSecret([]byte(leak))
+	resolved.BindKey = NewBindingKey(bindingKey)
+	for name, secret := range map[string]Secret{"declaration": declaration, "resolved": resolved, "clone": resolved.Clone()} {
+		t.Run(name, func(t *testing.T) {
+			for _, value := range []any{secret, &secret, struct {
+				Credential Secret `yaml:"credential"`
+			}{secret}, map[string]Secret{"credential": secret}} {
+				encoded, err := yaml.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(encoded), bindingKey) {
+					t.Errorf("YAML leaked binding credential: %s", encoded)
+				}
+				assertRedacted(t, "YAML", string(encoded))
+			}
+		})
+	}
 }

@@ -36,7 +36,8 @@ values and secret metadata across every environment. A reviewed multi-target
 parameter write creates a separate immutable version and change-log revision
 in each selected namespace; it never links the resulting values. Partial
 failures are reported per environment. Secret plaintext is never included in
-the matrix and client-bound secrets are not copied by this workflow.
+the matrix. A secret's live binding/token metadata is displayed, but the
+cross-environment parameter write never copies secret material.
 
 ## Release contents and digest
 
@@ -46,9 +47,14 @@ persistence. The immutable stored entry contains:
 
 - alias, `parameter`/`secret` kind, structured `ResourceRef`, and exact version;
 - the pinned version's content type and immutable non-sensitive metadata;
-- SHA-256 of the exact parameter bytes, or no value digest for a secret; and
-- secret protection flags (`client_bound`, `has_access_token`), never a token
-  or plaintext.
+- SHA-256 of the exact parameter bytes, or no value digest for a secret.
+
+Both parameter and secret references must be in the release's own namespace.
+Entries carry no protection flags: `bound` and `has_access_token` are
+deliberately absent from both the entry and release digest. Those properties
+are immutable for the lifetime of a non-destroyed secret version, so an exact
+version pin implicitly pins its protection mode without changing the release
+entry schema or deterministic digest format.
 
 The release digest is SHA-256 over a deterministic, alias-sorted protobuf
 projection containing the release schema reference, resource pins, captured
@@ -134,8 +140,8 @@ than resource values.
 
 `ActivateRelease` reruns the same schema and resource validation used by
 `ValidateRelease`. It then transactionally rechecks exact resource identity,
-content type and digest, secret enabled/expiry state, and secret protection
-metadata before moving `current`/`previous`; publication occurs only after
+home namespace, content type and digest, and secret enabled/expiry state before
+moving `current`/`previous`; publication occurs only after
 commit. Validation failure is gRPC `FAILED_PRECONDITION` (HTTP 412) with a
 sanitized structured `ValidateReleaseResponse` detail, and does not allocate an
 activation revision or move either label. The optional-presence
@@ -215,10 +221,14 @@ unless explicitly classified. Operator remediation is in the
 
 Equivalent Go, Python, and TypeScript loaders perform these steps:
 
-1. fresh-read or receive the active release;
-2. resolve all exact pins concurrently (default limit 16);
-3. ask the local token provider only for a protected secret;
-4. verify returned resource versions, parameter digests, and release digest;
+1. fresh-read or receive the active release, then verify its identity and
+   complete deterministic manifest digest;
+2. resolve all exact pins concurrently (default limit 16); before fetching a
+   secret value, fresh-read its metadata and verify response identity, exact
+   version, enabled/destroyed state, expiry, `bound`, and `has_access_token`;
+3. resolve an access token and binding key independently, by alias, only when
+   that exact live version requires each credential;
+4. verify returned resource identity/version and parameter digests;
 5. construct an immutable snapshot whose normal formatting omits resolved
    values and whose `Secret` values always redact;
 6. acknowledge `received`, call application preparation, then acknowledge
@@ -229,7 +239,10 @@ Equivalent Go, Python, and TypeScript loaders perform these steps:
 9. commit and acknowledge `applied`, or acknowledge `rejected` and retain the
    last-known-good release.
 
-Startup fails until an initial release is successfully applied. After that,
+Missing either required local credential rejects the whole candidate as
+`token_unavailable`; wrong credentials or failed resolution reject it as
+`resolution_failed`. There is no partial snapshot. Startup fails until an
+initial release is successfully applied. After that,
 transport outages and rejected candidates do not displace the last-known-good
 state. Every successfully prepared candidate that does not commit is aborted
 exactly once. `Commit`/`commit` must be infallible and normally be an atomic
@@ -259,24 +272,34 @@ home-namespace grant includes only release `read` and `watch`;
 own namespace (existing `configuration-release:*` and `*` rules cover it —
 review them when upgrading). Release access never grants access to a
 referenced parameter or secret: create, validate, and loaders all perform
-independent resource authorization, including cross-namespace references,
-and `verify-defaults` denies the whole call unless the caller also holds
-the verify operation on every namespace the release pins parameters from.
+independent resource authorization. Cross-namespace references are invalid for
+both parameters and secrets, so `verify-defaults` operates only on the
+release's home namespace.
 
 Current and previous releases protect their referenced parameter versions and
 secret versions. Parameter deletion, secret deletion, and secret-version
 destruction fail with `FAILED_PRECONDITION` and identify the release/version/
 alias when they would break a protected release. These attempts are audited.
 Promoting a parameter or secret's ordinary `current` label never changes an
-active release pin. Ordinary secret value rotation preserves the existing
+active release pin. Ordinary secret value rotation preserves the independent
 per-secret access token unless token generation/rotation is explicitly
-requested; the token still remains outside the release. Each secret version
-also retains its own content type, client-bound flag, and token-required flag.
-Enabling a token on a later standard-secret version therefore does not
-retroactively protect an older version. Explicit token rotation replaces the
-shared credential used by every standard-secret version already marked as
-token-protected; client-bound versions remain cryptographically bound to the
-token used when each version was written.
+requested; the token remains outside the release. Every exact secret version
+has immutable `bound` and `has_access_token` flags. Bind, unbind, and
+binding-key rotation clone the current secret into exactly one new current
+version and leave the source unchanged as `previous`. Existing releases
+therefore continue resolving the source with its original credentials; a newly
+created release must explicitly pin the new version and has a different digest
+because the version changed. The digest algorithm and release schema do not
+change.
+
+The safe operational sequence is: transition current, create and activate a
+new release, retire old releases, then purge the old bound cohort or all
+unbound versions when required. Both administrator purge operations bypass
+release-reference protection and leave referencing releases immutable but
+unresolvable. Future protection-mode toggles must create versions as well;
+access-token credential rotation may replace the credential but may never
+weaken an existing version's token requirement. See
+[`binding-keys.md`](binding-keys.md).
 
 Release history defaults to at least the newest 100 inactive versions and 90
 days. Current, previous, schema dependencies, and versions needed by retained
@@ -366,8 +389,10 @@ A contract alias is a release-level name; the physical parameter or secret
 key is chosen per environment. Readiness, Ship, and clone resolve an alias to
 a key with one shared rule, in order: the active release's entry for that
 alias → the latest release's entry → a resource in the namespace whose key
-equals the alias → the key another environment's active release uses for
-that alias → unresolved. The console shows both identifiers, and an
+equals the alias → the key name another environment's active release uses
+for that alias → unresolved. That final fallback borrows only a key name;
+the matching resource and resulting pin must still belong to the target
+environment's home namespace. The console shows both identifiers, and an
 unresolved alias becomes a "Create parameter" action that can also pick an
 existing key.
 

@@ -11,7 +11,7 @@ type ApplicationConfigurationCell struct {
 	Value          string
 	ContentType    string
 	Version        uint64
-	ClientBound    bool
+	Bound          bool
 	HasAccessToken bool
 }
 
@@ -130,7 +130,7 @@ type OverviewValue struct {
 	ContentType    string
 	CurrentVersion uint64
 	PinnedVersion  uint64
-	ClientBound    bool
+	Bound          bool
 }
 
 // OverviewActiveRelease is the active release of one environment plus the

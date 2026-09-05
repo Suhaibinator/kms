@@ -36,6 +36,9 @@ func TestReleaseSnapshotJSONPathsExcludeResolvedValues(t *testing.T) {
 		if !strings.Contains(string(encoded), `"namespace":"prod/app"`) {
 			t.Fatalf("%s JSON omitted safe identity: %s", label, encoded)
 		}
+		if strings.Contains(string(encoded), "client_bound") || strings.Contains(string(encoded), "has_access_token") {
+			t.Fatalf("%s JSON retained removed release protection flags: %s", label, encoded)
+		}
 	}
 }
 

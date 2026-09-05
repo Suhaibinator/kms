@@ -10,7 +10,7 @@ Typical use::
         print(db_password)          # [REDACTED]
         connect(db_password.value)  # explicit access to plaintext
 
-The SDK hides gRPC boilerplate, supports TLS/mTLS, caches reads, redacts secrets
+The SDK hides gRPC boilerplate, supports TLS/mTLS, caches parameter reads, redacts secrets
 in logs and errors, and provides declarative :class:`SecretValue` /
 :class:`ParameterValue` config fields with hot reload.
 """
@@ -36,6 +36,7 @@ from .errors import (
     NotInitializedError,
     ParamStoreError,
     PermissionDeniedError,
+    PurgeCleanupPendingError,
     RateLimitedError,
     UnauthenticatedError,
 )
@@ -50,7 +51,10 @@ from .models import (
     PutResult,
     PutSecretResult,
     SecretInfo,
+    SecretBindingCohortResult,
     SecretVersion,
+    SecretVersionSetResult,
+    SecretVersionTransitionResult,
     WhoAmI,
     VerifyDefaultEntry,
     VerifyDefaultVerdict,
@@ -84,7 +88,7 @@ from .watch import Event, EventType, WatchStatus
 try:
     __version__ = version("kms-paramstore")
 except PackageNotFoundError:
-    __version__ = "0.2.0"
+    __version__ = "0.3.0"
 
 __all__ = [
     "Client",
@@ -107,7 +111,10 @@ __all__ = [
     "ParameterMetadata",
     "ParameterVersion",
     "SecretInfo",
+    "SecretBindingCohortResult",
     "SecretVersion",
+    "SecretVersionSetResult",
+    "SecretVersionTransitionResult",
     "PutResult",
     "PutSecretResult",
     "PromoteSecretResult",
@@ -138,6 +145,7 @@ __all__ = [
     "ParamStoreError",
     "NotFoundError",
     "PermissionDeniedError",
+    "PurgeCleanupPendingError",
     "RateLimitedError",
     "UnauthenticatedError",
     "FailedPreconditionError",

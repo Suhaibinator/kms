@@ -183,6 +183,14 @@ func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in do
 		if err := validateRef(sel.Ref); err != nil {
 			return ctx, nil, nil, err
 		}
+		// A configuration release is a complete, namespace-owned unit. Cross-
+		// namespace pins would let an otherwise immutable manifest depend on a
+		// separately administered namespace and are forbidden for both parameters
+		// and secrets, including for administrators.
+		if sel.Ref.NS != in.Namespace {
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument,
+				"release alias %q must reference its release namespace %s", sel.Alias, in.Namespace)
+		}
 		label := sel.Label
 		if sel.Version == 0 && label == "" {
 			label = domain.LabelCurrent
@@ -242,7 +250,7 @@ func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in do
 				}
 				continue
 			}
-			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
+			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata})
 		default:
 			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
 		}
@@ -397,7 +405,42 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return nil, err
 	}
-	return s.validateReleaseEntries(ctx, pr, rs, rel, nil, authorizeEntries, true)
+	return s.validatePersistedReleaseEntries(ctx, pr, rs, ns, rel, authorizeEntries, true)
+}
+
+func persistedReleaseIntegrityViolations(home domain.NamespaceRef, rel domain.ConfigurationRelease) []domain.ReleaseValidationError {
+	if rel.Namespace != home {
+		return []domain.ReleaseValidationError{{
+			Code: domain.ReleaseValidationUnreadable, Message: "release is outside its requested namespace",
+		}}
+	}
+	validation := make([]domain.ReleaseValidationError, 0)
+	for _, entry := range rel.Entries {
+		switch {
+		case entry.Ref.NS != home:
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is outside the release namespace",
+			})
+		case entry.ResourceNamespaceID <= 0:
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is missing its namespace identity",
+			})
+		}
+	}
+	return validation
+}
+
+// validatePersistedReleaseEntries fails closed on immutable namespace identity
+// corruption before any resource lookup. Transient dry-run candidates use
+// validateReleaseEntries directly because storage has not assigned their
+// ResourceNamespaceID yet.
+func (s *Service) validatePersistedReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, home domain.NamespaceRef, rel domain.ConfigurationRelease, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
+	if validation := persistedReleaseIntegrityViolations(home, rel); len(validation) > 0 {
+		return validation, nil
+	}
+	return s.validateReleaseEntries(ctx, pr, rs, rel, nil, authorizeEntries, adopt)
 }
 
 // validateReleaseEntries validates an in-memory release: every pinned entry
@@ -406,8 +449,9 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 // parameter aliases (dry-run of an edit) — those aliases skip the stored
 // lookup and digest check and the override is what the schema sees. adopt is
 // forwarded to the contract check; dry-run callers pass false so validation
-// never writes. Entries with a zero ResourceNamespaceID (never persisted) are
-// read through the caller's already-bound context instead of re-binding.
+// never writes. Transient entries have a zero ResourceNamespaceID and are read
+// through the caller's already-bound context instead of re-binding. Persisted
+// callers must first use validatePersistedReleaseEntries, which rejects zero.
 func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, rel domain.ConfigurationRelease, overrides map[string]releaseCandidateValue, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
 	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaVersion, rel.Entries, adopt); err != nil {
 		return nil, err
@@ -415,6 +459,13 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 	validation := make([]domain.ReleaseValidationError, 0)
 	obj := map[string]any{}
 	for _, entry := range rel.Entries {
+		if entry.Ref.NS != rel.Namespace {
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is outside the release namespace",
+			})
+			continue
+		}
 		entryCtx := ctx
 		if entry.ResourceNamespaceID > 0 {
 			bound, bindErr := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
@@ -487,9 +538,6 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 			if ver.ContentType != entry.ContentType {
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationContentType, Message: "secret content type does not match release pin"})
 				continue
-			}
-			if ver.ClientBound != entry.ClientBound || ver.HasAccessToken != entry.HasAccessToken {
-				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "secret protection metadata does not match release pin"})
 			}
 		default:
 			validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "release entry kind is invalid"})
@@ -726,7 +774,7 @@ func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, ns domain.N
 func (s *Service) ResetReleaseSubscriberConnections(ctx context.Context) error {
 	rs, err := s.releaseStore()
 	if err != nil {
-		return nil // release storage is additive for legacy Store implementations
+		return nil // Data-plane-only Store implementations may omit release state.
 	}
 	return rs.ResetReleaseInstanceConnections(ctx, s.now())
 }
@@ -880,7 +928,7 @@ func releaseDigest(r domain.ConfigurationRelease) (string, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
 	pb := &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: r.Namespace.Env, App: r.Namespace.App}, Name: r.Name, SchemaVersion: r.SchemaVersion, MetadataJson: r.Metadata}
 	for _, e := range entries {
-		pb.Entries = append(pb.Entries, &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: e.Ref.NS.Env, App: e.Ref.NS.App}, Key: e.Ref.Key}, Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound, HasAccessToken: e.HasAccessToken})
+		pb.Entries = append(pb.Entries, &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: e.Ref.NS.Env, App: e.Ref.NS.App}, Key: e.Ref.Key}, Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest})
 	}
 	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(pb)
 	if err != nil {

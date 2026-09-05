@@ -1,6 +1,7 @@
 import { Filter, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
 import {
   BulkActionBar,
   BulkDeleteDialog,
@@ -11,6 +12,7 @@ import {
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import { SecretWorkspace, shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import {
   Badge,
   EmptyState,
@@ -24,7 +26,13 @@ import {
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { api, isAbortError } from "@/lib/api";
+import {
+  api,
+  isAbortError,
+  isSecretAlreadyExists,
+  type ResourceRef,
+  SECRET_ALREADY_EXISTS_MESSAGE,
+} from "@/lib/api";
 import { bulkSummary, runBulk } from "@/lib/bulk";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
@@ -56,8 +64,8 @@ const COLUMNS: ReadonlyArray<SortColumn<SecretMetadata>> = [
   { id: "type", label: "Type", value: (s) => s.content_type },
   { id: "current", label: "Current", value: (s) => currentVersion(s) },
   { id: "versions", label: "Versions", value: (s) => s.versions?.length ?? 0 },
-  // Client-bound is the mode that changes how a value is read, so it leads.
-  { id: "mode", label: "Mode", value: (s) => Boolean(s.client_bound) },
+  // Binding-key protection changes how the current version is read, so it leads.
+  { id: "mode", label: "Mode", value: (s) => Boolean(s.bound) },
   { id: "updated", label: "Updated", value: (s) => s.updated_at_unix_ms },
 ];
 
@@ -84,6 +92,9 @@ export default function SecretsPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDone, setBulkDone] = useState(0);
+  const [newSecretOpen, setNewSecretOpen] = useState(false);
+  const [secretSaving, setSecretSaving] = useState(false);
+  const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
 
   const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
   const { pageToken, setNextToken } = paging;
@@ -183,6 +194,15 @@ export default function SecretsPage() {
   }
 
   const newSecretLink = hasNs ? links.newSecret(ns) : links.newSecret();
+  const secretEnvironments = useMemo(
+    () =>
+      namespaces.filter((namespace) => namespace.app === ns.app).map((namespace) => namespace.env),
+    [namespaces, ns.app],
+  );
+
+  function openNewSecret(event: React.MouseEvent<HTMLElement>) {
+    if (hasNs && shouldOpenSecretWorkspace(event)) setNewSecretOpen(true);
+  }
 
   // A deep link's env/app land one frame after mount, so "Choose an
   // environment" would flash before the list it asked for.
@@ -230,9 +250,13 @@ export default function SecretsPage() {
     <>
       <PageHeader
         title="Secrets"
-        subtitle="Encrypted values, isolated by application and environment. Values are revealed only on the detail page."
+        subtitle="Encrypted values, isolated by application and environment. Open a secret to manage it without losing this list."
         breadcrumbs={hasNs ? crumbs.environment(ns) : undefined}
-        actions={<ButtonLink href={newSecretLink}>New secret</ButtonLink>}
+        actions={
+          <ButtonLink href={newSecretLink} onClick={openNewSecret}>
+            New secret
+          </ButtonLink>
+        }
       />
 
       <form className="filters" onSubmit={applyFilter}>
@@ -279,7 +303,9 @@ export default function SecretsPage() {
                 Clear filter
               </Button>
             ) : (
-              <ButtonLink href={newSecretLink}>New secret</ButtonLink>
+              <ButtonLink href={newSecretLink} onClick={openNewSecret}>
+                New secret
+              </ButtonLink>
             )
           }
         >
@@ -314,7 +340,13 @@ export default function SecretsPage() {
                       <SelectRowCell selection={selection} id={s.key} label={`Select ${s.key}`} />
                     ) : null}
                     <td data-label="Key">
-                      <Link className="cell-path" href={links.secretDetail(s)}>
+                      <Link
+                        className="cell-path"
+                        href={links.secretDetail(s)}
+                        onClick={(event) => {
+                          if (shouldOpenSecretWorkspace(event)) setSecretTarget(s);
+                        }}
+                      >
                         {s.key}
                       </Link>
                     </td>
@@ -327,10 +359,10 @@ export default function SecretsPage() {
                     <td data-label="Versions">{s.versions?.length ?? 0}</td>
                     <td data-label="Mode">
                       <div className="row-wrap">
-                        {s.client_bound ? (
-                          <Badge kind="warning">client-bound</Badge>
+                        {s.bound ? (
+                          <Badge kind="warning">binding key</Badge>
                         ) : (
-                          <Badge kind="neutral">standard</Badge>
+                          <Badge kind="neutral">master key only</Badge>
                         )}
                         {s.has_access_token ? <Badge kind="accent">access token</Badge> : null}
                       </div>
@@ -382,6 +414,58 @@ export default function SecretsPage() {
         completed={bulkDone}
         onConfirm={() => void onBulkDelete()}
         onCancel={() => setBulkOpen(false)}
+      />
+
+      <QuickSecretModal
+        app={ns.app}
+        environments={secretEnvironments}
+        seed={newSecretOpen ? { environment: ns.env, key: "" } : null}
+        saving={secretSaving}
+        onClose={() => setNewSecretOpen(false)}
+        onSave={async (request) => {
+          setSecretSaving(true);
+          try {
+            const response = await api.createSecret({
+              env: request.environment,
+              app: ns.app,
+              key: request.key,
+              value_base64: request.valueBase64,
+              content_type: request.contentType,
+              metadata_json: request.metadataJson,
+              ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
+              generate_access_token: request.generateAccessToken,
+              create_only: true,
+              expires_at_unix_ms: request.expiresAtUnixMs,
+            });
+            toast.success(
+              `Secret created (version ${response.version})`,
+              response.access_token
+                ? "Save the access token before continuing."
+                : `${request.environment}/${ns.app}/${request.key}`,
+            );
+            return response;
+          } catch (error) {
+            if (isSecretAlreadyExists(error)) {
+              toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+            } else {
+              toast.error(error, "Failed to create secret");
+            }
+            throw error;
+          } finally {
+            setSecretSaving(false);
+          }
+        }}
+        onCreated={(ref) => {
+          setNewSecretOpen(false);
+          setSecretTarget(ref);
+          void load(pageToken, ns, prefix);
+        }}
+      />
+      <SecretWorkspace
+        secretRef={secretTarget}
+        onClose={() => setSecretTarget(null)}
+        onChanged={() => void load(pageToken, ns, prefix)}
+        onDeleted={() => void load(pageToken, ns, prefix)}
       />
     </>
   );

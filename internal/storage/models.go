@@ -7,11 +7,10 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// This file defines the GORM models. They map one-to-one onto the tables in
-// migrations/0001_initial.sql. Timestamps are stored as fixed-width RFC3339
-// UTC text (see fmtTime) so lexicographic ordering matches chronological
-// ordering in SQL. Nullable time/blob columns use pointer/[]byte fields so a
-// zero value round-trips to SQL NULL.
+// This file defines the authoritative 0.3.x baseline schema. Timestamps are
+// stored as fixed-width RFC3339 UTC text (see fmtTime) so lexicographic
+// ordering matches chronological ordering in SQL. Nullable time/blob columns
+// use pointer/[]byte fields so a zero value round-trips to SQL NULL.
 
 // keyMetadataModel -> key_metadata.
 type keyMetadataModel struct {
@@ -104,7 +103,6 @@ type secretModel struct {
 	NamespaceID     int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_secret_ns_name,priority:1"`
 	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	Name            string         `gorm:"column:name;not null;uniqueIndex:idx_secret_ns_name,priority:2"`
-	ClientBound     int64          `gorm:"column:client_bound;not null;default:0"`
 	AccessTokenHash []byte         `gorm:"column:access_token_hash"`
 	ContentType     string         `gorm:"column:content_type;not null;default:application/octet-stream"`
 	MetadataJSON    string         `gorm:"column:metadata_json;not null;default:{}"`
@@ -114,29 +112,41 @@ type secretModel struct {
 
 func (secretModel) TableName() string { return "secrets" }
 
+// secretVersionHighWaterModel preserves the next-version identity for a
+// secret path after the deletable secret row and its versions are removed.
+// NamespaceID binds the counter to one namespace incarnation.
+type secretVersionHighWaterModel struct {
+	NamespaceID int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false"`
+	Namespace   namespaceModel `gorm:"foreignKey:NamespaceID;references:ID;constraint:OnDelete:CASCADE"`
+	Name        string         `gorm:"column:name;not null;primaryKey"`
+	LastVersion int64          `gorm:"column:last_version;not null;default:0"`
+}
+
+func (secretVersionHighWaterModel) TableName() string { return "secret_version_high_water" }
+
 // secretVersionModel -> secret_versions.
 type secretVersionModel struct {
 	ID             int64       `gorm:"column:id;primaryKey;autoIncrement"`
 	SecretID       int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
 	Secret         secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
 	VersionNumber  int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
-	ContentType    string      `gorm:"column:content_type;not null;default:application/octet-stream"`
-	ClientBound    int64       `gorm:"column:client_bound;not null;default:0"`
+	ContentType    string      `gorm:"column:content_type;default:application/octet-stream"`
+	Bound          int64       `gorm:"column:bound;not null;default:0"`
 	HasAccessToken int64       `gorm:"column:has_access_token;not null;default:0"`
 	Ciphertext     []byte      `gorm:"column:ciphertext"`
 	EncryptedDEK   []byte      `gorm:"column:encrypted_dek"`
-	KEKID          string      `gorm:"column:kek_id;not null"`
-	WrapMode       string      `gorm:"column:wrap_mode;not null;default:standard"`
-	ClientKeySalt  []byte      `gorm:"column:client_key_salt"`
-	Algorithm      string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
+	KEKID          string      `gorm:"column:kek_id"`
+	WrapMode       string      `gorm:"column:wrap_mode;default:standard"`
+	BindingKeySalt []byte      `gorm:"column:binding_key_salt"`
+	Algorithm      string      `gorm:"column:algorithm;default:AES-256-GCM"`
 	Nonce          []byte      `gorm:"column:nonce"`
-	AAD            string      `gorm:"column:aad;not null"`
+	AAD            string      `gorm:"column:aad"`
 	State          string      `gorm:"column:state;not null;default:enabled"`
 	CreatedBy      string      `gorm:"column:created_by;not null;default:''"`
 	CreatedAt      string      `gorm:"column:created_at;not null"`
 	DestroyedAt    *string     `gorm:"column:destroyed_at"`
 	ExpiresAt      *string     `gorm:"column:expires_at"`
-	MetadataJSON   string      `gorm:"column:metadata_json;not null;default:{}"`
+	MetadataJSON   string      `gorm:"column:metadata_json;default:{}"`
 }
 
 func (secretVersionModel) TableName() string { return "secret_versions" }
@@ -234,18 +244,19 @@ func (auditEventModel) TableName() string { return "audit_events" }
 // changeLogDDL) to guarantee INTEGER PRIMARY KEY AUTOINCREMENT; this struct is
 // used only for queries.
 type changeLogModel struct {
-	Revision      int64   `gorm:"column:revision;primaryKey;autoIncrement"`
-	ResourceType  string  `gorm:"column:resource_type;not null"`
-	NamespaceID   int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
-	Env           string  `gorm:"column:env;not null"`
-	App           string  `gorm:"column:app;not null"`
-	Key           string  `gorm:"column:key;not null"`
-	ChangeType    string  `gorm:"column:change_type;not null"`
-	Value         *string `gorm:"column:value"`
-	ContentType   string  `gorm:"column:content_type;not null;default:''"`
-	VersionNumber int64   `gorm:"column:version_number;not null;default:0"`
-	Label         string  `gorm:"column:label;not null;default:''"`
-	CreatedAt     string  `gorm:"column:created_at;not null"`
+	Revision             int64   `gorm:"column:revision;primaryKey;autoIncrement"`
+	ResourceType         string  `gorm:"column:resource_type;not null"`
+	NamespaceID          int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
+	Env                  string  `gorm:"column:env;not null"`
+	App                  string  `gorm:"column:app;not null"`
+	Key                  string  `gorm:"column:key;not null"`
+	ChangeType           string  `gorm:"column:change_type;not null"`
+	Value                *string `gorm:"column:value"`
+	ContentType          string  `gorm:"column:content_type;not null;default:''"`
+	VersionNumber        int64   `gorm:"column:version_number;not null;default:0"`
+	AffectedVersionsJSON string  `gorm:"column:affected_versions_json;not null;default:'[]'"`
+	Label                string  `gorm:"column:label;not null;default:''"`
+	CreatedAt            string  `gorm:"column:created_at;not null"`
 }
 
 func (changeLogModel) TableName() string { return "change_log" }
@@ -274,7 +285,7 @@ type configurationReleaseEntryModel struct {
 	// ResourceNamespaceID is deliberately denormalized without a foreign key:
 	// immutable/inactive release history may outlive deletion of its source
 	// namespace, but must never resolve a recreated env/app name instead.
-	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;default:0;index:idx_release_entry_resource,priority:1"`
+	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;index:idx_release_entry_resource,priority:1"`
 	ResourceEnv         string `gorm:"column:resource_env;not null;index:idx_release_entry_ref,priority:3"`
 	ResourceApp         string `gorm:"column:resource_app;not null;index:idx_release_entry_ref,priority:4"`
 	ResourceKey         string `gorm:"column:resource_key;not null;index:idx_release_entry_ref,priority:5;index:idx_release_entry_resource,priority:3"`
@@ -282,8 +293,6 @@ type configurationReleaseEntryModel struct {
 	ContentType         string `gorm:"column:content_type;not null;default:''"`
 	MetadataJSON        string `gorm:"column:metadata_json;not null;default:{}"`
 	ParameterDigest     string `gorm:"column:parameter_digest;not null;default:''"`
-	ClientBound         int64  `gorm:"column:client_bound;not null;default:0"`
-	HasAccessToken      int64  `gorm:"column:has_access_token;not null;default:0"`
 }
 
 func (configurationReleaseEntryModel) TableName() string { return "configuration_release_entries" }
@@ -347,10 +356,8 @@ type releaseSubscriberStateModel struct {
 	ServerTimestamp    string         `gorm:"column:server_timestamp;not null;index:idx_release_subscriber_server_time;index:idx_release_subscriber_page,priority:3"`
 	Connected          int64          `gorm:"column:connected;not null;default:0"`
 	DisconnectedAt     *string        `gorm:"column:disconnected_at;index:idx_release_subscriber_disconnected"`
-	// AppliedDivergent / DivergentFieldCount (schema v7) record that an applied
-	// generation differs from the application's source-owned defaults. They are
-	// added by an explicit ALTER TABLE in migrate because this table is never
-	// AutoMigrate'd once it exists.
+	// AppliedDivergent / DivergentFieldCount record that an applied generation
+	// differs from the application's source-owned defaults.
 	AppliedDivergent    int64 `gorm:"column:applied_divergent;not null;default:0"`
 	DivergentFieldCount int64 `gorm:"column:divergent_field_count;not null;default:0"`
 }
@@ -393,6 +400,7 @@ var autoMigrateModels = []any{
 	&parameterVersionModel{},
 	&parameterLabelModel{},
 	&secretModel{},
+	&secretVersionHighWaterModel{},
 	&secretVersionModel{},
 	&secretLabelModel{},
 	&identityModel{},
@@ -496,7 +504,6 @@ func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) S
 	return SecretRecord{
 		ID:              sec.ID,
 		Ref:             ref,
-		ClientBound:     i2b(sec.ClientBound),
 		AccessTokenHash: sec.AccessTokenHash,
 		ContentType:     sec.ContentType,
 		Metadata:        sec.MetadataJSON,
@@ -512,13 +519,13 @@ func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
 		SecretID:       v.SecretID,
 		Version:        uint64(v.VersionNumber),
 		ContentType:    v.ContentType,
-		ClientBound:    i2b(v.ClientBound),
+		Bound:          i2b(v.Bound),
 		HasAccessToken: i2b(v.HasAccessToken),
 		Ciphertext:     v.Ciphertext,
 		EncryptedDEK:   v.EncryptedDEK,
 		KEKID:          v.KEKID,
 		WrapMode:       v.WrapMode,
-		ClientKeySalt:  v.ClientKeySalt,
+		BindingKeySalt: v.BindingKeySalt,
 		Algorithm:      v.Algorithm,
 		Nonce:          v.Nonce,
 		AAD:            v.AAD,
@@ -536,17 +543,22 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 	if m.Value != nil {
 		value = *m.Value
 	}
+	var affectedVersions []uint64
+	if err := json.Unmarshal([]byte(zeroOr(m.AffectedVersionsJSON, "[]")), &affectedVersions); err != nil {
+		affectedVersions = nil
+	}
 	return domain.ChangeLogEntry{
-		Revision:     uint64(m.Revision),
-		ResourceType: m.ResourceType,
-		NamespaceID:  m.NamespaceID,
-		Ref:          domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
-		ChangeType:   m.ChangeType,
-		Value:        value,
-		ContentType:  m.ContentType,
-		Version:      uint64(m.VersionNumber),
-		Label:        m.Label,
-		CreatedAt:    parseTime(m.CreatedAt),
+		Revision:         uint64(m.Revision),
+		ResourceType:     m.ResourceType,
+		NamespaceID:      m.NamespaceID,
+		Ref:              domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
+		ChangeType:       m.ChangeType,
+		Value:            value,
+		ContentType:      m.ContentType,
+		Version:          uint64(m.VersionNumber),
+		AffectedVersions: affectedVersions,
+		Label:            m.Label,
+		CreatedAt:        parseTime(m.CreatedAt),
 	}
 }
 

@@ -1,6 +1,7 @@
 package fileutil
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -57,5 +58,44 @@ func TestSecureExistingPrivateFileAcceptsOwnerOnlyFile(t *testing.T) {
 	}
 	if stable == "" {
 		t.Fatal("secured existing path is empty")
+	}
+}
+
+func TestValidateExistingPrivateFileDoesNotNormalizeOwnerMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows access is expressed through DACLs rather than POSIX mode bits")
+	}
+	path := filepath.Join(t.TempDir(), "existing.db")
+	want := []byte("operator database")
+	if err := os.WriteFile(path, want, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable, err := ValidateExistingPrivateFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stable == "" {
+		t.Fatal("validated path is empty")
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("validation changed file metadata: before=%v/%v after=%v/%v", before.Mode(), before.ModTime(), after.Mode(), after.ModTime())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("validation changed content: %q", got)
 	}
 }

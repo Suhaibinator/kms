@@ -1,7 +1,7 @@
 # kms_paramstore — Python SDK
 
 Python client for the KMS parameter store and secret management service. It hides
-gRPC boilerplate, supports TLS/mTLS, caches reads, redacts secrets in logs and
+gRPC boilerplate, supports TLS/mTLS, caches parameter reads, redacts secrets in logs and
 errors, resolves declarative config fields, and hot-reloads parameters over the
 watch stream.
 
@@ -13,7 +13,7 @@ Requires Python 3.10+.
 pip install -e sdk/python
 # Published releases are wheel assets on GitHub (replace both versions):
 python -m pip install \
-  https://github.com/Suhaibinator/kms/releases/download/v0.2.0/kms_paramstore-0.2.0-py3-none-any.whl
+  https://github.com/Suhaibinator/kms/releases/download/v0.3.0/kms_paramstore-0.3.0-py3-none-any.whl
 ```
 
 Runtime dependencies are `grpcio>=1.83.1`, `protobuf>=7.35.1,<8`, and
@@ -101,9 +101,9 @@ client = Client("localhost:8443", namespace="dev/app", insecure=True)
 
 ## Caching
 
-Set `cache_ttl` (seconds) to cache `get_parameter` / `get_secret` reads. Cached
-entries are invalidated by writes through the client and by watch events when a
-subscription is active.
+Set `cache_ttl` (seconds) to cache `get_parameter` reads. Secret plaintext is
+never cached. Parameter entries are invalidated by writes through the client
+and by watch events when a subscription is active.
 
 ```python
 client = Client(
@@ -121,10 +121,16 @@ call — the Python equivalent of the Go SDK's `SecretValue` / `ParameterValue` 
 `Resolve` idiom.
 
 ```python
+import os
+
 from kms_paramstore import Client, SecretValue, ParameterValue
 
 class AppConfig:
-    stripe_key = SecretValue("stripe-api-key", token="<per-secret-token>")
+    stripe_key = SecretValue(
+        "stripe-api-key",
+        token="<per-secret-access-token>",
+        bind_key=os.environ["STRIPE_KMS_BINDING_KEY"],
+    )
     openai_key = SecretValue("openai-api-key", env_var="OPENAI_API_KEY")
     rate_limit = ParameterValue("rate-limit", default="100")       # hot-reloads
     log_format = ParameterValue("log-format", static=True)         # boot-time only
@@ -208,11 +214,14 @@ with `AsyncReleaseLoaderConfig`; it owns independent event-loop state and an
 async gRPC stream.
 
 ```python
+import os
+
 from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
 
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
     secret_token_provider=lambda alias, path: local_tokens.get(alias),
+    binding_keys={"openai_api_key": os.environ["OPENAI_KMS_BINDING_KEY"]},
     validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
 
@@ -228,7 +237,11 @@ stable alias. A prepared object's `commit()` must be infallible and normally
 performs an atomic reference swap; `abort()` releases stale or failed prepared
 work. Startup fails until one release applies. Later outages and rejections
 retain the last-known-good state. Manifest validation runs before resource
-fetches and token lookup. `ClassifiedReleaseError` propagates an allow-listed,
+fetches and credential lookup. Protection is live exact-version metadata, not a
+release-entry flag: access tokens come from `secret_token_provider`, while
+binding keys come from the defensive-copied alias map. Missing credentials
+reject the whole candidate as `token_unavailable`; wrong credentials reject it
+as `resolution_failed`. `ClassifiedReleaseError` propagates an allow-listed,
 value-free rejection category (including `restart_required`) without sending
 its local message. Applied acknowledgements can carry a bounded divergence
 count from a prepared object's optional `release_divergence()` method.
@@ -254,8 +267,12 @@ All SDK errors derive from `ParamStoreError`. gRPC status codes map to
 an unconfigured `SecretValue`/`ParameterValue`); its subclass `NoNamespaceError`
 is raised when a relative key is used on a client with no namespace (unbound
 identity and no `namespace=`). `NotInitializedError` is raised when a declarative
-field is read before `Client.resolve` has run. No exception (or its message) ever
-contains secret plaintext.
+field is read before `Client.resolve` has run. `PurgeCleanupPendingError` means a
+bound-cohort or unbound-version purge committed but KMS closed fail-safe while
+database artifact cleanup remains pending; no purge result accompanies the
+exception. Do not retry a cohort purge with the retired key or an unbound purge
+as though its preview were still live. No exception (or its message) ever
+contains secret plaintext or credentials.
 
 ## Development
 

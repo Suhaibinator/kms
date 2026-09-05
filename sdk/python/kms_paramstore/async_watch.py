@@ -205,6 +205,7 @@ class AsyncSubscriptionManager:
         revision = event.revision
         kind = event.WhichOneof("event")
         if kind == "snapshot":
+            # Compatibility no-op: the SDK never retains secret plaintext.
             self._client._cache.invalidate_secrets_in_namespaces(stream_namespaces)
             self._client._cache.invalidate_parameters_in_namespaces(stream_namespaces)
             present: Set[_RefKey] = set()

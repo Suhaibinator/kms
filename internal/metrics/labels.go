@@ -107,6 +107,13 @@ var RouteLabels = []string{
 	"POST /api/v1/secrets/disable",
 	"POST /api/v1/secrets/destroy",
 	"POST /api/v1/secrets/promote",
+	"POST /api/v1/secrets/bind",
+	"POST /api/v1/secrets/unbind",
+	"POST /api/v1/secrets/binding-cohort/preview",
+	"POST /api/v1/secrets/binding-key/rotate",
+	"POST /api/v1/secrets/binding-cohort/purge",
+	"POST /api/v1/secrets/unbound-versions/preview",
+	"POST /api/v1/secrets/unbound-versions/purge",
 	"DELETE /api/v1/secrets",
 
 	"GET /api/v1/policies",
@@ -173,6 +180,7 @@ var LimiterNames = []string{
 	LimiterSSEGlobal,
 	core.LimiterVerifyDefaultsRequests,
 	core.LimiterVerifyDefaultsMismatch,
+	core.LimiterBindingCohortPreview,
 }
 
 var limiterSet = stringSet(LimiterNames)
@@ -259,6 +267,10 @@ var AuditEventTypes = []string{
 	"policy.read",
 	"policy.write",
 	"posture.read",
+	"secret.bind",
+	"secret.binding_cohort.preview",
+	"secret.binding_cohort.purge",
+	"secret.binding_key.rotate",
 	"secret.delete",
 	"secret.destroy",
 	"secret.disable",
@@ -266,6 +278,9 @@ var AuditEventTypes = []string{
 	"secret.promote",
 	"secret.read",
 	"secret.reveal",
+	"secret.unbind",
+	"secret.unbound_versions.preview",
+	"secret.unbound_versions.purge",
 	"secret.write",
 	"subscribers.read",
 }
@@ -285,6 +300,7 @@ var PolicyOperations = []string{
 	domain.OpSecretDisable,
 	domain.OpSecretDestroy,
 	domain.OpSecretPromote,
+	domain.OpSecretBindingManage,
 	domain.OpConfigurationReleaseCreate,
 	domain.OpConfigurationReleaseRead,
 	domain.OpConfigurationReleaseValidate,

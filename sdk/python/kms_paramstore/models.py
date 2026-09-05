@@ -17,6 +17,9 @@ __all__ = [
     "ParameterVersion",
     "SecretVersion",
     "SecretInfo",
+    "SecretVersionTransitionResult",
+    "SecretVersionSetResult",
+    "SecretBindingCohortResult",
     "PutResult",
     "PutSecretResult",
     "PromoteSecretResult",
@@ -111,6 +114,8 @@ class SecretVersion:
     destroyed_at_unix_ms: int = 0
     expires_at_unix_ms: int = 0
     metadata_json: str = "{}"
+    bound: bool = False
+    has_access_token: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,7 +126,7 @@ class SecretInfo:
     app: str
     key: str
     content_type: str
-    client_bound: bool
+    bound: bool
     has_access_token: bool
     metadata_json: str = "{}"
     created_at_unix_ms: int = 0
@@ -160,6 +165,32 @@ class PromoteSecretResult:
     current_version: int
     previous_version: int
     revision: int
+
+
+@dataclass(frozen=True)
+class SecretVersionTransitionResult:
+    current_version: int
+    previous_version: int
+    revision: int
+
+
+@dataclass(frozen=True)
+class SecretVersionSetResult:
+    affected_versions: Tuple[int, ...]
+    revision: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "affected_versions", tuple(self.affected_versions))
+
+
+@dataclass(frozen=True)
+class SecretBindingCohortResult:
+    anchor_version: int
+    affected_versions: Tuple[int, ...]
+    revision: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "affected_versions", tuple(self.affected_versions))
 
 
 @dataclass(frozen=True)
@@ -274,7 +305,7 @@ def _secret_info_from_proto(s) -> SecretInfo:
         app=ref.namespace.app,
         key=ref.key,
         content_type=s.content_type,
-        client_bound=s.client_bound,
+        bound=s.bound,
         has_access_token=s.has_access_token,
         metadata_json=s.metadata_json,
         created_at_unix_ms=s.created_at_unix_ms,
@@ -289,6 +320,8 @@ def _secret_info_from_proto(s) -> SecretInfo:
                 destroyed_at_unix_ms=v.destroyed_at_unix_ms,
                 expires_at_unix_ms=v.expires_at_unix_ms,
                 metadata_json=v.metadata_json,
+                bound=v.bound,
+                has_access_token=v.has_access_token,
             )
             for v in s.versions
         ),

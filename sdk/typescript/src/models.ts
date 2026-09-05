@@ -21,6 +21,8 @@ export interface SecretVersion {
   readonly destroyedAtUnixMs: bigint;
   readonly expiresAtUnixMs: bigint;
   readonly metadataJson: string;
+  readonly bound: boolean;
+  readonly hasAccessToken: boolean;
 }
 
 export interface SecretInfo {
@@ -28,7 +30,7 @@ export interface SecretInfo {
   readonly app: string;
   readonly key: string;
   readonly contentType: string;
-  readonly clientBound: boolean;
+  readonly bound: boolean;
   readonly hasAccessToken: boolean;
   readonly metadataJson: string;
   readonly createdAtUnixMs: bigint;
@@ -46,6 +48,21 @@ export interface PutResult {
 
 export interface PutSecretResult extends PutResult {
   readonly accessToken: string;
+}
+
+export interface SecretVersionTransitionResult {
+  readonly currentVersion: bigint;
+  readonly previousVersion: bigint;
+  readonly revision: bigint;
+}
+
+export interface SecretVersionSetResult {
+  readonly affectedVersions: readonly bigint[];
+  readonly revision: bigint;
+}
+
+export interface SecretBindingCohortResult extends SecretVersionSetResult {
+  readonly anchorVersion: bigint;
 }
 
 export interface Page<T> {

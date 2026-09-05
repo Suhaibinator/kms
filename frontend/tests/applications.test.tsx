@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShipModalProps } from "@/components/applications/contracts";
 import { ApiError } from "@/lib/api";
+import { datetimeLocalToUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
 import { findingCopy } from "@/lib/readiness";
 import type { ApplicationOverview, EnvironmentOverview, Finding } from "@/lib/types";
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   importApplicationDefaults: vi.fn(),
   health: vi.fn(),
   shipModal: vi.fn(),
+  secretWorkspace: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }));
 
@@ -38,7 +40,22 @@ vi.mock("next/router", () => ({
     replace: mocks.replace,
   }),
 }));
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({
+    identity: { name: "root", kind: "admin", namespace: null },
+  }),
+}));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+vi.mock("@/components/secrets/SecretWorkspace", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/secrets/SecretWorkspace")>();
+  return {
+    ...actual,
+    SecretWorkspace: (props: { secretRef: unknown }) => {
+      mocks.secretWorkspace(props);
+      return null;
+    },
+  };
+});
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
@@ -97,6 +114,7 @@ describe("ApplicationsPage", () => {
     mocks.importApplicationDefaults.mockReset();
     mocks.health.mockReset().mockRejectedValue(new Error("offline"));
     mocks.shipModal.mockClear();
+    mocks.secretWorkspace.mockClear();
     mocks.toast.error.mockClear();
     mocks.toast.success.mockClear();
     mocks.toast.info.mockClear();
@@ -347,8 +365,10 @@ describe("ApplicationsPage", () => {
       .closest("li") as HTMLElement;
     fireEvent.click(within(envFinding).getByRole("button", { name: "Open secret" }));
     const key = prod.values.find((value) => value.alias === "db_password")?.key ?? "db_password";
-    expect(mocks.push).toHaveBeenCalledWith(
-      links.secretDetail({ env: "prod", app: overview.application.name, key }),
+    expect(mocks.secretWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        secretRef: { env: "prod", app: overview.application.name, key },
+      }),
     );
   });
 
@@ -634,5 +654,101 @@ describe("ApplicationsPage", () => {
       key: secret.alias,
     });
     await waitFor(() => expect(mocks.applicationOverview).toHaveBeenCalledTimes(2));
+  });
+
+  it("creates an advanced secret and transitions the modal to its workspace", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    mocks.createSecret.mockResolvedValue({
+      version: 1,
+      revision: 9,
+      access_token: "kmss_created_once",
+    });
+
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
+    const modal = screen.getByRole("dialog", { name: "New secret" });
+    const advanced = within(modal).getByText("Advanced options").closest("details");
+    expect(advanced).not.toHaveAttribute("open");
+    fireEvent.change(within(modal).getByRole("textbox", { name: "Secret value" }), {
+      target: { value: "advanced value" },
+    });
+    fireEvent.click(within(modal).getByText("Advanced options"));
+    fireEvent.change(within(modal).getByLabelText("Expires at"), {
+      target: { value: "2099-01-02T03:04" },
+    });
+    fireEvent.change(within(modal).getByRole("textbox", { name: "Metadata JSON" }), {
+      target: { value: '{"owner":"platform"}' },
+    });
+    fireEvent.click(
+      within(modal).getByRole("checkbox", {
+        name: /Bind this version to an application key/,
+      }),
+    );
+    const bindingKey = "binding-key-00000000000000000001";
+    fireEvent.change(within(modal).getByLabelText("Binding key"), {
+      target: { value: bindingKey },
+    });
+    fireEvent.click(
+      within(modal).getByRole("checkbox", { name: /Generate a per-secret access token/ }),
+    );
+    fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+
+    await waitFor(() => expect(mocks.createSecret).toHaveBeenCalledTimes(1));
+    expect(mocks.createSecret).toHaveBeenCalledWith({
+      env: "prod",
+      app: overview.application.name,
+      key: secret.alias,
+      value_base64: "YWR2YW5jZWQgdmFsdWU=",
+      content_type: "text/plain",
+      metadata_json: '{"owner":"platform"}',
+      binding_key: bindingKey,
+      generate_access_token: true,
+      create_only: true,
+      expires_at_unix_ms: datetimeLocalToUnixMs("2099-01-02T03:04"),
+    });
+
+    const token = await screen.findByRole("dialog", { name: "Save this access token now" });
+    expect(token).toHaveTextContent("kmss_created_once");
+    fireEvent.click(within(token).getByRole("button", { name: "I've saved it — manage secret" }));
+    expect(mocks.secretWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        secretRef: { env: "prod", app: overview.application.name, key: secret.alias },
+      }),
+    );
+  });
+
+  it("directs an existing quick-create key to the secret editor", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    mocks.createSecret.mockRejectedValue(
+      new ApiError("already_exists", "Secret operation failed.", 409),
+    );
+
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
+    const modal = screen.getByRole("dialog", { name: "New secret" });
+    fireEvent.change(within(modal).getByRole("textbox", { name: "Secret value" }), {
+      target: { value: "value" },
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        "This secret already exists. Open it in the secret editor to create a new version.",
+        "Secret already exists",
+      ),
+    );
+    expect(screen.getByRole("dialog", { name: "New secret" })).toBeInTheDocument();
   });
 });

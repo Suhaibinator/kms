@@ -25,9 +25,10 @@ type SecretValue struct {
 	// Key is the secret key, relative to the client namespace (e.g.
 	// "stripe/api-key"), or an absolute "/env/app/key" display path.
 	Key string
-	// Token is the per-secret access token. For client-bound secrets it is also
-	// the client key share (plan 10.7).
+	// Token is the per-secret access token.
 	Token string
+	// BindKey is the independent operator-owned binding key.
+	BindKey BindingKey
 	// EnvVar is an optional environment variable that, when set and non-empty,
 	// overrides the store value.
 	EnvVar string
@@ -81,7 +82,7 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 	}
 
 	if v.Key != "" {
-		sec, err := client.GetSecret(ctx, v.Key, WithSecretToken(v.Token))
+		sec, err := client.GetSecret(ctx, v.Key, WithSecretToken(v.Token), WithBindingKeyValue(v.BindKey))
 		if err == nil {
 			st.value = sec.StringValue()
 			st.initialized = true
@@ -165,6 +166,11 @@ func (v SecretValue) MarshalJSON() ([]byte, error) {
 // MarshalJSONTo is the streaming JSON v2 equivalent of MarshalJSON.
 func (v SecretValue) MarshalJSONTo(out *jsontext.Encoder) error {
 	return json.MarshalEncode(out, redactedText)
+}
+
+// MarshalYAML redacts secret credentials and fallback plaintext in YAML exports.
+func (v SecretValue) MarshalYAML() (any, error) {
+	return redactedText, nil
 }
 
 // ParameterValue is a declarative, store-backed non-secret field. By default it

@@ -65,8 +65,10 @@ class FakeStore:
         self.revision = 0
         # (env, app, key) -> list of (value, content_type); index+1 is the version
         self.params: Dict[_RefKey, List[tuple]] = {}
-        # (env, app, key) -> dict(value, content_type, token, client_bound, versions)
+        # Test-only secret state. Binding credentials are retained solely so
+        # this in-process fake can exercise credential and cohort behavior.
         self.secrets: Dict[_RefKey, dict] = {}
+        self.secret_metadata_versions: List[int] = []
         self.subs: List[_Subscription] = []
         self.require_bearer = require_bearer
         self.whoami_name = whoami_name
@@ -230,11 +232,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             sec = self.store.secrets.get(rk)
             if sec is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, f"secret {rk} not found")
-            if sec["token"]:
-                if request.secret_token != sec["token"]:
-                    context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret token required")
-            while len(sec["states"]) < len(sec["versions"]):
-                sec["states"].append("enabled")
+            self._extend_version_state(sec)
             if not sec.get("promoted", False) and sec["current_version"] < len(sec["versions"]):
                 sec["current_version"] = len(sec["versions"])
             version = request.version or sec["current_version"]
@@ -242,12 +240,17 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
             if sec["states"][version - 1] != "enabled":
                 context.abort(grpc.StatusCode.FAILED_PRECONDITION, "version is not enabled")
+            if sec["has_tokens"][version - 1] and request.secret_token != sec["token"]:
+                context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
+            binding_key = sec["binding_keys"][version - 1]
+            if binding_key and request.binding_key != binding_key:
+                context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
             value, ct = sec["versions"][version - 1]
         return kms_pb2.GetSecretResponse(
             ref=_proto_ref(rk), version=version, value=value, content_type=ct,
         )
 
-    def PutSecret(self, request, context):
+    def PutSecretV03(self, request, context):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
             sec = self.store.secrets.get(rk)
@@ -256,8 +259,10 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 token = "tok-" + "_".join(rk) if request.generate_access_token else ""
                 sec = {
                     "value": request.value, "content_type": request.content_type or "application/octet-stream",
-                    "token": token, "client_bound": request.client_bound, "versions": [],
-                    "states": [], "current_version": 0, "promoted": False,
+                    "token": token, "versions": [], "states": [],
+                    "binding_keys": [], "has_tokens": [], "expires": [],
+                    "metadata": [], "current_version": 0, "previous_version": 0,
+                    "promoted": False,
                 }
                 self.store.secrets[rk] = sec
             else:
@@ -266,7 +271,13 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                     sec["token"] = token
             sec["versions"].append((request.value, request.content_type or sec["content_type"]))
             sec["states"].append("enabled")
+            sec["binding_keys"].append(request.binding_key)
+            sec["has_tokens"].append(bool(sec["token"]))
+            sec["expires"].append(request.expires_at_unix_ms)
+            sec["metadata"].append(request.metadata_json or "{}")
             version = len(sec["versions"])
+            sec["value"] = request.value
+            sec["content_type"] = sec["versions"][-1][1]
             sec["current_version"] = version
             sec["promoted"] = False
             rev = self.store._next_rev()
@@ -279,17 +290,32 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
     def GetSecretMetadata(self, request, context):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
+            self.store.secret_metadata_versions.append(request.version)
             sec = self.store.secrets.get(rk)
             if sec is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, "not found")
-            versions = [
-                kms_pb2.SecretVersionInfo(version=i + 1, state=sec["states"][i])
-                for i in range(len(sec["versions"]))
-            ]
+            self._extend_version_state(sec)
+            versions = [kms_pb2.SecretVersionInfo(
+                version=i + 1, state=sec["states"][i],
+                expires_at_unix_ms=sec["expires"][i],
+                metadata_json=sec["metadata"][i],
+                bound=bool(sec["binding_keys"][i]),
+                has_access_token=sec["has_tokens"][i],
+            ) for i in range(len(sec["versions"]))]
+            if request.version:
+                versions = [version for version in versions if version.version == request.version]
+                if not versions:
+                    context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+            current = sec["current_version"] - 1
             meta = kms_pb2.SecretMetadata(
                 ref=_proto_ref(rk), content_type=sec["content_type"],
-                client_bound=sec["client_bound"], has_access_token=bool(sec["token"]),
-                labels={"current": len(sec["versions"])}, versions=versions,
+                bound=versions[0].bound if request.version else bool(sec["binding_keys"][current]),
+                has_access_token=bool(sec["token"]),
+                metadata_json=sec["metadata"][current],
+                labels={} if request.version else {
+                    "current": sec["current_version"],
+                    **({"previous": sec.get("previous_version", 0)} if sec.get("previous_version") else {}),
+                }, versions=versions,
             )
         return kms_pb2.GetSecretMetadataResponse(secret=meta)
 
@@ -307,12 +333,22 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             items = []
             for rk in window:
                 sec = self.store.secrets[rk]
+                self._extend_version_state(sec)
+                current = sec["current_version"] - 1
                 items.append(kms_pb2.SecretMetadata(
                     ref=_proto_ref(rk), content_type=sec["content_type"],
-                    client_bound=sec["client_bound"], has_access_token=bool(sec["token"]),
+                    bound=bool(sec["binding_keys"][current]),
+                    has_access_token=bool(sec["token"]),
+                    metadata_json=sec["metadata"][current],
                     labels={"current": sec["current_version"]},
                     versions=[
-                        kms_pb2.SecretVersionInfo(version=i + 1, state=state)
+                        kms_pb2.SecretVersionInfo(
+                            version=i + 1, state=state,
+                            expires_at_unix_ms=sec["expires"][i],
+                            metadata_json=sec["metadata"][i],
+                            bound=bool(sec["binding_keys"][i]),
+                            has_access_token=sec["has_tokens"][i],
+                        )
                         for i, state in enumerate(sec["states"])
                     ],
                 ))
@@ -360,11 +396,236 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
             previous = sec["current_version"]
             sec["current_version"] = request.version
+            sec["previous_version"] = previous
             sec["promoted"] = True
             rev = self.store._next_rev()
         return kms_pb2.PromoteSecretVersionResponse(
             current_version=request.version, previous_version=previous, revision=rev
         )
+
+    def BindSecret(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            if request.expected_current_version == 0:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "expected current version is required")
+            if request.expected_current_version != sec["current_version"]:
+                context.abort(grpc.StatusCode.ABORTED, "current version changed")
+            sec, index = self._version(
+                sec=sec, version=request.expected_current_version, context=context,
+            )
+            if sec["states"][index] == "destroyed" or sec["binding_keys"][index]:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, "binding state cannot change")
+            current, previous = self._clone_transition(
+                sec, index, binding_key=request.binding_key,
+            )
+            rev = self.store._next_rev()
+        return kms_pb2.SecretVersionTransitionResponse(
+            current_version=current, previous_version=previous, revision=rev,
+        )
+
+    def UnbindSecret(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            if request.expected_current_version == 0:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "expected current version is required")
+            if request.expected_current_version != sec["current_version"]:
+                context.abort(grpc.StatusCode.ABORTED, "current version changed")
+            sec, index = self._version(
+                sec=sec, version=request.expected_current_version, context=context,
+            )
+            if sec["states"][index] == "destroyed" or sec["binding_keys"][index] != request.binding_key:
+                context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
+            current, previous = self._clone_transition(sec, index, binding_key="")
+            rev = self.store._next_rev()
+        return kms_pb2.SecretVersionTransitionResponse(
+            current_version=current, previous_version=previous, revision=rev,
+        )
+
+    def PreviewSecretBindingCohort(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec, index = self._version(sec=self.store.secrets.get(rk), version=request.anchor_version, context=context)
+            versions = self._cohort(sec, index, request.binding_key, context)
+            revision = self.store.revision
+        return kms_pb2.SecretBindingCohortResponse(
+            anchor_version=index + 1, affected_versions=versions, revision=revision,
+        )
+
+    def RotateSecretBindingKey(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            if request.expected_current_version == 0:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "expected current version is required")
+            if request.expected_current_version != sec["current_version"]:
+                context.abort(grpc.StatusCode.ABORTED, "current version changed")
+            sec, index = self._version(
+                sec=sec, version=request.expected_current_version, context=context,
+            )
+            if not sec["binding_keys"][index] or sec["binding_keys"][index] != request.binding_key:
+                context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
+            if request.binding_key == request.new_binding_key:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "new binding key must differ")
+            current, previous = self._clone_transition(
+                sec, index, binding_key=request.new_binding_key,
+            )
+            revision = self.store._next_rev()
+        return kms_pb2.SecretVersionTransitionResponse(
+            current_version=current, previous_version=previous, revision=revision,
+        )
+
+    def PurgeSecretBindingCohort(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec, index = self._version(sec=self.store.secrets.get(rk), version=request.anchor_version, context=context)
+            versions = self._cohort(sec, index, request.binding_key, context)
+            self._check_guard(request, versions, context)
+            for version in versions:
+                item = version - 1
+                sec["versions"][item] = (b"", "")
+                sec["states"][item] = "destroyed"
+                sec["binding_keys"][item] = ""
+                sec["has_tokens"][item] = False
+                sec["expires"][item] = 0
+                sec["metadata"][item] = ""
+            if sec["current_version"] in versions:
+                sec["value"] = b""
+                sec["content_type"] = ""
+            revision = self.store._next_rev()
+        return kms_pb2.SecretBindingCohortResponse(
+            anchor_version=index + 1, affected_versions=versions, revision=revision,
+        )
+
+    def PreviewSecretUnboundVersions(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            self._extend_version_state(sec)
+            versions = [
+                index + 1 for index, state in enumerate(sec["states"])
+                if state != "destroyed" and not sec["binding_keys"][index]
+            ]
+            if not versions:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, "no unbound versions")
+            revision = self.store.revision
+        return kms_pb2.SecretVersionSetResponse(
+            affected_versions=versions, revision=revision,
+        )
+
+    def PurgeSecretUnboundVersions(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            self._extend_version_state(sec)
+            versions = [
+                index + 1 for index, state in enumerate(sec["states"])
+                if state != "destroyed" and not sec["binding_keys"][index]
+            ]
+            if not versions:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, "no unbound versions")
+            expected = list(request.expected_affected_versions)
+            if request.expected_revision == 0 or not expected:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "preview guard required")
+            if request.expected_revision != self.store.revision or expected != versions:
+                context.abort(grpc.StatusCode.ABORTED, "secret version set changed")
+            for version in versions:
+                item = version - 1
+                sec["versions"][item] = (b"", "")
+                sec["states"][item] = "destroyed"
+                sec["binding_keys"][item] = ""
+                sec["has_tokens"][item] = False
+                sec["expires"][item] = 0
+                sec["metadata"][item] = ""
+            if sec["current_version"] in versions:
+                sec["value"] = b""
+                sec["content_type"] = ""
+            revision = self.store._next_rev()
+        return kms_pb2.SecretVersionSetResponse(
+            affected_versions=versions, revision=revision,
+        )
+
+    @staticmethod
+    def _clone_transition(sec: dict, index: int, *, binding_key: str) -> tuple[int, int]:
+        previous = index + 1
+        sec["versions"].append(sec["versions"][index])
+        sec["states"].append(sec["states"][index])
+        sec["binding_keys"].append(binding_key)
+        sec["has_tokens"].append(sec["has_tokens"][index])
+        sec["expires"].append(sec["expires"][index])
+        sec["metadata"].append(sec["metadata"][index])
+        current = len(sec["versions"])
+        sec["previous_version"] = previous
+        sec["current_version"] = current
+        sec["value"], sec["content_type"] = sec["versions"][current - 1]
+        sec["promoted"] = True
+        return current, previous
+
+    @staticmethod
+    def _extend_version_state(sec: dict) -> None:
+        count = len(sec["versions"])
+        sec.setdefault("states", [])
+        sec.setdefault("binding_keys", [])
+        sec.setdefault("has_tokens", [])
+        sec.setdefault("expires", [])
+        sec.setdefault("metadata", [])
+        while len(sec["states"]) < count:
+            sec["states"].append("enabled")
+        while len(sec["binding_keys"]) < count:
+            sec["binding_keys"].append("")
+        while len(sec["has_tokens"]) < count:
+            sec["has_tokens"].append(bool(sec.get("token")))
+        while len(sec["expires"]) < count:
+            sec["expires"].append(0)
+        while len(sec["metadata"]) < count:
+            sec["metadata"].append("{}")
+
+    def _version(self, *, sec, version: int, context):
+        if sec is None:
+            context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+        self._extend_version_state(sec)
+        selected = version or sec["current_version"]
+        if selected < 1 or selected > len(sec["versions"]):
+            context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+        return sec, selected - 1
+
+    @staticmethod
+    def _cohort(sec: dict, index: int, binding_key: str, context) -> list[int]:
+        if sec["states"][index] == "destroyed" or sec["binding_keys"][index] != binding_key:
+            context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
+        low = index
+        while low > 0 and sec["states"][low - 1] != "destroyed" and sec["binding_keys"][low - 1] == binding_key:
+            low -= 1
+        high = index
+        while high + 1 < len(sec["versions"]) and sec["states"][high + 1] != "destroyed" and sec["binding_keys"][high + 1] == binding_key:
+            high += 1
+        return list(range(low + 1, high + 2))
+
+    def _check_guard(self, request, versions: list[int], context) -> None:
+        expected = list(request.expected_affected_versions)
+        if request.expected_revision == 0 or not expected:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "expected revision and affected versions must be supplied together",
+            )
+        if any(version <= 0 for version in expected) or expected != sorted(set(expected)):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "invalid preview guard")
+        if (
+            request.expected_revision != self.store.revision
+            or expected != versions
+        ):
+            context.abort(grpc.StatusCode.ABORTED, "secret version set changed")
 
 
 class WatchServicer(kms_pb2_grpc.WatchServiceServicer):

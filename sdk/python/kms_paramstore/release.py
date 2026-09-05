@@ -159,8 +159,6 @@ class ReleaseEntry:
     content_type: str
     metadata_json: str
     parameter_digest: str = ""
-    client_bound: bool = False
-    has_access_token: bool = False
 
 
 @dataclass(frozen=True)
@@ -289,6 +287,9 @@ class ReleaseLoaderConfig:
     namespace: "Optional[str | NamespaceRef]" = None
     reconcile_interval: float = 60.0
     secret_token_provider: Optional[SecretTokenProvider] = None
+    binding_keys: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}), repr=False, compare=False
+    )
     validate_manifest: Optional[Callable[[threading.Event, ReleaseManifest], None]] = None
     max_concurrent_fetches: int = 16
     client_name: Optional[str] = None
@@ -296,6 +297,9 @@ class ReleaseLoaderConfig:
     reconnect_initial: float = 0.25
     reconnect_max: float = 30.0
     request_timeout: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
 @dataclass(frozen=True)
@@ -346,6 +350,7 @@ class ReleaseLoader:
 
         self._client = client
         self._config = config
+        self._binding_keys = MappingProxyType(dict(config.binding_keys))
         self._namespace = client._resolve_namespace_arg(config.namespace)
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
@@ -757,6 +762,11 @@ class ReleaseLoader:
             raise _CandidateFailure("resolution_failed", "invalid release entry") from None
         if len({entry.alias for entry in entries}) != len(entries):
             raise _CandidateFailure("resolution_failed", "duplicate alias")
+        if any(
+            split_display_path(entry.path).ns != self._namespace
+            for entry in entries
+        ):
+            raise _CandidateFailure("resolution_failed", "release entry namespace mismatch")
 
         manifest = ReleaseManifest(
             namespace=f"{release.namespace.env}/{release.namespace.app}",
@@ -828,8 +838,11 @@ class ReleaseLoader:
         )
 
     def _resolve_entry(self, entry: ReleaseEntry, cancel: threading.Event):
-        if cancel.is_set() or self._stop_event.is_set():
-            raise _CandidateFailure("superseded")
+        def check_cancelled() -> None:
+            if cancel.is_set() or self._stop_event.is_set():
+                raise _CandidateFailure("superseded")
+
+        check_cancelled()
         proto_ref = to_proto_ref(split_display_path(entry.path))
         timeout = self._client._call_timeout(self._config.request_timeout)
         if entry.kind == _KIND_PARAMETER:
@@ -840,13 +853,15 @@ class ReleaseLoader:
                     timeout=timeout,
                 )
             except grpc.RpcError as exc:
+                check_cancelled()
                 raise _CandidateFailure("resolution_failed", _grpc_code_name(exc)) from None
+            check_cancelled()
             parameter = response.parameter
             if parameter.version != entry.version:
                 raise _CandidateFailure("version_mismatch")
             if str(Ref(NamespaceRef(parameter.ref.namespace.env, parameter.ref.namespace.app), parameter.ref.key)) != entry.path:
                 raise _CandidateFailure("version_mismatch", "resource mismatch")
-            if entry.content_type and parameter.content_type != entry.content_type:
+            if parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch", "content type mismatch")
             digest = hashlib.sha256(parameter.value.encode("utf-8")).hexdigest()
             if not _valid_sha256_hex(entry.parameter_digest) or not hmac.compare_digest(
@@ -857,31 +872,67 @@ class ReleaseLoader:
 
         if entry.kind != _KIND_SECRET:
             raise _CandidateFailure("resolution_failed", "unknown entry kind")
+        try:
+            live = self._client._get_secret_metadata_version(
+                entry.path, version=entry.version, timeout=self._config.request_timeout,
+            )
+        except Exception:
+            check_cancelled()
+            raise _CandidateFailure("resolution_failed") from None
+        check_cancelled()
+        requested_ref = split_display_path(entry.path)
+        if (live.env, live.app, live.key) != (
+            requested_ref.ns.env, requested_ref.ns.app, requested_ref.key,
+        ):
+            raise _CandidateFailure("version_mismatch", "resource mismatch")
+        matches = tuple(item for item in live.versions if item.version == entry.version)
+        if (
+            len(matches) != 1
+            or matches[0].state != "enabled"
+            or matches[0].destroyed_at_unix_ms != 0
+        ):
+            raise _CandidateFailure("resolution_failed")
+        exact = matches[0]
+        if exact.expires_at_unix_ms > 0 and exact.expires_at_unix_ms <= _now_ms():
+            raise _CandidateFailure("resolution_failed")
+
         secret_token = ""
-        if entry.client_bound or entry.has_access_token:
+        if exact.has_access_token:
             provider = self._config.secret_token_provider
             if provider is None:
                 raise _CandidateFailure("token_unavailable")
+            check_cancelled()
             try:
                 secret_token = _token_from_result(provider(entry.alias, entry.path))
             except Exception:
+                check_cancelled()
                 raise _CandidateFailure("token_unavailable") from None
+            check_cancelled()
             if not secret_token:
                 raise _CandidateFailure("token_unavailable")
+        binding_key = ""
+        if exact.bound:
+            binding_key = self._binding_keys.get(entry.alias, "")
+            if not isinstance(binding_key, str) or not binding_key:
+                raise _CandidateFailure("token_unavailable")
+        check_cancelled()
         try:
             secret = self._client.get_secret(
                 entry.path,
                 version=entry.version,
                 secret_token=secret_token,
+                binding_key=binding_key,
                 timeout=self._config.request_timeout,
             )
         except Exception:
+            check_cancelled()
             raise _CandidateFailure("resolution_failed") from None
+        check_cancelled()
         if secret.version != entry.version:
             raise _CandidateFailure("version_mismatch")
         if secret.path != entry.path:
             raise _CandidateFailure("version_mismatch", "resource mismatch")
-        if entry.content_type and secret.content_type != entry.content_type:
+        if secret.content_type != entry.content_type:
             raise _CandidateFailure("version_mismatch", "content type mismatch")
         return secret
 
@@ -1157,8 +1208,6 @@ def _entry_from_proto(entry) -> ReleaseEntry:
         content_type=entry.content_type,
         metadata_json=entry.metadata_json,
         parameter_digest=entry.parameter_digest,
-        client_bound=entry.client_bound,
-        has_access_token=entry.has_access_token,
     )
 
 
@@ -1181,8 +1230,6 @@ def _release_digest(release) -> str:
             content_type=source.content_type,
             metadata_json=source.metadata_json,
             parameter_digest=source.parameter_digest,
-            client_bound=source.client_bound,
-            has_access_token=source.has_access_token,
         )
         entry.ref.CopyFrom(source.ref)
     encoded = projection.SerializeToString(deterministic=True)
@@ -1215,9 +1262,11 @@ def _valid_sha256_hex(value: object) -> bool:
 
 def _token_from_result(result: SecretTokenResult) -> str:
     if isinstance(result, tuple):
+        if len(result) != 2:
+            return ""
         token, ok = result
-        return token if ok else ""
-    return result or ""
+        return token if isinstance(token, str) and ok is True else ""
+    return result if isinstance(result, str) else ""
 
 
 def _classified_rejection_category(exc: BaseException) -> str:

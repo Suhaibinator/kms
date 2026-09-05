@@ -38,6 +38,14 @@ Commit the regenerated `config_kms.gen.go`, `runtime.schema.json`, and
 `runtime.contract.json`. The generated `Options` now embeds
 `configstore.Callbacks`, and the binding gains `VerifyReleaseDefaults`.
 
+For every bound secret alias, set the declaration-only credential on the
+application defaults, for example
+`kmsclient.Secret{BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"))}`. Leave
+unbound secrets as `kmsclient.Secret{}`. Generated startup extracts this map and
+clears it from retained defaults and published snapshots; do not add a custom
+binding-key provider or file convention. Access-token providers remain
+independent.
+
 ## 2. Replace the callbacks
 
 Before:
@@ -202,6 +210,7 @@ the budget and failure domain predictable.
 ## Checklist
 
 - [ ] module bumped, binding regenerated, artifacts committed
+- [ ] each bound secret declares `BindKey`; deployment injects it securely
 - [ ] `AllowDefaultMismatch` flag and `DefaultMismatchError` handling removed
 - [ ] `Callbacks: configstore.SlogCallbacks(sink, ...)` and `sink.Set(logger)`
 - [ ] `kmsmetrics.NewCollector` registered; alert on `default_divergent`

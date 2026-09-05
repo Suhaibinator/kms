@@ -4,14 +4,20 @@ export {
 } from "./client.js";
 export type {
   CallOptions,
+  BindSecretOptions,
   ClientReleaseLoaderOptions,
   GetOptions,
   KmsClientOptions,
   ListOptions,
   Logger,
   ParameterMetadata,
+  PreviewSecretBindingCohortOptions,
   PutParameterOptions,
   PutSecretOptions,
+  PurgeSecretBindingCohortOptions,
+  PurgeSecretUnboundVersionsOptions,
+  RotateSecretBindingKeyOptions,
+  SecretBindingCohortGuardOptions,
   WatchCallback,
   WatchEvent,
   WatchOptions,
@@ -24,9 +30,12 @@ export {
   isKmsError,
   KmsError,
   mapGrpcError,
+  mapPurgeSecretGrpcError,
   NoNamespaceError,
   normalizeError,
   NotInitializedError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingError,
   RateLimitedError,
   wrapError,
 } from "./errors.js";
@@ -38,7 +47,10 @@ export type {
   PutResult,
   PutSecretResult,
   SecretInfo,
+  SecretBindingCohortResult,
   SecretVersion,
+  SecretVersionSetResult,
+  SecretVersionTransitionResult,
   WhoAmI,
 } from "./models.js";
 
@@ -129,7 +141,7 @@ export type {
 } from "./releases/verify.js";
 
 export { newSecret, REDACTED, Secret } from "./secret.js";
-export type { SecretMetadata } from "./secret.js";
+export type { SecretOptions } from "./secret.js";
 
 export { mtlsFromFiles, tlsFromBytes, tlsFromFiles } from "./tls.js";
 

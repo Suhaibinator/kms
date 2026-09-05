@@ -109,7 +109,7 @@ export type ConceptKey =
   | "instance"
   | "applied"
   | "rejected"
-  | "client_bound"
+  | "binding_key"
   | "rollback"
   | "cas";
 
@@ -183,10 +183,10 @@ export const CONCEPTS: Record<ConceptKey, Concept> = {
     definition:
       "The instance could not adopt the release and keeps serving its last-known-good. The bounded category says why; the diagnostic is local detail.",
   },
-  client_bound: {
-    term: "Client-bound secret",
+  binding_key: {
+    term: "Binding key",
     definition:
-      "A secret only its owning client identity can read. The console can see metadata and pin versions, never the value.",
+      "An operator-owned string that adds a second wrapping layer to one secret version. KMS never stores, hashes, or fingerprints it.",
   },
   rollback: {
     term: "Roll back",
@@ -229,9 +229,9 @@ export const REJECTION_CATEGORIES: Record<RejectionCategory, RejectionGuidance> 
       "Revalidate that every exact pin exists, is readable, and is authorized for the application identity.",
   },
   token_unavailable: {
-    summary: "A protected secret needs a local token the instance does not have.",
+    summary: "A protected secret needs a local credential the instance does not have.",
     response:
-      "Provision the local token used by SecretTokenProvider for the protected secret; never put it in the release.",
+      "Provision the exact version's missing access token through SecretTokenProvider or its binding key through the secret declaration; never put either credential in the release.",
   },
   version_mismatch: {
     summary: "A fetched resource did not match the pinned version.",

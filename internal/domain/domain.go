@@ -28,8 +28,8 @@ const (
 
 // Wrap modes for secret versions.
 const (
-	WrapModeStandard    = "standard"
-	WrapModeClientBound = "client_bound"
+	WrapModeStandard   = "standard"
+	WrapModeBindingKey = "binding_key"
 )
 
 // Well-known labels.
@@ -68,12 +68,13 @@ const (
 	OpParameterList   = "parameter:list"
 	OpParameterDelete = "parameter:delete"
 
-	OpSecretRead    = "secret:read"
-	OpSecretWrite   = "secret:write"
-	OpSecretList    = "secret:list"
-	OpSecretDisable = "secret:disable"
-	OpSecretDestroy = "secret:destroy"
-	OpSecretPromote = "secret:promote"
+	OpSecretRead          = "secret:read"
+	OpSecretWrite         = "secret:write"
+	OpSecretList          = "secret:list"
+	OpSecretDisable       = "secret:disable"
+	OpSecretDestroy       = "secret:destroy"
+	OpSecretPromote       = "secret:promote"
+	OpSecretBindingManage = "secret:binding-manage"
 
 	OpConfigurationReleaseCreate   = "configuration-release:create"
 	OpConfigurationReleaseRead     = "configuration-release:read"
@@ -98,14 +99,19 @@ const (
 
 // Change types recorded in the change log and pushed over watch streams.
 const (
-	ChangePut      = "put"
-	ChangeDelete   = "delete"
-	ChangeLabel    = "label"
-	ChangePromote  = "promote"
-	ChangeDisable  = "disable"
-	ChangeEnable   = "enable"
-	ChangeDestroy  = "destroy"
-	ChangeActivate = "activate"
+	ChangePut                = "put"
+	ChangeDelete             = "delete"
+	ChangeLabel              = "label"
+	ChangePromote            = "promote"
+	ChangeDisable            = "disable"
+	ChangeEnable             = "enable"
+	ChangeDestroy            = "destroy"
+	ChangeActivate           = "activate"
+	ChangeBind               = "bind"
+	ChangeUnbind             = "unbind"
+	ChangeRotateBindingKey   = "rotate_binding_key"
+	ChangePurgeBindingCohort = "purge_binding_cohort"
+	ChangePurgeUnbound       = "purge_unbound_versions"
 )
 
 // NamespaceRef is a fixed (env, app) pair — the first-class grouping every
@@ -177,7 +183,7 @@ type ParameterVersionInfo struct {
 type Secret struct {
 	Ref            Ref
 	ContentType    string
-	ClientBound    bool
+	Bound          bool
 	HasAccessToken bool
 	Metadata       string
 	CreatedAt      time.Time
@@ -188,13 +194,15 @@ type Secret struct {
 
 // SecretVersionInfo describes one secret version without key material.
 type SecretVersionInfo struct {
-	Version     uint64
-	State       string
-	CreatedBy   string
-	CreatedAt   time.Time
-	DestroyedAt time.Time // zero if not destroyed
-	ExpiresAt   time.Time // zero if no expiry
-	Metadata    string
+	Version        uint64
+	State          string
+	Bound          bool
+	HasAccessToken bool
+	CreatedBy      string
+	CreatedAt      time.Time
+	DestroyedAt    time.Time // zero if not destroyed
+	ExpiresAt      time.Time // zero if no expiry
+	Metadata       string
 }
 
 // SecretValue is a decrypted secret returned to an authorized caller.
@@ -367,8 +375,11 @@ type ChangeLogEntry struct {
 	Value       string // parameter value for puts; empty for secrets
 	ContentType string
 	Version     uint64
-	Label       string
-	CreatedAt   time.Time
+	// AffectedVersions records the exact sorted version set for one atomic
+	// multi-version secret mutation. It is empty for ordinary changes.
+	AffectedVersions []uint64
+	Label            string
+	CreatedAt        time.Time
 }
 
 // Subscriber describes one live watch stream in the registry. Namespaces are

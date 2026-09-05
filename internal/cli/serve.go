@@ -93,8 +93,9 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 
 	// A hangup is a reload request once the listeners are up; before that —
-	// during the passphrase prompt, migrations or CA bootstrap — it must not
-	// kill the process. Ctrl-C at the prompt still works (SIGINT is untouched).
+	// during the passphrase prompt, database baseline verification, or CA
+	// bootstrap — it must not kill the process. Ctrl-C at the prompt still works
+	// (SIGINT is untouched).
 	signal.Ignore(syscall.SIGHUP)
 
 	cfg, prov, configFile, err := r.resolve()
@@ -115,7 +116,8 @@ func (c *CLI) cmdServe(args []string) int {
 		zap.String("config", cfg.Redacted()))
 	logConfigSources(logger, prov)
 
-	// Startup order per plan 23.1: open store (migrates), unseal, then listeners.
+	// Startup order per plan 23.1: verify the store baseline, unseal, then
+	// listeners.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)

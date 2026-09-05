@@ -28,7 +28,7 @@ func TestAuthorizationDenials(t *testing.T) {
 	if _, err := h.svc.GetParameter(ctx, nobody, h.ref("/prod/app/rate"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("unpolicied param read err = %v, want ErrPermissionDenied", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, nobody, h.ref("/prod/app/token"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, nobody, h.ref("/prod/app/token"), 0, "", "", ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("unpolicied secret read err = %v, want ErrPermissionDenied", err)
 	}
 
@@ -46,7 +46,7 @@ func TestAuthorizationDenials(t *testing.T) {
 	if _, err := h.svc.GetParameter(ctx, app, h.ref("/staging/app/rate"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("cross-namespace read err = %v, want ErrPermissionDenied", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, app, h.ref("/prod/app/token"), 0, ""); err != nil || string(got.Value) != "s3cr3t" {
+	if got, err := h.svc.GetSecret(ctx, app, h.ref("/prod/app/token"), 0, "", "", ""); err != nil || string(got.Value) != "s3cr3t" {
 		t.Errorf("scoped secret read = %q err=%v, want s3cr3t", got.Value, err)
 	}
 

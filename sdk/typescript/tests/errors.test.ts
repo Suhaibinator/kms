@@ -7,7 +7,11 @@ import {
   isKmsError,
   KmsError,
   mapGrpcError,
+  mapPurgeSecretGrpcError,
+  mapSecretGrpcError,
   NoNamespaceError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingError,
   wrapError,
 } from "../src/errors.js";
 import { FakeTransport } from "./helpers/fake-transport.js";
@@ -69,6 +73,78 @@ describe("gRPC error normalization", () => {
     expect(mapped).toBeInstanceOf(KmsError);
     expect(mapped).toMatchObject({ code: "not_found", grpcCode: status.NOT_FOUND });
     expect((mapped as Error).cause).toBe(source);
+  });
+
+  it("maps secret RPC errors from status alone without reading or retaining hostile details", () => {
+    const canary = "reflected-secret-credential";
+    const source = new Error(canary);
+    let detailsReads = 0;
+    Object.defineProperties(source, {
+      code: { value: status.PERMISSION_DENIED },
+      details: {
+        get() {
+          detailsReads += 1;
+          throw new Error(canary);
+        },
+      },
+    });
+
+    const mapped = mapSecretGrpcError(source);
+    expect(detailsReads).toBe(0);
+    expect(mapped).toMatchObject({
+      code: "permission_denied",
+      grpcCode: status.PERMISSION_DENIED,
+      message: "KMS secret operation failed",
+    });
+    expect(mapped?.cause).toBeUndefined();
+    expect(String(mapped)).not.toContain(canary);
+  });
+
+  it("preserves only the exact post-commit purge cleanup outcome", () => {
+    const pending = mapPurgeSecretGrpcError(
+      grpcError(status.UNAVAILABLE, PURGE_CLEANUP_PENDING_MESSAGE),
+    );
+    expect(pending).toBeInstanceOf(PurgeCleanupPendingError);
+    expect(pending).toMatchObject({
+      code: "purge_cleanup_pending",
+      grpcCode: status.UNAVAILABLE,
+      message: PURGE_CLEANUP_PENDING_MESSAGE,
+    });
+    expect(pending?.cause).toBeUndefined();
+
+    const ordinary = mapPurgeSecretGrpcError(
+      grpcError(status.UNAVAILABLE, `${PURGE_CLEANUP_PENDING_MESSAGE}-attacker-controlled`),
+    );
+    expect(ordinary).toMatchObject({
+      code: "unavailable",
+      message: "KMS secret operation failed",
+    });
+    expect(String(ordinary)).not.toContain("attacker-controlled");
+
+    const lookalike = Object.assign(new Error(PURGE_CLEANUP_PENDING_MESSAGE), {
+      code: status.UNAVAILABLE,
+      details: PURGE_CLEANUP_PENDING_MESSAGE,
+    });
+    const untrusted = mapPurgeSecretGrpcError(lookalike);
+    expect(untrusted).not.toBeInstanceOf(PurgeCleanupPendingError);
+    expect(untrusted).toMatchObject({
+      code: "unavailable",
+      message: "KMS secret operation failed",
+    });
+  });
+
+  it("does not execute a hostile Error name getter while sanitizing secret failures", () => {
+    const canary = "hostile-error-name-canary";
+    const source = new Error("safe");
+    Object.defineProperty(source, "name", {
+      get() {
+        throw new Error(canary);
+      },
+    });
+
+    const mapped = mapSecretGrpcError(source);
+    expect(mapped).toMatchObject({ code: "unknown", message: "KMS secret operation failed" });
+    expect(String(mapped)).not.toContain(canary);
   });
 
   it("preserves an injected DOM cancellation through the client RPC boundary", async () => {

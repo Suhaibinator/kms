@@ -101,7 +101,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	secrets := kmsv1.NewSecretServiceClient(env.adminConn)
 	putSecret := func(key, plaintext string) (uint64, string) {
 		t.Helper()
-		response, putErr := secrets.PutSecret(authCtx, &kmsv1.PutSecretRequest{
+		response, putErr := secrets.PutSecretV03(authCtx, &kmsv1.PutSecretRequest{
 			Ref: networkRef("prod", "managed-config", key), Value: []byte(plaintext),
 			ContentType: "text/plain", GenerateAccessToken: true,
 		})

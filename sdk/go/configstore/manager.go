@@ -3,8 +3,10 @@ package configstore
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -30,6 +32,44 @@ type Manager struct {
 	lastReportedKey string
 	lastRejectedKey string
 	waitErr         error
+}
+
+// String prevents formatting from traversing the retained lower-level loader,
+// which owns the private binding-key map for the manager's lifetime.
+func (m *Manager) String() string {
+	if m == nil {
+		return "Manager<nil>"
+	}
+	return fmt.Sprintf("Manager{release=%q}", m.options.Release)
+}
+
+func (m *Manager) GoString() string { return m.String() }
+
+func (m *Manager) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", m.String())
+		return
+	}
+	_, _ = fmt.Fprint(f, m.String())
+}
+
+type managerJSON struct {
+	Release string `json:"release"`
+}
+
+func (m *Manager) safeProjection() *managerJSON {
+	if m == nil {
+		return nil
+	}
+	return &managerJSON{Release: m.options.Release}
+}
+
+func (m *Manager) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.safeProjection())
+}
+
+func (m *Manager) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, m.safeProjection())
 }
 
 // Start validates its generated contract, starts ReleaseLoader in the
@@ -61,6 +101,10 @@ func Start(
 		return nil, err
 	}
 	options.Contract = append([]ContractEntry(nil), options.Contract...)
+	bindingKeys := maps.Clone(options.BindingKeys)
+	// The manager retains Options for callbacks and status bookkeeping; keep
+	// credentials only in the lower-level loader.
+	options.BindingKeys = nil
 
 	manager := &Manager{
 		options: options,
@@ -73,6 +117,7 @@ func Start(
 		Name:                options.Release,
 		ReconcileInterval:   options.ReconcileInterval,
 		SecretTokenProvider: options.SecretTokenProvider,
+		BindingKeys:         bindingKeys,
 		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
 			identity := releaseIdentityFromManifest(manifest)
 			manager.mu.Lock()

@@ -64,6 +64,50 @@ describe("generated managed configuration binding", () => {
     ).toThrow(/must be the zero Secret/u);
   });
 
+  it("extracts declaration binding keys, strips them from snapshots, and overrides injected maps", async () => {
+    const bindingKey = "operator-binding-key-never-publish";
+    const defaults = { ...defaultConfig(), password: new Secret("", { bindKey: bindingKey }) };
+    const loader = new InlineLoader(
+      releaseSnapshot({
+        version: 1n,
+        revision: 10n,
+        limit: 12,
+        enabled: true,
+        secretVersion: 7n,
+      }),
+    );
+    const validatorBindingKey = "validator-injected-key";
+    const store = new Store(defaults, (config) => {
+      config.password = new Secret(config.password.bytes(), {
+        path: config.password.path,
+        version: config.password.version,
+        contentType: config.password.contentType,
+        bindKey: validatorBindingKey,
+      });
+    });
+    defaults.password = new Secret("", { bindKey: "mutated-after-construction" });
+    const controller = new AbortController();
+    const injected = {
+      release: "runtime",
+      onDefaultMismatch: () => undefined,
+      bindingKeys: { database_password: "caller-injected-key" },
+    } as Parameters<Store["start"]>[1];
+
+    const manager = await store.start(inlineClient(loader), injected, controller.signal);
+    const bindingKeys = loader.options?.bindingKeys;
+    expect(bindingKeys).toBeDefined();
+    expect(Object.getPrototypeOf(bindingKeys)).toBeNull();
+    expect(Object.isFrozen(bindingKeys)).toBe(true);
+    expect(bindingKeys).toEqual({ database_password: bindingKey });
+    expect(store.current().worker().password.bindKey).toBe("");
+    expect(store.current().config().password.bindKey).toBe("");
+    expect(JSON.stringify(store.current().config().password)).not.toContain(bindingKey);
+    expect(JSON.stringify(store.current().config().password)).not.toContain(validatorBindingKey);
+
+    controller.abort();
+    await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
   it("prepares, validates and atomically publishes hot changes while fencing restart identities", async () => {
     const first = releaseSnapshot({
       version: 1n,

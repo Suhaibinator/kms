@@ -18,11 +18,14 @@ This document describes the public API as implemented in
 `proto/kms/v1/kms.proto` and [`http-api.md`](http-api.md); for the
 namespace/key model, see [`migration.md`](migration.md).
 
-## Migrating from v0.1 to v0.2
+## `0.3.x` compatibility baseline
 
-The Python package in this source tree is versioned `v0.2.0`. It contains
-intentional breaking API cleanup so the SDK follows the current Go and
-TypeScript semantics:
+The Python package in this source tree is versioned `v0.3.0`. This is a
+greenfield wire/storage cutover: use it with a `0.3.x` server and a freshly
+initialized `0.3.x` database, not a `0.2.x` database. The release digest,
+secret request, metadata, and binding contracts intentionally changed.
+
+The earlier `v0.2.0` cleanup remains relevant to callers coming from v0.1:
 
 - `token` is keyword-only on `Client` and `AsyncClient`.
 - `tls=` accepts `grpc.ChannelCredentials`; replace `TLSConfig(...)` with
@@ -48,7 +51,7 @@ use the same language-neutral behavior as the Go and TypeScript SDKs.
 pip install -e sdk/python
 # Published releases are wheel assets on GitHub (replace both versions):
 python -m pip install \
-  https://github.com/Suhaibinator/kms/releases/download/v0.2.0/kms_paramstore-0.2.0-py3-none-any.whl
+  https://github.com/Suhaibinator/kms/releases/download/v0.3.0/kms_paramstore-0.3.0-py3-none-any.whl
 ```
 
 Runtime dependencies are `grpcio>=1.83.1`, `protobuf>=7.35.1,<8`, and
@@ -124,8 +127,8 @@ or constructed and closed manually. `Client.__init__` parameters
 | `namespace` | The client's namespace as `"env/app"`. Keyword-only, `None` by default. When `None`, the namespace is discovered from the identity via `WhoAmI` on first use. A malformed string fails fast with `ConfigError` at construction. |
 | `tls` | A `grpc.ChannelCredentials` built by the SDK TLS helpers. When omitted, the client requires either `insecure=True` or a pre-built `channel`. |
 | `insecure` | Explicitly opts into a cleartext channel for local development. Defaults to `False` and is mutually exclusive with `tls`; never enable it across an untrusted network. |
-| `cache_ttl` | Seconds to cache `get_parameter`/`get_secret` reads; `0` (default) disables caching. Cache entries are invalidated by writes through the client and, once a subscription is active, by watch events. |
-| `cache_max_entries` | Maximum entries retained by each bounded parameter/secret cache. Defaults to 4096. |
+| `cache_ttl` | Seconds to cache `get_parameter` reads; `0` (default) disables caching. Secret plaintext is never cached. Parameter entries are invalidated by writes and watch events. |
+| `cache_max_entries` | Maximum entries retained by the bounded parameter cache. Defaults to 4096. |
 | `timeout` | Default per-RPC deadline in seconds, used when a call doesn't pass its own `timeout`. Defaults to 5.0. Does not apply to the long-lived `Subscribe` stream. |
 | `client_name` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `os.path.basename(sys.argv[0])`. |
 | `fallback_to_defaults_on_error` | Controls when a declarative field's `default` is used — see [Declarative config](#declarative-config-secretvalue-and-parametervalue) below. Defaults to `False`. |
@@ -196,12 +199,12 @@ other = client.get_parameter("/staging/billing/rate")    # absolute, cross-names
 Both accept keyword-only options:
 
 - `get_parameter(key, *, version=0, label="", timeout=None)`
-- `get_secret(key, *, version=0, label="", secret_token="", timeout=None)`
+- `get_secret(key, *, version=0, label="", secret_token="", binding_key="", timeout=None)`
 
 `version` pins the read to a specific immutable version; `label` reads the
 version a label points at (server default is `"current"` when neither is
-given). `secret_token` sets the operation-specific `GetSecret` request field,
-required for token-protected and client-bound secrets.
+given). `secret_token` and `binding_key` set independent operation-specific
+request fields. The exact version may require either, both, or neither.
 
 `get_secret` returns a `Secret` (`kms_paramstore/secret.py`): an immutable,
 `__slots__`-based value type carrying plaintext plus read-only `env`, `app`,
@@ -214,9 +217,11 @@ silently leaking). `value` (bytes) and `string_value` (str, UTF-8-decoded)
 are the only way to read plaintext. Equality compares plaintext without
 rendering it; `Secret` is deliberately unhashable (`hash(secret)` raises
 `TypeError`) to discourage accidentally caching by value.
-`new_secret(value, *, env="", app="", key="", version=0, content_type="")`
+`new_secret(value, *, env="", app="", key="", version=0, content_type="", bind_key="")`
 wraps plaintext in a `Secret` directly — mainly useful for tests and
-tooling.
+tooling. The read-only `bind_key` property is declaration-only: cloning
+preserves it for generated-store extraction, but a fetched secret omits it,
+and normal string/format/Pydantic serialization surfaces remain redacted.
 
 Writes (mainly for tooling, not typical application code):
 
@@ -230,17 +235,64 @@ result = client.put_secret("stripe-api-key", b"sk_live_...",
 ```
 
 - `put_parameter(key, value, *, content_type="", metadata_json="", timeout=None) -> PutResult`
-- `put_secret(key, value, *, content_type="", metadata_json="", client_bound=False, generate_access_token=False, expires_at_unix_ms=0, secret_token="", timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). A new client-bound secret requires `client_bound=True, generate_access_token=True`; retain the returned one-time token. Updates require `client_bound=True, secret_token=current_token`; also setting `generate_access_token=True` rotates the token for the new version.
+- `put_secret(key, value, *, content_type="", metadata_json="", binding_key="", generate_access_token=False, expires_at_unix_ms=0, timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). Non-empty `binding_key` creates a bound version; empty creates an unbound version regardless of history. `generate_access_token` is independent and there is no write-side `secret_token`.
 - `list_parameters(namespace=None, key_prefix="", *, page_size=0, page_token="") -> Page[Parameter]` — listing is namespace-scoped; `namespace` accepts an `"env/app"` string (or `None` for the client's own namespace) and `key_prefix` filters by relative-key prefix. Prefer `page.items` and `page.next_page_token`; two-value unpacking remains only as a v0.1 migration path.
 - `delete_parameter(key, *, timeout=None) -> int` (returns the revision)
 - `get_secret_metadata(key, *, timeout=None) -> SecretInfo` (metadata only, never plaintext)
 - `delete_secret(key, *, timeout=None) -> int` (returns the revision)
 
-`PutResult`, `PutSecretResult`, `Parameter`, `SecretInfo`, `SecretVersion`
-(`kms_paramstore/models.py`) are plain dataclasses decoupling callers from
-the generated protobuf messages. `Parameter` and `SecretInfo` carry explicit
-`env`, `app`, and `key` fields, plus `namespace` (`"env/app"`) and `path`
-(`"/env/app/key"`) display properties.
+Binding lifecycle methods are available on both clients (await them on
+`AsyncClient`):
+
+```python
+client.bind_secret(
+    "api-key", expected_current_version=7, binding_key=new_key
+)
+client.unbind_secret(
+    "api-key", expected_current_version=7, binding_key=current_key
+)
+preview = client.preview_secret_binding_cohort(
+    "api-key", anchor_version=7, binding_key=current_key
+)
+client.rotate_secret_binding_key(
+    "api-key", expected_current_version=7,
+    binding_key=current_key, new_binding_key=new_key,
+)
+client.purge_secret_binding_cohort(
+    "api-key", anchor_version=7, binding_key=compromised_key,
+    expected_revision=preview.revision,
+    expected_affected_versions=preview.affected_versions,
+)
+unbound = client.preview_secret_unbound_versions("api-key")
+client.purge_secret_unbound_versions(
+    "api-key",
+    expected_revision=unbound.revision,
+    expected_affected_versions=unbound.affected_versions,
+)
+```
+
+The server proves the supplied current key before rejecting a byte-for-byte
+unchanged replacement, preserving the canonical credential-failure boundary.
+
+Bound-cohort and unbound-version purges both require exact prior-preview
+guards. The SDK rejects an incomplete, zero, unsorted, or duplicate guard
+before the RPC. Purge is
+irreversible and admin-only. See
+[`binding-keys.md`](binding-keys.md).
+
+`PutResult`, `PutSecretResult`, `Parameter`, `SecretInfo`, `SecretVersion`,
+`SecretVersionTransitionResult`, `SecretBindingCohortResult`, and
+`SecretVersionSetResult`
+(`kms_paramstore/models.py`) are frozen dataclasses decoupling callers from
+the generated protobuf messages. Affected-version collections are immutable
+tuples. `Parameter` and `SecretInfo` carry explicit `env`, `app`, and `key`
+fields, plus `namespace` (`"env/app"`) and `path` (`"/env/app/key"`) display
+properties.
+
+`SecretInfo.bound` summarizes the current-labeled version, while its top-level
+`has_access_token` reports whether the secret currently has an access-token
+hash. Every `SecretVersion` carries immutable-while-live `bound` and
+`has_access_token` flags; use those fields for an exact pin.
 
 ### Public client surface
 
@@ -251,7 +303,7 @@ watch, defaults, and close operations. The stable method families are:
 |---|---|
 | Identity and reads | `who_am_i`, `get_parameter`, `get_parameter_info`, `get_secret` |
 | Parameter inventory and writes | `list_parameters -> Page[Parameter]`, `get_parameter_metadata`, `put_parameter`, `delete_parameter` |
-| Secret inventory and lifecycle | `list_secrets -> Page[SecretInfo]`, `get_secret_metadata`, `put_secret`, `delete_secret`, `set_secret_enabled`, `destroy_secret_version`, `promote_secret_version -> PromoteSecretResult` |
+| Secret inventory and lifecycle | `list_secrets -> Page[SecretInfo]`, `get_secret_metadata`, `put_secret`, `delete_secret`, `set_secret_enabled`, `destroy_secret_version`, `promote_secret_version`, `bind_secret`, `unbind_secret`, `preview_secret_binding_cohort`, `rotate_secret_binding_key`, `purge_secret_binding_cohort`, `preview_secret_unbound_versions`, `purge_secret_unbound_versions` |
 | Runtime configuration | `resolve`, `watch`, `watch_namespace`, `current_revision`, `watch_status` |
 | Managed defaults | `verify_release_defaults -> VerifyReleaseDefaultsResult`, `apply_application_defaults -> ApplicationDefaultsApplyResult` |
 | Lifecycle | `close`; sync and async clients are context managers for their respective execution models |
@@ -283,15 +335,17 @@ except PermissionDeniedError:
 | `NotFoundError` | The key/version/label does not exist. |
 | `PermissionDeniedError` | Authenticated but not authorized for the resource/operation (includes a namespace that forbids the caller's auth method). |
 | `UnauthenticatedError` | Missing, invalid, or expired credential. |
-| `FailedPreconditionError` | Well-formed request the server state forbids (e.g. a `client_bound` mode mismatch, a disabled version). |
+| `FailedPreconditionError` | Well-formed request the server state forbids (e.g. binding an already-bound version or finding no unbound versions to preview). CAS mismatches are a generic `ParamStoreError` with code `"aborted"`. |
 | `NotInitializedError` | A declarative `SecretValue` field was read before `resolve` ran. |
 | `ConfigError` | The SDK itself was misconfigured (missing endpoint, malformed namespace, no key/env_var/default on a declarative field, ...). |
 | `NoNamespaceError` | A **subclass of `ConfigError`**: a relative key was used on a client with no namespace (an unbound identity and no `namespace=`). The message names the key. |
+| `PurgeCleanupPendingError` | The bound-cohort or unbound-version purge committed logically, but active SQLite/WAL artifact cleanup is pending. No purge result accompanies the gRPC error. Do not retry a cohort purge with the retired key or an unbound purge as though its preview were still live. |
 
-gRPC status codes outside this mapped set surface as a generic
-`ParamStoreError` carrying the status code name and message. No exception,
-or its message, ever contains secret plaintext — the SDK maps errors using
-only the gRPC status code and the server's own (non-secret) status message.
+For ordinary RPCs, gRPC status codes outside this mapped set surface as a
+generic `ParamStoreError` carrying the status code name and message. Every RPC
+that carries secret plaintext, an access token, or a binding key instead maps
+from the structured status alone and uses fixed safe text; even a buggy or
+hostile peer cannot reflect credential material into an exception.
 
 ## TLS / mTLS
 
@@ -334,7 +388,8 @@ from kms_paramstore import Client, SecretValue, ParameterValue
 
 class AppConfig:
     stripe_key = SecretValue("stripe-api-key",
-                              token="<per-secret-token>")   # per-secret token, if required
+                              token="<per-secret-token>",   # access token, if required
+                              bind_key="<binding-key>")     # independent, if bound
     openai_key = SecretValue("openai-api-key",
                               env_var="OPENAI_API_KEY")      # env override still wins
     rate_limit = ParameterValue("rate-limit", default="100") # hot-reloads (default)
@@ -348,12 +403,16 @@ cfg.stripe_key.value        # -> bytes plaintext (explicit access only)
 cfg.rate_limit.get()        # -> latest value, hot-reloaded
 ```
 
-**`SecretValue(key="", *, token=None, env_var=None, default=None)`** —
+**`SecretValue(key="", *, token=None, bind_key=None, env_var=None, default=None)`** —
 resolves to a `Secret` object: accessing the attribute on a resolved
 instance (`cfg.stripe_key`) returns the `Secret` directly (so
 `isinstance(cfg.stripe_key, Secret)` is `True`), which redacts exactly like
 any other `Secret`. Accessing it before `resolve` has run raises
 `NotInitializedError`.
+
+`bind_key` is passed only when the store version is fetched. Environment
+overrides and defaults perform no secret RPC. Secret plaintext is never cached,
+regardless of the client's parameter cache settings.
 
 **`ParameterValue(key="", *, env_var=None, default=None, static=False)`** —
 resolves to a `ParameterHandle` (`.get()`, `.value` property, `.on_change()`,
@@ -477,6 +536,7 @@ prepared and installed as one candidate. It uses the dedicated release stream,
 not the ordinary namespace callback queue.
 
 ```python
+import os
 import threading
 from kms_paramstore import (
     ClassifiedReleaseError, ReleaseLoader, ReleaseLoaderConfig, ReleaseSnapshot,
@@ -487,6 +547,7 @@ loader = ReleaseLoader(client, ReleaseLoaderConfig(
     reconcile_interval=60.0,       # default
     max_concurrent_fetches=16,     # default; maximum 256
     secret_token_provider=lambda alias, path: local_tokens.get(alias),
+    binding_keys={"db_password": os.environ["DB_PASSWORD_KMS_BIND_KEY"]},
     validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
 
@@ -519,17 +580,23 @@ reconnects unless one is supplied. Reconciliation defaults to 60 seconds,
 resolution concurrency to 16, reconnect backoff to 0.25–30 seconds, and RPC
 deadlines to the client's default unless `request_timeout` is set.
 
-The token provider receives `(alias, absolute_path)` and may return a token
-string, `(token, bool)`, or `None`. It is called only for a release entry
-captured as token-protected or client-bound. Tokens remain local and are sent
-only with the corresponding pinned secret read; they never enter KMS release
-storage, snapshots, watch events, lifecycle acknowledgements, logs, or metrics.
+For each exact secret pin the loader first fetches live metadata and verifies
+response identity, exact version, state, expiry, `bound`, and
+`has_access_token`. The token provider receives `(alias, absolute_path)` and
+may return a token string, `(token, bool)`, or `None`; it is called only for a
+version whose live metadata is access-token gated. `binding_keys` is a
+defensively copied, read-only alias map and is consulted only for a bound
+version. Credentials remain local and are sent independently only with the
+corresponding pinned read. Missing credentials reject the whole candidate as
+`token_unavailable`; wrong credentials/read failure are `resolution_failed`.
 
 `ReleaseSnapshot` is a frozen dataclass with namespace, release version,
 activation revision, schema version, deterministic digest, metadata,
 immutable entry tuple, and read-only alias-keyed parameter/secret mappings.
 Each `ReleaseEntry` contains exact path/version, content type, captured
-metadata, parameter digest, and non-sensitive secret protection flags. Snapshot
+metadata, and parameter digest. Protection flags are immutable exact-version
+metadata and are absent from release entries and digests, so the version pin
+implicitly pins the protection mode. Snapshot
 `str`/`repr`/formatting omit resolved values, and every `Secret` remains
 `[REDACTED]` unless `.value` or `.string_value` is used explicitly.
 
@@ -563,6 +630,7 @@ from kms_paramstore import AsyncReleaseLoader, AsyncReleaseLoaderConfig
 loader = AsyncReleaseLoader(async_client, AsyncReleaseLoaderConfig(
     name="runtime",
     secret_token_provider=async_token_provider,  # (alias, path, cancel)
+    binding_keys={"db_password": db_password_binding_key},
     validate_manifest=async_manifest_validator,  # (cancel, manifest)
 ))
 await loader.run(async_prepare, stop_event=shutdown)
@@ -605,6 +673,11 @@ generation, atomic managed snapshots, defaults export and verification, use
 [`kms-config-gen-py` and the Python managed-configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 The Python generator currently caps generated schemas at 256 KiB, below the
 server and Go generator's 1 MiB limit, and fails before writing any artifact.
+
+A generated secret declaration may carry `Secret(bind_key=...)`. The store
+extracts those keys into its private alias-keyed release-loader map, then strips
+them from retained defaults and published snapshots. Callers cannot inject a
+replacement `binding_keys` map through managed start options.
 
 ## Parity with the Go and TypeScript SDKs
 

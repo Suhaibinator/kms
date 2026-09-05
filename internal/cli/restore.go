@@ -56,9 +56,9 @@ func restoreFile(in, dst string, force bool) error {
 			return fmt.Errorf("removing stale %s: %w", stableDst+suffix, err)
 		}
 	}
-	// Validate and migrate through the already-resolved spelling. Reopening the
-	// caller's original path here would reintroduce a parent-symlink swap after
-	// the atomic publication completed.
+	// Validate the current baseline through the already-resolved spelling.
+	// Reopening the caller's original path here would reintroduce a parent-symlink
+	// swap after the atomic publication completed.
 	store, err := storage.Open(stableDst)
 	if err != nil {
 		return fmt.Errorf("restored database failed to open: %w", err)

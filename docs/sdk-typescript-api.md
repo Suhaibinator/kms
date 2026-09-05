@@ -3,6 +3,10 @@
 This document fixes the package boundaries and lifecycle contract for the first
 public TypeScript SDK. It is intentionally framework-neutral at the core.
 
+Version `0.3.0` is the greenfield binding-key baseline. It intentionally drops
+the `0.2.x` client-bound write options and release protection fields and must be
+used with the matching `0.3.x` server/database contract.
+
 ## Package and runtime boundaries
 
 The distribution is `@suhaibinator/kms` and supports maintained Node.js
@@ -50,12 +54,12 @@ source of truth for exact inference.
 | Export | Kind and signature family | Purpose |
 |---|---|---|
 | `createClient`, `KmsClient` | Function `(KmsClientOptions) => KmsClient`; class constructor with the same options | Construct and own one process-shareable Node client. |
-| `KmsClientOptions`, `Logger` | Types | Configure endpoint, authentication/transport, namespace, cache/deadlines, reconciliation, client identity, and bounded logging. |
-| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions` | Types | Per-operation cancellation/deadline, selector, pagination, content metadata, and secret-specific options. |
-| `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
+| `KmsClientOptions`, `Logger` | Types | Configure endpoint, authentication/transport, namespace, parameter cache/deadlines, reconciliation, client identity, and bounded logging. Secret plaintext is never cached. |
+| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions`, `BindSecretOptions`, `PreviewSecretBindingCohortOptions`, `RotateSecretBindingKeyOptions`, `PurgeSecretBindingCohortOptions`, `PurgeSecretUnboundVersionsOptions`, `SecretBindingCohortGuardOptions` | Types | Per-operation cancellation/deadline, selectors, pagination, content metadata, independent credentials, current-version transition guards, and mandatory exact-preview guards for both purge operations. |
+| `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `SecretVersionTransitionResult`, `SecretBindingCohortResult`, `SecretVersionSetResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
 | `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
 | `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope/tracked-parameter counts, and optional lifecycle timestamps. |
-| `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, secret-token lookup, and manifest validation. |
+| `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, access-token lookup, defensive alias-keyed `bindingKeys`, and manifest validation. |
 
 `KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,
 `fallbackToDefaultsOnError`, `logger`, `closed`, `currentRevision`, and
@@ -71,9 +75,10 @@ method families are:
 | `getParameter(key, options?)`, `getParameterInfo(key, options?)` | `Promise<string>` or `Promise<Parameter>` for a current, exact-version, or labeled immutable parameter. |
 | `putParameter(key, value, options?)` | `Promise<PutResult>` and invalidates matching cached reads. |
 | `listParameters(namespace?, options?)`, `getParameterMetadata(key, options?)`, `deleteParameter(key, options?)` | Immutable page, non-plaintext metadata/history, or exact revision. |
-| `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; secret tokens are separate from bearer identity. |
+| `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; access tokens, binding keys, and bearer identity are independent. `putSecret` has no write-side secret token. |
 | `listSecrets(namespace?, options?)`, `getSecretMetadata(key, options?)`, `deleteSecret(key, options?)` | Immutable non-plaintext inventory/metadata or exact mutation revision. |
 | `setSecretEnabled(key, enabled, options?)`, `destroySecretVersion(key, version, options?)`, `promoteSecretVersion(key, version, options?)` | Authorized version-state mutations; promotion returns current/previous versions and revision as `bigint`. |
+| `bindSecret`, `unbindSecret`, `rotateSecretBindingKey`, `previewSecretBindingCohort`, `purgeSecretBindingCohort`, `previewSecretUnboundVersions`, `purgeSecretUnboundVersions` | Current-version transitions and purge lifecycle. Transitions require `expectedCurrentVersion` and return one new current/previous pair. Both purge operations require a paired positive, sorted-unique preview guard. All results are deeply frozen. Purge is irreversible and admin-only. |
 | `watch(callback, options?)`, `watchNamespace(namespace, callback, options?)` | Register on the shared process-client stream and return an idempotent local unsubscriber. Home-namespace discovery makes `watch` asynchronous. |
 | `resolve(config, options?)` | Resolve all reachable declarative values concurrently. |
 | `createReleaseLoader(options)` | Create an independently runnable loader that shares this client’s authenticated transport. |
@@ -87,10 +92,10 @@ method families are:
 | `NamespaceRef`, `ResourceRef`, `VersionRef` | Types for explicit namespaces, fully qualified keys, and mutually normalized version/label selection. |
 | `CURRENT_VERSION`, `UINT64_MAX` | Readonly current-selector and exact protobuf `uint64` upper bound. |
 | `parseNamespace`, `splitDisplayPath`, `displayNamespace`, `displayPath`, `resolveRef`, `refOf`, `namespaceEquals`, `namespaceKey`, `normalizeVersionRef` | Pure reference parse/render/compare/normalization helpers. `resolveRef` requires a namespace for a relative key; `refOf` is the tolerant trusted-input parser. |
-| `KmsError`, `ConfigError`, `NoNamespaceError`, `NotInitializedError`, `RateLimitedError` | Stable error class hierarchy for remote, configuration, relative-key, declarative-lifecycle, and exhausted per-identity budget (`resource_exhausted`) failures. |
+| `KmsError`, `ConfigError`, `NoNamespaceError`, `NotInitializedError`, `RateLimitedError`, `PurgeCleanupPendingError` | Stable error class hierarchy for remote, configuration, relative-key, declarative-lifecycle, exhausted-budget, and committed-purge/pending-cleanup outcomes. |
 | `KmsErrorCode`, `KmsErrorOptions` | Types for bounded programmatic codes and optional original gRPC status. |
 | `isKmsError`, `mapGrpcError`, `normalizeError`, `wrapError` | Error narrowing, transport normalization (`normalizeError` aliases `mapGrpcError`), and context wrapping that preserves stable codes. |
-| `Secret`, `newSecret`, `REDACTED`, `SecretMetadata` | Redacting, defensive plaintext wrapper; constructor/factory accept bytes or string plus non-sensitive metadata. |
+| `Secret`, `newSecret`, `REDACTED`, `SecretOptions` | Redacting, defensive plaintext wrapper; constructor/factory accept bytes or string plus metadata and a declaration-only `bindKey`. |
 | `tlsFromFiles`, `mtlsFromFiles`, `tlsFromBytes` | Node credential factories for server-authenticated TLS or mTLS from validated files/bytes. The CA argument always identifies server trust. |
 | `UnaryMethod<Request, Response>`, `BidiMethod<Request, Response>`, `TransportCallOptions`, `DuplexRpc<Request, Response>`, `RpcTransport` | Type-only injectable protocol boundary. Generated service descriptors are intentionally not exported. |
 
@@ -130,9 +135,9 @@ method families are:
 | `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
 | `PreparedRelease`, `PrepareRelease`, `ReleaseDivergence` | Types | Candidate callback contract: synchronous infallible `commit` and at-most-once `abort`, each returning exactly `undefined`, plus cooperative `AbortSignal`. An optional `releaseDivergence()` puts a bounded divergence flag and field count on the applied acknowledgement only. |
 | `VERIFY_VERDICTS`, `VerifyVerdict`, `VerifyDefaultsEntry`, `VerifyReleaseDefaultsOptions`, `VerifyDefaultsVerdict`, `VerifyReleaseDefaultsResult` | Readonly value/types | Bounded verdict vocabulary (`match`, `differs`, `missing_in_release`, `unknown_alias`, `secret_alias`, `unsupported_content_type`), the value-free verify request, and the frozen validated result with `passed()`. |
-| `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry secret authorization locally and reject a manifest before resource resolution. |
+| `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry access tokens locally and reject a manifest before resource resolution. |
 | `ReleaseManifest`, `ReleaseManifestInit`, `ReleaseSnapshot`, `ReleaseSnapshotInit` | Immutable classes/types | Unresolved identity/entries and fully resolved exact candidate; serialization and inspection omit values. |
-| `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, resource, version, content, digest, and protection metadata. |
+| `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, home-namespace resource, exact version, content, and parameter digest. Protection flags are not release fields. |
 | `ReleaseParameter`, `ReleaseSecret` | Immutable value classes | Exact candidate values; release-secret access returns copies and implicit rendering redacts. |
 | `RELEASE_STATES`, `ReleaseState`, `RELEASE_REJECTION_CATEGORIES`, `ReleaseRejectionCategory` | Readonly values/types | Complete bounded service acknowledgement states and rejection taxonomy. |
 | `ReleaseLoaderStatus`, `ReleaseLoaderStats` | Types | Copied, value-free health and counters including applied/observed revisions and reconnects. |
@@ -150,12 +155,12 @@ method families are:
 | `client.close()` | Idempotently cancel watches, reconciliation, callbacks, and transport work. `Symbol.asyncDispose` delegates to it. |
 | `CallOptions` | Per-call `AbortSignal` and earlier absolute deadline. The default unary deadline is five seconds. |
 
-`KmsClientOptions.token` supplies bearer authentication. `GetOptions.secretToken`
-is placed only in a `GetSecret` request and is never used as caller identity or
-metadata. The shared option and legacy secret-lifecycle options remain accepted
-for source compatibility but are never transmitted by parameter or lifecycle
-operations. Parameter and secret reads carrying a `secretToken` still bypass
-the shared read cache and never populate it. Lazy namespace discovery
+`KmsClientOptions.token` supplies bearer authentication.
+`GetOptions.secretToken` and `GetOptions.bindingKey` are placed only in a
+`GetSecret` request and are never used as caller identity or metadata. They are
+independent: an exact version may require either, both, or neither. The
+parameter read cache never stores secret plaintext, with or without a
+credential. Lazy namespace discovery
 is coalesced as client-owned work under the default RPC deadline; each caller's
 earlier deadline or cancellation independently bounds its wait without
 poisoning concurrent callers; an already-cancelled caller starts no shared
@@ -168,18 +173,31 @@ generated protobuf symbols remain internal.
 | API | Contract |
 |---|---|
 | `getParameter`, `getSecret` | Resolve a relative or absolute key at `version` or `label`; return exact `bigint` metadata and a redacting `Secret`. |
-| `putParameter`, `putSecret` | Write an immutable version, invalidate matching cache entries, and return `bigint` version/revision fields. |
+| `putParameter`, `putSecret` | Write an immutable version and return `bigint` version/revision fields. `putSecret` binds the new version only when `bindingKey` is non-empty; `generateAccessToken` is orthogonal. |
 | `listParameters`, `listSecrets` | Return immutable `Page<T>` values with bounded pagination inputs. |
 | `getParameterMetadata`, `getSecretMetadata` | Return non-plaintext history, labels, state, and content metadata. |
 | `deleteParameter`, `deleteSecret`, `setSecretEnabled`, `destroySecretVersion`, `promoteSecretVersion` | Perform the corresponding authorized mutation and return exact revision/version values. |
+| `bindSecret`, `unbindSecret` | Require `expectedCurrentVersion`, clone current into one new version with the requested protection mode, and return a frozen `SecretVersionTransitionResult`. |
+| `previewSecretBindingCohort` | Discover a contiguous cohort without mutation and return its anchor, sorted affected versions, and revision. |
+| `rotateSecretBindingKey` | Require `expectedCurrentVersion` and clone only current under the replacement key; historical versions retain the old key. |
+| `purgeSecretBindingCohort` | Irreversibly destroy a contiguous bound cohort. Required `expectedRevision` and `expectedAffectedVersions` must exactly match a prior preview. |
+| `previewSecretUnboundVersions`, `purgeSecretUnboundVersions` | Preview every non-destroyed unbound version, then irreversibly purge exactly that mandatory revision/version-set guard. |
 | `SecretValue` | Resolve an env override, KMS secret, or allowed default. Plaintext access is explicit and implicit rendering redacts. |
 | `ParameterValue` | Resolve the same precedence and subscribe by default. `static: true` opts out; `onChange` and `dispose` own callback lifecycle. |
 | `client.resolve(object)` / `resolveValues` | Find declarative values through own properties and arrays, detect cycles, and report failures together in `ResolutionError`. |
 
+`SecretInfo.bound` summarizes the version selected by `current`, while
+`SecretInfo.hasAccessToken` reports whether the secret currently has an access
+token hash. Every `SecretVersion` carries immutable-while-live `bound` and
+`hasAccessToken`; exact-version decisions use those fields.
+
 `parseNamespace`, `splitDisplayPath`, `resolveRef`, and display helpers expose
 the namespace/path rules without a network call. `CURRENT_VERSION` represents
 the server's current selector. All explicit versions must be `bigint` values
-within the protobuf `uint64` range.
+within the protobuf `uint64` range. Binding keys are opaque strings; the server
+enforces valid UTF-8 of at least 32 bytes without trimming or normalization.
+`SecretValueOptions.bindKey` is sent only when that declaration performs a KMS
+secret read; an environment override or default performs no secret RPC.
 
 ### Watches and releases
 
@@ -187,7 +205,7 @@ within the protobuf `uint64` range.
 |---|---|
 | `client.watch(callback)` | Observe the home namespace through the shared bidirectional stream and return an unsubscribe function. |
 | `client.watchNamespace(namespace, callback)` | Observe an explicit namespace, subject to authorization. |
-| `client.createReleaseLoader(options)` | Bind an atomic loader to the client's authenticated transport and configured/discovered namespace; exact fetches preserve and verify the server-returned resource identity without entering the ordinary read cache. |
+| `client.createReleaseLoader(options)` | Bind an atomic loader to the client's authenticated transport and configured/discovered namespace; exact secret fetches first validate live metadata and never enter a plaintext cache. |
 | `ReleaseLoader.run(prepare, signal)` | Resolve one exact, verified candidate at a time; abort superseded work; synchronously commit prepared state; preserve last known good after later rejection. |
 | `ReleaseLoader.status()`, `stats()` | Return copied non-secret loader health and bounded rejection categories. |
 | `ReleaseSnapshot` | Provide immutable parameter access and defensive redacting secret access. JSON and inspection omit all values. |
@@ -197,7 +215,12 @@ within the protobuf `uint64` range.
 returned `commit()` and `abort()` must complete synchronously, return exactly
 `undefined`, and never throw; the declaration and runtime both reject Promise
 or thenable callbacks. `abort()` releases candidate-owned resources. A release
-containing protected secrets supplies a local `secretTokenProvider`. `stop()`
+containing protected secrets supplies a local `secretTokenProvider` for access
+tokens and defensive frozen null-prototype `bindingKeys` by alias for bound
+versions. Release entries contain neither flag, so the bounded worker fetches
+exact live metadata, validates identity/version/state/expiry, and resolves the
+two credentials independently. Missing credentials reject the whole candidate
+as `token_unavailable`; failed reads reject it as `resolution_failed`. `stop()`
 requests cooperative shutdown; preparation work must observe its `AbortSignal`,
 and callers still await the `run()` promise before closing the client.
 
@@ -329,6 +352,15 @@ name and exact generated alias/content-type contract, require a synchronous
 default-drift reporter, and may add `onApplied` and `onCandidateRejected`
 observers; `consoleCallbacks` supplies all three.
 
+A generated secret default may be `new Secret("", { bindKey })`; an unbound
+secret uses `new Secret()`. Generated `Store` construction extracts every
+non-empty declaration key into its private alias map and replaces the retained
+default with a key-free `Secret`. Published snapshots are key-free too.
+Generated `StartOptions` omits `ManagedConfigOptions.bindingKeys`, and runtime
+spreads caller options before overwriting `bindingKeys` with the extracted map,
+so JavaScript callers cannot inject a competing credential object. The access
+token provider remains a separate release-loader option.
+
 Generated preparation performs strict decode and application validation, then
 returns a synchronous `publish` swap plus optional `abort`; both must return
 exactly `undefined`. It also returns complete source-default differences, the
@@ -435,6 +467,14 @@ map to `not_found`, `permission_denied`, `unauthenticated`, and
 Unmapped transport status information is preserved without ever including
 caller-supplied secret bytes.
 
+RPCs that carry plaintext, access tokens, or binding keys use a secret-safe
+mapper with fixed messages rather than reflecting hostile server detail.
+`PurgeCleanupPendingError` means the purge transaction committed but physical
+SQLite/WAL cleanup has not completed. Do not retry a bound-cohort purge with
+the retired key, or an unbound-version purge as though its preview were still
+live. gRPC cannot return a mutation result with an error, so the promise rejects
+without a result in this case.
+
 The complete `KmsErrorCode` union is `not_found`, `permission_denied`,
 `unauthenticated`, `failed_precondition`, `not_initialized`, `no_namespace`,
 `invalid_argument`, `cancelled`, `deadline_exceeded`, `already_exists`,
@@ -442,11 +482,15 @@ The complete `KmsErrorCode` union is `not_found`, `permission_denied`,
 `unavailable`, `data_loss`, and `unknown`. `grpcCode` is present only when a
 wire status exists; branch on `code`, not message text.
 
-`Secret` stores a private copy of plaintext bytes. `bytes()`, `text()`, and
-`clone()` are the only plaintext access paths; returned byte arrays are fresh
-copies. String conversion, JSON conversion, Node inspection, errors, release
-snapshots, status, metrics, and logs redact. This defensive-copy behavior is
-deliberately stronger than the Go SDK's mutable `Value()` slice.
+`Secret` stores private copies of plaintext bytes and the optional
+declaration-only `bindKey`. Its read-only `bindKey` getter lets a generated
+store extract the declaration credential. `clone()` preserves the key for that
+ownership transfer, while secrets fetched from KMS omit it. `bytes()` and
+`text()` are the only plaintext access paths; returned byte arrays are fresh
+copies. String coercion, JSON conversion, Node inspection, `Object.keys`,
+errors, release snapshots, status, metrics, and logs reveal neither plaintext
+nor the key. This defensive-copy behavior is deliberately stronger than the
+Go SDK's mutable `Value()` slice.
 
 ## Stability, versioning, and deprecation
 

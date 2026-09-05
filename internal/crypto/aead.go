@@ -1,6 +1,6 @@
 // Package crypto implements the encryption subsystem: AES-256-GCM envelope
 // encryption with per-version DEKs, KEK management (file- or
-// passphrase-derived), opt-in client-bound double wrapping, key-check
+// passphrase-derived), opt-in binding-key double wrapping, key-check
 // canaries, and token generation/hashing.
 //
 // Design invariants:
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 )
 
 // AlgorithmAES256GCM is the algorithm identifier persisted with ciphertexts.
@@ -106,7 +107,8 @@ func randomBytes(n int) ([]byte, error) {
 // passphrases promptly. (Go can't guarantee no copies exist, but this
 // removes the primary buffer.)
 func Zero(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
+	clear(b)
+	// KeepAlive prevents the compiler from proving the final overwrite dead
+	// before the backing storage's last observable use.
+	runtime.KeepAlive(b)
 }

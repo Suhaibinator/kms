@@ -50,9 +50,9 @@ import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
 const client = createClient({
   endpoint: process.env.KMS_ENDPOINT ?? "kms.internal:8443",
   credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),
   // Optional when the authenticated identity is bound to a namespace.
   namespace: process.env.KMS_NAMESPACE,
@@ -110,8 +110,34 @@ const pinned = await client.getParameter("rate-limit", { version: 7n });
 const previous = await client.getSecret("session-signing-key", {
   label: "previous",
   secretToken: process.env.SIGNING_KEY_TOKEN,
+  bindingKey: process.env.SIGNING_KEY_BINDING_KEY,
 });
 ```
+
+Binding changes and binding-key rotation create one new current version, so
+callers read current metadata and submit its version as a compare-and-swap
+guard. Historical versions remain unchanged under their original key:
+
+```ts
+const bindingKey = process.env.SIGNING_KEY_BINDING_KEY!;
+const nextBindingKey = process.env.SIGNING_KEY_NEW_BINDING_KEY!;
+const metadata = await client.getSecretMetadata("session-signing-key");
+await client.rotateSecretBindingKey("session-signing-key", {
+  expectedCurrentVersion: metadata.labels.current,
+  bindingKey,
+  newBindingKey: nextBindingKey,
+});
+```
+
+Bound-cohort and unbound-version purges both require their exact prior-preview
+guards. A purge rejects locally unless its revision is
+positive and its affected versions are a non-empty, strictly ascending list of positive `bigint` values. The
+server validates the current binding key before rejecting an identical
+replacement, so credential failures retain their canonical behavior.
+`PurgeCleanupPendingError` means either purge committed logically but active
+SQLite/WAL cleanup remains pending; no purge result accompanies the error. Do
+not retry a cohort purge with the retired key or an unbound purge as though its
+preview were still live.
 
 ## Declarative values and hot reload
 
@@ -127,6 +153,7 @@ const config = {
   database: {
     password: new SecretValue("db-password", {
       token: process.env.DB_PASSWORD_TOKEN,
+      bindKey: process.env.DB_PASSWORD_BINDING_KEY,
       envVar: "DB_PASSWORD",
     }),
   },
@@ -208,9 +235,12 @@ await loader.run(async (snapshot: ReleaseSnapshot): Promise<PreparedRelease> => 
 });
 ```
 
-Supply `secretTokenProvider` when a release contains token-protected or
-client-bound secrets. Preparation errors that may contain application data are
-reported to the service as bounded rejection categories, not raw text.
+Supply `secretTokenProvider` for access-token-gated release aliases and
+`bindingKeys` for bound aliases. The loader checks the exact pinned version's
+live metadata before requesting only the credentials it requires. Preparation
+errors that may contain application data are reported to the service as bounded
+rejection categories, not raw text. Secret plaintext is never read from the SDK
+cache; every read is authorized by the server.
 
 ## Public policy and Next.js
 
@@ -252,6 +282,14 @@ try {
   }
 }
 ```
+
+`PurgeCleanupPendingError` is the distinct post-commit outcome for either purge
+kind when SQLite artifact cleanup is still pending. The logical purge has
+already happened, no mutation result accompanies the error, and KMS has failed
+closed. Do not retry a bound-cohort purge with the retired key or an
+unbound-version purge as though its preview were still live. Handle this class
+separately from an ordinary `unavailable` error and restore service by completing
+the documented database cleanup/reopen procedure.
 
 `Secret`, `SecretValue`, and release secrets redact string conversion, JSON,
 and Node inspection. Their byte accessors return defensive copies. Once an
@@ -328,8 +366,10 @@ import { Store } from "./config.generated.js";
 const store = new Store(
   {
     requestTimeoutMs: 3000,
-    // Secret defaults must be the zero Secret; plaintext never belongs here.
-    databasePassword: new Secret(),
+    // Plaintext never belongs here; a declaration-only binding key is allowed.
+    databasePassword: new Secret("", {
+      bindKey: process.env.DATABASE_PASSWORD_KMS_BINDING_KEY,
+    }),
   },
   (candidate) => {
     if (candidate.requestTimeoutMs <= 0) {

@@ -273,14 +273,22 @@ var ParameterService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SecretService_GetSecret_FullMethodName            = "/kms.v1.SecretService/GetSecret"
-	SecretService_PutSecret_FullMethodName            = "/kms.v1.SecretService/PutSecret"
-	SecretService_ListSecrets_FullMethodName          = "/kms.v1.SecretService/ListSecrets"
-	SecretService_DeleteSecret_FullMethodName         = "/kms.v1.SecretService/DeleteSecret"
-	SecretService_DisableSecret_FullMethodName        = "/kms.v1.SecretService/DisableSecret"
-	SecretService_DestroySecretVersion_FullMethodName = "/kms.v1.SecretService/DestroySecretVersion"
-	SecretService_GetSecretMetadata_FullMethodName    = "/kms.v1.SecretService/GetSecretMetadata"
-	SecretService_PromoteSecretVersion_FullMethodName = "/kms.v1.SecretService/PromoteSecretVersion"
+	SecretService_GetSecret_FullMethodName                    = "/kms.v1.SecretService/GetSecret"
+	SecretService_PutSecret_FullMethodName                    = "/kms.v1.SecretService/PutSecret"
+	SecretService_PutSecretV03_FullMethodName                 = "/kms.v1.SecretService/PutSecretV03"
+	SecretService_ListSecrets_FullMethodName                  = "/kms.v1.SecretService/ListSecrets"
+	SecretService_DeleteSecret_FullMethodName                 = "/kms.v1.SecretService/DeleteSecret"
+	SecretService_DisableSecret_FullMethodName                = "/kms.v1.SecretService/DisableSecret"
+	SecretService_DestroySecretVersion_FullMethodName         = "/kms.v1.SecretService/DestroySecretVersion"
+	SecretService_GetSecretMetadata_FullMethodName            = "/kms.v1.SecretService/GetSecretMetadata"
+	SecretService_PromoteSecretVersion_FullMethodName         = "/kms.v1.SecretService/PromoteSecretVersion"
+	SecretService_BindSecret_FullMethodName                   = "/kms.v1.SecretService/BindSecret"
+	SecretService_UnbindSecret_FullMethodName                 = "/kms.v1.SecretService/UnbindSecret"
+	SecretService_PreviewSecretBindingCohort_FullMethodName   = "/kms.v1.SecretService/PreviewSecretBindingCohort"
+	SecretService_RotateSecretBindingKey_FullMethodName       = "/kms.v1.SecretService/RotateSecretBindingKey"
+	SecretService_PurgeSecretBindingCohort_FullMethodName     = "/kms.v1.SecretService/PurgeSecretBindingCohort"
+	SecretService_PreviewSecretUnboundVersions_FullMethodName = "/kms.v1.SecretService/PreviewSecretUnboundVersions"
+	SecretService_PurgeSecretUnboundVersions_FullMethodName   = "/kms.v1.SecretService/PurgeSecretUnboundVersions"
 )
 
 // SecretServiceClient is the client API for SecretService service.
@@ -288,13 +296,25 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SecretServiceClient interface {
 	GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*GetSecretResponse, error)
+	// Deprecated: Do not use.
+	// PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+	// receive an explicit rejection instead of silently losing client_bound.
+	// v0.3 clients must use PutSecretV03.
 	PutSecret(ctx context.Context, in *PutSecretRequest, opts ...grpc.CallOption) (*PutSecretResponse, error)
+	PutSecretV03(ctx context.Context, in *PutSecretRequest, opts ...grpc.CallOption) (*PutSecretResponse, error)
 	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
 	DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*DeleteSecretResponse, error)
 	DisableSecret(ctx context.Context, in *DisableSecretRequest, opts ...grpc.CallOption) (*DisableSecretResponse, error)
 	DestroySecretVersion(ctx context.Context, in *DestroySecretVersionRequest, opts ...grpc.CallOption) (*DestroySecretVersionResponse, error)
 	GetSecretMetadata(ctx context.Context, in *GetSecretMetadataRequest, opts ...grpc.CallOption) (*GetSecretMetadataResponse, error)
 	PromoteSecretVersion(ctx context.Context, in *PromoteSecretVersionRequest, opts ...grpc.CallOption) (*PromoteSecretVersionResponse, error)
+	BindSecret(ctx context.Context, in *BindSecretRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error)
+	UnbindSecret(ctx context.Context, in *UnbindSecretRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error)
+	PreviewSecretBindingCohort(ctx context.Context, in *PreviewSecretBindingCohortRequest, opts ...grpc.CallOption) (*SecretBindingCohortResponse, error)
+	RotateSecretBindingKey(ctx context.Context, in *RotateSecretBindingKeyRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error)
+	PurgeSecretBindingCohort(ctx context.Context, in *PurgeSecretBindingCohortRequest, opts ...grpc.CallOption) (*SecretBindingCohortResponse, error)
+	PreviewSecretUnboundVersions(ctx context.Context, in *PreviewSecretUnboundVersionsRequest, opts ...grpc.CallOption) (*SecretVersionSetResponse, error)
+	PurgeSecretUnboundVersions(ctx context.Context, in *PurgeSecretUnboundVersionsRequest, opts ...grpc.CallOption) (*SecretVersionSetResponse, error)
 }
 
 type secretServiceClient struct {
@@ -315,10 +335,21 @@ func (c *secretServiceClient) GetSecret(ctx context.Context, in *GetSecretReques
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *secretServiceClient) PutSecret(ctx context.Context, in *PutSecretRequest, opts ...grpc.CallOption) (*PutSecretResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PutSecretResponse)
 	err := c.cc.Invoke(ctx, SecretService_PutSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PutSecretV03(ctx context.Context, in *PutSecretRequest, opts ...grpc.CallOption) (*PutSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutSecretResponse)
+	err := c.cc.Invoke(ctx, SecretService_PutSecretV03_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -385,18 +416,100 @@ func (c *secretServiceClient) PromoteSecretVersion(ctx context.Context, in *Prom
 	return out, nil
 }
 
+func (c *secretServiceClient) BindSecret(ctx context.Context, in *BindSecretRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretVersionTransitionResponse)
+	err := c.cc.Invoke(ctx, SecretService_BindSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) UnbindSecret(ctx context.Context, in *UnbindSecretRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretVersionTransitionResponse)
+	err := c.cc.Invoke(ctx, SecretService_UnbindSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PreviewSecretBindingCohort(ctx context.Context, in *PreviewSecretBindingCohortRequest, opts ...grpc.CallOption) (*SecretBindingCohortResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretBindingCohortResponse)
+	err := c.cc.Invoke(ctx, SecretService_PreviewSecretBindingCohort_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) RotateSecretBindingKey(ctx context.Context, in *RotateSecretBindingKeyRequest, opts ...grpc.CallOption) (*SecretVersionTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretVersionTransitionResponse)
+	err := c.cc.Invoke(ctx, SecretService_RotateSecretBindingKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PurgeSecretBindingCohort(ctx context.Context, in *PurgeSecretBindingCohortRequest, opts ...grpc.CallOption) (*SecretBindingCohortResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretBindingCohortResponse)
+	err := c.cc.Invoke(ctx, SecretService_PurgeSecretBindingCohort_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PreviewSecretUnboundVersions(ctx context.Context, in *PreviewSecretUnboundVersionsRequest, opts ...grpc.CallOption) (*SecretVersionSetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretVersionSetResponse)
+	err := c.cc.Invoke(ctx, SecretService_PreviewSecretUnboundVersions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PurgeSecretUnboundVersions(ctx context.Context, in *PurgeSecretUnboundVersionsRequest, opts ...grpc.CallOption) (*SecretVersionSetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretVersionSetResponse)
+	err := c.cc.Invoke(ctx, SecretService_PurgeSecretUnboundVersions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SecretServiceServer is the server API for SecretService service.
 // All implementations must embed UnimplementedSecretServiceServer
 // for forward compatibility.
 type SecretServiceServer interface {
 	GetSecret(context.Context, *GetSecretRequest) (*GetSecretResponse, error)
+	// Deprecated: Do not use.
+	// PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+	// receive an explicit rejection instead of silently losing client_bound.
+	// v0.3 clients must use PutSecretV03.
 	PutSecret(context.Context, *PutSecretRequest) (*PutSecretResponse, error)
+	PutSecretV03(context.Context, *PutSecretRequest) (*PutSecretResponse, error)
 	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
 	DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error)
 	DisableSecret(context.Context, *DisableSecretRequest) (*DisableSecretResponse, error)
 	DestroySecretVersion(context.Context, *DestroySecretVersionRequest) (*DestroySecretVersionResponse, error)
 	GetSecretMetadata(context.Context, *GetSecretMetadataRequest) (*GetSecretMetadataResponse, error)
 	PromoteSecretVersion(context.Context, *PromoteSecretVersionRequest) (*PromoteSecretVersionResponse, error)
+	BindSecret(context.Context, *BindSecretRequest) (*SecretVersionTransitionResponse, error)
+	UnbindSecret(context.Context, *UnbindSecretRequest) (*SecretVersionTransitionResponse, error)
+	PreviewSecretBindingCohort(context.Context, *PreviewSecretBindingCohortRequest) (*SecretBindingCohortResponse, error)
+	RotateSecretBindingKey(context.Context, *RotateSecretBindingKeyRequest) (*SecretVersionTransitionResponse, error)
+	PurgeSecretBindingCohort(context.Context, *PurgeSecretBindingCohortRequest) (*SecretBindingCohortResponse, error)
+	PreviewSecretUnboundVersions(context.Context, *PreviewSecretUnboundVersionsRequest) (*SecretVersionSetResponse, error)
+	PurgeSecretUnboundVersions(context.Context, *PurgeSecretUnboundVersionsRequest) (*SecretVersionSetResponse, error)
 	mustEmbedUnimplementedSecretServiceServer()
 }
 
@@ -412,6 +525,9 @@ func (UnimplementedSecretServiceServer) GetSecret(context.Context, *GetSecretReq
 }
 func (UnimplementedSecretServiceServer) PutSecret(context.Context, *PutSecretRequest) (*PutSecretResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutSecret not implemented")
+}
+func (UnimplementedSecretServiceServer) PutSecretV03(context.Context, *PutSecretRequest) (*PutSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutSecretV03 not implemented")
 }
 func (UnimplementedSecretServiceServer) ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSecrets not implemented")
@@ -430,6 +546,27 @@ func (UnimplementedSecretServiceServer) GetSecretMetadata(context.Context, *GetS
 }
 func (UnimplementedSecretServiceServer) PromoteSecretVersion(context.Context, *PromoteSecretVersionRequest) (*PromoteSecretVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PromoteSecretVersion not implemented")
+}
+func (UnimplementedSecretServiceServer) BindSecret(context.Context, *BindSecretRequest) (*SecretVersionTransitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BindSecret not implemented")
+}
+func (UnimplementedSecretServiceServer) UnbindSecret(context.Context, *UnbindSecretRequest) (*SecretVersionTransitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnbindSecret not implemented")
+}
+func (UnimplementedSecretServiceServer) PreviewSecretBindingCohort(context.Context, *PreviewSecretBindingCohortRequest) (*SecretBindingCohortResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewSecretBindingCohort not implemented")
+}
+func (UnimplementedSecretServiceServer) RotateSecretBindingKey(context.Context, *RotateSecretBindingKeyRequest) (*SecretVersionTransitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RotateSecretBindingKey not implemented")
+}
+func (UnimplementedSecretServiceServer) PurgeSecretBindingCohort(context.Context, *PurgeSecretBindingCohortRequest) (*SecretBindingCohortResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PurgeSecretBindingCohort not implemented")
+}
+func (UnimplementedSecretServiceServer) PreviewSecretUnboundVersions(context.Context, *PreviewSecretUnboundVersionsRequest) (*SecretVersionSetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewSecretUnboundVersions not implemented")
+}
+func (UnimplementedSecretServiceServer) PurgeSecretUnboundVersions(context.Context, *PurgeSecretUnboundVersionsRequest) (*SecretVersionSetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PurgeSecretUnboundVersions not implemented")
 }
 func (UnimplementedSecretServiceServer) mustEmbedUnimplementedSecretServiceServer() {}
 func (UnimplementedSecretServiceServer) testEmbeddedByValue()                       {}
@@ -484,6 +621,24 @@ func _SecretService_PutSecret_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SecretServiceServer).PutSecret(ctx, req.(*PutSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PutSecretV03_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PutSecretV03(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PutSecretV03_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PutSecretV03(ctx, req.(*PutSecretRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -596,6 +751,132 @@ func _SecretService_PromoteSecretVersion_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SecretService_BindSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).BindSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_BindSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).BindSecret(ctx, req.(*BindSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_UnbindSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnbindSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).UnbindSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_UnbindSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).UnbindSecret(ctx, req.(*UnbindSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PreviewSecretBindingCohort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreviewSecretBindingCohortRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PreviewSecretBindingCohort(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PreviewSecretBindingCohort_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PreviewSecretBindingCohort(ctx, req.(*PreviewSecretBindingCohortRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_RotateSecretBindingKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateSecretBindingKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).RotateSecretBindingKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_RotateSecretBindingKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).RotateSecretBindingKey(ctx, req.(*RotateSecretBindingKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PurgeSecretBindingCohort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PurgeSecretBindingCohortRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PurgeSecretBindingCohort(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PurgeSecretBindingCohort_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PurgeSecretBindingCohort(ctx, req.(*PurgeSecretBindingCohortRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PreviewSecretUnboundVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreviewSecretUnboundVersionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PreviewSecretUnboundVersions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PreviewSecretUnboundVersions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PreviewSecretUnboundVersions(ctx, req.(*PreviewSecretUnboundVersionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PurgeSecretUnboundVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PurgeSecretUnboundVersionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PurgeSecretUnboundVersions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PurgeSecretUnboundVersions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PurgeSecretUnboundVersions(ctx, req.(*PurgeSecretUnboundVersionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SecretService_ServiceDesc is the grpc.ServiceDesc for SecretService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -610,6 +891,10 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutSecret",
 			Handler:    _SecretService_PutSecret_Handler,
+		},
+		{
+			MethodName: "PutSecretV03",
+			Handler:    _SecretService_PutSecretV03_Handler,
 		},
 		{
 			MethodName: "ListSecrets",
@@ -634,6 +919,34 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PromoteSecretVersion",
 			Handler:    _SecretService_PromoteSecretVersion_Handler,
+		},
+		{
+			MethodName: "BindSecret",
+			Handler:    _SecretService_BindSecret_Handler,
+		},
+		{
+			MethodName: "UnbindSecret",
+			Handler:    _SecretService_UnbindSecret_Handler,
+		},
+		{
+			MethodName: "PreviewSecretBindingCohort",
+			Handler:    _SecretService_PreviewSecretBindingCohort_Handler,
+		},
+		{
+			MethodName: "RotateSecretBindingKey",
+			Handler:    _SecretService_RotateSecretBindingKey_Handler,
+		},
+		{
+			MethodName: "PurgeSecretBindingCohort",
+			Handler:    _SecretService_PurgeSecretBindingCohort_Handler,
+		},
+		{
+			MethodName: "PreviewSecretUnboundVersions",
+			Handler:    _SecretService_PreviewSecretUnboundVersions_Handler,
+		},
+		{
+			MethodName: "PurgeSecretUnboundVersions",
+			Handler:    _SecretService_PurgeSecretUnboundVersions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

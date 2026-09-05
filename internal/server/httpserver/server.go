@@ -450,13 +450,15 @@ func newRequestID() string {
 	return "r-" + hex.EncodeToString(b[:])
 }
 
-// decodeJSON reads and decodes a JSON request body under the size limit. A
-// missing/empty body is treated as an empty object, leaving v at its zero
-// value; per-handler field validation then reports any required-field errors.
+// decodeJSON reads and strictly decodes a JSON request body under the size
+// limit. Unknown members are rejected so misspelled protection or CAS fields
+// cannot silently become their unsafe zero values. A missing/empty body is
+// treated as an empty object, leaving v at its zero value; per-handler field
+// validation then reports any required-field errors.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	body := &jsonBodyReader{Reader: r.Body}
-	if err := json.UnmarshalRead(body, v); err != nil {
+	if err := json.UnmarshalRead(body, v, json.RejectUnknownMembers(true)); err != nil {
 		if !body.sawNonWhitespace && errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil // empty body: leave v zero-valued
 		}

@@ -4,6 +4,29 @@ Stable repository releases are lockstep: one `X.Y.Z` version identifies the
 server binaries, Go module, container image, Python SDK, and TypeScript SDK.
 Prerelease tags are intentionally unsupported.
 
+## `0.3.0` baseline release notes
+
+`0.3.0` is a deliberately greenfield cutover. It replaces server-minted
+client-bound version tokens with operator-owned binding keys. Bind, unbind, and
+key rotation clone current into a new version guarded by its expected version.
+Bound-cohort purge and the separate all-unbound-version administrator
+operation both require their exact paired prior-preview guards.
+Protection is immutable exact-version metadata rather than release-entry data.
+Release entries/digests and the protobuf/JSON secret shapes are therefore not
+compatible with `0.2.x`.
+
+Operators must initialize a fresh database and repopulate it through normal
+bootstrap/import workflows. There is no in-place `0.2.x` migration, legacy
+schema repair, or reserved protobuf-field compatibility. Upgrade server, SDK,
+generated bindings, and consuming applications together; provision declaration
+binding keys separately. See [`migration.md`](migration.md#03x-database-cutover)
+and [`binding-keys.md`](binding-keys.md).
+
+The retained `parameter-store import` command is not an exception to that
+rule: it ingests the separate SuhaibParameterStore flat-key schema or neutral
+JSON through current `0.3.x` service writes. It does not understand or upgrade
+a `0.2.x` KMS database.
+
 ## Release from GitHub
 
 1. Merge the release changes to `main` and wait for its ordinary CI run to pass.
@@ -49,7 +72,7 @@ artifacts from the tagged commit.
 Download an archive and verify its checksum and provenance:
 
 ```bash
-VERSION=0.1.15
+VERSION=0.3.0
 curl -LO "https://github.com/Suhaibinator/kms/releases/download/v${VERSION}/kms_${VERSION}_linux_amd64.tar.gz"
 curl -LO "https://github.com/Suhaibinator/kms/releases/download/v${VERSION}/SHA256SUMS"
 grep "kms_${VERSION}_linux_amd64.tar.gz" SHA256SUMS | sha256sum --check
@@ -60,7 +83,7 @@ GitHub does not provide a PyPI-compatible package registry, so install the
 Python wheel directly from the release:
 
 ```bash
-VERSION=0.1.15
+VERSION=0.3.0
 python -m pip install \
   "https://github.com/Suhaibinator/kms/releases/download/v${VERSION}/kms_paramstore-${VERSION}-py3-none-any.whl"
 ```
@@ -69,7 +92,7 @@ GitHub's npm registry requires authentication even for this public package. Use
 a classic personal access token with `read:packages` for local installation:
 
 ```bash
-VERSION=0.1.15
+VERSION=0.3.0
 npm config set @suhaibinator:registry https://npm.pkg.github.com
 npm config set //npm.pkg.github.com/:_authToken "$GITHUB_PACKAGES_TOKEN"
 npm install "@suhaibinator/kms@${VERSION}"
@@ -78,7 +101,7 @@ npm install "@suhaibinator/kms@${VERSION}"
 Pull and verify the multi-platform container image:
 
 ```bash
-VERSION=0.1.15
+VERSION=0.3.0
 docker pull "ghcr.io/suhaibinator/kms:${VERSION}"
 gh attestation verify "oci://ghcr.io/suhaibinator/kms:${VERSION}" \
   --repo Suhaibinator/kms
@@ -87,7 +110,7 @@ gh attestation verify "oci://ghcr.io/suhaibinator/kms:${VERSION}" \
 Initialize separate database and key volumes, then start the service:
 
 ```bash
-VERSION=0.1.15
+VERSION=0.3.0
 docker volume create kms-data
 docker volume create kms-key
 docker run --rm -it \

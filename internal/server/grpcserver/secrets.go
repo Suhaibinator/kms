@@ -3,8 +3,12 @@ package grpcserver
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 type secretServer struct {
@@ -17,7 +21,7 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 	if err != nil {
 		return nil, err
 	}
-	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel(), req.GetSecretToken())
+	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel(), req.GetSecretToken(), req.GetBindingKey())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -32,6 +36,10 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 }
 
 func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+	return nil, status.Error(codes.FailedPrecondition, "PutSecret is incompatible with KMS v0.3; use PutSecretV03")
+}
+
+func (h *secretServer) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
@@ -41,10 +49,9 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 		Value:         req.GetValue(),
 		ContentType:   req.GetContentType(),
 		Metadata:      req.GetMetadataJson(),
-		ClientBound:   req.GetClientBound(),
+		BindingKey:    req.GetBindingKey(),
 		GenerateToken: req.GetGenerateAccessToken(),
 		ExpiresAt:     req.GetExpiresAtUnixMs(),
-		SecretToken:   req.GetSecretToken(),
 	})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
@@ -55,6 +62,113 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 		Revision:    res.Revision,
 		AccessToken: res.AccessToken,
 	}, nil
+}
+
+func (h *secretServer) BindSecret(ctx context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.BindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionTransitionResponse(result), nil
+}
+
+func (h *secretServer) UnbindSecret(ctx context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.UnbindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionTransitionResponse(result), nil
+}
+
+func (h *secretServer) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PreviewSecretBindingCohort(ctx, pr, refFromProto(req.GetRef()), req.GetAnchorVersion(), req.GetBindingKey())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretBindingCohortResponse(result), nil
+}
+
+func (h *secretServer) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.RotateSecretBindingKey(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey(), req.GetNewBindingKey())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionTransitionResponse(result), nil
+}
+
+func (h *secretServer) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.PurgeSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PurgeSecretBindingCohort(ctx, pr, refFromProto(req.GetRef()), req.GetAnchorVersion(), req.GetBindingKey(), req.GetExpectedRevision(), req.GetExpectedAffectedVersions())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretBindingCohortResponse(result), nil
+}
+
+func (h *secretServer) PreviewSecretUnboundVersions(ctx context.Context, req *kmsv1.PreviewSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PreviewSecretUnboundVersions(ctx, pr, refFromProto(req.GetRef()))
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionSetResponse(result), nil
+}
+
+func (h *secretServer) PurgeSecretUnboundVersions(ctx context.Context, req *kmsv1.PurgeSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PurgeSecretUnboundVersions(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedRevision(), req.GetExpectedAffectedVersions())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionSetResponse(result), nil
+}
+
+func secretVersionTransitionResponse(result core.SecretVersionTransitionResult) *kmsv1.SecretVersionTransitionResponse {
+	return &kmsv1.SecretVersionTransitionResponse{
+		CurrentVersion:  result.CurrentVersion,
+		PreviousVersion: result.PreviousVersion,
+		Revision:        result.Revision,
+	}
+}
+
+func secretVersionSetResponse(result core.SecretVersionSetResult) *kmsv1.SecretVersionSetResponse {
+	return &kmsv1.SecretVersionSetResponse{
+		AffectedVersions: append([]uint64(nil), result.AffectedVersions...),
+		Revision:         result.Revision,
+	}
+}
+
+func secretBindingCohortResponse(result core.SecretBindingCohortResult) *kmsv1.SecretBindingCohortResponse {
+	return &kmsv1.SecretBindingCohortResponse{
+		AnchorVersion:    result.AnchorVersion,
+		AffectedVersions: append([]uint64(nil), result.AffectedVersions...),
+		Revision:         result.Revision,
+	}
 }
 
 func (h *secretServer) ListSecrets(ctx context.Context, req *kmsv1.ListSecretsRequest) (*kmsv1.ListSecretsResponse, error) {
@@ -114,7 +228,12 @@ func (h *secretServer) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecr
 	if err != nil {
 		return nil, err
 	}
-	sec, err := h.s.svc.GetSecretInfo(ctx, pr, refFromProto(req.GetRef()))
+	var sec domain.Secret
+	if req.GetVersion() == 0 && req.GetLabel() == "" {
+		sec, err = h.s.svc.GetSecretInfo(ctx, pr, refFromProto(req.GetRef()))
+	} else {
+		sec, err = h.s.svc.GetSecretVersionInfo(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel())
+	}
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

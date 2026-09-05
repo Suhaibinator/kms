@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
@@ -85,26 +86,39 @@ type Server struct {
 	lis  *bufconn.Listener
 	grpc *grpc.Server
 
-	mu              sync.Mutex
-	params          map[string]*kmsv1.Parameter // display path -> current parameter
-	paramVersions   map[string]map[uint64]*kmsv1.Parameter
-	secretMeta      map[string]*kmsv1.GetSecretResponse // display path -> current secret
-	secretVersions  map[string]map[uint64]*kmsv1.GetSecretResponse
-	revision        uint64
-	paramErr        map[string]error       // display path -> error
-	secretErr       map[string]error       // display path -> error
-	lastMetadata    map[string]metadata.MD // method -> incoming md
-	lastSecretToken map[string]string      // method -> request field
-	putSecrets      []PutSecretCall
-	defaultsCalls   []*kmsv1.ApplyApplicationDefaultsRequest
-	defaultsQueue   []scriptedDefaultsResponse
-	verifyCalls     []*kmsv1.VerifyReleaseDefaultsRequest
-	verifyQueue     []scriptedVerifyResponse
-	schemaCalls     []*kmsv1.CreateSchemaRequest
-	schemaQueue     []scriptedSchemaResponse
-	getParamHook    func(displayPath string)
-	listHook        func(namespace string)
-	identity        *kmsv1.WhoAmIResponse
+	mu                  sync.Mutex
+	params              map[string]*kmsv1.Parameter // display path -> current parameter
+	paramVersions       map[string]map[uint64]*kmsv1.Parameter
+	secretVersions      map[string]map[uint64]*kmsv1.GetSecretResponse
+	secretMetadata      map[string]*kmsv1.SecretMetadata
+	revision            uint64
+	paramErr            map[string]error       // display path -> error
+	secretErr           map[string]error       // display path -> error
+	lastMetadata        map[string]metadata.MD // method -> incoming md
+	lastSecretToken     map[string]string      // method -> request field
+	lastBindingKey      map[string]string      // method -> request field
+	secretTokens        map[string]string      // display path -> most recent GetSecret token
+	bindingKeys         map[string]string      // display path -> most recent GetSecret binding key
+	secretAccessTokens  map[string]string      // display path -> persistent per-secret access token
+	secretCredentials   map[string]map[uint64]secretVersionCredentials
+	secretOperationErr  map[string]map[string]error // operation -> display path -> error
+	putSecrets          []PutSecretCall
+	bindCalls           []*kmsv1.BindSecretRequest
+	unbindCalls         []*kmsv1.UnbindSecretRequest
+	previewCalls        []*kmsv1.PreviewSecretBindingCohortRequest
+	rotateCalls         []*kmsv1.RotateSecretBindingKeyRequest
+	purgeCalls          []*kmsv1.PurgeSecretBindingCohortRequest
+	previewUnboundCalls []*kmsv1.PreviewSecretUnboundVersionsRequest
+	purgeUnboundCalls   []*kmsv1.PurgeSecretUnboundVersionsRequest
+	defaultsCalls       []*kmsv1.ApplyApplicationDefaultsRequest
+	defaultsQueue       []scriptedDefaultsResponse
+	verifyCalls         []*kmsv1.VerifyReleaseDefaultsRequest
+	verifyQueue         []scriptedVerifyResponse
+	schemaCalls         []*kmsv1.CreateSchemaRequest
+	schemaQueue         []scriptedSchemaResponse
+	getParamHook        func(displayPath string)
+	listHook            func(namespace string)
+	identity            *kmsv1.WhoAmIResponse
 
 	subMu     sync.Mutex
 	subs      []*Subscription
@@ -114,6 +128,11 @@ type Server struct {
 	activeRelease    *kmsv1.GetActiveReleaseResponse
 	releaseSubs      []*ReleaseSubscription
 	releaseSubNotify chan *ReleaseSubscription
+}
+
+type secretVersionCredentials struct {
+	secretToken string
+	bindingKey  string
 }
 
 type scriptedDefaultsResponse struct {
@@ -137,26 +156,31 @@ type PutSecretCall struct {
 	Key                 string
 	Path                string // display path
 	Value               []byte
-	ClientBound         bool
+	BindingKey          string
 	GenerateAccessToken bool
-	SecretToken         string
 }
 
 // New starts a fake server on an in-memory bufconn listener.
 func New() (*Server, error) {
 	s := &Server{
-		lis:              bufconn.Listen(1 << 20),
-		params:           make(map[string]*kmsv1.Parameter),
-		paramVersions:    make(map[string]map[uint64]*kmsv1.Parameter),
-		secretMeta:       make(map[string]*kmsv1.GetSecretResponse),
-		secretVersions:   make(map[string]map[uint64]*kmsv1.GetSecretResponse),
-		lastSecretToken:  make(map[string]string),
-		paramErr:         make(map[string]error),
-		secretErr:        make(map[string]error),
-		lastMetadata:     make(map[string]metadata.MD),
-		identity:         &kmsv1.WhoAmIResponse{Name: "test", Kind: "client"},
-		subNotify:        make(chan *Subscription, 16),
-		releaseSubNotify: make(chan *ReleaseSubscription, 16),
+		lis:                bufconn.Listen(1 << 20),
+		params:             make(map[string]*kmsv1.Parameter),
+		paramVersions:      make(map[string]map[uint64]*kmsv1.Parameter),
+		secretVersions:     make(map[string]map[uint64]*kmsv1.GetSecretResponse),
+		secretMetadata:     make(map[string]*kmsv1.SecretMetadata),
+		lastSecretToken:    make(map[string]string),
+		lastBindingKey:     make(map[string]string),
+		secretTokens:       make(map[string]string),
+		bindingKeys:        make(map[string]string),
+		secretAccessTokens: make(map[string]string),
+		secretCredentials:  make(map[string]map[uint64]secretVersionCredentials),
+		secretOperationErr: make(map[string]map[string]error),
+		paramErr:           make(map[string]error),
+		secretErr:          make(map[string]error),
+		lastMetadata:       make(map[string]metadata.MD),
+		identity:           &kmsv1.WhoAmIResponse{Name: "test", Kind: "client"},
+		subNotify:          make(chan *Subscription, 16),
+		releaseSubNotify:   make(chan *ReleaseSubscription, 16),
 	}
 	s.grpc = grpc.NewServer()
 	kmsv1.RegisterParameterServiceServer(s.grpc, s)
@@ -191,14 +215,12 @@ func (s *Server) DialOptions() []grpc.DialOption {
 // configuration release. Path may be relative to ReleaseSpec.Namespace or an
 // absolute /env/app/key display path.
 type ReleaseEntrySpec struct {
-	Alias          string
-	Kind           string
-	Path           string
-	Version        uint64
-	ContentType    string
-	MetadataJSON   string
-	ClientBound    bool
-	HasAccessToken bool
+	Alias        string
+	Kind         string
+	Path         string
+	Version      uint64
+	ContentType  string
+	MetadataJSON string
 }
 
 // ReleaseSpec describes an immutable release for ReleaseLoader and generated
@@ -286,14 +308,12 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 		ref := resourceProto(namespace, key)
 		display := displayOf(ref)
 		entry := &kmsv1.ConfigurationReleaseEntry{
-			Alias:          item.Alias,
-			Kind:           item.Kind,
-			Ref:            ref,
-			Version:        item.Version,
-			ContentType:    item.ContentType,
-			MetadataJson:   item.MetadataJSON,
-			ClientBound:    item.ClientBound,
-			HasAccessToken: item.HasAccessToken,
+			Alias:        item.Alias,
+			Kind:         item.Kind,
+			Ref:          ref,
+			Version:      item.Version,
+			ContentType:  item.ContentType,
+			MetadataJson: item.MetadataJSON,
 		}
 		switch item.Kind {
 		case "parameter":
@@ -352,8 +372,6 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 			ContentType:     entry.GetContentType(),
 			MetadataJson:    entry.GetMetadataJson(),
 			ParameterDigest: entry.GetParameterDigest(),
-			ClientBound:     entry.GetClientBound(),
-			HasAccessToken:  entry.GetHasAccessToken(),
 		})
 	}
 	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
@@ -444,13 +462,112 @@ func (s *Server) setSecretVersionLocked(namespace, key string, value []byte, con
 		Value:       append([]byte(nil), value...),
 		ContentType: contentType,
 	}
-	s.secretMeta[display] = secret
 	versions := s.secretVersions[display]
 	if versions == nil {
 		versions = make(map[uint64]*kmsv1.GetSecretResponse)
 		s.secretVersions[display] = versions
 	}
 	versions[version] = secret
+	credentials := s.secretCredentials[display]
+	if credentials == nil {
+		credentials = make(map[uint64]secretVersionCredentials)
+		s.secretCredentials[display] = credentials
+	}
+	if _, exists := credentials[version]; !exists {
+		credentials[version] = secretVersionCredentials{}
+	}
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		metadata = &kmsv1.SecretMetadata{Ref: ref, Labels: make(map[string]uint64)}
+		s.secretMetadata[display] = metadata
+	}
+	metadata.ContentType = contentType
+	metadata.Labels["current"] = version
+	found := false
+	for _, info := range metadata.Versions {
+		if info.GetVersion() == version {
+			found = true
+			break
+		}
+	}
+	if !found {
+		metadata.Versions = append(metadata.Versions, &kmsv1.SecretVersionInfo{Version: version, State: "enabled"})
+		sort.Slice(metadata.Versions, func(i, j int) bool { return metadata.Versions[i].GetVersion() < metadata.Versions[j].GetVersion() })
+	}
+}
+
+func (s *Server) setSecretVersionMetadataLocked(display string, version uint64, state string, bound, hasAccessToken bool, expiresAtUnixMS int64) {
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return
+	}
+	for _, info := range metadata.Versions {
+		if info.GetVersion() != version {
+			continue
+		}
+		info.State = state
+		info.Bound = bound
+		info.HasAccessToken = hasAccessToken
+		info.ExpiresAtUnixMs = expiresAtUnixMS
+		credentials := s.secretCredentials[display][version]
+		if !bound {
+			credentials.bindingKey = ""
+		}
+		if !hasAccessToken {
+			credentials.secretToken = ""
+		}
+		s.secretCredentials[display][version] = credentials
+		if hasAccessToken {
+			metadata.HasAccessToken = true
+		}
+		if metadata.GetLabels()["current"] == version {
+			metadata.Bound = bound
+		}
+		return
+	}
+}
+
+// SetSecretVersionMetadata configures the live protection and availability of
+// one exact version. It never changes the immutable release manifest.
+func (s *Server) SetSecretVersionMetadata(namespace, key string, version uint64, state string, bound, hasAccessToken bool, expiresAtUnixMS int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setSecretVersionMetadataLocked(displayOf(resourceProto(namespace, key)), version, state, bound, hasAccessToken, expiresAtUnixMS)
+}
+
+// SetSecretVersionCredentials configures exact credentials for one scripted
+// version and makes its live metadata require the corresponding non-empty
+// values. A blank field leaves that credential unrequired. The fake never
+// derives or hashes these test-only values.
+func (s *Server) SetSecretVersionCredentials(namespace, key string, version uint64, secretToken, bindingKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	display := displayOf(resourceProto(namespace, key))
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return
+	}
+	credentials := s.secretCredentials[display]
+	if credentials == nil {
+		credentials = make(map[uint64]secretVersionCredentials)
+		s.secretCredentials[display] = credentials
+	}
+	credentials[version] = secretVersionCredentials{secretToken: secretToken, bindingKey: bindingKey}
+	if secretToken != "" {
+		s.secretAccessTokens[display] = secretToken
+		metadata.HasAccessToken = true
+	}
+	for _, info := range metadata.Versions {
+		if info.GetVersion() != version {
+			continue
+		}
+		info.HasAccessToken = secretToken != ""
+		info.Bound = bindingKey != ""
+		if metadata.GetLabels()["current"] == version {
+			metadata.Bound = info.Bound
+		}
+		return
+	}
 }
 
 // SetSecretPath is SetSecret addressed by display path.
@@ -483,6 +600,25 @@ func (s *Server) SetSecretError(namespace, key string, err error) {
 func (s *Server) SetSecretErrorPath(displayPath string, err error) {
 	ns, key := splitDisplay(displayPath)
 	s.SetSecretError(ns, key, err)
+}
+
+// SetSecretOperationError scripts an error for one named secret RPC and
+// resource. Pass nil to clear it. Supported names are the generated RPC method
+// names, such as "GetSecret" and "PurgeSecretBindingCohort".
+func (s *Server) SetSecretOperationError(method, namespace, key string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byPath := s.secretOperationErr[method]
+	if byPath == nil {
+		byPath = make(map[string]error)
+		s.secretOperationErr[method] = byPath
+	}
+	display := displayOf(resourceProto(namespace, key))
+	if err == nil {
+		delete(byPath, display)
+		return
+	}
+	byPath[display] = err
 }
 
 // SetGetParameterHook installs fn to run at the start of every GetParameter,
@@ -534,12 +670,85 @@ func (s *Server) LastSecretToken(method string) string {
 	return s.lastSecretToken[method]
 }
 
+// LastBindingKey returns the operation-specific binding-key request field most
+// recently received by a secret RPC.
+func (s *Server) LastBindingKey(method string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastBindingKey[method]
+}
+
+// SecretCredentials returns the most recent GetSecret credentials for one
+// display path. Empty strings mean the credential was not sent.
+func (s *Server) SecretCredentials(displayPath string) (secretToken, bindingKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.secretTokens[displayPath], s.bindingKeys[displayPath]
+}
+
 // PutSecretCalls returns a copy of recorded PutSecret invocations.
 func (s *Server) PutSecretCalls() []PutSecretCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]PutSecretCall, len(s.putSecrets))
 	copy(out, s.putSecrets)
+	return out
+}
+
+// BindSecretCalls returns deep copies of recorded BindSecret requests.
+func (s *Server) BindSecretCalls() []*kmsv1.BindSecretRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.bindCalls)
+}
+
+// UnbindSecretCalls returns deep copies of recorded UnbindSecret requests.
+func (s *Server) UnbindSecretCalls() []*kmsv1.UnbindSecretRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.unbindCalls)
+}
+
+// PreviewSecretBindingCohortCalls returns deep copies of recorded previews.
+func (s *Server) PreviewSecretBindingCohortCalls() []*kmsv1.PreviewSecretBindingCohortRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.previewCalls)
+}
+
+// RotateSecretBindingKeyCalls returns deep copies of recorded rotations.
+func (s *Server) RotateSecretBindingKeyCalls() []*kmsv1.RotateSecretBindingKeyRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.rotateCalls)
+}
+
+// PurgeSecretBindingCohortCalls returns deep copies of recorded purges.
+func (s *Server) PurgeSecretBindingCohortCalls() []*kmsv1.PurgeSecretBindingCohortRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.purgeCalls)
+}
+
+// PreviewSecretUnboundVersionsCalls returns deep copies of recorded previews.
+func (s *Server) PreviewSecretUnboundVersionsCalls() []*kmsv1.PreviewSecretUnboundVersionsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.previewUnboundCalls)
+}
+
+// PurgeSecretUnboundVersionsCalls returns deep copies of recorded purges.
+func (s *Server) PurgeSecretUnboundVersionsCalls() []*kmsv1.PurgeSecretUnboundVersionsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.purgeUnboundCalls)
+}
+
+func cloneProtoSlice[T proto.Message](in []T) []T {
+	out := make([]T, len(in))
+	for i, item := range in {
+		out[i] = proto.Clone(item).(T)
+	}
 	return out
 }
 
@@ -690,48 +899,518 @@ func (s *Server) ListParameters(ctx context.Context, req *kmsv1.ListParametersRe
 
 // --- SecretService ---------------------------------------------------------
 
+func (s *Server) secretOperationErrorLocked(method, display string) error {
+	if byPath := s.secretOperationErr[method]; byPath != nil {
+		return byPath[display]
+	}
+	return nil
+}
+
+func (s *Server) secretVersionLocked(display string, requested uint64, label string) (*kmsv1.GetSecretResponse, *kmsv1.SecretVersionInfo, secretVersionCredentials, error) {
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, nil, secretVersionCredentials{}, notFound(display)
+	}
+	version := requested
+	if version == 0 {
+		if label == "" {
+			label = "current"
+		}
+		version = metadata.GetLabels()[label]
+	}
+	secret := s.secretVersions[display][version]
+	if secret == nil || version == 0 {
+		return nil, nil, secretVersionCredentials{}, notFound(display)
+	}
+	var info *kmsv1.SecretVersionInfo
+	for _, candidate := range metadata.GetVersions() {
+		if candidate.GetVersion() == version {
+			info = candidate
+			break
+		}
+	}
+	if info == nil {
+		return nil, nil, secretVersionCredentials{}, notFound(display)
+	}
+	credentials := s.secretCredentials[display][version]
+	if token := s.secretAccessTokens[display]; token != "" {
+		credentials.secretToken = token
+	}
+	return secret, info, credentials, nil
+}
+
+func validateFakeReadCredentials(info *kmsv1.SecretVersionInfo, expected secretVersionCredentials, secretToken, bindingKey string) error {
+	if info.GetState() != "enabled" || info.GetDestroyedAtUnixMs() != 0 ||
+		(info.GetExpiresAtUnixMs() > 0 && info.GetExpiresAtUnixMs() <= time.Now().UnixMilli()) {
+		return status.Error(codes.FailedPrecondition, "secret version is unavailable")
+	}
+	if info.GetHasAccessToken() && (secretToken == "" || (expected.secretToken != "" && secretToken != expected.secretToken)) {
+		return status.Error(codes.PermissionDenied, "secret credential rejected")
+	}
+	if info.GetBound() && (bindingKey == "" || (expected.bindingKey != "" && bindingKey != expected.bindingKey)) {
+		return status.Error(codes.PermissionDenied, "secret credential rejected")
+	}
+	return nil
+}
+
+func validFakeNewBindingKey(key string) bool {
+	return utf8.ValidString(key) && len([]byte(key)) >= 32
+}
+
+func fakeBindingKeyMatches(info *kmsv1.SecretVersionInfo, expected secretVersionCredentials, supplied string) bool {
+	return info != nil && info.GetDestroyedAtUnixMs() == 0 && info.GetState() != "destroyed" && info.GetBound() &&
+		supplied != "" && (expected.bindingKey == "" || supplied == expected.bindingKey)
+}
+
+func (s *Server) bindingCohortLocked(display string, requested uint64, bindingKey string) (uint64, []uint64, error) {
+	_, anchorInfo, expected, err := s.secretVersionLocked(display, requested, "")
+	if err != nil {
+		return 0, nil, err
+	}
+	anchor := anchorInfo.GetVersion()
+	if anchorInfo.GetDestroyedAtUnixMs() != 0 || anchorInfo.GetState() == "destroyed" || !anchorInfo.GetBound() {
+		return 0, nil, status.Error(codes.FailedPrecondition, "secret anchor is unavailable or unbound")
+	}
+	if !fakeBindingKeyMatches(anchorInfo, expected, bindingKey) {
+		return 0, nil, status.Error(codes.PermissionDenied, "secret credential rejected")
+	}
+	metadata := s.secretMetadata[display]
+	infos := make(map[uint64]*kmsv1.SecretVersionInfo, len(metadata.GetVersions()))
+	for _, info := range metadata.GetVersions() {
+		infos[info.GetVersion()] = info
+	}
+	first, last := anchor, anchor
+	for version := anchor; version > 1; {
+		version--
+		info := infos[version]
+		if s.secretVersions[display][version] == nil || !fakeBindingKeyMatches(info, s.secretCredentials[display][version], bindingKey) {
+			break
+		}
+		first = version
+	}
+	for version := anchor + 1; ; version++ {
+		info := infos[version]
+		if s.secretVersions[display][version] == nil || !fakeBindingKeyMatches(info, s.secretCredentials[display][version], bindingKey) {
+			break
+		}
+		last = version
+	}
+	affected := make([]uint64, 0, last-first+1)
+	for version := first; version <= last; version++ {
+		affected = append(affected, version)
+	}
+	return anchor, affected, nil
+}
+
+func validateFakeCohortGuard(expectedRevision uint64, expectedVersions []uint64, revision uint64, actual []uint64) error {
+	if expectedRevision == 0 || len(expectedVersions) == 0 {
+		return status.Error(codes.InvalidArgument, "expected revision and affected versions must be supplied together")
+	}
+	for index, version := range expectedVersions {
+		if version == 0 || (index > 0 && version <= expectedVersions[index-1]) {
+			return status.Error(codes.InvalidArgument, "expected affected versions must be sorted and unique")
+		}
+	}
+	if expectedRevision != revision || len(expectedVersions) != len(actual) {
+		return status.Error(codes.Aborted, "secret version set changed")
+	}
+	for index := range actual {
+		if expectedVersions[index] != actual[index] {
+			return status.Error(codes.Aborted, "secret version set changed")
+		}
+	}
+	return nil
+}
+
 func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
 	s.recordMD(ctx, "GetSecret")
 	display := displayOf(req.GetRef())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastSecretToken["GetSecret"] = req.GetSecretToken()
+	s.lastBindingKey["GetSecret"] = req.GetBindingKey()
+	s.secretTokens[display] = req.GetSecretToken()
+	s.bindingKeys[display] = req.GetBindingKey()
+	if err := s.secretOperationErrorLocked("GetSecret", display); err != nil {
+		return nil, err
+	}
 	if err := s.secretErr[display]; err != nil {
 		return nil, err
 	}
-	meta := s.secretMeta[display]
-	if req.GetVersion() > 0 {
-		meta = s.secretVersions[display][req.GetVersion()]
+	secret, info, expected, err := s.secretVersionLocked(display, req.GetVersion(), req.GetLabel())
+	if err != nil {
+		return nil, err
 	}
-	if meta == nil {
-		return nil, notFound(display)
+	if err := validateFakeReadCredentials(info, expected, req.GetSecretToken(), req.GetBindingKey()); err != nil {
+		return nil, err
 	}
-	return meta, nil
+	return proto.Clone(secret).(*kmsv1.GetSecretResponse), nil
 }
 
-func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+func (s *Server) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	s.recordMD(ctx, "GetSecretMetadata")
+	display := displayOf(req.GetRef())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.secretOperationErrorLocked("GetSecretMetadata", display); err != nil {
+		return nil, err
+	}
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	return &kmsv1.GetSecretMetadataResponse{Secret: proto.Clone(metadata).(*kmsv1.SecretMetadata)}, nil
+}
+
+func (s *Server) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.recordMD(ctx, "PutSecret")
 	display := displayOf(req.GetRef())
-	s.SetSecretPath(display, req.GetValue())
 	ns, key := splitDisplay(display)
 	s.mu.Lock()
-	s.lastSecretToken["PutSecret"] = req.GetSecretToken()
+	defer s.mu.Unlock()
+	s.lastBindingKey["PutSecret"] = req.GetBindingKey()
 	s.putSecrets = append(s.putSecrets, PutSecretCall{
 		Namespace:           ns,
 		Key:                 key,
 		Path:                display,
-		Value:               req.GetValue(),
-		ClientBound:         req.GetClientBound(),
+		Value:               append([]byte(nil), req.GetValue()...),
+		BindingKey:          req.GetBindingKey(),
 		GenerateAccessToken: req.GetGenerateAccessToken(),
-		SecretToken:         req.GetSecretToken(),
 	})
-	rev := s.revision
-	s.mu.Unlock()
-	resp := &kmsv1.PutSecretResponse{Version: rev, Revision: rev}
-	if req.GetGenerateAccessToken() {
-		resp.AccessToken = "minted-token-for-" + display
+	if err := s.secretOperationErrorLocked("PutSecret", display); err != nil {
+		return nil, err
 	}
-	return resp, nil
+	if req.GetBindingKey() != "" && !validFakeNewBindingKey(req.GetBindingKey()) {
+		return nil, status.Error(codes.InvalidArgument, "binding key must be valid UTF-8 and at least 32 bytes")
+	}
+	version := uint64(1)
+	if versions := s.secretVersions[display]; len(versions) > 0 {
+		for existing := range versions {
+			if existing >= version {
+				version = existing + 1
+			}
+		}
+	}
+	metadata := s.secretMetadata[display]
+	inheritedHasToken := metadata != nil && metadata.GetHasAccessToken()
+	inheritedToken := s.secretAccessTokens[display]
+	s.setSecretVersionLocked(ns, key, req.GetValue(), req.GetContentType(), version)
+	s.revision++
+	accessToken := ""
+	if req.GetGenerateAccessToken() {
+		accessToken = fmt.Sprintf("minted-token-for-%s-v%d", display, version)
+		inheritedToken = accessToken
+		inheritedHasToken = true
+		s.secretAccessTokens[display] = accessToken
+		for _, info := range s.secretMetadata[display].GetVersions() {
+			if info.GetVersion() == version || !info.GetHasAccessToken() {
+				continue
+			}
+			credentials := s.secretCredentials[display][info.GetVersion()]
+			credentials.secretToken = accessToken
+			s.secretCredentials[display][info.GetVersion()] = credentials
+		}
+	}
+	credentials := s.secretCredentials[display][version]
+	credentials.secretToken = inheritedToken
+	credentials.bindingKey = req.GetBindingKey()
+	s.secretCredentials[display][version] = credentials
+	s.setSecretVersionMetadataLocked(display, version, "enabled", req.GetBindingKey() != "", inheritedHasToken, req.GetExpiresAtUnixMs())
+	return &kmsv1.PutSecretResponse{Version: version, Revision: s.revision, AccessToken: accessToken}, nil
+}
+
+func (s *Server) cloneSecretTransitionLocked(display string, sourceVersion uint64, bound bool, bindingKey string) (*kmsv1.SecretVersionTransitionResponse, error) {
+	source, sourceInfo, sourceCredentials, err := s.secretVersionLocked(display, sourceVersion, "")
+	if err != nil {
+		return nil, err
+	}
+	var newVersion uint64
+	for version := range s.secretVersions[display] {
+		if version >= newVersion {
+			newVersion = version + 1
+		}
+	}
+	if newVersion == 0 {
+		return nil, status.Error(codes.Internal, "secret version overflow")
+	}
+	cloned := proto.Clone(source).(*kmsv1.GetSecretResponse)
+	cloned.Version = newVersion
+	cloned.CreatedAtUnixMs = time.Now().UnixMilli()
+	s.secretVersions[display][newVersion] = cloned
+	clonedInfo := proto.Clone(sourceInfo).(*kmsv1.SecretVersionInfo)
+	clonedInfo.Version = newVersion
+	clonedInfo.Bound = bound
+	clonedInfo.CreatedAtUnixMs = time.Now().UnixMilli()
+	clonedInfo.CreatedBy = "test-transition"
+	s.secretMetadata[display].Versions = append(s.secretMetadata[display].Versions, clonedInfo)
+	sort.Slice(s.secretMetadata[display].Versions, func(i, j int) bool {
+		return s.secretMetadata[display].Versions[i].GetVersion() < s.secretMetadata[display].Versions[j].GetVersion()
+	})
+	sourceCredentials.bindingKey = bindingKey
+	s.secretCredentials[display][newVersion] = sourceCredentials
+	metadata := s.secretMetadata[display]
+	metadata.Labels["previous"] = sourceVersion
+	metadata.Labels["current"] = newVersion
+	metadata.ContentType = cloned.GetContentType()
+	metadata.MetadataJson = cloned.GetMetadataJson()
+	metadata.Bound = bound
+	s.revision++
+	return &kmsv1.SecretVersionTransitionResponse{
+		CurrentVersion: newVersion, PreviousVersion: sourceVersion, Revision: s.revision,
+	}, nil
+}
+
+func (s *Server) BindSecret(ctx context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	s.recordMD(ctx, "BindSecret")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bindCalls = append(s.bindCalls, proto.Clone(req).(*kmsv1.BindSecretRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("BindSecret", display); err != nil {
+		return nil, err
+	}
+	if !validFakeNewBindingKey(req.GetBindingKey()) {
+		return nil, status.Error(codes.InvalidArgument, "binding key must be valid UTF-8 and at least 32 bytes")
+	}
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	if req.GetExpectedCurrentVersion() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "expected current version is required")
+	}
+	if metadata.GetLabels()["current"] != req.GetExpectedCurrentVersion() {
+		return nil, status.Error(codes.Aborted, "current secret version changed")
+	}
+	_, info, _, err := s.secretVersionLocked(display, req.GetExpectedCurrentVersion(), "")
+	if err != nil {
+		return nil, err
+	}
+	if info.GetDestroyedAtUnixMs() != 0 || info.GetState() == "destroyed" || info.GetBound() {
+		return nil, status.Error(codes.FailedPrecondition, "secret version cannot be bound")
+	}
+	return s.cloneSecretTransitionLocked(display, info.GetVersion(), true, req.GetBindingKey())
+}
+
+func (s *Server) UnbindSecret(ctx context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	s.recordMD(ctx, "UnbindSecret")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unbindCalls = append(s.unbindCalls, proto.Clone(req).(*kmsv1.UnbindSecretRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("UnbindSecret", display); err != nil {
+		return nil, err
+	}
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	if req.GetExpectedCurrentVersion() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "expected current version is required")
+	}
+	if metadata.GetLabels()["current"] != req.GetExpectedCurrentVersion() {
+		return nil, status.Error(codes.Aborted, "current secret version changed")
+	}
+	_, info, credentials, err := s.secretVersionLocked(display, req.GetExpectedCurrentVersion(), "")
+	if err != nil {
+		return nil, err
+	}
+	if info.GetDestroyedAtUnixMs() != 0 || info.GetState() == "destroyed" || !info.GetBound() {
+		return nil, status.Error(codes.FailedPrecondition, "secret version cannot be unbound")
+	}
+	if !fakeBindingKeyMatches(info, credentials, req.GetBindingKey()) {
+		return nil, status.Error(codes.PermissionDenied, "secret credential rejected")
+	}
+	return s.cloneSecretTransitionLocked(display, info.GetVersion(), false, "")
+}
+
+func (s *Server) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	s.recordMD(ctx, "PreviewSecretBindingCohort")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.previewCalls = append(s.previewCalls, proto.Clone(req).(*kmsv1.PreviewSecretBindingCohortRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("PreviewSecretBindingCohort", display); err != nil {
+		return nil, err
+	}
+	anchor, affected, err := s.bindingCohortLocked(display, req.GetAnchorVersion(), req.GetBindingKey())
+	if err != nil {
+		return nil, err
+	}
+	return &kmsv1.SecretBindingCohortResponse{AnchorVersion: anchor, AffectedVersions: affected, Revision: s.revision}, nil
+}
+
+func (s *Server) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
+	s.recordMD(ctx, "RotateSecretBindingKey")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rotateCalls = append(s.rotateCalls, proto.Clone(req).(*kmsv1.RotateSecretBindingKeyRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("RotateSecretBindingKey", display); err != nil {
+		return nil, err
+	}
+	if !validFakeNewBindingKey(req.GetNewBindingKey()) {
+		return nil, status.Error(codes.InvalidArgument, "new binding key must be valid UTF-8 and at least 32 bytes")
+	}
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	if req.GetExpectedCurrentVersion() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "expected current version is required")
+	}
+	if metadata.GetLabels()["current"] != req.GetExpectedCurrentVersion() {
+		return nil, status.Error(codes.Aborted, "current secret version changed")
+	}
+	_, info, credentials, err := s.secretVersionLocked(display, req.GetExpectedCurrentVersion(), "")
+	if err != nil {
+		return nil, err
+	}
+	if !fakeBindingKeyMatches(info, credentials, req.GetBindingKey()) {
+		return nil, status.Error(codes.PermissionDenied, "secret credential rejected")
+	}
+	if req.GetBindingKey() == req.GetNewBindingKey() {
+		return nil, status.Error(codes.InvalidArgument, "new binding key must differ")
+	}
+	return s.cloneSecretTransitionLocked(display, info.GetVersion(), true, req.GetNewBindingKey())
+}
+
+func (s *Server) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.PurgeSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	s.recordMD(ctx, "PurgeSecretBindingCohort")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purgeCalls = append(s.purgeCalls, proto.Clone(req).(*kmsv1.PurgeSecretBindingCohortRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("PurgeSecretBindingCohort", display); err != nil {
+		return nil, err
+	}
+	anchor, affected, err := s.bindingCohortLocked(display, req.GetAnchorVersion(), req.GetBindingKey())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFakeCohortGuard(req.ExpectedRevision, req.GetExpectedAffectedVersions(), s.revision, affected); err != nil {
+		return nil, err
+	}
+	metadata := s.secretMetadata[display]
+	destroyedAt := time.Now().UnixMilli()
+	for _, version := range affected {
+		secret := s.secretVersions[display][version]
+		secret.Value = nil
+		secret.ContentType = ""
+		secret.MetadataJson = ""
+		for _, info := range metadata.GetVersions() {
+			if info.GetVersion() == version {
+				info.State = "destroyed"
+				info.DestroyedAtUnixMs = destroyedAt
+				info.ExpiresAtUnixMs = 0
+				info.MetadataJson = ""
+				info.Bound = false
+				info.HasAccessToken = false
+				break
+			}
+		}
+		delete(s.secretCredentials[display], version)
+		if metadata.GetLabels()["current"] == version {
+			metadata.ContentType = ""
+			metadata.MetadataJson = ""
+			metadata.Bound = false
+		}
+	}
+	s.revision++
+	return &kmsv1.SecretBindingCohortResponse{AnchorVersion: anchor, AffectedVersions: affected, Revision: s.revision}, nil
+}
+
+func (s *Server) unboundVersionsLocked(display string) ([]uint64, error) {
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	versions := make([]uint64, 0, len(metadata.GetVersions()))
+	for _, info := range metadata.GetVersions() {
+		if info.GetState() != "destroyed" && info.GetDestroyedAtUnixMs() == 0 && !info.GetBound() {
+			versions = append(versions, info.GetVersion())
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	if len(versions) == 0 {
+		return nil, status.Error(codes.FailedPrecondition, "secret has no unbound versions")
+	}
+	return versions, nil
+}
+
+func (s *Server) PreviewSecretUnboundVersions(ctx context.Context, req *kmsv1.PreviewSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	s.recordMD(ctx, "PreviewSecretUnboundVersions")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.previewUnboundCalls = append(s.previewUnboundCalls, proto.Clone(req).(*kmsv1.PreviewSecretUnboundVersionsRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("PreviewSecretUnboundVersions", display); err != nil {
+		return nil, err
+	}
+	versions, err := s.unboundVersionsLocked(display)
+	if err != nil {
+		return nil, err
+	}
+	return &kmsv1.SecretVersionSetResponse{AffectedVersions: versions, Revision: s.revision}, nil
+}
+
+func (s *Server) PurgeSecretUnboundVersions(ctx context.Context, req *kmsv1.PurgeSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	s.recordMD(ctx, "PurgeSecretUnboundVersions")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purgeUnboundCalls = append(s.purgeUnboundCalls, proto.Clone(req).(*kmsv1.PurgeSecretUnboundVersionsRequest))
+	display := displayOf(req.GetRef())
+	if err := s.secretOperationErrorLocked("PurgeSecretUnboundVersions", display); err != nil {
+		return nil, err
+	}
+	actual, err := s.unboundVersionsLocked(display)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetExpectedRevision() == 0 || len(req.GetExpectedAffectedVersions()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "unbound purge preview guard is required")
+	}
+	expected := req.GetExpectedAffectedVersions()
+	for i, version := range expected {
+		if version == 0 || (i > 0 && version <= expected[i-1]) {
+			return nil, status.Error(codes.InvalidArgument, "expected affected versions must be sorted and unique")
+		}
+	}
+	if req.GetExpectedRevision() != s.revision || len(expected) != len(actual) {
+		return nil, status.Error(codes.Aborted, "secret version set changed")
+	}
+	for i := range expected {
+		if expected[i] != actual[i] {
+			return nil, status.Error(codes.Aborted, "secret version set changed")
+		}
+	}
+	metadata := s.secretMetadata[display]
+	destroyedAt := time.Now().UnixMilli()
+	for _, version := range actual {
+		secret := s.secretVersions[display][version]
+		secret.Value = nil
+		secret.ContentType = ""
+		secret.MetadataJson = ""
+		for _, info := range metadata.GetVersions() {
+			if info.GetVersion() == version {
+				info.State = "destroyed"
+				info.DestroyedAtUnixMs = destroyedAt
+				info.ExpiresAtUnixMs = 0
+				info.MetadataJson = ""
+				info.Bound = false
+				info.HasAccessToken = false
+				break
+			}
+		}
+		delete(s.secretCredentials[display], version)
+		if metadata.GetLabels()["current"] == version {
+			metadata.ContentType = ""
+			metadata.MetadataJson = ""
+			metadata.Bound = false
+		}
+	}
+	s.revision++
+	return &kmsv1.SecretVersionSetResponse{AffectedVersions: actual, Revision: s.revision}, nil
 }
 
 // --- AdminService ----------------------------------------------------------

@@ -1,0 +1,905 @@
+package storage
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"testing"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/Suhaibinator/kms/internal/crypto"
+	"github.com/Suhaibinator/kms/internal/domain"
+)
+
+var errBindingKeyRejected = domain.Errorf(domain.ErrPermissionDenied, "access denied")
+
+func bindingSalt(key, marker byte, version uint64) []byte {
+	salt := bytes.Repeat([]byte{marker}, crypto.BindingKeySaltSize)
+	salt[0] = key
+	binary.BigEndian.PutUint64(salt[len(salt)-8:], version)
+	return salt
+}
+
+func putBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, key byte, options ...func(*CreateSecretParams)) uint64 {
+	t.Helper()
+	p := CreateSecretParams{
+		Ref:         r,
+		ContentType: "application/x-test",
+		Metadata:    `{"operator":"metadata"}`,
+		CreatedBy:   "creator",
+		Bound:       key != 0,
+		Encrypt: func(version uint64) (EncryptedPayload, error) {
+			payload := EncryptedPayload{
+				Ciphertext:   []byte(fmt.Sprintf("ciphertext-%d", version)),
+				EncryptedDEK: []byte(fmt.Sprintf("wrapped-dek-%d", version)),
+				KEKID:        "kek-a",
+				WrapMode:     domain.WrapModeStandard,
+				Algorithm:    "AES-256-GCM",
+				Nonce:        []byte(fmt.Sprintf("nonce-%d", version)),
+				AAD:          fmt.Sprintf("aad-%d", version),
+			}
+			if key != 0 {
+				payload.WrapMode = domain.WrapModeBindingKey
+				payload.BindingKeySalt = bindingSalt(key, 'o', version)
+			}
+			return payload, nil
+		},
+	}
+	for _, option := range options {
+		option(&p)
+	}
+	version, _, err := st.CreateSecretVersion(context.Background(), p)
+	if err != nil {
+		t.Fatalf("CreateSecretVersion: %v", err)
+	}
+	return version
+}
+
+func bindingKeyTest(key byte) SecretBindingTestFunc {
+	return func(rec SecretVersionRecord) error {
+		if len(rec.BindingKeySalt) == 0 || rec.BindingKeySalt[0] != key {
+			return errBindingKeyRejected
+		}
+		return nil
+	}
+}
+
+func previewBindingGuard(t *testing.T, st *SQLStore, r domain.Ref, anchor uint64, key byte) SecretBindingCASGuard {
+	t.Helper()
+	preview, err := st.PreviewSecretBindingCohort(context.Background(), r, anchor, bindingKeyTest(key))
+	if err != nil {
+		t.Fatalf("PreviewSecretBindingCohort: %v", err)
+	}
+	return SecretBindingCASGuard{
+		ExpectedRevision:         preview.Revision,
+		ExpectedAffectedVersions: slices.Clone(preview.AffectedVersions),
+	}
+}
+
+func rawSecretVersion(t *testing.T, st *SQLStore, r domain.Ref, version uint64) secretVersionModel {
+	t.Helper()
+	sec, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row secretVersionModel
+	if err := st.db.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func bindingRowSnapshot(row secretVersionModel) []any {
+	return []any{
+		row.ID, row.SecretID, row.VersionNumber, row.ContentType, row.Bound, row.HasAccessToken,
+		string(row.Ciphertext), string(row.EncryptedDEK), row.KEKID, row.WrapMode,
+		string(row.BindingKeySalt), row.Algorithm, string(row.Nonce), row.AAD, row.State,
+		row.CreatedBy, row.CreatedAt, row.DestroyedAt, row.ExpiresAt, row.MetadataJSON,
+	}
+}
+
+type forensicSecretMarkers struct {
+	Ciphertext   []byte
+	EncryptedDEK []byte
+	Nonce        []byte
+	Salt         []byte
+	AAD          []byte
+	Metadata     []byte
+}
+
+func newForensicSecretMarkers(tag string, version uint64) forensicSecretMarkers {
+	marker := func(field string) []byte {
+		return fmt.Appendf(nil, "|KMS-PURGE-LIVE-%s-%s-V%08d|", tag, field, version)
+	}
+	salt := bytes.Repeat([]byte{byte('K' + version)}, crypto.BindingKeySaltSize)
+	salt[0] = 'B'
+	return forensicSecretMarkers{
+		Ciphertext:   marker("CIPHERTEXT"),
+		EncryptedDEK: marker("ENCRYPTED-DEK"),
+		Nonce:        marker("NONCE"),
+		Salt:         salt,
+		AAD:          marker("AAD"),
+		Metadata:     marker("METADATA"),
+	}
+}
+
+func putForensicBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, markers forensicSecretMarkers) uint64 {
+	t.Helper()
+	version, _, err := st.CreateSecretVersion(context.Background(), CreateSecretParams{
+		Ref: r, Bound: true, ContentType: "application/x-forensic-marker",
+		Metadata: fmt.Sprintf(`{"marker":%q}`, string(bytes.Repeat(markers.Metadata, 384))), CreatedBy: "forensic-test",
+		Encrypt: func(uint64) (EncryptedPayload, error) {
+			return EncryptedPayload{
+				Ciphertext: bytes.Repeat(markers.Ciphertext, 384), EncryptedDEK: bytes.Repeat(markers.EncryptedDEK, 384),
+				KEKID: "kek-a", WrapMode: domain.WrapModeBindingKey, BindingKeySalt: bytes.Clone(markers.Salt),
+				Algorithm: "AES-256-GCM", Nonce: bytes.Repeat(markers.Nonce, 384), AAD: string(bytes.Repeat(markers.AAD, 384)),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSecretVersion forensic marker: %v", err)
+	}
+	return version
+}
+
+func readArtifact(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read SQLite artifact %s: %v", filepath.Base(path), err)
+	}
+	return b
+}
+
+func allForensicMarkers(markers ...forensicSecretMarkers) [][]byte {
+	var out [][]byte
+	for _, marker := range markers {
+		out = append(out, marker.Ciphertext, marker.EncryptedDEK, marker.Nonce, marker.Salt, marker.AAD, marker.Metadata)
+	}
+	return out
+}
+
+func TestPreviewSecretBindingCohortBoundaries(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "cohorts")
+	putBindingVersion(t, st, r, 'A') // 1: wrong-key lower boundary
+	putBindingVersion(t, st, r, 'B') // 2: disabled but included
+	if _, err := st.SetSecretVersionState(ctx, r, 2, domain.StateDisabled); err != nil {
+		t.Fatal(err)
+	}
+	putBindingVersion(t, st, r, 'B', func(p *CreateSecretParams) { p.ExpiresAt = time.Now().Add(-time.Hour) }) // 3: expired but included
+	putBindingVersion(t, st, r, 'B')                                                                           // 4
+	putBindingVersion(t, st, r, 0)                                                                             // 5: unbound boundary
+	putBindingVersion(t, st, r, 'B')                                                                           // 6: same key reused after boundary
+	putBindingVersion(t, st, r, 'B')                                                                           // 7: current
+
+	preview, err := st.PreviewSecretBindingCohort(ctx, r, 3, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.AnchorVersion != 3 || !slices.Equal(preview.AffectedVersions, []uint64{2, 3, 4}) {
+		t.Fatalf("middle preview = %+v", preview)
+	}
+	current, err := st.PreviewSecretBindingCohort(ctx, r, 0, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.AnchorVersion != 7 || !slices.Equal(current.AffectedVersions, []uint64{6, 7}) {
+		t.Fatalf("current/reused-key preview = %+v", current)
+	}
+
+	if err := st.db.Where("secret_id = ? AND version_number = ?", rawSecretVersion(t, st, r, 7).SecretID, 6).Delete(&secretVersionModel{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	gap, err := st.PreviewSecretBindingCohort(ctx, r, 7, bindingKeyTest('B'))
+	if err != nil || !slices.Equal(gap.AffectedVersions, []uint64{7}) {
+		t.Fatalf("gap preview = %+v err=%v", gap, err)
+	}
+
+	putBindingVersion(t, st, r, 'C') // 8
+	putBindingVersion(t, st, r, 'C') // 9 destroyed boundary
+	if _, err := st.DestroySecretVersion(ctx, r, 9); err != nil {
+		t.Fatal(err)
+	}
+	putBindingVersion(t, st, r, 'C') // 10
+	destroyedBoundary, err := st.PreviewSecretBindingCohort(ctx, r, 10, bindingKeyTest('C'))
+	if err != nil || !slices.Equal(destroyedBoundary.AffectedVersions, []uint64{10}) {
+		t.Fatalf("destroyed boundary = %+v err=%v", destroyedBoundary, err)
+	}
+
+	putBindingVersion(t, st, r, 'D') // 11 corrupt boundary
+	putBindingVersion(t, st, r, 'D') // 12
+	row11 := rawSecretVersion(t, st, r, 11)
+	if err := st.db.Model(&secretVersionModel{}).Where("id = ?", row11.ID).Update("encrypted_dek", nil).Error; err != nil {
+		t.Fatal(err)
+	}
+	corruptBoundary, err := st.PreviewSecretBindingCohort(ctx, r, 12, bindingKeyTest('D'))
+	if err != nil || !slices.Equal(corruptBoundary.AffectedVersions, []uint64{12}) {
+		t.Fatalf("corrupt boundary = %+v err=%v", corruptBoundary, err)
+	}
+
+	calls := 0
+	_, err = st.PreviewSecretBindingCohort(ctx, r, 3, func(rec SecretVersionRecord) error {
+		calls++
+		return errBindingKeyRejected
+	})
+	if !errors.Is(err, errBindingKeyRejected) || calls != 1 {
+		t.Fatalf("wrong anchor key: calls=%d err=%v", calls, err)
+	}
+	if _, err := st.PreviewSecretBindingCohort(ctx, r, 5, bindingKeyTest('B')); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("unbound anchor = %v", err)
+	}
+	if _, err := st.PreviewSecretBindingCohort(ctx, r, 9, bindingKeyTest('C')); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("destroyed anchor = %v", err)
+	}
+}
+
+func TestPreviewSecretBindingCohortCapsContiguousWork(t *testing.T) {
+	const maxCohortVersions = 128
+	for _, tc := range []struct {
+		name       string
+		versions   int
+		wantErr    error
+		wantCalls  int
+		wantResult int
+	}{
+		{name: "exact limit", versions: maxCohortVersions, wantCalls: maxCohortVersions, wantResult: maxCohortVersions},
+		{name: "over limit", versions: maxCohortVersions + 1, wantErr: domain.ErrResourceExhausted, wantCalls: maxCohortVersions + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			seedNS(t, st, "prod", "app")
+			r := ref("prod", "app", "bounded-cohort")
+			for range tc.versions {
+				putBindingVersion(t, st, r, 'A')
+			}
+			calls := 0
+			result, err := st.PreviewSecretBindingCohort(context.Background(), r, 1, func(rec SecretVersionRecord) error {
+				calls++
+				return bindingKeyTest('A')(rec)
+			})
+			if !errors.Is(err, tc.wantErr) || tc.wantErr == nil && err != nil {
+				t.Fatalf("PreviewSecretBindingCohort error = %v, want %v", err, tc.wantErr)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("binding tests = %d, want %d", calls, tc.wantCalls)
+			}
+			if len(result.AffectedVersions) != tc.wantResult {
+				t.Fatalf("affected versions = %d, want %d", len(result.AffectedVersions), tc.wantResult)
+			}
+		})
+	}
+}
+
+func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	ns := seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge")
+	putBindingVersion(t, st, r, 'A')
+	putBindingVersion(t, st, r, 'B', func(p *CreateSecretParams) { p.AccessTokenHash = []byte("hash") })
+	putBindingVersion(t, st, r, 'B', func(p *CreateSecretParams) { p.ExpiresAt = time.Now().Add(-time.Hour) })
+	if _, err := st.SetSecretVersionState(ctx, r, 2, domain.StateDisabled); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelsBefore, err := loadSecretLabels(st.db, secret.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := configurationReleaseModel{
+		NamespaceID: ns.ID, Name: "runtime", VersionNumber: 1, Digest: "digest", MetadataJSON: "{}", CreatedBy: "admin", CreatedAt: fmtTime(nowUTC()),
+	}
+	if err := st.db.Omit(clause.Associations).Create(&release).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Omit(clause.Associations).Create(&configurationReleaseLabelModel{
+		NamespaceID: ns.ID, ReleaseName: release.Name, Label: domain.LabelCurrent, VersionNumber: release.VersionNumber,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Omit(clause.Associations).Create(&configurationReleaseEntryModel{
+		ReleaseID: release.ID, Alias: "secret", Kind: domain.ReleaseEntrySecret,
+		ResourceNamespaceID: ns.ID, ResourceEnv: r.NS.Env, ResourceApp: r.NS.App,
+		ResourceKey: r.Key, ResourceVersion: 2, ContentType: "application/x-test", MetadataJSON: "{}",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DestroySecretVersion(ctx, r, 2); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("ordinary destroy did not observe release guard: %v", err)
+	}
+
+	preview, err := st.PreviewSecretBindingCohort(ctx, r, 0, bindingKeyTest('B'))
+	if err != nil || !slices.Equal(preview.AffectedVersions, []uint64{2, 3}) {
+		t.Fatalf("preview = %+v err=%v", preview, err)
+	}
+	var auditBefore, changesBefore int64
+	if err := st.db.Model(&auditEventModel{}).Count(&auditBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&changeLogModel{}).Count(&changesBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	guard := SecretBindingCASGuard{ExpectedRevision: preview.Revision, ExpectedAffectedVersions: slices.Clone(preview.AffectedVersions)}
+	purged, err := st.PurgeSecretBindingCohort(ctx, r, 0, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{
+		ActorIdentity: "admin", ActorType: domain.IdentityKindAdmin, SourceIP: "127.0.0.1", UserAgent: "test", RequestID: "request-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged.AnchorVersion != 3 || !slices.Equal(purged.AffectedVersions, []uint64{2, 3}) {
+		t.Fatalf("purge result = %+v", purged)
+	}
+	for _, version := range []uint64{2, 3} {
+		row := rawSecretVersion(t, st, r, version)
+		if row.State != domain.StateDestroyed || row.DestroyedAt == nil || row.Bound != 0 || row.HasAccessToken != 0 ||
+			len(row.Ciphertext) != 0 || len(row.EncryptedDEK) != 0 || len(row.Nonce) != 0 || len(row.BindingKeySalt) != 0 ||
+			row.KEKID != "" || row.WrapMode != "" || row.Algorithm != "" || row.AAD != "" || row.ExpiresAt != nil ||
+			row.ContentType != "" || row.MetadataJSON != "" || row.CreatedBy != "creator" || row.CreatedAt == "" {
+			t.Fatalf("version %d tombstone retained recoverable data: %+v", version, row)
+		}
+	}
+	if row := rawSecretVersion(t, st, r, 1); row.State == domain.StateDestroyed || len(row.Ciphertext) == 0 {
+		t.Fatalf("outside-cohort version changed: %+v", row)
+	}
+	labelsAfter, err := loadSecretLabels(st.db, secret.ID)
+	if err != nil || !reflect.DeepEqual(labelsAfter, labelsBefore) {
+		t.Fatalf("labels after purge = %v, want %v (err=%v)", labelsAfter, labelsBefore, err)
+	}
+	projected, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ContentType != "" || projected.MetadataJSON != "" {
+		t.Fatalf("purged current retained secret projection: content_type=%q metadata=%q", projected.ContentType, projected.MetadataJSON)
+	}
+	_, current, err := st.GetSecretVersion(ctx, r, 0, "")
+	if err != nil || current.Version != 3 || current.State != domain.StateDestroyed {
+		t.Fatalf("current tombstone = %+v err=%v", current, err)
+	}
+	var releaseEntryCount int64
+	if err := st.db.Model(&configurationReleaseEntryModel{}).Where("release_id = ?", release.ID).Count(&releaseEntryCount).Error; err != nil || releaseEntryCount != 1 {
+		t.Fatalf("release pin after purge: count=%d err=%v", releaseEntryCount, err)
+	}
+	var auditAfter, changesAfter int64
+	_ = st.db.Model(&auditEventModel{}).Count(&auditAfter).Error
+	_ = st.db.Model(&changeLogModel{}).Count(&changesAfter).Error
+	if auditAfter != auditBefore+1 || changesAfter != changesBefore+1 {
+		t.Fatalf("transactional records: audit %d->%d changes %d->%d", auditBefore, auditAfter, changesBefore, changesAfter)
+	}
+	changes, err := st.ListChangesSince(ctx, preview.Revision, 10)
+	if err != nil || len(changes) != 1 || changes[0].ChangeType != domain.ChangePurgeBindingCohort || !slices.Equal(changes[0].AffectedVersions, []uint64{2, 3}) {
+		t.Fatalf("purge change = %+v err=%v", changes, err)
+	}
+	audits, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: purgeBindingCohortAuditEvent}, ListPage{})
+	if err != nil || len(audits) != 1 {
+		t.Fatalf("purge audit = %+v err=%v", audits, err)
+	}
+	if audit := audits[0]; audit.ActorIdentity != "admin" || audit.ResourceNamespaceID != ns.ID || audit.ResourceVersion != 3 ||
+		audit.Decision != "allow" || audit.Metadata != `{"affected_versions":[2,3]}` {
+		t.Fatalf("purge audit = %+v", audit)
+	}
+	var highWater secretVersionHighWaterModel
+	if err := st.db.Where("namespace_id = ? AND name = ?", ns.ID, r.Key).First(&highWater).Error; err != nil || highWater.LastVersion != 3 {
+		t.Fatalf("high water = %+v err=%v", highWater, err)
+	}
+}
+
+func TestPurgeNonCurrentCohortPreservesCurrentProjection(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-non-current")
+	putBindingVersion(t, st, r, 'A')
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'A', func(p *CreateSecretParams) {
+		p.ContentType = "application/current"
+		p.Metadata = `{"current":true}`
+	})
+
+	guard := previewBindingGuard(t, st, r, 2, 'B')
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 2, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	projected, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ContentType != "application/current" || projected.MetadataJSON != `{"current":true}` {
+		t.Fatalf("non-current purge changed current projection: content_type=%q metadata=%q", projected.ContentType, projected.MetadataJSON)
+	}
+}
+
+func TestPurgeScrubsLiveSQLiteArtifacts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "physical-purge")
+	mainMarkers := newForensicSecretMarkers("MAIN", 1)
+	walMarkers := newForensicSecretMarkers("WAL", 2)
+	putForensicBindingVersion(t, st, r, mainMarkers)
+	if err := st.db.WithContext(ctx).Connection(func(conn *gorm.DB) error { return truncateWAL(conn) }); err != nil {
+		t.Fatalf("stage main database marker: %v", err)
+	}
+	putForensicBindingVersion(t, st, r, walMarkers)
+
+	mainBefore := readArtifact(t, path)
+	walBefore := readArtifact(t, path+"-wal")
+	for _, marker := range allForensicMarkers(mainMarkers) {
+		if !bytes.Contains(mainBefore, marker) {
+			t.Fatalf("main database did not contain staged %d-byte marker", len(marker))
+		}
+	}
+	for _, marker := range allForensicMarkers(walMarkers) {
+		if !bytes.Contains(walBefore, marker) {
+			t.Fatalf("WAL did not contain staged %d-byte marker", len(marker))
+		}
+	}
+
+	guard := previewBindingGuard(t, st, r, 1, 'B')
+	result, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.AffectedVersions, []uint64{1, 2}) {
+		t.Fatalf("purged versions = %v", result.AffectedVersions)
+	}
+
+	artifacts := map[string][]byte{
+		"main": readArtifact(t, path),
+		"wal":  readArtifact(t, path+"-wal"),
+		"shm":  readArtifact(t, path+"-shm"),
+	}
+	for artifact, contents := range artifacts {
+		for _, marker := range allForensicMarkers(mainMarkers, walMarkers) {
+			if bytes.Contains(contents, marker) {
+				t.Fatalf("%s artifact retained a purged %d-byte marker", artifact, len(marker))
+			}
+		}
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil && info.Size() != 0 {
+		t.Fatalf("successful purge left WAL size %d, want 0", info.Size())
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeReportsCommittedCleanupPendingWhenExternalReaderBlocksCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "pending-cleanup")
+	putBindingVersion(t, st, r, 'B')
+
+	reader, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readerDB, err := reader.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTx, err := readerDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		_ = readTx.Rollback()
+		t.Fatalf("establish external read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+
+	guard := previewBindingGuard(t, st, r, 1, 'B')
+	result, purgeErr := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+	if !errors.Is(purgeErr, ErrPurgeCleanupPending) {
+		_ = readTx.Rollback()
+		t.Fatalf("purge error = %v, want ErrPurgeCleanupPending", purgeErr)
+	}
+	if purgeErr.Error() != ErrPurgeCleanupPending.Error() {
+		_ = readTx.Rollback()
+		t.Fatalf("cleanup-pending error leaked details: %q", purgeErr)
+	}
+	if result.AnchorVersion != 1 || !slices.Equal(result.AffectedVersions, []uint64{1}) || result.Revision == 0 {
+		_ = readTx.Rollback()
+		t.Fatalf("committed purge did not return its result: %+v", result)
+	}
+	if err := st.Ping(ctx); err == nil {
+		_ = readTx.Rollback()
+		t.Fatal("cleanup-pending store continued serving after WAL scrub failure")
+	}
+	if blocked, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond}); err == nil {
+		_ = blocked.Close()
+		_ = readTx.Rollback()
+		t.Fatal("store opened while an external reader prevented startup WAL cleanup")
+	}
+
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopening performs the startup TRUNCATE checkpoint, recovering a crash or
+	// response failure between logical commit and physical cleanup.
+	reopened, err := OpenWithOptions(path, Options{BusyTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("startup cleanup after reader release: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	row := rawSecretVersion(t, reopened, r, 1)
+	if row.State != domain.StateDestroyed || len(row.Ciphertext) != 0 {
+		t.Fatalf("cleanup-pending purge did not logically commit: %+v", row)
+	}
+	var auditCount int64
+	if err := reopened.db.Model(&auditEventModel{}).Where("event_type = ?", purgeBindingCohortAuditEvent).Count(&auditCount).Error; err != nil || auditCount != 1 {
+		t.Fatalf("cleanup-pending purge audit count=%d err=%v", auditCount, err)
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil && info.Size() != 0 {
+		t.Fatalf("startup cleanup left WAL size %d, want 0", info.Size())
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeQuiescesPrimedInProcessPoolAndRestoresPolicy(t *testing.T) {
+	ctx := context.Background()
+	st := newStoreWithOptions(t, Options{BusyTimeout: 20 * time.Millisecond})
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "in-process-reader")
+	putBindingVersion(t, st, r, 'B')
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep one connection checked out with an old read snapshot and return a
+	// second to the idle pool. SetMaxOpenConns(1) alone would let purge take the
+	// idle connection without waiting for the reader because database/sql checks
+	// the idle list before enforcing max-open.
+	idleConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		_ = idleConn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readerConn.Close() })
+	readTx, err := readerConn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		_ = idleConn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readTx.Rollback() })
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		_ = idleConn.Close()
+		t.Fatalf("establish read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+	if err := idleConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := sqlDB.Stats(); stats.InUse != 1 || stats.Idle != 1 || stats.OpenConnections != 2 {
+		t.Fatalf("primed pool stats = %+v, want one active reader and one idle connection", stats)
+	}
+
+	type purgeResult struct {
+		result SecretBindingResult
+		err    error
+	}
+	done := make(chan purgeResult, 1)
+	guard := previewBindingGuard(t, st, r, 1, 'B')
+	go func() {
+		result, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+		done <- purgeResult{result: result, err: err}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := sqlDB.Stats()
+		if stats.MaxOpenConnections == 1 && stats.OpenConnections == 2 && stats.InUse == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("purge never pinned its connection while the in-process reader remained active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("purge returned before in-process reader drained: result=%+v err=%v", got.result, got.err)
+	case <-time.After(4 * 20 * time.Millisecond):
+	}
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := readerConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || !slices.Equal(got.result.AffectedVersions, []uint64{1}) {
+			t.Fatalf("purge after reader drain: result=%+v err=%v", got.result, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("purge did not finish after in-process reader drained")
+	}
+
+	if got := sqlDB.Stats().MaxOpenConnections; got != sqlStoreMaxOpenConns {
+		t.Fatalf("max-open after purge = %d, want configured %d", got, sqlStoreMaxOpenConns)
+	}
+	first, err := sqlDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := sqlDB.Conn(ctx)
+	if err != nil {
+		_ = first.Close()
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		_ = second.Close()
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := sqlDB.Stats(); stats.Idle != sqlStoreMaxIdleConns {
+		t.Fatalf("idle connections after purge = %d, want configured %d (stats=%+v)", stats.Idle, sqlStoreMaxIdleConns, stats)
+	}
+}
+
+func TestPurgeCleanupPendingRejectsQueuedWorkBeforeConnectionHandoff(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "queued-work")
+	putBindingVersion(t, st, r, 'B')
+
+	reader, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readerDB, err := reader.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTx, err := readerDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readTx.Rollback() })
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		t.Fatalf("establish external read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+
+	type purgeResult struct {
+		result SecretBindingResult
+		err    error
+	}
+	purgeDone := make(chan purgeResult, 1)
+	guard := previewBindingGuard(t, st, r, 1, 'B')
+	go func() {
+		result, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+		purgeDone <- purgeResult{result: result, err: err}
+	}()
+
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := sqlDB.Stats()
+		if stats.MaxOpenConnections == 1 && stats.InUse == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("purge never pinned its exclusive connection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	waitBefore := sqlDB.Stats().WaitCount
+	queuedDone := make(chan error, 1)
+	queuedRef := ref("prod", "app", "must-not-commit")
+	go func() {
+		_, _, err := st.PutParameter(ctx, queuedRef, "value", "text/plain", "{}", "tester")
+		queuedDone <- err
+	}()
+	deadline = time.Now().Add(time.Second)
+	for sqlDB.Stats().WaitCount == waitBefore && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if sqlDB.Stats().WaitCount == waitBefore {
+		t.Fatal("concurrent write never queued behind purge")
+	}
+
+	gotPurge := <-purgeDone
+	if !errors.Is(gotPurge.err, ErrPurgeCleanupPending) || gotPurge.result.Revision == 0 {
+		t.Fatalf("purge result = %+v err=%v, want committed cleanup-pending", gotPurge.result, gotPurge.err)
+	}
+	select {
+	case err := <-queuedDone:
+		if err == nil {
+			t.Fatal("queued write was served after cleanup-pending retirement")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued write was not released when cleanup-pending retired the store")
+	}
+
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("reopen after external reader release: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if _, err := reopened.GetParameter(ctx, queuedRef, 0, ""); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("queued write persisted after fail-closed purge: %v", err)
+	}
+	if row := rawSecretVersion(t, reopened, r, 1); row.State != domain.StateDestroyed {
+		t.Fatalf("purge did not commit before cleanup-pending: %+v", row)
+	}
+}
+
+func TestPurgeSecretBindingCohortAuditFailureRollsBack(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-rollback")
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'B')
+	preview, err := st.PreviewSecretBindingCohort(ctx, r, 1, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := []secretVersionModel{rawSecretVersion(t, st, r, 1), rawSecretVersion(t, st, r, 2)}
+	if err := st.db.Exec(`CREATE TRIGGER reject_purge_audit BEFORE INSERT ON audit_events
+		BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: preview.AffectedVersions,
+	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+	if !errors.Is(err, ErrRequiredAuditUnavailable) {
+		t.Fatalf("purge audit failure = %v, want ErrRequiredAuditUnavailable", err)
+	}
+	for i, want := range before {
+		if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
+			t.Fatalf("audit failure did not roll back version %d", i+1)
+		}
+	}
+	if revision, _ := st.CurrentRevision(ctx); revision != preview.Revision {
+		t.Fatalf("audit failure revision = %d, want %d", revision, preview.Revision)
+	}
+}
+
+func TestPurgeSecretBindingCohortCASValidation(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-cas")
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'B')
+	preview, err := st.PreviewSecretBindingCohort(ctx, r, 1, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := []secretVersionModel{rawSecretVersion(t, st, r, 1), rawSecretVersion(t, st, r, 2)}
+
+	for _, guard := range []SecretBindingCASGuard{
+		{ExpectedRevision: preview.Revision},
+		{ExpectedAffectedVersions: preview.AffectedVersions},
+	} {
+		if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Fatalf("half purge guard %+v = %v", guard, err)
+		}
+	}
+
+	if _, _, err := st.PutParameter(ctx, ref("prod", "app", "purge-revision-bump"), "x", "text/plain", "{}", "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: preview.AffectedVersions,
+	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale purge revision = %v", err)
+	}
+	preview, err = st.PreviewSecretBindingCohort(ctx, r, 1, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: []uint64{1},
+	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale purge set = %v", err)
+	}
+	for i, want := range before {
+		if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
+			t.Fatalf("failed purge CAS changed version %d", i+1)
+		}
+	}
+	var auditCount int64
+	if err := st.db.Model(&auditEventModel{}).Count(&auditCount).Error; err != nil || auditCount != 0 {
+		t.Fatalf("failed purge CAS audit count=%d err=%v", auditCount, err)
+	}
+}
+
+func TestPurgeSecretBindingCohortRejectsUnguardedOperation(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-unguarded")
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'B')
+
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("unguarded purge error = %v, want invalid argument", err)
+	}
+	for _, version := range []uint64{1, 2} {
+		if got := rawSecretVersion(t, st, r, version); got.State == domain.StateDestroyed {
+			t.Fatalf("unguarded purge destroyed version %d", version)
+		}
+	}
+}
+
+func TestPurgePreservesVersionHighWaterAcrossDeleteAndRecreate(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-high-water")
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'B')
+	guard := previewBindingGuard(t, st, r, 1, 'B')
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteSecret(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if got := putBindingVersion(t, st, r, 0); got != 3 {
+		t.Fatalf("recreated version = %d, want 3", got)
+	}
+}
+
+func TestChangeLogHasAffectedVersionsBaselineColumn(t *testing.T) {
+	st := newStore(t)
+	if !st.db.Migrator().HasColumn(&changeLogModel{}, "affected_versions_json") {
+		t.Fatal("change_log lacks affected_versions_json")
+	}
+}

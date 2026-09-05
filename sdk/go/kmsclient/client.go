@@ -31,6 +31,8 @@ const (
 	callbackQueueSize = 1024
 )
 
+var errSecretResponseIdentityMismatch = errors.New("kmsclient: secret response identity mismatch")
+
 // Config configures a Client.
 type Config struct {
 	// Endpoint is the server address as host:port. For custom transports it
@@ -60,9 +62,9 @@ type Config struct {
 	// development on a trusted network. It is mutually exclusive with TLS.
 	Insecure bool
 
-	// CacheTTL enables an in-memory read cache for GetParameter/GetSecret when
-	// greater than zero. Cached parameter and secret entries are invalidated by
-	// watch events when a subscription is active.
+	// CacheTTL enables an in-memory read cache for GetParameter when greater
+	// than zero. Secret plaintext is never cached because availability and
+	// authorization must be evaluated by the server on every read.
 	CacheTTL time.Duration
 
 	// FallbackToDefaultsOnError controls whether declarative SecretValue /
@@ -378,12 +380,9 @@ func (c *Client) fetchParameter(ctx context.Context, r ref, o getOptions) (strin
 
 // GetSecret returns a secret. The returned Secret redacts itself in logs and
 // string/JSON formatting; call Value or StringValue for plaintext. Use
-// WithSecretToken for token-protected or client-bound secrets.
-//
-// Token-gated reads (WithSecretToken) bypass the client cache entirely: caching
-// them under the token-less key would let later calls without the token read
-// the plaintext from cache, skipping the server's per-secret token check, and
-// would keep serving after a token rotation until the TTL expired.
+// WithSecretToken for token-protected secrets and WithBindingKey for bound
+// secrets. The credentials are independent and a version may require both.
+// Secret plaintext is never cached; every read is authorized by the server.
 func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (Secret, error) {
 	o := applyGetOptions(opts)
 	r, err := c.resolveRef(ctx, key)
@@ -391,11 +390,6 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 		return Secret{}, err
 	}
 	display := r.display()
-	if o.secretToken == "" {
-		if s, ok := c.cache.getSecret(display, o.version, o.label); ok {
-			return s, nil
-		}
-	}
 
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
@@ -404,22 +398,19 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 		Version:     o.version,
 		Label:       o.label,
 		SecretToken: o.secretToken,
+		BindingKey:  o.bindingKey.plaintext(),
 	})
 	if err != nil {
-		return Secret{}, mapError(err)
+		return Secret{}, mapSecretError(err)
 	}
-	path := display
-	if resp.GetRef() != nil {
-		path = refFromProto(resp.GetRef()).display()
+	if resp == nil || !sameResourceRef(resp.GetRef(), r.resourceProto()) || resp.GetVersion() == 0 || (o.version != 0 && resp.GetVersion() != o.version) {
+		return Secret{}, errSecretResponseIdentityMismatch
 	}
 	s := Secret{
 		value:       resp.GetValue(),
-		path:        path,
+		path:        display,
 		version:     resp.GetVersion(),
 		contentType: resp.GetContentType(),
-	}
-	if o.secretToken == "" {
-		c.cache.putSecret(display, o.version, o.label, s)
 	}
 	return s, nil
 }
@@ -473,20 +464,18 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
-	resp, err := c.secrets.PutSecret(cctx, &kmsv1.PutSecretRequest{
+	resp, err := c.secrets.PutSecretV03(cctx, &kmsv1.PutSecretRequest{
 		Ref:                 r.resourceProto(),
 		Value:               value,
 		ContentType:         o.contentType,
 		MetadataJson:        o.metadataJSON,
-		ClientBound:         o.clientBound,
+		BindingKey:          o.bindingKey.plaintext(),
 		GenerateAccessToken: o.generateAccessToken,
 		ExpiresAtUnixMs:     o.expiresAtUnixMS,
-		SecretToken:         o.secretToken,
 	})
 	if err != nil {
-		return PutSecretResult{}, mapError(err)
+		return PutSecretResult{}, mapSecretError(err)
 	}
-	c.cache.invalidateSecret(r.display())
 	return PutSecretResult{
 		Version:     resp.GetVersion(),
 		Revision:    resp.GetRevision(),

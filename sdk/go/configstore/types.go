@@ -59,10 +59,53 @@ type Options struct {
 	Release  string
 	Contract []ContractEntry
 	Callbacks
-	SecretTokenProvider  kmsclient.SecretTokenProvider
+	SecretTokenProvider kmsclient.SecretTokenProvider
+	// BindingKeys is an internal alias-keyed credential map assembled by
+	// generated stores from declaration-only Secret.BindKey fields.
+	BindingKeys          map[string]kmsclient.BindingKey
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
 	InstanceID           string
+}
+
+type optionsJSON struct {
+	Release              string `json:"release"`
+	ContractEntries      int    `json:"contract_entries"`
+	ReconcileInterval    string `json:"reconcile_interval"`
+	MaxConcurrentFetches int    `json:"max_concurrent_fetches"`
+	InstanceID           string `json:"instance_id,omitempty"`
+}
+
+func (o Options) safeProjection() optionsJSON {
+	return optionsJSON{
+		Release:              o.Release,
+		ContractEntries:      len(o.Contract),
+		ReconcileInterval:    o.ReconcileInterval.String(),
+		MaxConcurrentFetches: o.MaxConcurrentFetches,
+		InstanceID:           o.InstanceID,
+	}
+}
+
+// String omits callbacks, providers, and credential containers.
+func (o Options) String() string {
+	return fmt.Sprintf("Options{release=%q contract_entries=%d reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		o.Release, len(o.Contract), o.ReconcileInterval, o.MaxConcurrentFetches, o.InstanceID)
+}
+
+func (o Options) GoString() string { return o.String() }
+
+func (o Options) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", o.String())
+		return
+	}
+	_, _ = io.WriteString(f, o.String())
+}
+
+func (o Options) MarshalJSON() ([]byte, error) { return json.Marshal(o.safeProjection()) }
+
+func (o Options) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, o.safeProjection())
 }
 
 // PrepareFunc constructs a complete immutable candidate away from the active

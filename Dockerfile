@@ -37,7 +37,7 @@ LABEL org.opencontainers.image.source="https://github.com/Suhaibinator/kms" \
 
 USER kms:kms
 WORKDIR /data
-# Honored by serve and by every offline command (init, migrate, check, backup,
+# Honored by serve and by every offline command (init, check, backup,
 # restore, create-admin, rotate-admin, rotate-kek, import), which resolve
 # settings flag > env > config file > default — so `docker run ... init --admin
 # ops` needs no path flags.

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import grpc
 import pytest
 
+import kms_paramstore
 import kms_paramstore.release as release_module
 from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
@@ -45,7 +46,6 @@ def _release(version: int, revision: int):
                 ref=_ref("password"),
                 version=version,
                 content_type="string",
-                has_access_token=True,
             ),
         ],
     )
@@ -145,6 +145,13 @@ class _AsyncClient:
         self._client_name = "async-tests"
         self._param_stub = _AsyncParameterStub()
         self.tokens: List[str] = []
+        self.binding_keys: List[str] = []
+        self.bound = False
+        self.has_access_token = True
+        self.state = "enabled"
+        self.destroyed_at_unix_ms = 0
+        self.expires_at_unix_ms = 0
+        self.metadata_versions: List[int] = []
 
     async def _resolve_namespace_arg(self, namespace):
         return namespace or NamespaceRef("prod", "app")
@@ -162,10 +169,16 @@ class _AsyncClient:
         version=0,
         label="",
         secret_token="",
+        binding_key="",
         timeout=None,
     ):
         del label, timeout
         self.tokens.append(secret_token)
+        self.binding_keys.append(binding_key)
+        if self.has_access_token and secret_token != "token":
+            raise RuntimeError("credential unavailable")
+        if self.bound and binding_key != "async-binding-key":
+            raise RuntimeError("credential unavailable")
         env, app, resource_key = key[1:].split("/", 2)
         return Secret(
             f"secret-{version}".encode(),
@@ -174,6 +187,23 @@ class _AsyncClient:
             key=resource_key,
             version=version,
             content_type="string",
+        )
+
+    async def _get_secret_metadata_version(self, key, *, version, timeout=None):
+        del timeout
+        self.metadata_versions.append(version)
+        env, app, resource_key = key[1:].split("/", 2)
+        return kms_paramstore.models.SecretInfo(
+            env=env, app=app, key=resource_key, content_type="string",
+            bound=self.bound, has_access_token=self.has_access_token,
+            versions=tuple(
+                kms_paramstore.models.SecretVersion(
+                    version=version, state=self.state, bound=self.bound,
+                    destroyed_at_unix_ms=self.destroyed_at_unix_ms,
+                    expires_at_unix_ms=self.expires_at_unix_ms,
+                    has_access_token=self.has_access_token,
+                ) for version in range(1, 10)
+            ),
         )
 
 
@@ -230,7 +260,7 @@ def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
 
         async def validate(_cancel, manifest):
             order.append("manifest")
-            assert manifest.entry("password").has_access_token
+            assert not hasattr(manifest.entry("password"), "has_access_token")
 
         loader, stub, client = _loader(
             monkeypatch, _release(1, 10), validate_manifest=validate
@@ -253,9 +283,49 @@ def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
         assert prepared.aborts == 0
         assert order[0] == "manifest"
         assert client.tokens == ["token"]
+        assert client.metadata_versions == [1]
         applied = [a for a in stub.acknowledgements if a.state == "applied"][-1]
         assert applied.applied_divergent
         assert applied.divergent_field_count == 65_535
+
+    asyncio.run(scenario())
+
+
+def test_async_bound_loader_resolves_independent_credentials_and_missing_key_rejects(monkeypatch):
+    async def scenario():
+        source = {"password": "async-binding-key"}
+        loader, _stub, client = _loader(
+            monkeypatch, _release(1, 10), binding_keys=source,
+        )
+        client.bound = True
+        source["password"] = "changed"
+        prepared = _Prepared()
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        await _wait_for(lambda: prepared.commits == 1)
+        loader.stop()
+        await task
+        assert client.tokens == ["token"]
+        assert client.binding_keys == ["async-binding-key"]
+
+        missing, _stub, missing_client = _loader(monkeypatch, _release(1, 10))
+        missing_client.bound = True
+        with pytest.raises(ReleaseCandidateError) as caught:
+            await missing.run(lambda _cancel, _snapshot: _Prepared())
+        assert caught.value.category == "token_unavailable"
+        assert missing_client.binding_keys == []
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_rejects_enabled_version_with_destroyed_timestamp(monkeypatch):
+    async def scenario():
+        loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+        client.destroyed_at_unix_ms = 1
+        with pytest.raises(ReleaseCandidateError) as caught:
+            await loader.run(lambda _cancel, _snapshot: _Prepared())
+        assert caught.value.category == "resolution_failed"
+        assert client.tokens == []
+        assert client.binding_keys == []
 
     asyncio.run(scenario())
 
@@ -441,6 +511,48 @@ def test_async_rejection_preserves_lkg_and_replays_acks(monkeypatch):
         assert loader.status().state == "applied"
         assert loader.status().last_failure_category == ""
         assert loader.status().last_failure_unix_ms == 0
+        loader.stop()
+        await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("alias", "category"),
+    [("setting", "digest_mismatch"), ("password", "version_mismatch")],
+)
+def test_async_empty_pinned_content_type_rejects_without_replacing_lkg(
+    monkeypatch, alias, category
+):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        prepared: Dict[int, _Prepared] = {}
+        published = []
+
+        async def prepare(_cancel, snapshot):
+            published.append(snapshot.version)
+            return prepared.setdefault(snapshot.version, _Prepared())
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: loader.status().applied_version == 1)
+
+        tampered = _release(2, 20)
+        entry = next(item for item in tampered[0].entries if item.alias == alias)
+        entry.content_type = ""
+        tampered[0].digest = release_module._release_digest(tampered[0])
+        stub.activate(tampered)
+
+        await _wait_for(lambda: loader.status().last_failure_category == category)
+        assert loader.status().applied_version == 1
+        assert published == [1]
+        assert prepared[1].commits == 1
+        assert 2 not in prepared
+        await _wait_for(
+            lambda: any(
+                ack.state == "rejected" and ack.activation_revision == 20
+                for ack in stub.acknowledgements
+            )
+        )
         loader.stop()
         await task
 

@@ -1,4 +1,4 @@
-"""An optional in-memory TTL read cache for parameters and secrets.
+"""An optional in-memory TTL read cache for non-secret parameters.
 
 Entries are keyed by path, then by a ``(version, label)`` subkey so different
 reads of the same path do not collide. Invalidation is per-path, which lets
@@ -49,9 +49,7 @@ class Cache:
         self._max_entries = max_entries
         self._lock = threading.Lock()
         self._params: Dict[str, Dict[Tuple[int, str], Tuple[str, float]]] = {}
-        self._secrets: Dict[str, Dict[Tuple[int, str], Tuple[Secret, float]]] = {}
         self._param_generation: Dict[str, _GenerationState] = {}
-        self._secret_generation: Dict[str, _GenerationState] = {}
 
     @property
     def enabled(self) -> bool:
@@ -103,49 +101,22 @@ class Cache:
             self._evict(self._params)
 
     def get_secret(self, path: str, version: int, label: str) -> Optional[Secret]:
-        if not self.enabled:
-            return None
-        with self._lock:
-            by_key = self._secrets.get(path)
-            if not by_key:
-                return None
-            key = _subkey(version, label)
-            entry = by_key.get(key)
-            if entry is None:
-                return None
-            if time.monotonic() > entry[1]:
-                by_key.pop(key, None)
-                if not by_key:
-                    self._secrets.pop(path, None)
-                return None
-            return entry[0].clone()
+        """Compatibility no-op: secret plaintext is never cached."""
+        del path, version, label
+        return None
 
     def put_secret(self, path: str, version: int, label: str, secret: Secret) -> None:
-        if not self.enabled:
-            return
-        with self._lock:
-            self._secrets.setdefault(path, {})[_subkey(version, label)] = (
-                secret.clone(),
-                time.monotonic() + self._ttl,
-            )
-            self._evict(self._secrets)
+        """Compatibility no-op: secret plaintext is never retained."""
+        del path, version, label, secret
 
     def begin_secret_read(self, path: str) -> Optional[_ReadGeneration]:
-        return self._begin_read(self._secret_generation, "secret", path)
+        del path
+        return None
 
     def put_secret_if_unchanged(
         self, token: Optional[_ReadGeneration], version: int, label: str, secret: Secret
     ) -> None:
-        if token is None:
-            return
-        with self._lock:
-            if not self._is_current(self._secret_generation, token, "secret"):
-                return
-            self._secrets.setdefault(token.path, {})[_subkey(version, label)] = (
-                secret.clone(),
-                time.monotonic() + self._ttl,
-            )
-            self._evict(self._secrets)
+        del token, version, label, secret
 
     def end_read(self, token: Optional[_ReadGeneration]) -> None:
         """Release invalidation bookkeeping after an RPC settles."""
@@ -156,9 +127,7 @@ class Cache:
                 return
             token.released = True
             token.state.readers -= 1
-            generations = (
-                self._param_generation if token.kind == "parameter" else self._secret_generation
-            )
+            generations = self._param_generation
             if token.state.readers == 0 and generations.get(token.path) is token.state:
                 generations.pop(token.path, None)
 
@@ -172,29 +141,11 @@ class Cache:
             self._params.pop(path, None)
 
     def invalidate_secret(self, path: str) -> None:
-        if not self.enabled:
-            return
-        with self._lock:
-            state = self._secret_generation.get(path)
-            if state is not None:
-                state.epoch = object()
-            self._secrets.pop(path, None)
+        del path
 
     def invalidate_secrets_in_namespaces(self, namespaces: Iterable[Tuple[str, str]]) -> None:
-        """Drop all secret entries in the authoritative snapshot scope."""
-        if not self.enabled:
-            return
-        scope = set(namespaces)
-        if not scope:
-            return
-        with self._lock:
-            for path in set(self._secrets) | set(self._secret_generation):
-                parts = path.split("/", 3)
-                if len(parts) == 4 and (parts[1], parts[2]) in scope:
-                    state = self._secret_generation.get(path)
-                    if state is not None:
-                        state.epoch = object()
-                    self._secrets.pop(path, None)
+        """Compatibility no-op; no secret entries exist."""
+        del namespaces
 
     def invalidate_parameters_in_namespaces(self, namespaces: Iterable[Tuple[str, str]]) -> None:
         """Drop every parameter selector and fence in-flight reads in scope."""
@@ -217,8 +168,7 @@ class Cache:
 
     @property
     def secret_size(self) -> int:
-        with self._lock:
-            return sum(len(entries) for entries in self._secrets.values())
+        return 0
 
     def _evict(self, cache) -> None:
         now = time.monotonic()

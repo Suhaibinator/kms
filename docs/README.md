@@ -20,10 +20,13 @@ a local quick start. Use this index for deeper reference material.
   Prometheus alerting rules that go with the sections above.
 - [`security.md`](security.md) — current encryption, authentication,
   authorization, audit, and threat-boundary guarantees.
+- [`binding-keys.md`](binding-keys.md) — the `0.3.x` versioned binding-key
+  lifecycle, historical cohorts, and compromised-version purge.
 - [`http-api.md`](http-api.md) — browser/admin HTTP API and console aggregates.
 - [`configuration-releases.md`](configuration-releases.md) — immutable release,
   schema, activation, watch, and acknowledgement semantics.
-- [`migration.md`](migration.md) — migration from SuhaibParameterStore.
+- [`migration.md`](migration.md) — migration from SuhaibParameterStore and the
+  fresh-database requirement for the `0.3.x` baseline.
 
 ## Client SDKs
 

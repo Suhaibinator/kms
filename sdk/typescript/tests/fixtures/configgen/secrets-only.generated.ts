@@ -104,10 +104,11 @@ export class Snapshot {
 }
 
 export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
-export type StartOptions = Omit<ManagedConfigOptions, "contract">;
+export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;
 
 export class Store {
   readonly #defaults: ConfigSnapshot<RootConfig>;
+  readonly #bindingKeys: Readonly<Record<string, string>>;
   readonly #validate: ValidateConfig;
   #active: ConfigSnapshot<RootConfig> | undefined;
   #started = false;
@@ -115,7 +116,13 @@ export class Store {
   constructor(defaults: RootConfig, validate: ValidateConfig) {
     if (typeof validate !== "function") throw new TypeError("generated config store: validate callback is required");
     const copiedDefaults = writableClone(defaults);
+    const bindingKeys = Object.create(null) as Record<string, string>;
     assertZeroSecret(copiedDefaults["token"], "worker_token");
+    if (copiedDefaults["token"].bindKey.length > 0) {
+      bindingKeys["worker_token"] = copiedDefaults["token"].bindKey;
+    }
+    setProperty(copiedDefaults, "token", new Secret());
+    this.#bindingKeys = Object.freeze(bindingKeys);
     this.#defaults = immutableSnapshot(copiedDefaults);
     this.#validate = validate;
   }
@@ -129,7 +136,7 @@ export class Store {
     this.#started = true;
     return startManagedConfig(
       client,
-      { ...options, contract: generatedContract },
+      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },
       (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),
       signal,
     );
@@ -163,6 +170,8 @@ export class Store {
       throwIfAborted(signal);
       assertSecret(candidate["token"], "worker_token");
       assertSecret(effectiveDefaults["token"], "worker_token");
+      setProperty(candidate, "token", stripSecretBindingKey(candidate["token"]));
+      setProperty(effectiveDefaults, "token", stripSecretBindingKey(effectiveDefaults["token"]));
       validatedCandidate = writableClone(candidate);
     } catch (cause) {
       if (signal.aborted) throw abortReason(signal);
@@ -234,6 +243,19 @@ function setProperty<T extends object, K extends keyof T>(target: T, key: K, val
     writable: true,
     configurable: true,
   });
+}
+
+function stripSecretBindingKey(value: Secret): Secret {
+  const bytes = value.bytes();
+  try {
+    return new Secret(bytes, {
+      path: value.path,
+      version: value.version,
+      contentType: value.contentType,
+    });
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 function sameSecretIdentity(left: unknown, right: unknown): boolean {

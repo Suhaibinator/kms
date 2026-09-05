@@ -21,11 +21,15 @@ const mocks = vi.hoisted(() => ({
   toast: {
     error: vi.fn(),
     success: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
 vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+}));
 
 beforeEach(() => {
   // Every parameter page looks for a pinned schema; by default there is none.
@@ -37,6 +41,7 @@ beforeEach(() => {
   mocks.router.push.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
+  mocks.toast.info.mockReset();
   window.localStorage.removeItem(VALUE_EDITOR_MODE_STORAGE_KEY);
 });
 
@@ -84,7 +89,7 @@ const SECRET: SecretMetadata = {
   app: "billing",
   key: "api-key",
   content_type: "text/plain",
-  client_bound: false,
+  bound: false,
   has_access_token: false,
   metadata_json: "{}",
   created_at_unix_ms: 1,
@@ -94,6 +99,8 @@ const SECRET: SecretMetadata = {
     {
       version: 1,
       state: "enabled",
+      bound: false,
+      has_access_token: false,
       created_by: "admin",
       created_at_unix_ms: 1,
       destroyed_at_unix_ms: 0,
@@ -103,6 +110,8 @@ const SECRET: SecretMetadata = {
     {
       version: 2,
       state: "enabled",
+      bound: false,
+      has_access_token: false,
       created_by: "admin",
       created_at_unix_ms: 2,
       destroyed_at_unix_ms: 0,

@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
 // ---- helpers --------------------------------------------------------------
@@ -79,13 +81,30 @@ func encryptStub(gotVersion *uint64) func(uint64) (EncryptedPayload, error) {
 	}
 }
 
-func putSecret(t *testing.T, st *SQLStore, r domain.Ref, clientBound bool) (uint64, uint64) {
+func boundEncryptStub(gotVersion *uint64) func(uint64) (EncryptedPayload, error) {
+	standard := encryptStub(gotVersion)
+	return func(v uint64) (EncryptedPayload, error) {
+		payload, err := standard(v)
+		if err != nil {
+			return EncryptedPayload{}, err
+		}
+		payload.WrapMode = domain.WrapModeBindingKey
+		payload.BindingKeySalt = bindingSalt('B', 's', v)
+		return payload, nil
+	}
+}
+
+func putSecret(t *testing.T, st *SQLStore, r domain.Ref, bound bool) (uint64, uint64) {
 	t.Helper()
+	encrypt := encryptStub(nil)
+	if bound {
+		encrypt = boundEncryptStub(nil)
+	}
 	v, rev, err := st.CreateSecretVersion(context.Background(), CreateSecretParams{
-		Ref:         r,
-		CreatedBy:   "tester",
-		ClientBound: clientBound,
-		Encrypt:     encryptStub(nil),
+		Ref:       r,
+		CreatedBy: "tester",
+		Bound:     bound,
+		Encrypt:   encrypt,
 	})
 	if err != nil {
 		t.Fatalf("CreateSecretVersion(%s): %v", r, err)
@@ -117,7 +136,7 @@ func TestSchemaDDL(t *testing.T) {
 	}
 	for _, tbl := range []string{
 		"key_metadata", "namespaces", "parameters", "parameter_versions", "parameter_labels",
-		"secrets", "secret_versions", "secret_labels", "identities", "ca_keys", "identity_certs",
+		"secrets", "secret_version_high_water", "secret_versions", "secret_labels", "identities", "ca_keys", "identity_certs",
 		"policies", "audit_events", "change_log", "schema_migrations",
 	} {
 		if _, ok := ddl[tbl]; !ok {
@@ -130,6 +149,41 @@ func TestSchemaDDL(t *testing.T) {
 	for _, tbl := range []string{"parameter_versions", "secret_versions", "identity_certs"} {
 		if !strings.Contains(strings.ToUpper(ddl[tbl]), "ON DELETE CASCADE") {
 			t.Errorf("%s missing FK cascade:\n%s", tbl, ddl[tbl])
+		}
+	}
+	var stampCount int64
+	if err := st.db.Model(&schemaMigrationModel{}).Where("version = ?", schemaVersion).Count(&stampCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stampCount != 1 {
+		t.Fatalf("baseline stamp count = %d, want one version-%d row", stampCount, schemaVersion)
+	}
+	for table, removed := range map[string][]string{
+		"secrets":                       {"client_bound"},
+		"secret_versions":               {"client_bound", "client_key_salt"},
+		"configuration_release_entries": {"client_bound", "has_access_token"},
+	} {
+		for _, column := range removed {
+			if st.db.Migrator().HasColumn(table, column) {
+				t.Errorf("greenfield table %s retained removed column %s", table, column)
+			}
+		}
+	}
+	for _, column := range []string{"bound", "binding_key_salt"} {
+		if !st.db.Migrator().HasColumn("secret_versions", column) {
+			t.Errorf("secret_versions missing %s", column)
+		}
+	}
+	var releaseColumns []struct {
+		Name         string
+		DefaultValue *string `gorm:"column:dflt_value"`
+	}
+	if err := st.db.Raw("PRAGMA table_info(configuration_release_entries)").Scan(&releaseColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range releaseColumns {
+		if column.Name == "resource_namespace_id" && column.DefaultValue != nil {
+			t.Errorf("resource_namespace_id retained a default: %q", *column.DefaultValue)
 		}
 	}
 }
@@ -148,6 +202,32 @@ func TestPragmasApplied(t *testing.T) {
 	check("journal_mode", "wal")
 	check("foreign_keys", "1")
 	check("busy_timeout", "5000")
+	check("secure_delete", "1")
+}
+
+func TestSecureDeleteAppliedToEveryPooledConnection(t *testing.T) {
+	st := newStore(t)
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// Hold each checkout so database/sql must create a distinct physical
+	// connection; every one must have received the DSN pragma.
+	for i := range 4 {
+		conn, err := sqlDB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		var got int
+		if err := conn.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&got); err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		if got != 1 {
+			t.Fatalf("connection %d secure_delete=%d, want 1", i, got)
+		}
+	}
 }
 
 func TestOpenCreatesDatabaseWithRestrictedPermissions(t *testing.T) {
@@ -333,165 +413,261 @@ func TestReopenAndVersionGuard(t *testing.T) {
 	if err != nil || got.Value != "v1" {
 		t.Fatalf("after reopen got %+v err %v", got, err)
 	}
-	// Stamp a newer-than-supported version and confirm Open refuses.
+	// Any non-baseline stamp is incompatible; there is no 0.2.x upgrade path.
 	if err := st2.db.Exec("UPDATE schema_migrations SET version = ?", schemaVersion+5).Error; err != nil {
 		t.Fatal(err)
 	}
 	_ = st2.Close()
 	if _, err := Open(p); err == nil {
-		t.Fatal("expected Open to refuse a newer schema version")
+		t.Fatal("expected Open to refuse a non-baseline schema version")
+	} else if !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+		t.Fatalf("unexpected incompatibility error: %v", err)
 	}
 }
 
-func TestMigrationRepairsCurrentStampedChangeLogNamespaceID(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kms.db")
-	st, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ns := seedNS(t, st, "prod", "app")
-	ctx := context.Background()
-	if _, _, err := st.PutParameter(ctx, ref("prod", "app", "before"), "legacy", "", "", "admin"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Model an interrupted/current-stamped database whose physical change-log
-	// table is still the pre-incarnation shape. Open must inspect the table, not
-	// trust the schema stamp alone, and legacy rows must remain unattributed (0).
-	for _, statement := range []string{
-		`DROP INDEX IF EXISTS idx_change_log_namespace_revision`,
-		`DROP INDEX IF EXISTS idx_change_log_ns`,
-		`ALTER TABLE change_log RENAME TO change_log_pre_namespace_id`,
-		`CREATE TABLE change_log (
-			revision INTEGER PRIMARY KEY AUTOINCREMENT,
-			resource_type TEXT NOT NULL,
-			env TEXT NOT NULL,
-			app TEXT NOT NULL,
-			key TEXT NOT NULL,
-			change_type TEXT NOT NULL,
-			value TEXT,
-			content_type TEXT NOT NULL DEFAULT '',
-			version_number INTEGER NOT NULL DEFAULT 0,
-			label TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL
-		)`,
-		`INSERT INTO change_log (
-			revision, resource_type, env, app, key, change_type, value,
-			content_type, version_number, label, created_at
-		) SELECT revision, resource_type, env, app, key, change_type, value,
-			content_type, version_number, label, created_at
-		FROM change_log_pre_namespace_id`,
-		`DROP TABLE change_log_pre_namespace_id`,
-		`CREATE INDEX idx_change_log_ns ON change_log(env, app)`,
-	} {
-		if err := st.db.Exec(statement).Error; err != nil {
-			_ = st.Close()
-			t.Fatalf("prepare current-stamped legacy change_log: %v", err)
+func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
+	createRaw := func(t *testing.T, statements ...string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "legacy.db")
+		file, err := fileutil.OpenPrivateExclusive(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	var stamped schemaMigrationModel
-	if err := st.db.Order("version DESC").First(&stamped).Error; err != nil {
-		t.Fatal(err)
-	}
-	if stamped.Version != schemaVersion {
-		t.Fatalf("schema stamp = %d, want current %d", stamped.Version, schemaVersion)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	repaired, err := Open(path)
-	if err != nil {
-		t.Fatalf("repair current-stamped legacy change_log: %v", err)
-	}
-	defer func() { _ = repaired.Close() }()
-	if !repaired.db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
-		t.Fatal("namespace_id column was not repaired")
-	}
-	entries, err := repaired.ListChangesSince(ctx, 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].NamespaceID != 0 {
-		t.Fatalf("legacy entries = %+v, want one fail-closed namespace_id=0 row", entries)
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		db, err := gorm.Open(sqlite.Open(sqliteFileURI(filepath.ToSlash(path))), &gorm.Config{SkipDefaultTransaction: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range statements {
+			if err := db.Exec(statement).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
 
-	if _, _, err := repaired.PutParameter(ctx, ref("prod", "app", "after"), "current", "", "", "admin"); err != nil {
-		t.Fatal(err)
+	tests := map[string]func(*testing.T) string{
+		"unstamped nonempty": func(t *testing.T) string {
+			return createRaw(t, `CREATE TABLE legacy_secrets (id INTEGER PRIMARY KEY, value TEXT)`, `INSERT INTO legacy_secrets VALUES (1, 'keep-me')`)
+		},
+		"non-table schema object": func(t *testing.T) string {
+			return createRaw(t, `CREATE VIEW operator_view AS SELECT 'keep-me' AS value`)
+		},
+		"partial stamped baseline": func(t *testing.T) string {
+			return createRaw(t,
+				`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+				`INSERT INTO schema_migrations VALUES (1, 'legacy')`,
+				`CREATE TABLE secrets (id INTEGER PRIMARY KEY, client_bound INTEGER NOT NULL DEFAULT 0)`)
+		},
 	}
-	entries, err = repaired.ListChangesSince(ctx, entries[0].Revision, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].NamespaceID != ns.ID {
-		t.Fatalf("new entries = %+v, want namespace_id=%d", entries, ns.ID)
+	for name, setup := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := setup(t)
+			if runtime.GOOS != "windows" {
+				// A compatibility rejection must happen before the private-file
+				// normalizer turns a valid owner-read-only mode into 0600.
+				if err := os.Chmod(path, 0o400); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeInfo, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if store, err := Open(path); err == nil {
+				_ = store.Close()
+				t.Fatal("legacy database was accepted")
+			} else if !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+				t.Fatalf("unexpected incompatibility error: %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("rejected legacy database was mutated")
+			}
+			afterInfo, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if beforeInfo.Mode() != afterInfo.Mode() {
+				t.Fatalf("rejected database mode changed from %v to %v", beforeInfo.Mode(), afterInfo.Mode())
+			}
+			if !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+				t.Fatalf("rejected database modification time changed from %v to %v", beforeInfo.ModTime(), afterInfo.ModTime())
+			}
+			for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+				if _, err := os.Lstat(path + suffix); !os.IsNotExist(err) {
+					t.Fatalf("rejected database created sidecar %s: %v", suffix, err)
+				}
+			}
+		})
 	}
 }
 
-func TestMigrationRepairsCurrentStampedReleaseEntryNamespaceID(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kms.db")
-	st, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
+func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
+	newMemoryDB := func(t *testing.T, name string) *gorm.DB {
+		t.Helper()
+		db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{SkipDefaultTransaction: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return db
 	}
-	ctx := context.Background()
-	source := seedNS(t, st, "prod", "source")
-	target := seedNS(t, st, "prod", "target")
-	resource := ref("prod", "source", "config")
-	if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
-		t.Fatal(err)
-	}
-	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
-		Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-		Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1}},
+
+	t.Run("rollback leaves no partial schema", func(t *testing.T) {
+		db := newMemoryDB(t, "baseline-rollback")
+		err := initializeBaselineWithVerifier(db, func(tx *gorm.DB) error {
+			// Model a materialization defect that only exact baseline verification
+			// can detect. The verifier error must roll back the surrounding
+			// initialization transaction, including all preceding DDL.
+			if err := tx.Exec("DROP INDEX idx_secret_ns_name").Error; err != nil {
+				return err
+			}
+			return verifyBaselineDB(tx)
+		})
+		if err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			t.Fatalf("initialization err = %v, want exact-baseline failure", err)
+		}
+		var count int64
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").Scan(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("failed initialization left %d schema objects", count)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`DROP INDEX IF EXISTS idx_release_entry_resource`,
-		`ALTER TABLE configuration_release_entries DROP COLUMN resource_namespace_id`,
-	} {
-		if err := st.db.Exec(statement).Error; err != nil {
-			_ = st.Close()
-			t.Fatalf("prepare current-stamped legacy release entries: %v", err)
+
+	t.Run("index drift is incompatible", func(t *testing.T) {
+		db := newMemoryDB(t, "baseline-index-drift")
+		if err := db.Transaction(materializeBaseline); err != nil {
+			t.Fatal(err)
 		}
-	}
-	var stamped schemaMigrationModel
-	if err := st.db.Order("version DESC").First(&stamped).Error; err != nil {
-		t.Fatal(err)
-	}
-	if stamped.Version != schemaVersion {
-		t.Fatalf("schema stamp = %d, want current %d", stamped.Version, schemaVersion)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
+		if empty, err := inspectBaselineDB(db); err != nil || empty {
+			t.Fatalf("fresh baseline inspection: empty=%v err=%v", empty, err)
+		}
+		if err := db.Exec("DROP INDEX idx_secret_ns_name").Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			t.Fatalf("schema drift err = %v, want incompatibility", err)
+		}
+	})
+}
+
+func TestBaselineSchemaDoesNotHideSQLiteWildcardLookalikes(t *testing.T) {
+	newMemoryDB := func(t *testing.T) *gorm.DB {
+		t.Helper()
+		dsn := fmt.Sprintf("file:baseline-name-filter-%d?mode=memory&cache=shared", baselineReferenceID.Add(1))
+		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{SkipDefaultTransaction: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		return db
 	}
 
-	repaired, err := Open(path)
-	if err != nil {
-		t.Fatalf("repair current-stamped legacy release entries: %v", err)
+	tests := map[string]struct {
+		exact          []string
+		initialization []string
+	}{
+		"table": {
+			exact:          []string{`CREATE TABLE sqliteXtable (id INTEGER PRIMARY KEY)`},
+			initialization: []string{`CREATE TABLE sqliteXtable (id INTEGER PRIMARY KEY)`},
+		},
+		"view": {
+			exact:          []string{`CREATE VIEW sqliteXview AS SELECT 1 AS value`},
+			initialization: []string{`CREATE VIEW sqliteXview AS SELECT 1 AS value`},
+		},
+		"index": {
+			exact: []string{`CREATE INDEX sqliteXindex ON namespaces(env)`},
+			initialization: []string{
+				`CREATE TABLE sqliteXindex_host (value TEXT)`,
+				`CREATE INDEX sqliteXindex ON sqliteXindex_host(value)`,
+			},
+		},
+		"trigger": {
+			exact: []string{`CREATE TRIGGER sqliteXtrigger AFTER INSERT ON namespaces BEGIN SELECT 1; END`},
+			initialization: []string{
+				`CREATE TABLE sqliteXtrigger_host (value TEXT)`,
+				`CREATE TRIGGER sqliteXtrigger AFTER INSERT ON sqliteXtrigger_host BEGIN SELECT 1; END`,
+			},
+		},
 	}
-	defer func() { _ = repaired.Close() }()
-	if !repaired.db.Migrator().HasColumn(&configurationReleaseEntryModel{}, "ResourceNamespaceID") {
-		t.Fatal("resource_namespace_id column was not repaired")
-	}
-	var entry configurationReleaseEntryModel
-	if err := repaired.db.First(&entry).Error; err != nil {
-		t.Fatal(err)
-	}
-	if entry.ResourceNamespaceID != 0 {
-		t.Fatalf("legacy resource namespace ID = %d, want fail-closed 0", entry.ResourceNamespaceID)
-	}
-	if _, _, err := repaired.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("activate migrated legacy release err = %v, want ErrFailedPrecondition", err)
-	}
-	if source.ID <= 0 {
-		t.Fatal("source namespace setup failed")
+
+	for name, test := range tests {
+		t.Run("exact verification/"+name, func(t *testing.T) {
+			db := newMemoryDB(t)
+			if err := db.Transaction(materializeBaseline); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range test.exact {
+				if err := db.Exec(statement).Error; err != nil {
+					t.Fatalf("execute setup statement %q: %v", statement, err)
+				}
+			}
+			if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+				t.Fatalf("schema lookalike err = %v, want incompatibility", err)
+			}
+		})
+
+		t.Run("empty database initialization/"+name, func(t *testing.T) {
+			db := newMemoryDB(t)
+			for _, statement := range test.initialization {
+				if err := db.Exec(statement).Error; err != nil {
+					t.Fatalf("execute setup statement %q: %v", statement, err)
+				}
+			}
+			if err := initializeBaseline(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+				t.Fatalf("initialization err = %v, want incompatibility", err)
+			}
+			if db.Migrator().HasTable("schema_migrations") {
+				t.Fatal("rejected initialization created KMS schema")
+			}
+		})
 	}
 }
 
-// ---- parameters -----------------------------------------------------------
+func TestReferenceBaselineSchemaConcurrent(t *testing.T) {
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for range workers {
+		go func() {
+			ready.Done()
+			<-start
+			_, err := referenceBaselineSchema()
+			errs <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for range workers {
+		if err := <-errs; err != nil {
+			t.Errorf("referenceBaselineSchema: %v", err)
+		}
+	}
+}
 
 func TestPutGetParameter(t *testing.T) {
 	st := newStore(t)
@@ -751,7 +927,7 @@ func TestCreateSecretVersion(t *testing.T) {
 		ContentType: "application/json",
 		Metadata:    `{"team":"x"}`,
 		CreatedBy:   "alice",
-		ClientBound: false,
+		Bound:       false,
 		Encrypt:     encryptStub(&gotVer),
 	})
 	if err != nil {
@@ -767,7 +943,7 @@ func TestCreateSecretVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Ref != r || rec.ContentType != "application/json" || rec.Metadata != `{"team":"x"}` || rec.ClientBound {
+	if rec.Ref != r || rec.ContentType != "application/json" || rec.Metadata != `{"team":"x"}` || rec.Bound {
 		t.Fatalf("secret rec = %+v", rec)
 	}
 	if string(ver.Ciphertext) != "ct-1" || string(ver.EncryptedDEK) != "dek-1" || ver.AAD != "aad-1" {
@@ -812,23 +988,138 @@ func TestCreateSecretVersionRejectsRetiredKEKPayload(t *testing.T) {
 	}
 }
 
-func TestCreateSecretVersionModeMismatch(t *testing.T) {
+func TestCreateSecretVersionAllowsMixedProtectionAndTracksCurrent(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "s")
 	putSecret(t, st, r, false)
-	_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true, Encrypt: encryptStub(nil),
-	})
-	mustErrIs(t, err, domain.ErrFailedPrecondition, "mode mismatch")
-	// Nothing new should be written.
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, Bound: true, Encrypt: boundEncryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	info, err := st.GetSecretInfo(ctx, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(info.Versions) != 1 {
-		t.Fatalf("versions after failed create = %d, want 1", len(info.Versions))
+	if len(info.Versions) != 2 || info.Versions[0].Bound || !info.Versions[1].Bound || !info.Bound {
+		t.Fatalf("mixed version protection = %+v", info)
+	}
+	if _, _, _, err := st.PromoteSecretVersion(ctx, r, 1); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Bound {
+		t.Fatal("current summary remained bound after promoting unbound version")
+	}
+}
+
+func TestSecretMetadataReadsRejectDanglingCurrentLabel(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	ns := seedNS(t, st, "prod", "app").NamespaceRef
+	r := domain.Ref{NS: ns, Key: "dangling-current"}
+	putSecret(t, st, r, true)
+
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&secretLabelModel{}).
+		Where("secret_id = ? AND label = ?", rec.ID, domain.LabelCurrent).
+		Update("version_number", 999).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.GetSecretRecord(ctx, r); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("GetSecretRecord dangling current error = %v, want failed precondition", err)
+	}
+	if _, err := st.GetSecretInfo(ctx, r); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("GetSecretInfo dangling current error = %v, want failed precondition", err)
+	}
+	exact, err := st.GetSecretVersionInfo(ctx, r, 1, "")
+	if err != nil {
+		t.Fatalf("GetSecretVersionInfo must ignore unrelated current label corruption: %v", err)
+	}
+	if len(exact.Versions) != 1 || exact.Versions[0].Version != 1 || !exact.Versions[0].Bound {
+		t.Fatalf("exact metadata projection = %+v", exact)
+	}
+	secrets, next, err := st.ListSecrets(ctx, ns, "", ListPage{})
+	if !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("ListSecrets dangling current error = %v, want failed precondition", err)
+	}
+	if secrets != nil || next != "" {
+		t.Fatalf("ListSecrets returned partial metadata on corruption: secrets=%+v next=%q", secrets, next)
+	}
+}
+
+func TestGetSecretVersionInfoProjectsOnlyOneMetadataRow(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "bounded-metadata")
+	putSecret(t, st, r, false)
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{Ref: r, Encrypt: encryptStub(nil)}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&secretVersionModel{}).Where("secret_id = ?", rec.ID).
+		Update("ciphertext", bytes.Repeat([]byte("x"), 5<<20)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var queries []string
+	const callback = "test:capture-bounded-secret-metadata"
+	if err := st.db.Callback().Query().After("gorm:query").Register(callback, func(db *gorm.DB) {
+		queries = append(queries, db.Statement.SQL.String())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.db.Callback().Query().Remove(callback) })
+
+	for _, tc := range []struct {
+		name    string
+		version uint64
+		label   string
+		want    uint64
+	}{
+		{"exact", 1, "", 1}, {"current", 0, "current", 2}, {"previous", 0, "previous", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queries = nil
+			info, err := st.GetSecretVersionInfo(ctx, r, tc.version, tc.label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(info.Versions) != 1 || info.Versions[0].Version != tc.want {
+				t.Fatalf("exact projection = %+v", info)
+			}
+			var versionQuery string
+			for _, query := range queries {
+				if strings.Contains(query, "secret_versions") {
+					versionQuery = query
+					break
+				}
+			}
+			if versionQuery == "" {
+				t.Fatalf("secret version query not captured: %q", queries)
+			}
+			for _, forbidden := range []string{"ciphertext", "encrypted_dek", "nonce", "binding_key_salt", "SELECT *"} {
+				if strings.Contains(strings.ToLower(versionQuery), strings.ToLower(forbidden)) {
+					t.Fatalf("exact metadata query selected %q: %s", forbidden, versionQuery)
+				}
+			}
+			if !strings.Contains(versionQuery, "version_number") || !strings.Contains(versionQuery, "LIMIT 1") {
+				t.Fatalf("exact metadata query is not bounded to one version: %s", versionQuery)
+			}
+		})
 	}
 }
 
@@ -873,7 +1164,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	r := ref("prod", "app", "guarded")
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: encryptStub(nil),
+		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -884,11 +1175,11 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 
 	encrypted := false
 	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true,
+		Ref: r, Bound: true,
 		Expected: &SecretWriteExpectation{Exists: false},
 		Encrypt: func(version uint64) (EncryptedPayload, error) {
 			encrypted = true
-			return encryptStub(nil)(version)
+			return boundEncryptStub(nil)(version)
 		},
 	})
 	if !errors.Is(err, domain.ErrAborted) {
@@ -899,20 +1190,20 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	}
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true, AccessTokenHash: []byte("hash-v2"),
+		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v2"),
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
-		Encrypt:  encryptStub(nil),
+		Encrypt:  boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatalf("current token rotation: %v", err)
 	}
 
 	encrypted = false
 	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true,
+		Ref: r, Bound: true,
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
 		Encrypt: func(version uint64) (EncryptedPayload, error) {
 			encrypted = true
-			return encryptStub(nil)(version)
+			return boundEncryptStub(nil)(version)
 		},
 	})
 	if !errors.Is(err, domain.ErrAborted) {
@@ -923,9 +1214,9 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	}
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true,
+		Ref: r, Bound: true,
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v2")},
-		Encrypt:  encryptStub(nil),
+		Encrypt:  boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatalf("write with current expectation: %v", err)
 	}
@@ -955,10 +1246,10 @@ func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
 		wg.Go(func() {
 			<-start
 			version, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-				Ref:         r,
-				ClientBound: true,
-				Expected:    &SecretWriteExpectation{Exists: false},
-				Encrypt:     encryptStub(nil),
+				Ref:      r,
+				Bound:    true,
+				Expected: &SecretWriteExpectation{Exists: false},
+				Encrypt:  boundEncryptStub(nil),
 			})
 			results <- result{version: version, err: err}
 		})
@@ -997,7 +1288,7 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 	r := ref("prod", "app", "concurrent-rotation")
 	oldHash := []byte("hash-v1")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ClientBound: true, AccessTokenHash: oldHash, Encrypt: encryptStub(nil),
+		Ref: r, Bound: true, AccessTokenHash: oldHash, Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1020,9 +1311,9 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 			defer wg.Done()
 			<-start
 			_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-				Ref: r, ClientBound: true, AccessTokenHash: newHash,
+				Ref: r, Bound: true, AccessTokenHash: newHash,
 				Expected: &SecretWriteExpectation{Exists: true, ID: rec.ID, AccessTokenHash: oldHash},
-				Encrypt:  encryptStub(nil),
+				Encrypt:  boundEncryptStub(nil),
 			})
 			results <- result{hash: newHash, err: err}
 		}(newHash)
@@ -1088,6 +1379,9 @@ func TestCreateSecretVersionRejectsDeleteRecreateABA(t *testing.T) {
 	if replacement.ID == original.ID {
 		t.Fatalf("replacement reused secret row ID %d", original.ID)
 	}
+	if replacement.Labels[domain.LabelCurrent] != 2 {
+		t.Fatalf("replacement reused version number: labels=%v", replacement.Labels)
+	}
 
 	encrypted := false
 	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
@@ -1103,6 +1397,42 @@ func TestCreateSecretVersionRejectsDeleteRecreateABA(t *testing.T) {
 	}
 	if encrypted {
 		t.Fatal("delete/recreate ABA invoked Encrypt before rejecting stale row identity")
+	}
+}
+
+func TestSecretVersionHighWaterSurvivesDeleteAndRollsBack(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:secret-high-water?mode=memory&cache=shared"), &gorm.Config{SkipDefaultTransaction: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(materializeBaseline); err != nil {
+		t.Fatal(err)
+	}
+	st := &SQLStore{db: db}
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "high-water")
+	if version, _ := putSecret(t, st, r, false); version != 1 {
+		t.Fatalf("first version = %d, want 1", version)
+	}
+	if _, err := st.DeleteSecret(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("encrypt failed")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, Encrypt: func(uint64) (EncryptedPayload, error) { return EncryptedPayload{}, boom },
+	}); !errors.Is(err, boom) {
+		t.Fatalf("failed recreation err = %v, want injected failure", err)
+	}
+	if version, _ := putSecret(t, st, r, false); version != 2 {
+		t.Fatalf("recreated version = %d, want 2", version)
+	}
+	var highWater secretVersionHighWaterModel
+	if err := st.db.Where("name = ?", r.Key).First(&highWater).Error; err != nil {
+		t.Fatal(err)
+	}
+	if highWater.LastVersion != 2 {
+		t.Fatalf("last version = %d, want 2", highWater.LastVersion)
 	}
 }
 
@@ -1314,14 +1644,14 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 	if rec.ContentType != "application/yaml" || len(rec.AccessTokenHash) == 0 {
 		t.Fatalf("latest secret metadata = %+v, want yaml with token", rec)
 	}
-	if v1.ContentType != "text/plain" || v1.ClientBound || v1.HasAccessToken {
+	if v1.ContentType != "text/plain" || v1.Bound || v1.HasAccessToken {
 		t.Fatalf("v1 attributes = %+v, want original unprotected text version", v1)
 	}
 	_, v2, err := st.GetSecretVersion(ctx, r, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v2.ContentType != "application/json" || v2.ClientBound || !v2.HasAccessToken {
+	if v2.ContentType != "application/json" || v2.Bound || !v2.HasAccessToken {
 		t.Fatalf("v2 attributes = %+v, want protected json version", v2)
 	}
 	_, v3, err := st.GetSecretVersion(ctx, r, 3, "")
@@ -1334,7 +1664,7 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 
 	bound := ref("prod", "app", "bound")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: bound, ClientBound: true, AccessTokenHash: []byte("bound-token"), Encrypt: encryptStub(nil),
+		Ref: bound, Bound: true, AccessTokenHash: []byte("bound-token"), Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1342,62 +1672,8 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !boundV1.ClientBound || !boundV1.HasAccessToken {
-		t.Fatalf("client-bound v1 attributes = %+v", boundV1)
-	}
-}
-
-func TestSchemaV2BackfillsSecretVersionAttributes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kms.db")
-	st, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	seedNS(t, st, "prod", "app")
-	r := ref("prod", "app", "s")
-	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ContentType: "ignored", Encrypt: encryptStub(nil),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// Emulate a v1 database after AutoMigrate has introduced the new columns:
-	// historical versions have no independent values, while the shared secret
-	// row contains the only attributes that v2 retained.
-	if err := st.db.Exec(`UPDATE secrets SET content_type = ?, client_bound = 1, access_token_hash = ? WHERE name = ?`, "application/custom", []byte("token-hash"), "s").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := st.db.Exec(`UPDATE secret_versions SET content_type = '', client_bound = 0, has_access_token = 0`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := st.db.Exec(`DELETE FROM schema_migrations`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := st.db.Create(&schemaMigrationModel{Version: 1, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	st, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-	_, ver, err := st.GetSecretVersion(ctx, r, 1, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ver.ContentType != "application/custom" || !ver.ClientBound || !ver.HasAccessToken {
-		t.Fatalf("backfilled attributes = %+v", ver)
-	}
-	var latest schemaMigrationModel
-	if err := st.db.Order("version DESC").First(&latest).Error; err != nil {
-		t.Fatal(err)
-	}
-	if latest.Version != schemaVersion {
-		t.Fatalf("schema version = %d, want %d", latest.Version, schemaVersion)
+	if !boundV1.Bound || !boundV1.HasAccessToken {
+		t.Fatalf("bound v1 attributes = %+v", boundV1)
 	}
 }
 
@@ -1539,9 +1815,21 @@ func TestPromoteSecretVersion(t *testing.T) {
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "s")
-	putSecret(t, st, r, false) // v1
-	putSecret(t, st, r, false) // v2 current, previous 1
-	putSecret(t, st, r, false) // v3 current, previous 2
+	for _, version := range []struct {
+		contentType string
+		metadata    string
+	}{
+		{contentType: "text/plain", metadata: `{"generation":1}`},
+		{contentType: "application/json", metadata: `{"generation":2}`},
+		{contentType: "application/yaml", metadata: `{"generation":3}`},
+	} {
+		if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+			Ref: r, ContentType: version.contentType, Metadata: version.metadata,
+			CreatedBy: "tester", Encrypt: encryptStub(nil),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	cur, prev, rev, err := st.PromoteSecretVersion(ctx, r, 1)
 	if err != nil {
@@ -1554,6 +1842,23 @@ func TestPromoteSecretVersion(t *testing.T) {
 	if rec.Labels[domain.LabelCurrent] != 1 || rec.Labels[domain.LabelPrevious] != 3 {
 		t.Fatalf("labels after promote = %v", rec.Labels)
 	}
+	if rec.ContentType != "text/plain" || rec.Metadata != `{"generation":1}` {
+		t.Fatalf("secret projection after promote = content type %q metadata %q", rec.ContentType, rec.Metadata)
+	}
+	info, err := st.GetSecretInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ContentType != "text/plain" || info.Metadata != `{"generation":1}` {
+		t.Fatalf("secret info projection after promote = content type %q metadata %q", info.ContentType, info.Metadata)
+	}
+	listed, _, err := st.ListSecrets(ctx, r.NS, r.Key, ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ContentType != "text/plain" || listed[0].Metadata != `{"generation":1}` {
+		t.Fatalf("listed secret projection after promote = %+v", listed)
+	}
 
 	// Promote requires an enabled, existing target.
 	if _, err := st.SetSecretVersionState(ctx, r, 2, domain.StateDisabled); err != nil {
@@ -1561,6 +1866,13 @@ func TestPromoteSecretVersion(t *testing.T) {
 	}
 	_, _, _, err = st.PromoteSecretVersion(ctx, r, 2)
 	mustErrIs(t, err, domain.ErrFailedPrecondition, "promote disabled")
+	row3 := rawSecretVersion(t, st, r, 3)
+	if err := st.db.Model(&secretVersionModel{}).Where("id = ?", row3.ID).
+		Update("destroyed_at", fmtTime(nowUTC())).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = st.PromoteSecretVersion(ctx, r, 3)
+	mustErrIs(t, err, domain.ErrFailedPrecondition, "promote contradictory destroyed timestamp")
 	_, _, _, err = st.PromoteSecretVersion(ctx, r, 99)
 	mustErrIs(t, err, domain.ErrNotFound, "promote missing")
 }
@@ -1593,8 +1905,8 @@ func TestSecretInfoAndList(t *testing.T) {
 	if len(list) != 2 || list[0].Ref.Key != "a/one" || list[1].Ref.Key != "a/two" {
 		t.Fatalf("list a = %+v", list)
 	}
-	if !list[1].ClientBound {
-		t.Fatal("a/two should be client-bound")
+	if !list[1].Bound {
+		t.Fatal("a/two should be bound")
 	}
 }
 
@@ -2631,39 +2943,6 @@ func TestDeleteAuditByIDs(t *testing.T) {
 		t.Fatalf("empty delete count = %d, want 0", deleted)
 	}
 }
-
-// TestAuditDecisionIndexCreatedOnExistingDatabase covers the upgrade path: a
-// database written before the decision index existed gains it on the next
-// migration rather than only on a freshly created file.
-func TestAuditDecisionIndexCreatedOnExistingDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kms.db")
-	st, err := OpenWithOptions(path, Options{})
-	if err != nil {
-		t.Fatalf("OpenWithOptions: %v", err)
-	}
-	if err := st.db.Exec("DROP INDEX idx_audit_decision").Error; err != nil {
-		t.Fatalf("drop index: %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	reopened, err := OpenWithOptions(path, Options{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-
-	var columns []string
-	if err := reopened.db.Raw("SELECT name FROM pragma_index_info('idx_audit_decision') ORDER BY seqno").Scan(&columns).Error; err != nil {
-		t.Fatalf("inspect index: %v", err)
-	}
-	if strings.Join(columns, ",") != "decision,id" {
-		t.Fatalf("idx_audit_decision columns = %v, want [decision id]", columns)
-	}
-}
-
-// ---- change log / revisions ----------------------------------------------
 
 func TestRevisionMonotonicAfterPruneAll(t *testing.T) {
 	st := newStore(t)

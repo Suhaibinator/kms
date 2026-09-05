@@ -33,7 +33,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create backup namespace: %v", err)
 	}
-	if _, err := kmsv1.NewSecretServiceClient(e.adminConn).PutSecret(rootCtx, &kmsv1.PutSecretRequest{
+	if _, err := kmsv1.NewSecretServiceClient(e.adminConn).PutSecretV03(rootCtx, &kmsv1.PutSecretRequest{
 		Ref:   networkRef("prod", "process-backup", "database-password"),
 		Value: []byte("process-backup-secret-canary"), ContentType: "text/plain",
 	}); err != nil {
@@ -71,7 +71,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 	value, err := restoredService.GetSecret(ctx, core.Principal{
 		Identity: domain.Identity{Name: "network-root", Kind: domain.IdentityKindAdmin},
 		Method:   domain.AuthMethodToken,
-	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "process-backup"}, Key: "database-password"}, 0, "")
+	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "process-backup"}, Key: "database-password"}, 0, "", "", "")
 	if err != nil {
 		t.Fatalf("read secret from restored process database: %v", err)
 	}

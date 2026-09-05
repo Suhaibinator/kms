@@ -124,7 +124,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	}
 }
 
-func TestConfigurationReleaseValidationPinsSourceNamespaceIncarnation(t *testing.T) {
+func TestConfigurationReleaseRejectsCrossNamespacePinsEvenForAdmin(t *testing.T) {
 	ctx := context.Background()
 	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
 	if err != nil {
@@ -132,72 +132,23 @@ func TestConfigurationReleaseValidationPinsSourceNamespaceIncarnation(t *testing
 	}
 	defer func() { _ = st.Close() }()
 
-	source := domain.NamespaceRef{Env: "prod", App: "source"}
-	target := domain.NamespaceRef{Env: "prod", App: "target"}
-	for _, namespace := range []domain.NamespaceRef{source, target} {
-		if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: namespace, CreatedBy: "admin"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	ref := domain.Ref{NS: source, Key: "config/runtime"}
-	if _, _, err := st.PutParameter(ctx, ref, `{"enabled":true}`, "json", "{}", "admin"); err != nil {
+	home := domain.NamespaceRef{Env: "prod", App: "target"}
+	foreign := domain.NamespaceRef{Env: "prod", App: "source"}
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: home, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
 	}
-
 	svc := New(st, nil, "test")
-	principal := adminPrincipal()
-	release, err := svc.CreateConfigurationRelease(ctx, principal, domain.CreateConfigurationReleaseInput{
-		Namespace: target,
-		Name:      "runtime",
-		Entries: []domain.ReleaseEntrySelector{{
-			Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if release.Entries[0].ResourceNamespaceID == 0 {
-		t.Fatal("release did not retain its source namespace incarnation")
-	}
-
-	if _, err := st.DeleteParameter(ctx, ref); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.DeleteNamespace(ctx, source); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: source, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := st.PutParameter(ctx, ref, `{"enabled":true}`, "json", "{}", "admin"); err != nil {
-		t.Fatal(err)
-	}
-
-	violations, err := svc.ValidateConfigurationRelease(ctx, principal, target, "runtime", release.Version)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(violations) != 1 || violations[0].Alias != "settings" || violations[0].Code != domain.ReleaseValidationNotFound {
-		t.Fatalf("validation violations = %+v, want settings/not_found", violations)
-	}
-
-	before, err := st.CurrentRevision(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zero := uint64(0)
-	if _, changed, err := svc.ActivateConfigurationRelease(ctx, principal, target, "runtime", release.Version, &zero); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
-		t.Fatalf("activation against recreated source changed=%v err=%v, want validation failure", changed, err)
-	}
-	after, err := st.CurrentRevision(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after != before {
-		t.Fatalf("rejected activation advanced revision from %d to %d", before, after)
-	}
-	if _, err := svc.GetActiveConfigurationRelease(ctx, principal, target, "runtime"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("active release after rejected activation err=%v, want ErrNotFound", err)
+	for _, kind := range []string{domain.ReleaseEntryParameter, domain.ReleaseEntrySecret} {
+		_, err := svc.CreateConfigurationRelease(ctx, adminPrincipal(), domain.CreateConfigurationReleaseInput{
+			Namespace: home,
+			Name:      "runtime",
+			Entries: []domain.ReleaseEntrySelector{{
+				Alias: "foreign", Kind: kind, Ref: domain.Ref{NS: foreign, Key: "config/runtime"},
+			}},
+		})
+		if !errors.Is(err, domain.ErrInvalidArgument) || !strings.Contains(err.Error(), "release namespace") {
+			t.Errorf("%s cross-namespace pin error = %v, want invalid argument", kind, err)
+		}
 	}
 }
 
@@ -311,7 +262,7 @@ func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T
 		t.Fatal(err)
 	}
 	entry := release.Entries[0]
-	if entry.ContentType != "text/plain" || entry.ClientBound || entry.HasAccessToken {
+	if entry.ContentType != "text/plain" {
 		t.Fatalf("release v1 secret pin = %+v", entry)
 	}
 
@@ -334,7 +285,7 @@ func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := stored.Entries[0]; got.ContentType != "text/plain" || got.HasAccessToken {
+	if got := stored.Entries[0]; got.ContentType != "text/plain" {
 		t.Fatalf("stored release pin changed: %+v", got)
 	}
 }
@@ -427,6 +378,41 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 	app, err = svc.GetApplication(ctx, pr, "worker")
 	if err != nil || len(app.Contract) != 1 || app.Contract[0].Alias != "settings" {
 		t.Fatalf("create did not adopt the contract: %+v err=%v", app.Contract, err)
+	}
+}
+
+func TestPersistedReleaseIntegrityRequiresHomeNamespaceIdentity(t *testing.T) {
+	home := domain.NamespaceRef{Env: "prod", App: "worker"}
+	valid := domain.ConfigurationRelease{Namespace: home, Entries: []domain.ConfigurationReleaseEntry{{
+		Alias: "settings", Kind: domain.ReleaseEntryParameter,
+		Ref: domain.Ref{NS: home, Key: "settings"}, ResourceNamespaceID: 7,
+	}}}
+	if got := persistedReleaseIntegrityViolations(home, valid); len(got) != 0 {
+		t.Fatalf("valid persisted release violations = %+v", got)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*domain.ConfigurationRelease)
+	}{
+		{name: "wrong release namespace", mutate: func(release *domain.ConfigurationRelease) {
+			release.Namespace = domain.NamespaceRef{Env: "shared", App: "worker"}
+		}},
+		{name: "foreign entry", mutate: func(release *domain.ConfigurationRelease) {
+			release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "worker"}
+		}},
+		{name: "zero namespace identity", mutate: func(release *domain.ConfigurationRelease) {
+			release.Entries[0].ResourceNamespaceID = 0
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			release := valid
+			release.Entries = append([]domain.ConfigurationReleaseEntry(nil), valid.Entries...)
+			test.mutate(&release)
+			got := persistedReleaseIntegrityViolations(home, release)
+			if len(got) != 1 || got[0].Code != domain.ReleaseValidationUnreadable {
+				t.Fatalf("violations = %+v, want one unreadable violation", got)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,12 @@ a minor release may contain documented breaking changes.
 
 ### Changed
 
+- **Breaking (0.3.0):** operator-owned binding keys replace legacy per-version
+  key shares. Secret reads and writes accept `bindingKey`; bind, unbind, and key
+  rotation create guarded new current versions, while administrators can purge
+  previewed bound cohorts or all previewed unbound versions. Release protection
+  is resolved from exact immutable version metadata, generated stores privately
+  extract declaration `bindKey` values, and secret plaintext caching is disabled.
 - **Breaking (configstore):** a startup default mismatch is no longer fatal.
   The candidate is applied and reported through `onDefaultMismatch` with
   severity `"error"`; `allowDefaultMismatch`, the `"fatal"` severity, and
@@ -20,6 +26,10 @@ a minor release may contain documented breaking changes.
 
 ### Added
 
+- `PurgeCleanupPendingError` distinguishes the fail-closed case where a secret
+  cohort or unbound-version purge committed but active database artifact
+  cleanup remains pending. This outcome returns no mutation result and is not
+  retry-safe with a discarded binding key or either stale preview guard.
 - `onApplied(report: AppliedReport)` managed-store callback with immutable
   `phase`, `release`, `defaultDivergent`, `changed()` (`FieldChange` list,
   secrets path-only) and `groups()` (canonical non-secret parameter documents);
@@ -65,9 +75,8 @@ a minor release may contain documented breaking changes.
   canonical decimal strings while retaining whole-value secret redaction.
 - Disposed declarative values unregister their live parameter handlers, and
   watch shutdown removes external abort listeners.
-- Expanded watch scopes retry a full snapshot until it arrives, preserve
-  per-key revision fences, and immediately invalidate newly watched secret
-  caches; disposal cannot race a late parameter subscription.
+- Expanded watch scopes retry a full snapshot until it arrives and preserve
+  per-key revision fences; disposal cannot race a late parameter subscription.
 - Authoritative snapshots and explicit tombstones invalidate ordinary
   parameter-cache reads; expanded scopes also interrupt reconnect backoff, and
   late reconciliation pages or absence sets cannot mutate a released and

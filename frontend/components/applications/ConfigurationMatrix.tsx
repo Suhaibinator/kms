@@ -2,6 +2,7 @@ import { Plus, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import CopyButton from "@/components/CopyButton";
 import { Ident } from "@/components/Ident";
+import { shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
@@ -22,12 +23,14 @@ export function ConfigurationMatrix({
   environments,
   rows,
   onAddSecret,
+  onOpenSecret,
   onEdit,
 }: {
   app: string;
   environments: MatrixEnvironment[];
   rows: ApplicationConfigurationRow[];
   onAddSecret: (environment: string, key: string) => void;
+  onOpenSecret?: (environment: string, key: string) => void;
   onEdit: (row: ApplicationConfigurationRow) => void;
 }) {
   return (
@@ -61,7 +64,13 @@ export function ConfigurationMatrix({
               </td>
               {environments.map((env) => (
                 <td key={env.env}>
-                  <MatrixCell row={row} environment={env.env} app={app} onAddSecret={onAddSecret} />
+                  <MatrixCell
+                    row={row}
+                    environment={env.env}
+                    app={app}
+                    onAddSecret={onAddSecret}
+                    onOpenSecret={onOpenSecret}
+                  />
                 </td>
               ))}
               <td>
@@ -92,11 +101,13 @@ function MatrixCell({
   environment,
   app,
   onAddSecret,
+  onOpenSecret,
 }: {
   row: ApplicationConfigurationRow;
   environment: string;
   app: string;
   onAddSecret: (environment: string, key: string) => void;
+  onOpenSecret?: (environment: string, key: string) => void;
 }) {
   const cell = row.environments[environment];
   if (!cell?.present) {
@@ -117,10 +128,15 @@ function MatrixCell({
   }
   if (row.kind === "secret")
     return (
-      <Link href={links.secretDetail({ env: environment, app, key: row.key })}>
+      <Link
+        href={links.secretDetail({ env: environment, app, key: row.key })}
+        onClick={(event) => {
+          if (onOpenSecret && shouldOpenSecretWorkspace(event)) onOpenSecret(environment, row.key);
+        }}
+      >
         <span className="secret-cell">
           Secret v{cell.version}
-          {cell.client_bound ? " · client-bound" : ""}
+          {cell.bound ? " · binding key" : ""}
         </span>
       </Link>
     );

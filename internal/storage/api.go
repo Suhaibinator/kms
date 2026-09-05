@@ -17,16 +17,33 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
+// ErrPurgeCleanupPending means the logical purge, its change-log entry, and
+// its audit event committed, but SQLite could not yet truncate every WAL frame
+// that may contain the pre-purge bytes. Callers must not report rollback or
+// retry the purge with the binding key; opening the database again retries the
+// artifact cleanup before the store is returned for use. The affected SQLStore
+// is closed and cannot serve further requests until it is reopened.
+var ErrPurgeCleanupPending = errors.New("secret purge committed; database artifact cleanup is pending")
+
+// ErrRequiredAuditUnavailable identifies a failed audit insert that caused a
+// binding mutation transaction to roll back. Core uses the sentinel for
+// metrics and maps it to a fixed failed-precondition response; the underlying
+// database error is never exposed to clients.
+var ErrRequiredAuditUnavailable = errors.New("required binding audit unavailable")
+
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
-	ID              int64
-	Ref             domain.Ref
-	ClientBound     bool
+	ID  int64
+	Ref domain.Ref
+	// Bound is the live protection state of the version selected by current.
+	// Exact-version authorization must use SecretVersionRecord.Bound instead.
+	Bound           bool
 	AccessTokenHash []byte // nil when no per-secret token is set
 	ContentType     string
 	Metadata        string
@@ -42,18 +59,17 @@ type SecretVersionRecord struct {
 	ID       int64
 	SecretID int64
 	Version  uint64
-	// ContentType and the protection flags are immutable attributes of this
-	// exact version. SecretRecord carries the latest secret-level view for
-	// listing and token-hash rotation, but must not be used to interpret or
-	// authorize a historical version.
+	// ContentType and the protection flags describe this exact version.
+	// SecretRecord carries the current-version summary for listing and the
+	// secret-level token hash, but must not authorize a historical version.
 	ContentType    string
-	ClientBound    bool
+	Bound          bool
 	HasAccessToken bool
 	Ciphertext     []byte
 	EncryptedDEK   []byte
 	KEKID          string
-	WrapMode       string // domain.WrapModeStandard | domain.WrapModeClientBound
-	ClientKeySalt  []byte // HKDF salt for client-bound versions, else nil
+	WrapMode       string // domain.WrapModeStandard | domain.WrapModeBindingKey
+	BindingKeySalt []byte // HKDF salt for bound versions, else nil
 	Algorithm      string
 	Nonce          []byte
 	AAD            string
@@ -69,20 +85,101 @@ type SecretVersionRecord struct {
 // version. The storage layer persists it verbatim. AAD is produced in the
 // service layer (it binds env/app/key/version) and stored opaque here.
 type EncryptedPayload struct {
-	Ciphertext    []byte
-	EncryptedDEK  []byte
-	KEKID         string
-	WrapMode      string
-	ClientKeySalt []byte
-	Algorithm     string
-	Nonce         []byte
-	AAD           string
+	Ciphertext     []byte
+	EncryptedDEK   []byte
+	KEKID          string
+	WrapMode       string
+	BindingKeySalt []byte
+	Algorithm      string
+	Nonce          []byte
+	AAD            string
 }
+
+// SecretBindingTestFunc proves that a caller-held binding key can open one
+// persisted version. The key itself remains entirely above storage. The
+// callback must be pure computation: no I/O and no calls into storage.
+type SecretBindingTestFunc func(SecretVersionRecord) error
+
+// SecretBindingCASGuard binds a destructive version-set operation to an exact
+// prior preview. Both fields are required and the versions must be non-empty,
+// positive, sorted, and unique.
+type SecretBindingCASGuard struct {
+	ExpectedRevision         uint64
+	ExpectedAffectedVersions []uint64
+}
+
+// SecretBindingResult is returned by binding-cohort operations.
+// AffectedVersions is always non-empty, sorted, and unique on success.
+type SecretBindingResult struct {
+	AnchorVersion    uint64
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// MaxSecretBindingCohortVersions caps the exact version set returned by a
+// cohort operation. Discovery may test one adjacent matching version to prove
+// the cohort exceeds this limit, then fails without returning a partial set.
+const MaxSecretBindingCohortVersions = 128
+
+// SecretVersionTransitionKind identifies a protection transition. Each
+// transition clones the current source into one new immutable version.
+type SecretVersionTransitionKind string
+
+const (
+	SecretTransitionBind   SecretVersionTransitionKind = "bind"
+	SecretTransitionUnbind SecretVersionTransitionKind = "unbind"
+	SecretTransitionRotate SecretVersionTransitionKind = "rotate_binding_key"
+)
+
+// SecretVersionTransitionParams describes an atomic protection transition.
+// Encrypt is invoked inside the write transaction after the current-version
+// guard is checked and receives an isolated copy of the source row plus the
+// allocated high-water version. It must fully decrypt and re-encrypt the value.
+type SecretVersionTransitionParams struct {
+	Ref                    domain.Ref
+	ExpectedCurrentVersion uint64
+	Kind                   SecretVersionTransitionKind
+	CreatedBy              string
+	Encrypt                func(source SecretVersionRecord, newVersion uint64) (EncryptedPayload, error)
+	Audit                  SecretBindingAudit
+}
+
+// SecretVersionTransitionResult reports the label movement produced by a
+// protection transition.
+type SecretVersionTransitionResult struct {
+	CurrentVersion  uint64
+	PreviousVersion uint64
+	Revision        uint64
+}
+
+// SecretVersionSetResult is used by previewed destructive set operations.
+// AffectedVersions is always sorted and unique.
+type SecretVersionSetResult struct {
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// SecretBindingAudit is the deliberately narrow request context storage
+// accepts for a binding mutation. Storage supplies the fixed
+// event/resource/decision and sanitized metadata, so the operation's binding
+// key fields cannot enter the durable audit row.
+type SecretBindingAudit struct {
+	ActorIdentity string
+	ActorType     string
+	SourceIP      string
+	UserAgent     string
+	RequestID     string
+	CreatedAt     time.Time
+}
+
+// SecretBindingPurgeAudit preserves the descriptive purge API name while all
+// binding mutations share the same narrow, credential-free audit envelope.
+type SecretBindingPurgeAudit = SecretBindingAudit
 
 // SecretWriteExpectation is the secret state observed by the service before it
 // prepares a write. Storage compares it inside the write transaction so an
-// absent secret cannot silently become an update and a client-bound write
-// cannot commit after its validated token has been rotated.
+// absent secret cannot silently become an update and a token-gated write
+// cannot commit after its validated access token has been rotated.
 type SecretWriteExpectation struct {
 	Exists bool
 	// ID is the immutable row identity observed by the service. Comparing it
@@ -103,7 +200,7 @@ type CreateSecretParams struct {
 	ContentType string
 	Metadata    string
 	CreatedBy   string
-	ClientBound bool // required mode; must match the existing secret if present
+	Bound       bool
 	// AccessTokenHash, when non-nil, is stored on the secret row (sha256 of
 	// the per-secret token). It may be set on creation or when minting a new
 	// token for an existing secret.
@@ -249,16 +346,41 @@ type Store interface {
 	// CreateSecretVersion atomically creates/updates the secret row, assigns
 	// the next version number, invokes p.Encrypt(version), stores the
 	// payload, moves labels, and appends a metadata-only change-log entry.
-	// Fails with domain.ErrFailedPrecondition if p.ClientBound does not match
-	// an existing secret's mode, or domain.ErrAborted if p.Expected no longer
-	// matches the secret row.
+	// Bound and unbound versions may freely alternate. Fails with
+	// domain.ErrAborted if p.Expected no longer matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
+
+	// TransitionSecretVersion atomically verifies the current-version guard,
+	// clones the current source into one new high-water version with a fully new
+	// encrypted payload, moves current/previous, and appends its change and audit.
+	TransitionSecretVersion(ctx context.Context, p SecretVersionTransitionParams) (SecretVersionTransitionResult, error)
+
+	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
+	// (0 = current) and returns the coherent global storage revision.
+	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
+	// PurgeSecretBindingCohort rediscovers the cohort and CAS-checks the required
+	// paired preview guard against that exact preview,
+	// writes minimal tombstones, and appends its changelog and allow-audit rows
+	// in the same transaction. It intentionally bypasses release-pin guards.
+	// Success also requires a verified WAL truncate. If external use blocks that
+	// post-commit cleanup, the populated result and ErrPurgeCleanupPending are
+	// returned: the logical purge is durable and must not be retried with the key.
+	PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error)
+	// PreviewSecretUnboundVersions returns every non-destroyed unbound version.
+	PreviewSecretUnboundVersions(ctx context.Context, ref domain.Ref) (SecretVersionSetResult, error)
+	// PurgeSecretUnboundVersions requires an exact preview guard and securely
+	// tombstones that set while intentionally bypassing release-pin guards.
+	PurgeSecretUnboundVersions(ctx context.Context, ref domain.Ref, expectedRevision uint64, expectedAffectedVersions []uint64, audit SecretBindingPurgeAudit) (SecretVersionSetResult, error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)
 	// GetSecretVersion resolves version (>0) or label (default "current") and
 	// returns both the secret row and the version row.
 	GetSecretVersion(ctx context.Context, ref domain.Ref, version uint64, label string) (SecretRecord, SecretVersionRecord, error)
 	GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Secret, error)
+	// GetSecretVersionInfo returns metadata for one version selected by number
+	// or label. Label resolution and metadata must share a snapshot; implementations
+	// must not load ciphertext or unrelated versions or labels.
+	GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error)
 	ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Secret, string, error)
 	DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, error)
 

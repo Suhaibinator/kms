@@ -1,8 +1,9 @@
 import { Plus, Send } from "lucide-react";
 import Link from "next/link";
 import { Ident } from "@/components/Ident";
+import { shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { Badge } from "@/components/ui";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { links } from "@/lib/links";
 import type { EnvironmentOverview, OverviewValue } from "@/lib/types";
@@ -19,6 +20,7 @@ export function ValuesSection({
   otherKeys,
   onAddValue,
   onAddSecret,
+  onOpenSecret,
   onShip,
 }: {
   environment: EnvironmentOverview;
@@ -26,6 +28,7 @@ export function ValuesSection({
   otherKeys: number;
   onAddValue: (env: string, alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
+  onOpenSecret?: (env: string, key: string) => void;
   onShip: (env: string, alias?: string) => void;
 }) {
   const env = environment.namespace.env;
@@ -93,6 +96,24 @@ export function ValuesSection({
                     <Send size={13} />
                     Edit &amp; ship
                   </Button>
+                ) : value.kind === "secret" && value.present ? (
+                  <ButtonLink
+                    variant="ghost"
+                    size="sm"
+                    className="pipeline-row-action"
+                    href={links.secretDetail({
+                      env,
+                      app: environment.namespace.app,
+                      key: value.key ?? value.alias,
+                    })}
+                    onClick={(event) => {
+                      if (onOpenSecret && shouldOpenSecretWorkspace(event)) {
+                        onOpenSecret(env, value.key ?? value.alias);
+                      }
+                    }}
+                  >
+                    Manage
+                  </ButtonLink>
                 ) : null}
               </li>
             );

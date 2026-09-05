@@ -19,8 +19,6 @@ type ReleaseEntryMetadata struct {
 	ContentType     string `json:"content_type,omitempty"`
 	MetadataJSON    string `json:"metadata_json,omitempty"`
 	ParameterDigest string `json:"parameter_digest,omitempty"`
-	ClientBound     bool   `json:"client_bound,omitempty"`
-	HasAccessToken  bool   `json:"has_access_token,omitempty"`
 }
 
 // ReleaseParameter is a resolved, version-pinned non-secret value. Its

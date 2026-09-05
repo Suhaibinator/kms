@@ -1,6 +1,6 @@
 {
   "name": "@suhaibinator/kms",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Framework-neutral Node.js SDK for the KMS parameter store and configuration releases",
   "keywords": [
     "kms",

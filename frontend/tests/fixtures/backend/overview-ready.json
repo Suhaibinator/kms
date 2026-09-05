@@ -57,13 +57,11 @@
           "activation_revision": 8,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "d5a86ac820f5ce21b04e33bc82c5fad598614561c8fb704ad5828cb897cbbdea",
+          "digest": "08f53341d29463769364f4f4b5df6f28dfdbb401b6e7d76e5a770d53c930aecb",
           "entries": [
             {
               "alias": "database",
-              "client_bound": false,
               "content_type": "json",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
@@ -78,9 +76,7 @@
             },
             {
               "alias": "db_password",
-              "client_bound": false,
               "content_type": "text/plain",
-              "has_access_token": false,
               "kind": "secret",
               "metadata_json": "{}",
               "parameter_digest": "",
@@ -95,9 +91,7 @@
             },
             {
               "alias": "rate_limits",
-              "client_bound": false,
               "content_type": "integer",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
@@ -138,7 +132,7 @@
       "values": [
         {
           "alias": "database",
-          "client_bound": false,
+          "bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -148,7 +142,7 @@
         },
         {
           "alias": "db_password",
-          "client_bound": false,
+          "bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -158,7 +152,7 @@
         },
         {
           "alias": "rate_limits",
-          "client_bound": false,
+          "bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -206,13 +200,11 @@
           "activation_revision": 10,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "257116a829b2cef406ed2705ee3d9fd1068155ba376bd979f47508326f2f4deb",
+          "digest": "d8940768705b480b88414000a19f81d35bdc8cf91ef14cfae82eb45caa01ed14",
           "entries": [
             {
               "alias": "database",
-              "client_bound": false,
               "content_type": "json",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
@@ -227,9 +219,7 @@
             },
             {
               "alias": "db_password",
-              "client_bound": false,
               "content_type": "text/plain",
-              "has_access_token": false,
               "kind": "secret",
               "metadata_json": "{}",
               "parameter_digest": "",
@@ -244,9 +234,7 @@
             },
             {
               "alias": "rate_limits",
-              "client_bound": false,
               "content_type": "integer",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
@@ -287,7 +275,7 @@
       "values": [
         {
           "alias": "database",
-          "client_bound": false,
+          "bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -297,7 +285,7 @@
         },
         {
           "alias": "db_password",
-          "client_bound": false,
+          "bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -307,7 +295,7 @@
         },
         {
           "alias": "rate_limits",
-          "client_bound": false,
+          "bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -324,7 +312,7 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "json",
           "has_access_token": false,
           "present": true,
@@ -332,7 +320,7 @@
           "version": 1
         },
         "prod": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "json",
           "has_access_token": false,
           "present": true,
@@ -346,14 +334,14 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "text/plain",
           "has_access_token": false,
           "present": true,
           "version": 1
         },
         "prod": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "text/plain",
           "has_access_token": false,
           "present": true,
@@ -366,7 +354,7 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "integer",
           "has_access_token": false,
           "present": true,
@@ -374,7 +362,7 @@
           "version": 2
         },
         "prod": {
-          "client_bound": false,
+          "bound": false,
           "content_type": "integer",
           "has_access_token": false,
           "present": true,

@@ -40,10 +40,20 @@ export const MAX_ALIAS_LENGTH = 64;
 export const MAX_IDENTITY_NAME_LENGTH = 128;
 /** Max bytes for a parameter or secret value (`core.maxValueBytes`). */
 export const MAX_VALUE_BYTES = 1 << 20;
+/** Minimum raw UTF-8 bytes for an operator-supplied binding key (`crypto.MinBindingKeyBytes`). */
+export const MIN_BINDING_KEY_BYTES = 32;
 
 /** UTF-8 byte length. The Go limits count bytes, not UTF-16 code units. */
 export function byteLength(s: string): number {
   return new TextEncoder().encode(s).length;
+}
+
+/** Validates a required binding key without trimming or normalising it. */
+export function validateBindingKey(value: string): string | null {
+  if (byteLength(value) < MIN_BINDING_KEY_BYTES) {
+    return `Binding key must be at least ${MIN_BINDING_KEY_BYTES} UTF-8 bytes.`;
+  }
+  return null;
 }
 
 // --- namespace labels -------------------------------------------------------
@@ -319,6 +329,7 @@ export const KNOWN_OPERATIONS = [
   "secret:disable",
   "secret:destroy",
   "secret:promote",
+  "secret:binding-manage",
   "configuration-release:create",
   "configuration-release:read",
   "configuration-release:validate",

@@ -5,13 +5,30 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
+
+func validateSecretPayloadWrapping(bound bool, payload EncryptedPayload) error {
+	wrapMode := zeroOr(payload.WrapMode, domain.WrapModeStandard)
+	if bound {
+		if wrapMode != domain.WrapModeBindingKey || len(payload.BindingKeySalt) != crypto.BindingKeySaltSize {
+			return domain.Errorf(domain.ErrFailedPrecondition,
+				"bound secret payload must use binding-key wrapping with a %d-byte salt", crypto.BindingKeySaltSize)
+		}
+		return nil
+	}
+	if wrapMode != domain.WrapModeStandard || len(payload.BindingKeySalt) != 0 {
+		return domain.Errorf(domain.ErrFailedPrecondition, "unbound secret payload must use standard wrapping without a binding-key salt")
+	}
+	return nil
+}
 
 func loadSecretLabels(tx *gorm.DB, secretID int64) (map[string]uint64, error) {
 	var labels []secretLabelModel
@@ -34,6 +51,21 @@ func setSecretLabel(tx *gorm.DB, secretID int64, label string, version uint64) e
 		Label:         label,
 		VersionNumber: int64(version),
 	}).Error
+}
+
+func currentSecretBound(tx *gorm.DB, secretID int64, labels map[string]uint64) (bool, error) {
+	current, ok := labels[domain.LabelCurrent]
+	if !ok {
+		return false, nil
+	}
+	var version secretVersionModel
+	if err := tx.Select("bound").Where("secret_id = ? AND version_number = ?", secretID, current).First(&version).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, domain.Errorf(domain.ErrFailedPrecondition, "secret current label points to missing version %d", current)
+		}
+		return false, err
+	}
+	return i2b(version.Bound), nil
 }
 
 // findSecret resolves a secret row from its ref, returning ErrNotFound (naming
@@ -83,7 +115,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			sec = secretModel{
 				NamespaceID:     nsID,
 				Name:            p.Ref.Key,
-				ClientBound:     b2i(p.ClientBound),
 				AccessTokenHash: p.AccessTokenHash,
 				ContentType:     contentType,
 				MetadataJSON:    metadata,
@@ -96,10 +127,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		case e != nil:
 			return e
 		default:
-			if i2b(sec.ClientBound) != p.ClientBound {
-				return domain.Errorf(domain.ErrFailedPrecondition,
-					"secret %s wrap-mode mismatch (existing client_bound=%v, requested=%v)", p.Ref, i2b(sec.ClientBound), p.ClientBound)
-			}
 			upd := map[string]any{
 				"content_type":  contentType,
 				"metadata_json": metadata,
@@ -114,13 +141,24 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			}
 		}
 
-		// Next version includes destroyed versions so numbers are never reused.
-		var maxVer int64
-		if err := tx.Model(&secretVersionModel{}).Where("secret_id = ?", sec.ID).
-			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVer).Error; err != nil {
-			return err
+		// The high-water row is independent of the deletable secret graph. A
+		// delete/recreate cycle at the same namespace/path therefore cannot reuse
+		// a version number and accidentally satisfy an immutable release pin.
+		var highWater secretVersionHighWaterModel
+		hwErr := tx.Where("namespace_id = ? AND name = ?", nsID, p.Ref.Key).First(&highWater).Error
+		switch {
+		case errors.Is(hwErr, gorm.ErrRecordNotFound):
+			highWater = secretVersionHighWaterModel{NamespaceID: nsID, Name: p.Ref.Key}
+			if err := tx.Omit(clause.Associations).Create(&highWater).Error; err != nil {
+				return err
+			}
+		case hwErr != nil:
+			return hwErr
 		}
-		newVer := uint64(maxVer) + 1
+		if highWater.LastVersion == math.MaxInt64 {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version space exhausted", p.Ref)
+		}
+		newVer := uint64(highWater.LastVersion + 1)
 		hasAccessToken := len(sec.AccessTokenHash) > 0
 		if p.AccessTokenHash != nil {
 			hasAccessToken = len(p.AccessTokenHash) > 0
@@ -128,6 +166,9 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 
 		payload, err := p.Encrypt(newVer)
 		if err != nil {
+			return err
+		}
+		if err := validateSecretPayloadWrapping(p.Bound, payload); err != nil {
 			return err
 		}
 		// Rotation and this write both run under BEGIN IMMEDIATE. Verify the
@@ -150,13 +191,13 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			SecretID:       sec.ID,
 			VersionNumber:  int64(newVer),
 			ContentType:    contentType,
-			ClientBound:    b2i(p.ClientBound),
+			Bound:          b2i(p.Bound),
 			HasAccessToken: b2i(hasAccessToken),
 			Ciphertext:     payload.Ciphertext,
 			EncryptedDEK:   payload.EncryptedDEK,
 			KEKID:          payload.KEKID,
 			WrapMode:       zeroOr(payload.WrapMode, domain.WrapModeStandard),
-			ClientKeySalt:  payload.ClientKeySalt,
+			BindingKeySalt: payload.BindingKeySalt,
 			Algorithm:      zeroOr(payload.Algorithm, "AES-256-GCM"),
 			Nonce:          payload.Nonce,
 			AAD:            payload.AAD,
@@ -168,6 +209,15 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		}
 		if err := tx.Omit(clause.Associations).Create(&sv).Error; err != nil {
 			return err
+		}
+		updated := tx.Model(&secretVersionHighWaterModel{}).
+			Where("namespace_id = ? AND name = ? AND last_version = ?", nsID, p.Ref.Key, highWater.LastVersion).
+			Update("last_version", int64(newVer))
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
 		}
 
 		labels, err := loadSecretLabels(tx, sec.ID)
@@ -219,6 +269,10 @@ func (s *SQLStore) GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretR
 			return err
 		}
 		out = toSecretRecord(sec, ref, labels)
+		out.Bound, err = currentSecretBound(tx, sec.ID, labels)
+		if err != nil {
+			return err
+		}
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
 	return out, err
@@ -258,6 +312,10 @@ func (s *SQLStore) GetSecretVersion(ctx context.Context, ref domain.Ref, version
 			return err
 		}
 		rec = toSecretRecord(sec, ref, labels)
+		rec.Bound, err = currentSecretBound(tx, sec.ID, labels)
+		if err != nil {
+			return err
+		}
 		versionRec = toSecretVersionRecord(sv)
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
@@ -272,6 +330,13 @@ func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Se
 	if err != nil {
 		return domain.Secret{}, err
 	}
+	// Resolve the current summary through the same exact version lookup used by
+	// GetSecretRecord. Silently reporting Bound=false when the label dangles
+	// would turn corrupt metadata into a plausible unbound secret.
+	currentBound, err := currentSecretBound(db, sec.ID, labels)
+	if err != nil {
+		return domain.Secret{}, err
+	}
 	var vers []secretVersionModel
 	if err := db.Where("secret_id = ?", sec.ID).Order("version_number ASC").Find(&vers).Error; err != nil {
 		return domain.Secret{}, err
@@ -279,19 +344,21 @@ func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Se
 	vinfos := make([]domain.SecretVersionInfo, 0, len(vers))
 	for _, v := range vers {
 		vinfos = append(vinfos, domain.SecretVersionInfo{
-			Version:     uint64(v.VersionNumber),
-			State:       v.State,
-			CreatedBy:   v.CreatedBy,
-			CreatedAt:   parseTime(v.CreatedAt),
-			DestroyedAt: parseTimePtr(v.DestroyedAt),
-			ExpiresAt:   parseTimePtr(v.ExpiresAt),
-			Metadata:    v.MetadataJSON,
+			Version:        uint64(v.VersionNumber),
+			Bound:          i2b(v.Bound),
+			HasAccessToken: i2b(v.HasAccessToken),
+			State:          v.State,
+			CreatedBy:      v.CreatedBy,
+			CreatedAt:      parseTime(v.CreatedAt),
+			DestroyedAt:    parseTimePtr(v.DestroyedAt),
+			ExpiresAt:      parseTimePtr(v.ExpiresAt),
+			Metadata:       v.MetadataJSON,
 		})
 	}
 	return domain.Secret{
 		Ref:            domain.Ref{NS: ns, Key: sec.Name},
 		ContentType:    sec.ContentType,
-		ClientBound:    i2b(sec.ClientBound),
+		Bound:          currentBound,
 		HasAccessToken: sec.AccessTokenHash != nil,
 		Metadata:       sec.MetadataJSON,
 		CreatedAt:      parseTime(sec.CreatedAt),
@@ -311,6 +378,67 @@ func (s *SQLStore) GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Se
 		}
 		out, err = secretInfo(tx, ref.NS, sec)
 		return err
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
+}
+
+// GetSecretVersionInfo returns a bounded metadata-only projection for one
+// selected version. A label is resolved in the same transaction as its metadata.
+// Exact version requests never load labels, so unrelated current-label corruption
+// cannot make a historical release pin fail.
+func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
+	if (version == 0 && label == "") || (version != 0 && label != "") {
+		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "exactly one secret version or label is required")
+	}
+	var out domain.Secret
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, ref.NS)
+		if err != nil {
+			return err
+		}
+		var sec secretModel
+		if err := tx.Select("id", "content_type", "metadata_json", "created_at", "updated_at", "access_token_hash").
+			Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&sec).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+			}
+			return err
+		}
+
+		if label != "" {
+			var selected secretLabelModel
+			if err := tx.Select("version_number").Where("secret_id = ? AND label = ?", sec.ID, label).First(&selected).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return domain.Errorf(domain.ErrNotFound, "secret %s label %q", ref, label)
+				}
+				return err
+			}
+			version = uint64(selected.VersionNumber)
+		}
+		var ver secretVersionModel
+		if err := tx.Select("version_number", "state", "created_by", "created_at", "destroyed_at", "expires_at", "metadata_json", "bound", "has_access_token").
+			Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&ver).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
+			}
+			return err
+		}
+		info := domain.SecretVersionInfo{
+			Version: uint64(ver.VersionNumber), State: ver.State, CreatedBy: ver.CreatedBy,
+			CreatedAt: parseTime(ver.CreatedAt), DestroyedAt: parseTimePtr(ver.DestroyedAt),
+			ExpiresAt: parseTimePtr(ver.ExpiresAt), Metadata: ver.MetadataJSON,
+			Bound: i2b(ver.Bound), HasAccessToken: i2b(ver.HasAccessToken),
+		}
+		out = domain.Secret{
+			Ref: ref, ContentType: sec.ContentType, Bound: info.Bound,
+			HasAccessToken: sec.AccessTokenHash != nil, Metadata: sec.MetadataJSON,
+			CreatedAt: parseTime(sec.CreatedAt), UpdatedAt: parseTime(sec.UpdatedAt),
+			Versions: []domain.SecretVersionInfo{info},
+		}
+		if label != "" {
+			out.Labels = map[string]uint64{label: version}
+		}
+		return nil
 	}, &sql.TxOptions{ReadOnly: true})
 	return out, err
 }
@@ -528,11 +656,22 @@ func (s *SQLStore) PromoteSecretVersion(ctx context.Context, ref domain.Ref, ver
 			}
 			return err
 		}
-		if sv.State != domain.StateEnabled {
+		if sv.State != domain.StateEnabled || sv.DestroyedAt != nil {
 			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is not enabled", ref, version)
 		}
 		labels, err := loadSecretLabels(tx, sec.ID)
 		if err != nil {
+			return err
+		}
+		// Secret-level content type and metadata are a current-version
+		// projection used by metadata/listing clients. Move that projection in
+		// the same transaction as the current label so it cannot describe the
+		// version that happened to be written most recently.
+		if err := tx.Model(&secretModel{}).Where("id = ?", sec.ID).Updates(map[string]any{
+			"content_type":  sv.ContentType,
+			"metadata_json": sv.MetadataJSON,
+			"updated_at":    fmtTime(time.Now()),
+		}).Error; err != nil {
 			return err
 		}
 		if err := setSecretLabel(tx, sec.ID, domain.LabelCurrent, version); err != nil {

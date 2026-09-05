@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 
@@ -170,6 +170,34 @@ describe("Modal", () => {
     expect(
       within(popupOf("Edit")).queryByRole("button", { name: "Dismiss dialog" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("contains Escape inside a non-dismissible nested dialog", async () => {
+    const parentClosed = vi.fn();
+    function Probe() {
+      const [parentOpen, setParentOpen] = useState(true);
+      return (
+        <Modal
+          open={parentOpen}
+          title="Workspace"
+          onClose={() => {
+            parentClosed();
+            setParentOpen(false);
+          }}
+        >
+          <Modal open dismissible={false} title="Save credential" onClose={() => undefined}>
+            Copy this value first.
+          </Modal>
+        </Modal>
+      );
+    }
+    render(<Probe />);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(popupOf("Save credential")).toBeVisible());
+    expect(parentClosed).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Workspace", hidden: true })).toBeInTheDocument();
   });
 });
 

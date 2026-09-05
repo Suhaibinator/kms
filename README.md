@@ -60,11 +60,16 @@ deployment, start at [Quickstart](#quickstart).
 - **Envelope encryption at rest**: AES-256-GCM, one Data Encryption Key
   (DEK) per secret version, wrapped by a Key Encryption Key (KEK). Secret
   plaintext never touches SQLite, logs, metrics, or audit records.
-- **Opt-in client-bound secrets**: a secret's DEK can be double-wrapped under a
-  server-minted, one-time client token, so decryption requires both it and the master key —
-  the server alone cannot decrypt it, even with full database and key
-  access. No recovery escrow, by design; see
-  [`docs/security.md`](docs/security.md#client-bound-secrets-opt-in-double-wrapping).
+- **Opt-in binding keys**: an operator-supplied opaque key adds an inner
+  wrapping layer to a secret version. Protection mode is immutable per live
+  version: bind, unbind, and binding-key rotation clone the current value into
+  one new version and leave the source unchanged. Historical versions that
+  open with one key form a cryptographically discovered cohort for
+  compromise response. Callers with `secret:binding-manage` can preview a
+  cohort; purging it requires an administrator with `secret:destroy`.
+  Administrators can also preview and purge all non-destroyed unbound versions
+  of one secret. KMS never stores, hashes, fingerprints, or escrows a binding key; see
+  [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Built-in certificate authority + mTLS**: an embedded CA (Ed25519,
   KEK-wrapped private key) created by `init` mints short-lived client
   certificates (90-day default) so machine clients prove possession of a key
@@ -93,12 +98,13 @@ deployment, start at [Quickstart](#quickstart).
   pins exact parameter and secret versions under stable aliases. One activation
   moves `current`/`previous`, writes one authoritative global revision, and can
   be guarded with compare-and-swap. Go and Python loaders resolve the complete
-  candidate, let the application prepare it, fence stale work, and retain the
+  candidate using each exact version's live protection metadata, let the
+  application prepare it, fence stale work, and retain the
   last-known-good release on later failures. The TypeScript SDK provides the
   same exact-version, digest, supersession, acknowledgement, and
   last-known-good lifecycle for Node.js services. Optional immutable Draft 2020-12
   JSON Schemas validate the alias-keyed parameter object; secret values and
-  per-secret tokens are never stored in a release or watch event.
+  per-secret credentials are never stored in a release or watch event.
 - **Generated managed Go configuration**: applications declare an ordinary
   validated root type with storage, reload-policy, and consumer-view tags.
   `kms-config-gen` emits strict decoders, immutable atomic snapshots and typed
@@ -165,9 +171,10 @@ deployment, start at [Quickstart](#quickstart).
   *before* anything is deleted. Retention is off by default: history is kept
   forever until an operator asks otherwise. See
   [`docs/operations.md`](docs/operations.md#audit-retention-and-archive).
-- **SuhaibParameterStore migration tooling**: `parameter-store import` maps
+- **SuhaibParameterStore bootstrap import**: `parameter-store import` maps
   flat keys into an `(env, app)` namespace (`--env`/`--app`) and mints fresh
-  per-secret tokens with a one-time mapping report. See
+  per-secret tokens with a one-time mapping report. It does not read or upgrade
+  a `0.2.x` KMS database. See
   [`docs/migration.md`](docs/migration.md).
 
 ## Architecture
@@ -182,8 +189,8 @@ client SDK (Go · Python · TypeScript)
   v
 parameter-store — single binary (cmd/parameter-store)
   |
-  internal/cli — command dispatch: serve, init, migrate, backup,
-  |              restore, create-admin, rotate-admin, rotate-kek, audit,
+  internal/cli — command dispatch: serve, init, check, backup, restore,
+  |              create-admin, rotate-admin, rotate-kek, audit,
   |              import, ...
   |
   +--- grpcserver ---------------+--- httpserver -------------------+
@@ -209,7 +216,7 @@ parameter-store — single binary (cmd/parameter-store)
     KEK / keyring,  short-lived mTLS         replay/snapshot
     argon2id        client certs
     unseal,         (key KEK-wrapped)
-    client-bound
+    binding-key
       |             |                          |
       +-----------+-+--------------------------+
                   v
@@ -227,6 +234,11 @@ Go's `embed` package (`frontend_embed.go`); the Go HTTP server serves it
 directly, with client-side routing fallback for deep links.
 
 ## Quickstart
+
+> **`0.3.x` is a fresh-database baseline.** Do not point it at a `0.2.x`
+> SQLite file. Initialize a new database and repopulate it; there is no in-place
+> migration for the old client-bound payloads or release digests. See
+> [`docs/migration.md`](docs/migration.md#03x-database-cutover).
 
 ### Prerequisites
 
@@ -259,7 +271,7 @@ the Python SDK, the TypeScript SDK, and a multi-platform container image through
 GitHub. For example:
 
 ```bash
-VERSION=0.1.15 # choose a release containing RELEASE_COMPLETE.json
+VERSION=0.3.0 # choose a release containing RELEASE_COMPLETE.json
 
 # Container image (Linux amd64/arm64).
 docker pull "ghcr.io/suhaibinator/kms:${VERSION}"
@@ -374,6 +386,12 @@ echo -n 'sk_test_123' | ./bin/parameter-store put-secret /dev/gradethis/stripe-a
   --endpoint localhost:8443 --insecure --token "$GRADETHIS_TOKEN" --show
 ```
 
+To create a bound version, supply `KMS_BINDING_KEY` (an opaque UTF-8 string of
+at least 32 bytes) to `put-secret`; a bound `get-secret` consumes the same
+variable or prompts without echo on an interactive terminal. There is no
+binding-key file convention. Access tokens remain an independent optional
+gate: a version can require the binding key, an access token, both, or neither.
+
 A process that cannot link an SDK can still read from the store: `exec`
 resolves the namespace and hands the values to the command as environment
 variables (`stripe-api-key` becomes `STRIPE_API_KEY`), and `env` prints the
@@ -385,8 +403,15 @@ same set instead of running anything.
 # -> sk_test_123
 
 # In production, pin the active release's exact, digest-verified versions:
-parameter-store exec prod/gradethis --release runtime --strict -- ./server
+parameter-store exec prod/gradethis --release runtime -- ./server
 ```
+
+Secret-inclusive `env` and `exec` invocations fail closed if any selected
+secret is bound or lacks a required per-secret token. Use `--no-secrets` for an
+intentional parameter-only run. Namespace mode can explicitly opt into a
+partial result with `--allow-incomplete-secrets`; unavailable secrets are
+omitted with an unsuppressible warning and are never synthesized as empty
+credentials. Release mode remains atomic and rejects that opt-in.
 
 The equivalent from a consuming application using the Go SDK is below. This
 local example deliberately opts into cleartext and token authentication; do
@@ -479,9 +504,9 @@ Go ([full guide](docs/sdk-go.md)):
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint: os.Getenv("KMS_ENDPOINT"),
     TLS: kmsclient.MTLSFromFiles(
-        os.Getenv("KMS_CLIENT_CERT"),
-        os.Getenv("KMS_CLIENT_KEY"),
-        os.Getenv("KMS_SERVER_CA"),
+        os.Getenv("KMS_CLIENT_CERT_FILE"),
+        os.Getenv("KMS_CLIENT_KEY_FILE"),
+        os.Getenv("KMS_CA_FILE"),
     ),
 })
 if err != nil {
@@ -499,9 +524,9 @@ from kms_paramstore import Client, mtls_from_files
 with Client(
     os.environ["KMS_ENDPOINT"],
     tls=mtls_from_files(
-        os.environ["KMS_CLIENT_CERT"],
-        os.environ["KMS_CLIENT_KEY"],
-        os.environ["KMS_SERVER_CA"],
+        os.environ["KMS_CLIENT_CERT_FILE"],
+        os.environ["KMS_CLIENT_KEY_FILE"],
+        os.environ["KMS_CA_FILE"],
     ),
 ) as client:
     identity = client.who_am_i()  # verifies TLS, the client cert, and enrollment
@@ -515,9 +540,9 @@ import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
 const client = createClient({
   endpoint: process.env.KMS_ENDPOINT!,
   credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),
 });
 
@@ -540,7 +565,7 @@ variable, and a flag derived from it (`storage.sqlite_path`,
 `KMS_SQLITE_PATH`, `--sqlite-path`) — and they resolve highest first:
 **flag, then environment variable, then the config file (`--config FILE` /
 `KMS_CONFIG`), then the built-in default**. The same order applies to `serve`
-and to every offline command (`init`, `migrate`, `check`, `backup`, `restore`,
+and to every offline command (`init`, `check`, `backup`, `restore`,
 …). Run `parameter-store config show` to print the effective configuration
 with the source of each value, and `parameter-store config validate` to check
 it before a restart. Full reference, including the env var and flag table, is
@@ -615,12 +640,15 @@ Full detail: [`docs/security.md`](docs/security.md). Summary:
   key file nor a passphrase source is available and stdin isn't a TTY, the
   service fails fast instead of hanging a systemd unit on an invisible
   prompt.
-- **Client-bound secrets** double-wrap the DEK so the server cannot decrypt
-  them without a client-supplied token — defends against offline
-  database-plus-key theft, not a live compromise of the running server.
-  Losing the master key makes all versions unrecoverable; losing a
-  client-bound token permanently loses the versions encrypted under that
-  token. There is no escrow.
+- **Binding keys** add an operator-owned inner DEK-wrapping layer. A key is an
+  opaque UTF-8 string of at least 32 bytes and is supplied only for the
+  operation that needs it; KMS never stores a copy, hash, fingerprint, or
+  cohort identifier. Bind, unbind, and binding-key rotation create one new
+  current version while keeping the previous version unchanged. A
+  cryptographically discovered contiguous cohort is used only to preview and
+  purge historical versions after compromise; unbound versions have their own
+  all-version preview and guarded administrator purge. See
+  [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Proof of identity**: machine clients authenticate by mTLS client
   certificate from the built-in CA (identity is the cert's
   `kms://identity/<name>` URI SAN); tokens remain available where a
@@ -686,11 +714,12 @@ Node server runtime) embedded into the Go binary. It provides the operator
 console for applications and environments, parameters and secrets, identities
 and policies, releases and schemas, audit events, subscribers, and service
 health. Secret plaintext is hidden unless explicitly revealed. Revealing a
-client-bound version additionally requires that version's client token, which
-the console sends only in the reveal request body. Dynamic data comes from
-the [`/api/v1/*` API](docs/http-api.md); unknown frontend routes fall back to
-the exported entry HTML so client-side deep links work on refresh. See the
-[`frontend` development guide](frontend/README.md) for local workflows and
+bound version additionally requires that version's binding key. The audited
+administrator reveal path bypasses the independent access-token gate. The
+console sends the binding key only in the reveal request body. Dynamic data
+comes from the [`/api/v1/*` API](docs/http-api.md); unknown frontend routes
+fall back to the exported entry HTML so client-side deep links work on refresh.
+See the [`frontend` development guide](frontend/README.md) for local workflows and
 [`docs/testing.md`](docs/testing.md#frontend) for test boundaries.
 
 ## Client SDKs
@@ -725,6 +754,8 @@ the exported entry HTML so client-side deep links work on refresh. See the
   monitoring.
 - [`docs/security.md`](docs/security.md) — the encryption, authentication,
   authorization, and audit model in depth.
+- [`docs/binding-keys.md`](docs/binding-keys.md) — binding-key reads and writes,
+  versioned protection transitions, historical cohorts, and purge guarantees.
 - [`docs/sdk-go.md`](docs/sdk-go.md) — the Go client SDK.
 - [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) —
   generated atomic typed configuration, defaults, and operator workflow.

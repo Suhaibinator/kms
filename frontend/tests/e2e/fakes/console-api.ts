@@ -40,7 +40,28 @@ export interface FakeParameter {
 export interface FakeSecret {
   key: string;
   versionCount: number;
-  client_bound: boolean;
+  bound: boolean;
+  contentType?: string;
+  metadataJson?: string;
+  hasAccessToken?: boolean;
+  currentVersion?: number;
+  previousVersion?: number;
+  /** Current-version credential used only by the in-process fake. */
+  bindingKey?: string;
+  versions?: FakeSecretVersion[];
+}
+
+export interface FakeSecretVersion {
+  version: number;
+  state: "enabled" | "disabled" | "destroyed";
+  bound: boolean;
+  /** Per-version credential retained so historical cohorts remain distinct. */
+  bindingKey?: string;
+  hasAccessToken: boolean;
+  valueBase64: string;
+  metadataJson: string;
+  expiresAtUnixMs: number;
+  createdAtUnixMs: number;
 }
 
 export interface FakeNamespace {
@@ -142,7 +163,7 @@ export function incidentState(): ConsoleState {
         ns.secrets[value.key] = {
           key: value.key,
           versionCount: versions,
-          client_bound: value.client_bound ?? false,
+          bound: value.bound ?? false,
         };
       }
     }
@@ -341,7 +362,7 @@ function environmentOverview(state: ConsoleState, ns: FakeNamespace): Environmen
       content_type: field.kind === "parameter" ? parameter?.content_type : "text/plain",
       current_version: current,
       pinned_version: pinned,
-      client_bound: secret?.client_bound,
+      bound: secret?.bound,
     };
   });
   const rollout = rolloutOf(ns);
@@ -443,7 +464,7 @@ function applicationOverview(state: ConsoleState): ApplicationOverview {
                   present: true,
                   content_type: "",
                   version: secret.versionCount,
-                  client_bound: secret.client_bound,
+                  bound: secret.bound,
                   has_access_token: false,
                 }
               : { present: false, content_type: "", version: 0 },
@@ -523,8 +544,6 @@ function buildCandidate(
       content_type: field.kind === "parameter" ? (parameter?.content_type ?? "") : "",
       metadata_json: "{}",
       parameter_digest: field.kind === "parameter" ? `sha256:${field.alias}-${to}` : "",
-      client_bound: secret?.client_bound ?? false,
-      has_access_token: false,
     });
   }
   const latest = ns.releases.reduce((max, release) => Math.max(max, release.version), 0);
@@ -736,6 +755,61 @@ function summaries(ns: FakeNamespace, name?: string): ReleaseSummary[] {
     }));
 }
 
+function secretVersions(secret: FakeSecret): FakeSecretVersion[] {
+  if (!secret.versions) secret.versions = [];
+  while (secret.versions.length < secret.versionCount) {
+    const version = secret.versions.length + 1;
+    secret.versions.push({
+      version,
+      state: "enabled",
+      bound: secret.bound,
+      bindingKey: secret.bound ? secret.bindingKey : undefined,
+      hasAccessToken: secret.hasAccessToken ?? false,
+      valueBase64: Buffer.from(`secret-${version}`).toString("base64"),
+      metadataJson: secret.metadataJson ?? "{}",
+      expiresAtUnixMs: 0,
+      createdAtUnixMs: version,
+    });
+  }
+  return secret.versions;
+}
+
+function secretMetadata(ns: FakeNamespace, secret: FakeSecret) {
+  const versions = secretVersions(secret);
+  const current = secret.currentVersion ?? secret.versionCount;
+  return {
+    env: ns.namespace.env,
+    app: ns.namespace.app,
+    key: secret.key,
+    content_type: secret.contentType ?? "text/plain",
+    bound: versions.find((version) => version.version === current)?.bound ?? secret.bound,
+    has_access_token: secret.hasAccessToken ?? false,
+    metadata_json: secret.metadataJson ?? "{}",
+    created_at_unix_ms: versions[0]?.createdAtUnixMs ?? 1,
+    updated_at_unix_ms: versions.at(-1)?.createdAtUnixMs ?? 1,
+    labels: {
+      current,
+      ...(secret.previousVersion ? { previous: secret.previousVersion } : null),
+    },
+    versions: versions.map((version) => ({
+      version: version.version,
+      state: version.state,
+      bound: version.bound,
+      has_access_token: version.hasAccessToken,
+      created_by: "admin",
+      created_at_unix_ms: version.createdAtUnixMs,
+      destroyed_at_unix_ms: version.state === "destroyed" ? now() : 0,
+      expires_at_unix_ms: version.expiresAtUnixMs,
+      metadata_json: version.metadataJson,
+    })),
+  };
+}
+
+function bumpRevision(state: ConsoleState): number {
+  state.revision += 1;
+  return state.revision;
+}
+
 function handle(
   state: ConsoleState,
   method: string,
@@ -744,7 +818,6 @@ function handle(
   body: unknown,
 ): { status: number; body: unknown } {
   const env = params.get("env") ?? "";
-  const app = params.get("app") ?? "";
   const ns = state.namespaces[env];
   const nsFor = (e: string) => state.namespaces[e];
   const b = (body ?? {}) as Record<string, unknown>;
@@ -844,22 +917,345 @@ function handle(
       return {
         status: 200,
         body: {
-          secrets: Object.values(ns.secrets).map((secret) => ({
-            env,
-            app,
-            key: secret.key,
-            content_type: "text/plain",
-            client_bound: secret.client_bound,
-            has_access_token: false,
-            metadata_json: "{}",
-            created_at_unix_ms: 1,
-            updated_at_unix_ms: 1,
-            labels: { current: secret.versionCount },
-            versions: [],
-          })),
+          secrets: Object.values(ns.secrets).map((secret) => secretMetadata(ns, secret)),
           next_page_token: "",
         },
       };
+    case "GET /secrets/metadata": {
+      const secret = ns?.secrets[params.get("key") ?? ""];
+      return ns && secret
+        ? { status: 200, body: { secret: secretMetadata(ns, secret) } }
+        : error(404, "not_found", "secret not found");
+    }
+    case "POST /secrets": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const key = String(b.key ?? "");
+      if (!target || String(b.app ?? "") !== target.namespace.app || !key) {
+        return error(404, "not_found", "namespace not found");
+      }
+      let secret = target.secrets[key];
+      if (!secret) {
+        secret = {
+          key,
+          versionCount: 0,
+          bound: false,
+          currentVersion: 0,
+          versions: [],
+        };
+        target.secrets[key] = secret;
+      }
+      const versions = secretVersions(secret);
+      const version = secret.versionCount + 1;
+      const bound = typeof b.binding_key === "string" && b.binding_key.length > 0;
+      const bindingKey = bound ? String(b.binding_key) : undefined;
+      const generatesToken = b.generate_access_token === true;
+      secret.previousVersion = secret.currentVersion || undefined;
+      secret.currentVersion = version;
+      secret.versionCount = version;
+      secret.bound = bound;
+      secret.bindingKey = bindingKey;
+      secret.contentType = String(b.content_type ?? "text/plain");
+      secret.metadataJson = String(b.metadata_json ?? "{}");
+      if (generatesToken) secret.hasAccessToken = true;
+      const hasAccessToken = secret.hasAccessToken ?? false;
+      versions.push({
+        version,
+        state: "enabled",
+        bound,
+        bindingKey,
+        hasAccessToken,
+        valueBase64: String(b.value_base64 ?? ""),
+        metadataJson: secret.metadataJson,
+        expiresAtUnixMs: Number(b.expires_at_unix_ms ?? 0),
+        createdAtUnixMs: now(),
+      });
+      return {
+        status: 200,
+        body: {
+          version,
+          revision: bumpRevision(state),
+          ...(generatesToken ? { access_token: `kms_e2e_secret_token_v${version}` } : null),
+        },
+      };
+    }
+    case "POST /secrets/reveal": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      const version = secretVersions(secret ?? { key: "", versionCount: 0, bound: false }).find(
+        (entry) => entry.version === Number(b.version),
+      );
+      if (!target || !secret || !version || version.state !== "enabled") {
+        return error(404, "not_found", "secret version not found");
+      }
+      return {
+        status: 200,
+        body: {
+          env: target.namespace.env,
+          app: target.namespace.app,
+          key: secret.key,
+          version: version.version,
+          value_base64: version.valueBase64,
+          content_type: secret.contentType ?? "text/plain",
+        },
+      };
+    }
+    case "POST /secrets/disable": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      const version = secret
+        ? secretVersions(secret).find((entry) => entry.version === b.version)
+        : null;
+      if (!version || version.state === "destroyed") {
+        return error(404, "not_found", "secret version not found");
+      }
+      version.state = b.enable === true ? "enabled" : "disabled";
+      return { status: 200, body: { revision: bumpRevision(state) } };
+    }
+    case "POST /secrets/destroy": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      const version = secret
+        ? secretVersions(secret).find((entry) => entry.version === b.version)
+        : null;
+      if (!version) return error(404, "not_found", "secret version not found");
+      version.state = "destroyed";
+      version.valueBase64 = "";
+      return { status: 200, body: { revision: bumpRevision(state) } };
+    }
+    case "POST /secrets/promote": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      const version = secret
+        ? secretVersions(secret).find((entry) => entry.version === b.version)
+        : null;
+      if (!secret || !version || version.state !== "enabled") {
+        return error(404, "not_found", "secret version not found");
+      }
+      const previous = secret.currentVersion ?? secret.versionCount;
+      secret.previousVersion = previous;
+      secret.currentVersion = version.version;
+      return {
+        status: 200,
+        body: {
+          current_version: version.version,
+          previous_version: previous,
+          revision: bumpRevision(state),
+        },
+      };
+    }
+    case "POST /secrets/bind":
+    case "POST /secrets/unbind":
+    case "POST /secrets/binding-key/rotate": {
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      if (!secret) return error(404, "not_found", "secret not found");
+      const versions = secretVersions(secret);
+      const currentNumber = secret.currentVersion ?? secret.versionCount;
+      if (Number(b.expected_current_version) !== currentNumber) {
+        return error(409, "aborted", "current version changed; retry");
+      }
+      const source = versions.find((entry) => entry.version === currentNumber);
+      if (!source || source.state === "destroyed") {
+        return error(412, "failed_precondition", "current version is destroyed");
+      }
+      const binding = path === "/secrets/bind";
+      if ((binding && source.bound) || (!binding && !source.bound)) {
+        return error(
+          412,
+          "failed_precondition",
+          binding ? "current version is already bound" : "current version is not bound",
+        );
+      }
+      if (!binding && source.bindingKey !== String(b.binding_key ?? "")) {
+        return error(500, "internal", "internal error");
+      }
+      if (path === "/secrets/binding-key/rotate" && b.binding_key === b.new_binding_key) {
+        return error(
+          400,
+          "invalid_argument",
+          "new binding key must differ from current binding key",
+        );
+      }
+      const next = secret.versionCount + 1;
+      const bound = path !== "/secrets/unbind";
+      const bindingKey = bound
+        ? String(path === "/secrets/bind" ? b.binding_key : b.new_binding_key)
+        : undefined;
+      versions.push({
+        ...source,
+        version: next,
+        bound,
+        bindingKey,
+        createdAtUnixMs: now(),
+      });
+      secret.previousVersion = currentNumber;
+      secret.currentVersion = next;
+      secret.versionCount = next;
+      secret.bound = bound;
+      secret.bindingKey = bindingKey;
+      secret.metadataJson = source.metadataJson;
+      return {
+        status: 200,
+        body: {
+          current_version: next,
+          previous_version: currentNumber,
+          revision: bumpRevision(state),
+        },
+      };
+    }
+    case "POST /secrets/binding-cohort/preview":
+    case "POST /secrets/binding-cohort/purge": {
+      if (path === "/secrets/binding-cohort/purge" && state.identity.kind !== "admin") {
+        return error(403, "permission_denied", "access denied");
+      }
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      if (!secret) return error(404, "not_found", "secret not found");
+      const allVersions = secretVersions(secret);
+      const anchor = Number(b.anchor_version) || secret.currentVersion || secret.versionCount;
+      const version = secret ? allVersions.find((entry) => entry.version === anchor) : undefined;
+      if (!version) return error(404, "not_found", "secret version not found");
+      if (
+        version.state === "destroyed" ||
+        !version.bound ||
+        version.bindingKey !== String(b.binding_key ?? "")
+      ) {
+        return error(500, "internal", "internal error");
+      }
+      const matching = (candidate: FakeSecretVersion | undefined) =>
+        candidate !== undefined &&
+        candidate.state !== "destroyed" &&
+        candidate.bound &&
+        candidate.bindingKey === version.bindingKey;
+      const affected = [anchor];
+      for (let candidate = anchor - 1; candidate > 0; candidate -= 1) {
+        if (!matching(allVersions.find((entry) => entry.version === candidate))) break;
+        affected.unshift(candidate);
+      }
+      for (let candidate = anchor + 1; candidate <= secret.versionCount; candidate += 1) {
+        if (!matching(allVersions.find((entry) => entry.version === candidate))) break;
+        affected.push(candidate);
+      }
+      if (path === "/secrets/binding-cohort/purge") {
+        const expected = Array.isArray(b.expected_affected_versions)
+          ? b.expected_affected_versions.map(Number)
+          : [];
+        const expectedRevision = Number(b.expected_revision);
+        if (
+          !Number.isSafeInteger(expectedRevision) ||
+          expectedRevision <= 0 ||
+          expected.length === 0 ||
+          expected.some(
+            (candidate, index) =>
+              !Number.isSafeInteger(candidate) ||
+              candidate <= 0 ||
+              (index > 0 && candidate <= expected[index - 1]),
+          )
+        ) {
+          return error(400, "invalid_argument", "a prior exact preview is required");
+        }
+        if (
+          expectedRevision !== state.revision ||
+          expected.length !== affected.length ||
+          expected.some((candidate, index) => candidate !== affected[index])
+        ) {
+          return error(409, "aborted", "secret version set changed; preview and retry");
+        }
+        for (const candidate of allVersions) {
+          if (!affected.includes(candidate.version)) continue;
+          candidate.state = "destroyed";
+          candidate.bound = false;
+          candidate.hasAccessToken = false;
+          candidate.valueBase64 = "";
+          candidate.metadataJson = "";
+          candidate.expiresAtUnixMs = 0;
+        }
+        if (affected.includes(secret.currentVersion ?? secret.versionCount)) {
+          secret.contentType = "";
+          secret.metadataJson = "";
+          secret.bound = false;
+        }
+      }
+      return {
+        status: 200,
+        body: {
+          anchor_version: anchor,
+          affected_versions: affected,
+          revision:
+            path === "/secrets/binding-cohort/preview" ? state.revision : bumpRevision(state),
+        },
+      };
+    }
+    case "POST /secrets/unbound-versions/preview":
+    case "POST /secrets/unbound-versions/purge": {
+      if (state.identity.kind !== "admin") {
+        return error(403, "permission_denied", "access denied");
+      }
+      const target = state.namespaces[String(b.env ?? "")];
+      const secret = target?.secrets[String(b.key ?? "")];
+      if (!secret) return error(404, "not_found", "secret not found");
+      const affected = secretVersions(secret)
+        .filter((version) => version.state !== "destroyed" && !version.bound)
+        .map((version) => version.version)
+        .sort((a, b) => a - b);
+      if (affected.length === 0) {
+        return error(412, "failed_precondition", "secret has no unbound versions to purge");
+      }
+      if (path === "/secrets/unbound-versions/preview") {
+        return { status: 200, body: { affected_versions: affected, revision: state.revision } };
+      }
+      const expected = Array.isArray(b.expected_affected_versions)
+        ? b.expected_affected_versions.map(Number)
+        : [];
+      const expectedRevision = Number(b.expected_revision);
+      if (
+        !Number.isSafeInteger(expectedRevision) ||
+        expectedRevision <= 0 ||
+        expected.length === 0 ||
+        expected.some(
+          (version, index) =>
+            !Number.isSafeInteger(version) ||
+            version <= 0 ||
+            (index > 0 && version <= expected[index - 1]),
+        )
+      ) {
+        return error(400, "invalid_argument", "a prior exact preview is required");
+      }
+      if (
+        expectedRevision !== state.revision ||
+        expected.length !== affected.length ||
+        expected.some((version, index) => version !== affected[index])
+      ) {
+        return error(409, "aborted", "secret version set changed; preview and retry");
+      }
+      for (const version of secretVersions(secret)) {
+        if (!affected.includes(version.version)) continue;
+        version.state = "destroyed";
+        version.bound = false;
+        version.hasAccessToken = false;
+        version.valueBase64 = "";
+        version.metadataJson = "";
+        version.expiresAtUnixMs = 0;
+      }
+      if (affected.includes(secret.currentVersion ?? secret.versionCount)) {
+        // Current/previous labels deliberately remain pinned to their
+        // tombstones, but the secret-level current projection is scrubbed.
+        secret.contentType = "";
+        secret.metadataJson = "";
+        secret.bound = false;
+      }
+      return {
+        status: 200,
+        body: { affected_versions: affected, revision: bumpRevision(state) },
+      };
+    }
+    case "DELETE /secrets": {
+      const target = state.namespaces[env];
+      const key = params.get("key") ?? "";
+      if (!target?.secrets[key]) return error(404, "not_found", "secret not found");
+      delete target.secrets[key];
+      return { status: 200, body: { revision: bumpRevision(state) } };
+    }
     case "GET /releases":
       if (!ns) return error(404, "not_found", "namespace not found");
       return {
@@ -1002,6 +1398,16 @@ function handle(
     default:
       return error(404, "not_found", `no fake for ${method} ${path}`);
   }
+}
+
+/** Direct entry point for unit-testing the fake's state-machine semantics. */
+export function handleFakeConsoleRequest(
+  state: ConsoleState,
+  method: string,
+  path: string,
+  body: unknown,
+): { status: number; body: unknown } {
+  return handle(state, method, path, new URLSearchParams(), body);
 }
 
 function parameterOf(ns: FakeNamespace, parameter: FakeParameter, version?: number) {

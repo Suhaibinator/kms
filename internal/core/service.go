@@ -28,6 +28,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/policy"
+	"github.com/Suhaibinator/kms/internal/ratelimit"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -83,7 +84,7 @@ type Principal struct {
 
 // IsAdmin reports whether the principal has the admin kind. Admin-kind
 // identities are the management plane: they bypass the per-namespace
-// auth-method gate and data-plane policy, but not audit or client-bound
+// auth-method gate and data-plane policy, but not audit or binding-key
 // cryptography. Instead of the namespace gate they are subject to the global
 // admin client-certificate requirement, enforced when the principal is built
 // (see ResolvePrincipal and admitAdmin), so a principal that reaches an
@@ -129,6 +130,9 @@ type Service struct {
 	// verifyLimits holds the per-identity request and mismatch budgets for
 	// VerifyReleaseDefaults (see release_verify.go). Process-local.
 	verifyLimits atomic.Pointer[verifyLimiters]
+	// bindingCohortPreviews bounds the cryptographic discovery requests one
+	// identity may start. Process-local, like the verify-defaults limiter.
+	bindingCohortPreviews *ratelimit.Limiter
 	// metrics is the operational-signal exporter (see metrics.go); no-op
 	// until SetMetrics attaches one.
 	metrics atomic.Pointer[metricsHolder]
@@ -142,7 +146,11 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier()}
+	s := &Service{
+		store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() },
+		filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier(),
+		bindingCohortPreviews: ratelimit.New(defaultBindingCohortPreviewRequestsPerHour/60.0, defaultBindingCohortPreviewBurst),
+	}
 	s.auditEnabled.Store(true)
 	s.adminRequireClientCert.Store(true)
 	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))
@@ -158,9 +166,10 @@ func (s *Service) SetKeyring(k *crypto.Keyring) { s.keyring.Store(k) }
 // SetHub attaches the watch hub.
 func (s *Service) SetHub(h Hub) { s.hub.Store(&h) }
 
-// SetAuditEnabled controls whether audit events are persisted. Auditing is on
-// by default so non-server consumers retain the secure behavior unless they
-// explicitly opt out through configuration.
+// SetAuditEnabled controls general-purpose audit persistence. Binding
+// management's transactional mutation audits and strict cohort-preview audit
+// remain mandatory. Auditing is on by default so non-server consumers retain
+// the secure behavior unless they explicitly opt out through configuration.
 func (s *Service) SetAuditEnabled(enabled bool) { s.auditEnabled.Store(enabled) }
 
 // SetAdminRequireClientCert sets the effective admin client-certificate
@@ -713,10 +722,25 @@ func (s *Service) auditStrict(ctx context.Context, ev domain.AuditEvent) error {
 	return nil
 }
 
+// auditRequiredStrict is for operations whose result must never be disclosed
+// without a durable audit row, even when general-purpose auditing is disabled.
+func (s *Service) auditRequiredStrict(ctx context.Context, ev domain.AuditEvent) error {
+	if err := s.appendRequiredAudit(ctx, ev); err != nil {
+		s.log.Error("required audit append failed (failing operation closed)",
+			zap.String("event_type", ev.EventType), zap.Error(err))
+		return domain.Errorf(domain.ErrFailedPrecondition, "audit unavailable")
+	}
+	return nil
+}
+
 func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
 	if !s.auditEnabled.Load() {
 		return nil
 	}
+	return s.appendRequiredAudit(ctx, ev)
+}
+
+func (s *Service) appendRequiredAudit(ctx context.Context, ev domain.AuditEvent) error {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = s.now()
 	}
@@ -749,6 +773,10 @@ func (s *Service) auditRefWithNamespaceID(ctx context.Context, pr Principal, eve
 
 func (s *Service) auditRefStrictWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) error {
 	return s.auditStrict(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
+}
+
+func (s *Service) auditRefRequiredStrictWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) error {
+	return s.auditRequiredStrict(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
 }
 
 func (s *Service) buildRefEvent(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, version uint64, decision string, meta map[string]string) domain.AuditEvent {

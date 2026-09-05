@@ -3,7 +3,9 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -20,6 +22,9 @@ import (
 // Resources are keyed by their display path (ref.String()) or, for namespaces,
 // by "env/app" (ns.String()).
 type fakeStore struct {
+	secretMu sync.RWMutex
+	auditMu  sync.RWMutex
+
 	identitiesByName map[string]domain.Identity
 	identitiesByHash map[string]domain.Identity
 	certsBySerial    map[string]certEntry
@@ -35,13 +40,21 @@ type fakeStore struct {
 	nextNamespaceID  int64
 
 	// error injection
-	pingErr     error
-	auditErr    error
-	policiesErr error
+	pingErr  error
+	auditErr error
+	// bindingAuditErr fails only the transactional binding allow audit, so
+	// tests can distinguish it from the subsequent best-effort error audit.
+	bindingAuditErr error
+	policiesErr     error
+	// purgeResultErr simulates a post-commit purge cleanup failure: the fake
+	// applies the tombstones/audit/revision, then returns this error with the
+	// populated result just like SQLStore.
+	purgeResultErr error
 
 	// optional behavior overrides
 	onPoliciesForSubject      func(subject string) ([]domain.Policy, error)
 	beforeCreateSecretVersion func(storage.CreateSecretParams)
+	beforeBindingOperation    func(operation string)
 	onListNamespaces          func(storage.ListPage) ([]domain.Namespace, string, error)
 	onListAudit               func(domain.AuditFilter, storage.ListPage) ([]domain.AuditEvent, string, error)
 }
@@ -106,6 +119,8 @@ func (f *fakeStore) addNamespace(ns domain.NamespaceRef, methods ...domain.AuthM
 }
 
 func (f *fakeStore) lastAudit() (domain.AuditEvent, bool) {
+	f.auditMu.RLock()
+	defer f.auditMu.RUnlock()
 	if len(f.audits) == 0 {
 		return domain.AuditEvent{}, false
 	}
@@ -113,6 +128,8 @@ func (f *fakeStore) lastAudit() (domain.AuditEvent, bool) {
 }
 
 func (f *fakeStore) hasAudit(eventType, decision string) bool {
+	f.auditMu.RLock()
+	defer f.auditMu.RUnlock()
 	for _, e := range f.audits {
 		if e.EventType == eventType && e.Decision == decision {
 			return true
@@ -122,6 +139,8 @@ func (f *fakeStore) hasAudit(eventType, decision string) bool {
 }
 
 func (f *fakeStore) tamperCiphertext(ref domain.Ref, version uint64) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	rec := sec.versions[version]
 	rec.Ciphertext = bytes.Clone(rec.Ciphertext)
@@ -132,9 +151,20 @@ func (f *fakeStore) tamperCiphertext(ref domain.Ref, version uint64) {
 // expireVersion ages a version's expiry into the past, simulating a version
 // that expired during its lifetime (PutSecret rejects writing a past expiry).
 func (f *fakeStore) expireVersion(ref domain.Ref, version uint64) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	rec := sec.versions[version]
 	rec.ExpiresAt = time.Now().Add(-time.Hour)
+	sec.versions[version] = rec
+}
+
+func (f *fakeStore) markVersionDestroyedAt(ref domain.Ref, version uint64) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
+	sec := f.secrets[ref.String()]
+	rec := sec.versions[version]
+	rec.DestroyedAt = time.Now()
 	sec.versions[version] = rec
 }
 
@@ -338,6 +368,8 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 		f.beforeCreateSecretVersion = nil
 		hook(p)
 	}
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	key := p.Ref.String()
 	sec := f.secrets[key]
 	if p.Expected != nil {
@@ -347,33 +379,36 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 		}
 	}
 	if sec == nil {
-		f.nextSecretID++
-		sec = &fakeSecret{
-			rec:      storage.SecretRecord{ID: f.nextSecretID, Ref: p.Ref, ClientBound: p.ClientBound, Labels: map[string]uint64{}},
-			versions: map[uint64]storage.SecretVersionRecord{},
-		}
-		f.secrets[key] = sec
-	} else if sec.rec.ClientBound != p.ClientBound {
-		return 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "client_bound mismatch")
+		sec = &fakeSecret{versions: map[uint64]storage.SecretVersionRecord{}}
 	}
-	sec.next++
-	version := sec.next
+	version := sec.next + 1
 	payload, err := p.Encrypt(version)
 	if err != nil {
 		return 0, 0, err
 	}
+	if sec.rec.ID == 0 {
+		f.nextSecretID++
+		sec.rec = storage.SecretRecord{
+			ID:        f.nextSecretID,
+			Ref:       p.Ref,
+			CreatedAt: time.Now(),
+			Labels:    map[string]uint64{},
+		}
+		f.secrets[key] = sec
+	}
+	sec.next = version
 	sec.rec.ContentType = p.ContentType
 	sec.rec.Metadata = p.Metadata
+	sec.rec.Bound = p.Bound
 	sec.rec.UpdatedAt = time.Now()
 	if p.AccessTokenHash != nil {
-		sec.rec.AccessTokenHash = p.AccessTokenHash
-		sec.rec.ClientBound = p.ClientBound
+		sec.rec.AccessTokenHash = bytes.Clone(p.AccessTokenHash)
 	}
 	sec.versions[version] = storage.SecretVersionRecord{
-		Version: version, ContentType: p.ContentType, ClientBound: p.ClientBound,
+		Version: version, ContentType: p.ContentType, Bound: p.Bound,
 		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
 		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
-		KEKID: payload.KEKID, WrapMode: payload.WrapMode, ClientKeySalt: payload.ClientKeySalt,
+		KEKID: payload.KEKID, WrapMode: payload.WrapMode, BindingKeySalt: payload.BindingKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: time.Now(), ExpiresAt: p.ExpiresAt,
 		Metadata: p.Metadata,
@@ -386,6 +421,334 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	sec.rec.Labels[domain.LabelCurrent] = version
 	f.revision++
 	return version, f.revision, nil
+}
+
+func (f *fakeStore) TransitionSecretVersion(_ context.Context, p storage.SecretVersionTransitionParams) (storage.SecretVersionTransitionResult, error) {
+	if f.beforeBindingOperation != nil {
+		f.beforeBindingOperation(string(p.Kind))
+	}
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
+	sec := f.secrets[p.Ref.String()]
+	if sec == nil {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrNotFound, "secret %s", p.Ref)
+	}
+	if p.ExpectedCurrentVersion == 0 {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrInvalidArgument, "expected current version is required")
+	}
+	if sec.current != p.ExpectedCurrentVersion {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrAborted, "secret current version changed")
+	}
+	source := sec.versions[sec.current]
+	if source.State == domain.StateDestroyed {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret current version is destroyed")
+	}
+	targetBound := p.Kind != storage.SecretTransitionUnbind
+	if p.Kind == storage.SecretTransitionBind && source.Bound {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret current version is already bound")
+	}
+	if p.Kind != storage.SecretTransitionBind && !source.Bound {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret current version is not bound")
+	}
+	newVersion := sec.next + 1
+	payload, err := p.Encrypt(source, newVersion)
+	if err != nil {
+		return storage.SecretVersionTransitionResult{}, err
+	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretVersionTransitionResult{}, err
+	}
+	now := time.Now()
+	clone := source
+	clone.ID = 0
+	clone.Version = newVersion
+	clone.Bound = targetBound
+	clone.Ciphertext = bytes.Clone(payload.Ciphertext)
+	clone.EncryptedDEK = bytes.Clone(payload.EncryptedDEK)
+	clone.KEKID = payload.KEKID
+	clone.WrapMode = payload.WrapMode
+	clone.BindingKeySalt = bytes.Clone(payload.BindingKeySalt)
+	clone.Algorithm = payload.Algorithm
+	clone.Nonce = bytes.Clone(payload.Nonce)
+	clone.AAD = payload.AAD
+	clone.CreatedBy = p.CreatedBy
+	clone.CreatedAt = now
+	clone.DestroyedAt = time.Time{}
+	sec.versions[newVersion] = clone
+	sec.next = newVersion
+	sec.previous = sec.current
+	sec.current = newVersion
+	sec.rec.Labels[domain.LabelPrevious] = sec.previous
+	sec.rec.Labels[domain.LabelCurrent] = sec.current
+	sec.rec.Bound = targetBound
+	sec.rec.ContentType = clone.ContentType
+	sec.rec.Metadata = clone.Metadata
+	sec.rec.UpdatedAt = now
+	f.revision++
+	eventType := "secret." + string(p.Kind)
+	if p.Kind == storage.SecretTransitionRotate {
+		eventType = "secret.binding_key.rotate"
+	}
+	f.appendBindingAuditLocked(eventType, p.Ref, newVersion, []uint64{sec.previous, newVersion}, p.Audit)
+	return storage.SecretVersionTransitionResult{CurrentVersion: newVersion, PreviousVersion: sec.previous, Revision: f.revision}, nil
+}
+
+func (f *fakeStore) PreviewSecretBindingCohort(_ context.Context, ref domain.Ref, anchor uint64, test storage.SecretBindingTestFunc) (storage.SecretBindingResult, error) {
+	if f.beforeBindingOperation != nil {
+		f.beforeBindingOperation("preview")
+	}
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
+	_, resolved, _, err := f.bindingVersion(ref, anchor)
+	if err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	affected, err := f.bindingCohort(ref, resolved, test)
+	if err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}, nil
+}
+
+func (f *fakeStore) appendBindingAuditLocked(eventType string, ref domain.Ref, anchor uint64, affected []uint64, audit storage.SecretBindingAudit) {
+	metadata, _ := json.Marshal(affected)
+	ns := f.namespaces[ref.NS.String()]
+	f.audits = append(f.audits, domain.AuditEvent{
+		EventType: eventType, ActorIdentity: audit.ActorIdentity, ActorType: audit.ActorType,
+		ResourceType: domain.ResourceSecret, ResourceNamespaceID: ns.ID, ResourceEnv: ref.NS.Env,
+		ResourceApp: ref.NS.App, ResourceKey: ref.Key, ResourceVersion: anchor, Decision: "allow",
+		SourceIP: audit.SourceIP, UserAgent: audit.UserAgent, RequestID: audit.RequestID,
+		CreatedAt: audit.CreatedAt, Metadata: `{"affected_versions":` + string(metadata) + `}`,
+	})
+}
+
+func (f *fakeStore) requiredBindingAuditError() error {
+	if f.bindingAuditErr != nil || f.auditErr != nil {
+		return storage.ErrRequiredAuditUnavailable
+	}
+	return nil
+}
+
+func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, anchor uint64, guard storage.SecretBindingCASGuard, test storage.SecretBindingTestFunc, audit storage.SecretBindingPurgeAudit) (storage.SecretBindingResult, error) {
+	if f.beforeBindingOperation != nil {
+		f.beforeBindingOperation("purge")
+	}
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
+	if err := validateFakeBindingGuard(guard); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	sec, resolved, _, err := f.bindingVersion(ref, anchor)
+	if err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	affected, err := f.bindingCohort(ref, resolved, test)
+	if err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	if err := f.checkBindingGuard(guard, affected); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
+
+	destroyedAt := time.Now()
+	for _, version := range affected {
+		rec := sec.versions[version]
+		rec.ContentType = ""
+		rec.Bound = false
+		rec.HasAccessToken = false
+		rec.Ciphertext = nil
+		rec.EncryptedDEK = nil
+		rec.KEKID = ""
+		rec.WrapMode = ""
+		rec.BindingKeySalt = nil
+		rec.Algorithm = ""
+		rec.Nonce = nil
+		rec.AAD = ""
+		rec.State = domain.StateDestroyed
+		rec.DestroyedAt = destroyedAt
+		rec.ExpiresAt = time.Time{}
+		rec.Metadata = ""
+		sec.versions[version] = rec
+	}
+	if containsFakeVersion(affected, sec.current) {
+		sec.rec.Bound = false
+		sec.rec.ContentType = ""
+		sec.rec.Metadata = ""
+	}
+	f.revision++
+	f.appendBindingAuditLocked("secret.binding_cohort.purge", ref, resolved, affected, audit)
+	result := storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}
+	return result, f.purgeResultErr
+}
+
+func (f *fakeStore) PreviewSecretUnboundVersions(_ context.Context, ref domain.Ref) (storage.SecretVersionSetResult, error) {
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
+	sec := f.secrets[ref.String()]
+	if sec == nil {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	versions := make([]uint64, 0)
+	for version := uint64(1); version <= sec.next; version++ {
+		rec, ok := sec.versions[version]
+		if ok && rec.State != domain.StateDestroyed && !rec.Bound {
+			versions = append(versions, version)
+		}
+	}
+	if len(versions) == 0 {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret has no unbound versions")
+	}
+	return storage.SecretVersionSetResult{AffectedVersions: versions, Revision: f.revision}, nil
+}
+
+func (f *fakeStore) PurgeSecretUnboundVersions(_ context.Context, ref domain.Ref, expectedRevision uint64, expectedAffected []uint64, audit storage.SecretBindingPurgeAudit) (storage.SecretVersionSetResult, error) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
+	sec := f.secrets[ref.String()]
+	if sec == nil {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	affected := make([]uint64, 0)
+	for version := uint64(1); version <= sec.next; version++ {
+		rec, ok := sec.versions[version]
+		if ok && rec.State != domain.StateDestroyed && !rec.Bound {
+			affected = append(affected, version)
+		}
+	}
+	if expectedRevision == 0 || len(expectedAffected) == 0 {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrInvalidArgument, "exact preview guard is required")
+	}
+	if expectedRevision != f.revision || !equalFakeVersions(expectedAffected, affected) {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrAborted, "secret version set changed")
+	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretVersionSetResult{}, err
+	}
+	destroyedAt := time.Now()
+	for _, version := range affected {
+		rec := sec.versions[version]
+		rec.ContentType = ""
+		rec.Bound = false
+		rec.HasAccessToken = false
+		rec.Ciphertext = nil
+		rec.EncryptedDEK = nil
+		rec.KEKID = ""
+		rec.WrapMode = ""
+		rec.BindingKeySalt = nil
+		rec.Algorithm = ""
+		rec.Nonce = nil
+		rec.AAD = ""
+		rec.State = domain.StateDestroyed
+		rec.DestroyedAt = destroyedAt
+		rec.ExpiresAt = time.Time{}
+		rec.Metadata = ""
+		sec.versions[version] = rec
+	}
+	if containsFakeVersion(affected, sec.current) {
+		sec.rec.Bound = false
+		sec.rec.ContentType = ""
+		sec.rec.Metadata = ""
+	}
+	f.revision++
+	f.appendBindingAuditLocked("secret.unbound_versions.purge", ref, affected[0], affected, audit)
+	result := storage.SecretVersionSetResult{AffectedVersions: append([]uint64(nil), affected...), Revision: f.revision}
+	return result, f.purgeResultErr
+}
+
+func (f *fakeStore) bindingVersion(ref domain.Ref, version uint64) (*fakeSecret, uint64, storage.SecretVersionRecord, error) {
+	sec := f.secrets[ref.String()]
+	if sec == nil {
+		return nil, 0, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	resolved, ok := f.resolveVersion(sec, version, "")
+	if !ok {
+		return nil, 0, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version", ref)
+	}
+	return sec, resolved, sec.versions[resolved], nil
+}
+
+func (f *fakeStore) bindingCohort(ref domain.Ref, anchor uint64, test storage.SecretBindingTestFunc) ([]uint64, error) {
+	sec := f.secrets[ref.String()]
+	anchorRecord, ok := sec.versions[anchor]
+	if !ok {
+		return nil, domain.Errorf(domain.ErrNotFound, "secret %s v%d", ref, anchor)
+	}
+	if anchorRecord.State == domain.StateDestroyed || !anchorRecord.Bound {
+		return nil, domain.Errorf(domain.ErrFailedPrecondition, "secret anchor is unavailable or unbound")
+	}
+	if err := test(anchorRecord); err != nil {
+		return nil, err
+	}
+
+	first, last := anchor, anchor
+	for version := anchor - 1; version > 0; version-- {
+		rec, ok := sec.versions[version]
+		if !ok || rec.State == domain.StateDestroyed || !rec.Bound || test(rec) != nil {
+			break
+		}
+		first = version
+	}
+	for version := anchor + 1; version <= sec.next; version++ {
+		rec, ok := sec.versions[version]
+		if !ok || rec.State == domain.StateDestroyed || !rec.Bound || test(rec) != nil {
+			break
+		}
+		last = version
+	}
+	affected := make([]uint64, 0, last-first+1)
+	for version := first; version <= last; version++ {
+		affected = append(affected, version)
+	}
+	return affected, nil
+}
+
+func validateFakeBindingGuard(guard storage.SecretBindingCASGuard) error {
+	if guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
+		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
+	}
+	for i, version := range guard.ExpectedAffectedVersions {
+		if version == 0 || (i > 0 && version <= guard.ExpectedAffectedVersions[i-1]) {
+			return domain.Errorf(domain.ErrInvalidArgument, "expected affected versions must be sorted and unique")
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) checkBindingGuard(guard storage.SecretBindingCASGuard, affected []uint64) error {
+	if guard.ExpectedRevision != f.revision || !equalFakeVersions(guard.ExpectedAffectedVersions, affected) {
+		return domain.Errorf(domain.ErrAborted, "secret version set changed")
+	}
+	return nil
+}
+
+func equalFakeVersions(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsFakeVersion(versions []uint64, target uint64) bool {
+	for _, version := range versions {
+		if version == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeStore) resolveVersion(sec *fakeSecret, version uint64, label string) (uint64, bool) {
@@ -404,6 +767,8 @@ func (f *fakeStore) resolveVersion(sec *fakeSecret, version uint64, label string
 }
 
 func (f *fakeStore) GetSecretRecord(_ context.Context, ref domain.Ref) (storage.SecretRecord, error) {
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return storage.SecretRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -412,6 +777,8 @@ func (f *fakeStore) GetSecretRecord(_ context.Context, ref domain.Ref) (storage.
 }
 
 func (f *fakeStore) GetSecretVersion(_ context.Context, ref domain.Ref, version uint64, label string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return storage.SecretRecord{}, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -424,18 +791,62 @@ func (f *fakeStore) GetSecretVersion(_ context.Context, ref domain.Ref, version 
 }
 
 func (f *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Secret, error) {
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
-	return domain.Secret{Ref: ref, ContentType: sec.rec.ContentType, ClientBound: sec.rec.ClientBound}, nil
+	versions := make([]domain.SecretVersionInfo, 0, len(sec.versions))
+	for _, rec := range sec.versions {
+		versions = append(versions, domain.SecretVersionInfo{
+			Version: rec.Version, State: rec.State, Bound: rec.Bound, HasAccessToken: rec.HasAccessToken,
+			CreatedBy: rec.CreatedBy, CreatedAt: rec.CreatedAt, DestroyedAt: rec.DestroyedAt,
+			ExpiresAt: rec.ExpiresAt, Metadata: rec.Metadata,
+		})
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
+	return domain.Secret{
+		Ref: ref, ContentType: sec.rec.ContentType, Bound: sec.rec.Bound,
+		HasAccessToken: len(sec.rec.AccessTokenHash) > 0, Metadata: sec.rec.Metadata,
+		CreatedAt: sec.rec.CreatedAt, UpdatedAt: sec.rec.UpdatedAt,
+		Labels: sec.rec.Labels, Versions: versions,
+	}, nil
+}
+
+func (f *fakeStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
+	info, err := f.GetSecretInfo(ctx, ref)
+	if err != nil {
+		return domain.Secret{}, err
+	}
+	if label != "" {
+		version = info.Labels[label]
+	}
+	for _, candidate := range info.Versions {
+		if candidate.Version == version {
+			info.Bound = candidate.Bound
+			info.Versions = []domain.SecretVersionInfo{candidate}
+			info.Labels = nil
+			if label != "" {
+				info.Labels = map[string]uint64{label: version}
+			}
+			return info, nil
+		}
+	}
+	return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
 }
 
 func (f *fakeStore) ListSecrets(_ context.Context, ns domain.NamespaceRef, keyPrefix string, _ storage.ListPage) ([]domain.Secret, string, error) {
+	f.secretMu.RLock()
+	defer f.secretMu.RUnlock()
 	var out []domain.Secret
 	for _, sec := range f.secrets {
 		if sec.rec.Ref.NS == ns && keyHasPrefix(sec.rec.Ref.Key, keyPrefix) {
-			out = append(out, domain.Secret{Ref: sec.rec.Ref, ClientBound: sec.rec.ClientBound})
+			out = append(out, domain.Secret{
+				Ref: sec.rec.Ref, ContentType: sec.rec.ContentType, Bound: sec.rec.Bound,
+				HasAccessToken: len(sec.rec.AccessTokenHash) > 0, Metadata: sec.rec.Metadata,
+				CreatedAt: sec.rec.CreatedAt, UpdatedAt: sec.rec.UpdatedAt, Labels: sec.rec.Labels,
+			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Ref.Key < out[j].Ref.Key })
@@ -443,6 +854,8 @@ func (f *fakeStore) ListSecrets(_ context.Context, ns domain.NamespaceRef, keyPr
 }
 
 func (f *fakeStore) DeleteSecret(_ context.Context, ref domain.Ref) (uint64, error) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	if _, ok := f.secrets[ref.String()]; !ok {
 		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
@@ -452,6 +865,8 @@ func (f *fakeStore) DeleteSecret(_ context.Context, ref domain.Ref) (uint64, err
 }
 
 func (f *fakeStore) SetSecretVersionState(_ context.Context, ref domain.Ref, version uint64, state string) (uint64, error) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -478,6 +893,8 @@ func (f *fakeStore) SetSecretVersionState(_ context.Context, ref domain.Ref, ver
 }
 
 func (f *fakeStore) DestroySecretVersion(_ context.Context, ref domain.Ref, version uint64) (uint64, error) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -495,6 +912,8 @@ func (f *fakeStore) DestroySecretVersion(_ context.Context, ref domain.Ref, vers
 }
 
 func (f *fakeStore) PromoteSecretVersion(_ context.Context, ref domain.Ref, version uint64) (uint64, uint64, uint64, error) {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -503,19 +922,27 @@ func (f *fakeStore) PromoteSecretVersion(_ context.Context, ref domain.Ref, vers
 	if !ok {
 		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", ref, version)
 	}
-	if rec.State != domain.StateEnabled {
+	if rec.State != domain.StateEnabled || !rec.DestroyedAt.IsZero() {
 		return 0, 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "version not enabled")
 	}
 	prev := sec.current
 	if version != sec.current {
 		sec.previous = sec.current
+		sec.rec.Labels[domain.LabelPrevious] = sec.previous
 	}
 	sec.current = version
+	sec.rec.Labels[domain.LabelCurrent] = version
+	sec.rec.ContentType = rec.ContentType
+	sec.rec.Metadata = rec.Metadata
+	sec.rec.Bound = rec.Bound
+	sec.rec.UpdatedAt = time.Now()
 	f.revision++
 	return version, prev, f.revision, nil
 }
 
 func (f *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, ref domain.Ref, hash []byte) error {
+	f.secretMu.Lock()
+	defer f.secretMu.Unlock()
 	sec := f.secrets[ref.String()]
 	if sec == nil {
 		return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -733,6 +1160,8 @@ func (f *fakeStore) PoliciesForSubject(_ context.Context, subject string) ([]dom
 // --- audit ---
 
 func (f *fakeStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
 	if f.auditErr != nil {
 		return f.auditErr
 	}
@@ -743,6 +1172,8 @@ func (f *fakeStore) ListAudit(_ context.Context, filter domain.AuditFilter, page
 	if f.onListAudit != nil {
 		return f.onListAudit(filter, page)
 	}
+	f.auditMu.RLock()
+	defer f.auditMu.RUnlock()
 	return f.audits, "", nil
 }
 

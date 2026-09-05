@@ -9,14 +9,14 @@ import { SecretValueField } from "@/components/secrets/SecretValueField";
 import { Checkbox, Field, Input, PageHeader } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
-import { api } from "@/lib/api";
+import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import { secretValueBase64, validateSecretValue } from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
-import { validateKey, validateMetadataJson } from "@/lib/validation";
+import { validateBindingKey, validateKey, validateMetadataJson } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -46,8 +46,8 @@ export default function NewSecretPage() {
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
 
-  const [clientBound, setClientBound] = useState(false);
-  const [ack, setAck] = useState(false);
+  const [bindVersion, setBindVersion] = useState(false);
+  const [bindingKey, setBindingKey] = useState("");
   const [generateToken, setGenerateToken] = useState(false);
 
   const [saving, setSaving] = useState(false);
@@ -55,7 +55,7 @@ export default function NewSecretPage() {
 
   // A field reports its problem only once the operator has left it, so a
   // half-typed key never looks like a mistake.
-  const errors = useFieldErrors<"key" | "value" | "metadata" | "expires">();
+  const errors = useFieldErrors<"key" | "value" | "metadata" | "expires" | "bindingKey">();
 
   // Mirrors of the server's rules. The value has no content-type parse rule —
   // only the size cap (and the base64 alphabet when passed through) — and no
@@ -67,17 +67,15 @@ export default function NewSecretPage() {
     expires && (datetimeLocalToUnixMs(expires) ?? 0) <= Date.now()
       ? "Expiry must be in the future."
       : null;
+  const bindingKeyError = bindVersion ? validateBindingKey(bindingKey) : null;
   const shownKeyError = errors.shown("key", keyError);
   const shownValueError = errors.shown("value", valueError);
   const shownMetadataError = errors.shown("metadata", metadataError);
   const shownExpiresError = errors.shown("expires", expiresError);
-  // Namespace and acknowledgement have no field to blur, so they surface on submit.
+  const shownBindingKeyError = errors.shown("bindingKey", bindingKeyError);
+  // Namespace has no field to blur, so it surfaces on submit.
   const shownAppError = errors.submitted && !ns.app ? "Choose an application." : null;
   const shownEnvError = errors.submitted && !ns.env ? "Choose an environment." : null;
-  const shownAckError =
-    errors.submitted && clientBound && !ack
-      ? "You must acknowledge the permanent-loss semantics for client-bound secrets."
-      : null;
   const blocked = !!(
     shownKeyError ||
     shownValueError ||
@@ -85,7 +83,7 @@ export default function NewSecretPage() {
     shownExpiresError ||
     shownAppError ||
     shownEnvError ||
-    shownAckError
+    shownBindingKeyError
   );
 
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
@@ -119,7 +117,7 @@ export default function NewSecretPage() {
     if (
       !ns.env ||
       !ns.app ||
-      (clientBound && !ack) ||
+      bindingKeyError ||
       keyError ||
       valueError ||
       metadataError ||
@@ -131,8 +129,12 @@ export default function NewSecretPage() {
 
     const k = key.trim();
     const expiresMs = datetimeLocalToUnixMs(expires) ?? 0;
+    const requestBindingKey = bindVersion ? bindingKey : undefined;
 
     setSaving(true);
+    // A binding key is request-local. Clear the React/DOM copy before waiting
+    // for the server; a failed request intentionally requires re-entry.
+    setBindingKey("");
     try {
       const res = await api.createSecret({
         env: ns.env,
@@ -141,9 +143,9 @@ export default function NewSecretPage() {
         value_base64: secretValueBase64(value, alreadyBase64),
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
-        client_bound: clientBound,
-        // The server must mint the key share for every new client-bound secret.
-        generate_access_token: clientBound || generateToken,
+        ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
+        generate_access_token: generateToken,
+        create_only: true,
         expires_at_unix_ms: expiresMs,
       });
       // Clear plaintext inputs from the DOM immediately.
@@ -160,7 +162,11 @@ export default function NewSecretPage() {
         await router.push(links.secretDetail(ref));
       }
     } catch (err) {
-      toast.error(err, "Failed to create secret");
+      if (isSecretAlreadyExists(err)) {
+        toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+      } else {
+        toast.error(err, "Failed to create secret");
+      }
     } finally {
       setSaving(false);
     }
@@ -262,72 +268,52 @@ export default function NewSecretPage() {
 
           <div className="checkbox-row mb-4">
             <Checkbox
-              id="client-bound"
-              checked={clientBound}
+              id="bind-version"
+              checked={bindVersion}
               onCheckedChange={(checked) => {
-                setClientBound(checked);
-                if (!checked) {
-                  setAck(false);
-                  setGenerateToken(false);
-                }
+                setBindVersion(checked);
+                if (!checked) setBindingKey("");
               }}
             />
-            <label htmlFor="client-bound">
-              <strong>Client-bound encryption</strong>
+            <label htmlFor="bind-version">
+              <strong>Bind this version to an application key</strong>
               <div className="faint text-sm">
-                The value is additionally wrapped with a key derived from a client access token. The
-                server alone cannot decrypt it.
+                KMS will need this same binding key to decrypt the version. The key is never stored,
+                hashed, or fingerprinted by KMS.
               </div>
             </label>
           </div>
 
-          {clientBound ? (
-            <>
-              <div className="danger-panel mb-4">
-                <strong>Permanent-loss warning.</strong> There is no recovery escrow. Losing{" "}
-                <em>either</em> the server master key <em>or</em> this secret&apos;s client access
-                token makes the value <strong>permanently unrecoverable</strong>. Frontend reveal,
-                CLI plaintext output, and admin export are all impossible for client-bound secrets.
-                Opting in is an explicit acceptance of this risk.
-              </div>
-
-              <div className="mb-4">
-                <div className="checkbox-row">
-                  <Checkbox
-                    id="ack"
-                    checked={ack}
-                    aria-invalid={shownAckError ? true : undefined}
-                    onCheckedChange={setAck}
-                  />
-                  <label htmlFor="ack">
-                    I understand that loss of the master key or the client access token destroys
-                    this secret with no recovery path.
-                  </label>
-                </div>
-                {shownAckError ? (
-                  <div className="field-error" role="alert">
-                    {shownAckError}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="info-panel mb-4">
-                A new client access token will be generated and shown once after creation. Store it
-                immediately; the server cannot recover it later.
-              </div>
-            </>
-          ) : (
-            <div className="checkbox-row mb-4">
-              <Checkbox
-                id="gen-token-std"
-                checked={generateToken}
-                onCheckedChange={setGenerateToken}
+          {bindVersion ? (
+            <Field
+              label="Binding key"
+              hint="At least 32 UTF-8 bytes. Used only for this request; KMS cannot recover it later."
+              error={shownBindingKeyError}
+            >
+              <Input
+                className="font-mono"
+                type="password"
+                value={bindingKey}
+                required
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setBindingKey(event.target.value)}
+                onBlur={() => errors.touch("bindingKey")}
+                placeholder="application binding key"
               />
-              <label htmlFor="gen-token-std">
-                Also generate a per-secret access token (shown once after creation).
-              </label>
-            </div>
-          )}
+            </Field>
+          ) : null}
+
+          <div className="checkbox-row mb-4">
+            <Checkbox
+              id="generate-access-token"
+              checked={generateToken}
+              onCheckedChange={setGenerateToken}
+            />
+            <label htmlFor="generate-access-token">
+              Also generate a per-secret access token (shown once after creation).
+            </label>
+          </div>
 
           <div className="form-actions">
             <ButtonLink href={listLink} variant="outline">
@@ -350,8 +336,7 @@ export default function NewSecretPage() {
       >
         <div className="danger-panel mb-4">
           <strong>This token will never be shown again.</strong> Store it in your application&apos;s
-          configuration now. If this is a client-bound secret, losing this token means the value can
-          never be recovered.
+          configuration now. Access tokens and binding keys are independent credentials.
         </div>
         <div className="token-reveal">{mintedToken}</div>
         <div className="row-wrap mt-4">

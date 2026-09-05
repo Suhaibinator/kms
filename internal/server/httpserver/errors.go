@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // errorEnvelope is the JSON error body documented in docs/http-api.md.
@@ -47,6 +48,10 @@ func mapError(err error) (status int, code, message string) {
 		return http.StatusPreconditionFailed, "failed_precondition", err.Error()
 	case errors.Is(err, domain.ErrResourceExhausted):
 		return http.StatusTooManyRequests, "rate_limited", err.Error()
+	case errors.Is(err, storage.ErrPurgeCleanupPending):
+		// The logical purge committed. This distinct fixed response must not
+		// imply rollback or invite the caller to resubmit the compromised key.
+		return http.StatusServiceUnavailable, "purge_cleanup_pending", storage.ErrPurgeCleanupPending.Error()
 	case errors.Is(err, domain.ErrNotReady):
 		return http.StatusServiceUnavailable, "unavailable", err.Error()
 	case errors.Is(err, domain.ErrDecryptFailed):

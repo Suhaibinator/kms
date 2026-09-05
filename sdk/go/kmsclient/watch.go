@@ -369,14 +369,6 @@ func (m *subManager) applySnapshot(s *kmsv1.Snapshot, rev uint64) {
 	// subscribed namespace that is absent from the snapshot as deleted — a
 	// parameter removed while we were disconnected past the replay window (defect
 	// M3). Keys in other namespaces are never touched.
-	// Secret changes carry metadata only. A full snapshot cannot replay any
-	// secret events that were pruned, so invalidate every tokenless cached
-	// secret in the authoritative stream namespaces before continuing.
-	m.mu.Lock()
-	streamNamespaces := append([]namespaceRef(nil), m.streamNamespaces...)
-	m.mu.Unlock()
-	m.client.cache.invalidateSecretsInNamespaces(streamNamespaces)
-
 	present := make(map[string]struct{}, len(s.GetParameters()))
 	for _, p := range s.GetParameters() {
 		disp := refFromProto(p.GetRef()).display()
@@ -432,7 +424,6 @@ func (m *subManager) applyChange(c *kmsv1.ParameterChange, rev uint64) {
 
 func (m *subManager) applySecretChange(c *kmsv1.SecretMetadataChange, rev uint64) {
 	r := refFromProto(c.GetRef())
-	m.client.cache.invalidateSecret(r.display())
 	ev := Event{
 		Type:       EventSecretChange,
 		Namespace:  r.ns.String(),

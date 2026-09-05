@@ -119,8 +119,6 @@ type ConfigurationReleaseEntry struct {
 	ContentType         string
 	Metadata            string
 	ParameterDigest     string
-	ClientBound         bool
-	HasAccessToken      bool
 }
 
 // ConfigurationRelease is an immutable namespace-scoped release version.

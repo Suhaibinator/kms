@@ -13,4 +13,6 @@ class ApplicationConfig(BaseModel):
 
     port: Annotated[int, Parameter("runtime", reload="restart", views=("server",))] = 8080
     debug: Annotated[bool, Parameter("runtime", views=("server",))] = False
-    password: Annotated[Secret, SecretField("db_password", views=("server",))]
+    password: Annotated[Secret, SecretField("db_password", views=("server",))] = Secret(
+        bind_key="fixture-binding-key-never-generated"
+    )

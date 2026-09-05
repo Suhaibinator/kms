@@ -1,7 +1,15 @@
 import { basename } from "node:path";
 import type { ChannelCredentials, ChannelOptions } from "@grpc/grpc-js";
 import { ReadCache } from "./cache.js";
-import { ConfigError, KmsError, mapGrpcError, RateLimitedError, wrapError } from "./errors.js";
+import {
+  ConfigError,
+  KmsError,
+  mapGrpcError,
+  mapPurgeSecretGrpcError,
+  mapSecretGrpcError,
+  RateLimitedError,
+  wrapError,
+} from "./errors.js";
 import {
   AdminServiceService,
   type ConfigurationRelease,
@@ -18,8 +26,11 @@ import type {
   Parameter,
   PutResult,
   PutSecretResult,
+  SecretBindingCohortResult,
   SecretInfo,
   SecretVersion,
+  SecretVersionSetResult,
+  SecretVersionTransitionResult,
   WhoAmI,
 } from "./models.js";
 import {
@@ -99,6 +110,7 @@ export interface CallOptions {
 
 export interface GetOptions extends CallOptions, VersionRef {
   readonly secretToken?: string;
+  readonly bindingKey?: string;
 }
 
 export interface PutParameterOptions extends CallOptions {
@@ -109,10 +121,38 @@ export interface PutParameterOptions extends CallOptions {
 export interface PutSecretOptions extends CallOptions {
   readonly contentType?: string;
   readonly metadataJson?: string;
-  readonly clientBound?: boolean;
+  readonly bindingKey?: string;
   readonly generateAccessToken?: boolean;
   readonly expiresAtUnixMs?: bigint;
-  readonly secretToken?: string;
+}
+
+export interface BindSecretOptions extends CallOptions {
+  readonly expectedCurrentVersion: bigint;
+  readonly bindingKey: string;
+}
+
+export interface PreviewSecretBindingCohortOptions extends CallOptions {
+  readonly anchorVersion?: bigint;
+  readonly bindingKey: string;
+}
+
+export interface SecretBindingCohortGuardOptions {
+  readonly expectedRevision: bigint;
+  readonly expectedAffectedVersions: readonly bigint[];
+}
+
+export interface RotateSecretBindingKeyOptions extends CallOptions {
+  readonly expectedCurrentVersion: bigint;
+  readonly bindingKey: string;
+  readonly newBindingKey: string;
+}
+
+export type PurgeSecretBindingCohortOptions = PreviewSecretBindingCohortOptions &
+  SecretBindingCohortGuardOptions;
+
+export interface PurgeSecretUnboundVersionsOptions extends CallOptions {
+  readonly expectedRevision: bigint;
+  readonly expectedAffectedVersions: readonly bigint[];
 }
 
 export interface ListOptions extends CallOptions {
@@ -146,6 +186,7 @@ export interface ClientReleaseLoaderOptions {
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
   readonly secretTokenProvider?: SecretTokenProvider;
+  readonly bindingKeys?: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   /** Injected only for deterministic tests. */
   readonly now?: () => number;
@@ -303,24 +344,13 @@ export class KmsClient {
   }
 
   async getSecret(key: string, options: GetOptions = {}): Promise<Secret> {
-    const ref = await this.#resolveResourceRefForCall(key, options);
+    const secretToken = optionalCredential(options.secretToken, "getSecret secretToken");
+    const bindingKey = optionalCredential(options.bindingKey, "getSecret bindingKey");
     const selector = normalizeVersionRef(options);
-    const path = displayPath(ref);
-    if (!options.secretToken) {
-      const cached = this.#cache.getSecretAt(path, selector.version, selector.label);
-      if (cached) return cached;
-    }
-
-    const generation = options.secretToken ? undefined : this.#cache.beginSecretRead(path);
-    try {
-      const secret = await this.fetchSecret(ref, selector, options);
-      if (generation !== undefined) {
-        this.#cache.cacheSecretIfUnchanged(generation, selector.version, selector.label, secret);
-      }
-      return secret;
-    } finally {
-      this.#cache.endRead(generation);
-    }
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    // Secret protection is live metadata. Never serve plaintext from cache:
+    // doing so could bypass binding/token protection added after a prior read.
+    return this.fetchSecret(ref, selector, { ...options, secretToken, bindingKey });
   }
 
   /** @internal Exact-ref fetch used by the release runtime. */
@@ -330,6 +360,8 @@ export class KmsClient {
     options: GetOptions = {},
   ): Promise<Secret> {
     this.#assertOpen();
+    const secretToken = optionalCredential(options.secretToken, "fetchSecret secretToken");
+    const bindingKey = optionalCredential(options.bindingKey, "fetchSecret bindingKey");
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecret,
@@ -337,7 +369,8 @@ export class KmsClient {
           ref: toWireRef(ref),
           version: selector.version,
           label: selector.label,
-          secretToken: options.secretToken ?? "",
+          secretToken,
+          bindingKey,
         },
         this.#callOptions(options),
       );
@@ -351,7 +384,7 @@ export class KmsClient {
         contentType: response.contentType,
       });
     } catch (error) {
-      throwMapped(error);
+      throwSecretMapped(error);
     }
   }
 
@@ -395,31 +428,33 @@ export class KmsClient {
     ) {
       throw new ConfigError("expiresAtUnixMs must be a bigint in the non-negative int64 range");
     }
-    const ref = await this.#resolveResourceRefForCall(key, options);
+    const bindingKey = optionalCredential(options.bindingKey, "putSecret bindingKey");
     const plaintext = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
     try {
-      const response = await this.#transport.unary(
-        SecretServiceService.putSecret,
-        {
-          ref: toWireRef(ref),
-          value: plaintext,
-          contentType: options.contentType ?? "",
-          metadataJson: options.metadataJson ?? "",
-          clientBound: options.clientBound ?? false,
-          generateAccessToken: options.generateAccessToken ?? false,
-          expiresAtUnixMs,
-          secretToken: options.secretToken ?? "",
-        },
-        this.#callOptions(options),
-      );
-      this.#cache.invalidateSecret(displayPath(ref));
-      return Object.freeze({
-        version: response.version,
-        revision: response.revision,
-        accessToken: response.accessToken,
-      });
-    } catch (error) {
-      throwMapped(error);
+      const ref = await this.#resolveResourceRefForCall(key, options);
+      try {
+        const response = await this.#transport.unary(
+          SecretServiceService.putSecretV03,
+          {
+            ref: toWireRef(ref),
+            value: plaintext,
+            contentType: options.contentType ?? "",
+            metadataJson: options.metadataJson ?? "",
+            bindingKey,
+            generateAccessToken: options.generateAccessToken ?? false,
+            expiresAtUnixMs,
+          },
+          this.#callOptions(options),
+        );
+        this.#cache.invalidateSecret(displayPath(ref));
+        return Object.freeze({
+          version: response.version,
+          revision: response.revision,
+          accessToken: response.accessToken,
+        });
+      } catch (error) {
+        throwSecretMapped(error);
+      }
     } finally {
       plaintext.fill(0);
     }
@@ -536,11 +571,12 @@ export class KmsClient {
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecretMetadata,
-        { ref: toWireRef(ref) },
+        { ref: toWireRef(ref), version: 0n, label: "" },
         this.#callOptions(options),
       );
       if (!response.secret)
         throw new KmsError("internal", "KMS secret metadata response was empty");
+      assertResourceIdentity("secret metadata", ref, response.secret.ref);
       return secretInfoFromWire(response.secret);
     } catch (error) {
       throwMapped(error);
@@ -561,7 +597,7 @@ export class KmsClient {
   async setSecretEnabled(
     key: string,
     enabled: boolean,
-    options: CallOptions & { readonly version?: bigint; readonly secretToken?: string } = {},
+    options: CallOptions & { readonly version?: bigint } = {},
   ): Promise<bigint> {
     assertUint64(options.version ?? 0n, "version");
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -577,7 +613,7 @@ export class KmsClient {
   async destroySecretVersion(
     key: string,
     version: bigint,
-    options: CallOptions & { readonly secretToken?: string } = {},
+    options: CallOptions = {},
   ): Promise<bigint> {
     assertUint64(version, "destroySecretVersion version", true);
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -593,7 +629,7 @@ export class KmsClient {
   async promoteSecretVersion(
     key: string,
     version: bigint,
-    options: CallOptions & { readonly secretToken?: string } = {},
+    options: CallOptions = {},
   ): Promise<{
     readonly currentVersion: bigint;
     readonly previousVersion: bigint;
@@ -608,6 +644,137 @@ export class KmsClient {
       options,
     );
     return Object.freeze(response);
+  }
+
+  async bindSecret(
+    key: string,
+    options: BindSecretOptions,
+  ): Promise<SecretVersionTransitionResult> {
+    const bindingKey = requiredCredential(options?.bindingKey, "bindSecret bindingKey");
+    return this.#bindingTransition(key, options?.expectedCurrentVersion, bindingKey, options, true);
+  }
+
+  async unbindSecret(
+    key: string,
+    options: BindSecretOptions,
+  ): Promise<SecretVersionTransitionResult> {
+    const bindingKey = requiredCredential(options?.bindingKey, "unbindSecret bindingKey");
+    return this.#bindingTransition(
+      key,
+      options?.expectedCurrentVersion,
+      bindingKey,
+      options,
+      false,
+    );
+  }
+
+  async previewSecretBindingCohort(
+    key: string,
+    options: PreviewSecretBindingCohortOptions,
+  ): Promise<SecretBindingCohortResult> {
+    const bindingKey = requiredCredential(
+      options?.bindingKey,
+      "previewSecretBindingCohort bindingKey",
+    );
+    const anchorVersion = options?.anchorVersion ?? 0n;
+    assertUint64(anchorVersion, "previewSecretBindingCohort anchorVersion");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    try {
+      const response = await this.#transport.unary(
+        SecretServiceService.previewSecretBindingCohort,
+        { ref: toWireRef(ref), anchorVersion, bindingKey },
+        this.#callOptions(options),
+      );
+      return frozenBindingResult(response);
+    } catch (error) {
+      throwSecretMapped(error);
+    }
+  }
+
+  async rotateSecretBindingKey(
+    key: string,
+    options: RotateSecretBindingKeyOptions,
+  ): Promise<SecretVersionTransitionResult> {
+    const bindingKey = requiredCredential(options?.bindingKey, "rotateSecretBindingKey bindingKey");
+    const newBindingKey = requiredCredential(
+      options?.newBindingKey,
+      "rotateSecretBindingKey newBindingKey",
+    );
+    const expectedCurrentVersion = options?.expectedCurrentVersion;
+    assertUint64(expectedCurrentVersion, "rotateSecretBindingKey expectedCurrentVersion", true);
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.rotateSecretBindingKey,
+      {
+        ref: toWireRef(ref),
+        expectedCurrentVersion,
+        bindingKey,
+        newBindingKey,
+      },
+      options,
+    );
+    return frozenTransitionResult(response);
+  }
+
+  async previewSecretUnboundVersions(
+    key: string,
+    options: CallOptions = {},
+  ): Promise<SecretVersionSetResult> {
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    try {
+      const response = await this.#transport.unary(
+        SecretServiceService.previewSecretUnboundVersions,
+        { ref: toWireRef(ref) },
+        this.#callOptions(options),
+      );
+      return frozenVersionSetResult(response);
+    } catch (error) {
+      throwSecretMapped(error);
+    }
+  }
+
+  async purgeSecretUnboundVersions(
+    key: string,
+    options: PurgeSecretUnboundVersionsOptions,
+  ): Promise<SecretVersionSetResult> {
+    const guards = requiredVersionSetGuards(options, "purgeSecretUnboundVersions");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.purgeSecretUnboundVersions,
+      { ref: toWireRef(ref), ...guards },
+      options,
+      mapPurgeSecretGrpcError,
+    );
+    return frozenVersionSetResult(response);
+  }
+
+  async purgeSecretBindingCohort(
+    key: string,
+    options: PurgeSecretBindingCohortOptions,
+  ): Promise<SecretBindingCohortResult> {
+    const bindingKey = requiredCredential(
+      options?.bindingKey,
+      "purgeSecretBindingCohort bindingKey",
+    );
+    const anchorVersion = options?.anchorVersion ?? 0n;
+    assertUint64(anchorVersion, "purgeSecretBindingCohort anchorVersion");
+    const guards = requiredVersionSetGuards(options, "purgeSecretBindingCohort");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.purgeSecretBindingCohort,
+      {
+        ref: toWireRef(ref),
+        anchorVersion,
+        bindingKey,
+        ...guards,
+      },
+      options,
+      mapPurgeSecretGrpcError,
+    );
+    return frozenBindingResult(response);
   }
 
   async watch(callback: WatchCallback, options: WatchOptions = {}): Promise<() => void> {
@@ -875,11 +1042,11 @@ export class KmsClient {
           throwMapped(error);
         }
       },
-      fetchSecret: async (wireRef, version, secretToken, signal) => {
+      fetchSecret: async (wireRef, version, secretToken, bindingKey, signal) => {
         try {
           const response = await this.#transport.unary(
             SecretServiceService.getSecret,
-            { ref: wireRef, version, label: "", secretToken },
+            { ref: wireRef, version, label: "", secretToken, bindingKey },
             this.#callOptions(signal ? { signal } : {}),
           );
           // Do not synthesize a missing ref from the request. Absence and
@@ -890,6 +1057,21 @@ export class KmsClient {
             value: Uint8Array.from(response.value),
             contentType: response.contentType,
           };
+        } catch (error) {
+          throwSecretMapped(error);
+        }
+      },
+      fetchSecretMetadata: async (wireRef, version, signal) => {
+        try {
+          const response = await this.#transport.unary(
+            SecretServiceService.getSecretMetadata,
+            { ref: wireRef, version, label: "" },
+            this.#callOptions(signal ? { signal } : {}),
+          );
+          if (!response.secret) {
+            throw new KmsError("internal", "KMS secret metadata response was empty");
+          }
+          return response.secret;
         } catch (error) {
           throwMapped(error);
         }
@@ -939,14 +1121,35 @@ export class KmsClient {
     method: UnaryMethod<Request, Response>,
     request: Request,
     options: CallOptions,
+    errorMapper: typeof mapSecretGrpcError = mapSecretGrpcError,
   ): Promise<Response> {
     try {
       const response = await this.#transport.unary(method, request, this.#callOptions(options));
       this.#cache.invalidateSecret(displayPath(ref));
       return response;
     } catch (error) {
-      throwMapped(error);
+      throwSecretMapped(error, errorMapper);
     }
+  }
+
+  async #bindingTransition(
+    key: string,
+    expectedCurrentVersion: bigint,
+    bindingKey: string,
+    options: CallOptions,
+    bind: boolean,
+  ): Promise<SecretVersionTransitionResult> {
+    assertUint64(
+      expectedCurrentVersion,
+      `${bind ? "bindSecret" : "unbindSecret"} expectedCurrentVersion`,
+      true,
+    );
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const request = { ref: toWireRef(ref), expectedCurrentVersion, bindingKey };
+    const response = bind
+      ? await this.#secretMutation(ref, SecretServiceService.bindSecret, request, options)
+      : await this.#secretMutation(ref, SecretServiceService.unbindSecret, request, options);
+    return frozenTransitionResult(response);
   }
 
   #assertOpen(): void {
@@ -990,12 +1193,54 @@ function validPageSize(value = 0): number {
   return value;
 }
 
-function assertUint64(value: bigint, name: string, positive = false): void {
+function assertUint64(value: unknown, name: string, positive = false): asserts value is bigint {
   if (typeof value !== "bigint" || value < (positive ? 1n : 0n) || value > UINT64_MAX) {
     throw new ConfigError(
       `${name} must be a ${positive ? "positive " : ""}bigint in the uint64 range`,
     );
   }
+}
+
+function optionalCredential(value: unknown, name: string): string {
+  if (value === undefined) return "";
+  return requiredCredential(value, name);
+}
+
+function requiredCredential(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw new ConfigError(`${name} must be a string`);
+  }
+  return value;
+}
+
+function requiredVersionSetGuards(
+  options: SecretBindingCohortGuardOptions | undefined,
+  operation: string,
+): { readonly expectedRevision: bigint; readonly expectedAffectedVersions: bigint[] } {
+  const revision = options?.expectedRevision;
+  const versions = options?.expectedAffectedVersions;
+  if (revision === undefined || versions === undefined) {
+    throw new ConfigError(
+      `${operation} expectedRevision and expectedAffectedVersions are required`,
+    );
+  }
+  assertUint64(revision, `${operation} expectedRevision`, true);
+  if (!Array.isArray(versions) || versions.length === 0) {
+    throw new ConfigError(`${operation} expectedAffectedVersions must be a non-empty array`);
+  }
+  const copied: bigint[] = [];
+  let previous = 0n;
+  for (const [index, version] of versions.entries()) {
+    assertUint64(version, `${operation} expectedAffectedVersions[${index}]`, true);
+    if (index > 0 && version <= previous) {
+      throw new ConfigError(
+        `${operation} expectedAffectedVersions must be sorted and contain unique versions`,
+      );
+    }
+    copied.push(version);
+    previous = version;
+  }
+  return { expectedRevision: revision, expectedAffectedVersions: copied };
 }
 
 /** @internal */
@@ -1045,16 +1290,7 @@ function assertReadIdentity(
   returnedVersion: bigint,
   selector: { readonly version: bigint; readonly label: string },
 ): void {
-  if (returnedWireRef === undefined) {
-    throw new KmsError("internal", `KMS ${kind} response omitted resource reference`);
-  }
-  const returnedRef = fromWireRef(returnedWireRef);
-  if (
-    returnedRef.key !== requestedRef.key ||
-    !namespaceEquals(returnedRef.namespace, requestedRef.namespace)
-  ) {
-    throw new KmsError("internal", `KMS ${kind} response resource reference did not match request`);
-  }
+  assertResourceIdentity(kind, requestedRef, returnedWireRef);
   if (
     typeof returnedVersion !== "bigint" ||
     returnedVersion <= 0n ||
@@ -1064,6 +1300,23 @@ function assertReadIdentity(
   }
   if (selector.version > 0n && returnedVersion !== selector.version) {
     throw new KmsError("internal", `KMS ${kind} response version did not match request`);
+  }
+}
+
+function assertResourceIdentity(
+  kind: string,
+  requestedRef: ResourceRef,
+  returnedWireRef: WireResourceRef | undefined,
+): void {
+  if (returnedWireRef === undefined) {
+    throw new KmsError("internal", `KMS ${kind} response omitted resource reference`);
+  }
+  const returnedRef = fromWireRef(returnedWireRef);
+  if (
+    returnedRef.key !== requestedRef.key ||
+    !namespaceEquals(returnedRef.namespace, requestedRef.namespace)
+  ) {
+    throw new KmsError("internal", `KMS ${kind} response resource reference did not match request`);
   }
 }
 
@@ -1080,6 +1333,8 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
         destroyedAtUnixMs: version.destroyedAtUnixMs,
         expiresAtUnixMs: version.expiresAtUnixMs,
         metadataJson: version.metadataJson,
+        bound: version.bound,
+        hasAccessToken: version.hasAccessToken,
       }),
     ),
   );
@@ -1088,7 +1343,7 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
     app: ref.namespace.app,
     key: ref.key,
     contentType: secret.contentType,
-    clientBound: secret.clientBound,
+    bound: secret.bound,
     hasAccessToken: secret.hasAccessToken,
     metadataJson: secret.metadataJson,
     createdAtUnixMs: secret.createdAtUnixMs,
@@ -1097,6 +1352,40 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
     versions,
     namespace: displayNamespace(ref.namespace),
     path: displayPath(ref),
+  });
+}
+
+function frozenBindingResult(response: {
+  readonly anchorVersion: bigint;
+  readonly affectedVersions: readonly bigint[];
+  readonly revision: bigint;
+}): SecretBindingCohortResult {
+  return Object.freeze({
+    anchorVersion: response.anchorVersion,
+    affectedVersions: Object.freeze([...response.affectedVersions]),
+    revision: response.revision,
+  });
+}
+
+function frozenTransitionResult(response: {
+  readonly currentVersion: bigint;
+  readonly previousVersion: bigint;
+  readonly revision: bigint;
+}): SecretVersionTransitionResult {
+  return Object.freeze({
+    currentVersion: response.currentVersion,
+    previousVersion: response.previousVersion,
+    revision: response.revision,
+  });
+}
+
+function frozenVersionSetResult(response: {
+  readonly affectedVersions: readonly bigint[];
+  readonly revision: bigint;
+}): SecretVersionSetResult {
+  return Object.freeze({
+    affectedVersions: Object.freeze([...response.affectedVersions]),
+    revision: response.revision,
   });
 }
 
@@ -1171,6 +1460,14 @@ function assertCallerActive(options: CallOptions): void {
 function throwMapped(error: unknown): never {
   const mapped = mapGrpcError(error);
   throw mapped ?? wrapError("unexpected successful gRPC status", error);
+}
+
+function throwSecretMapped(
+  error: unknown,
+  mapper: typeof mapSecretGrpcError = mapSecretGrpcError,
+): never {
+  const mapped = mapper(error);
+  throw mapped ?? new KmsError("internal", "KMS secret operation failed");
 }
 
 class CallbackDispatcher {

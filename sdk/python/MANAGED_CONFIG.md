@@ -3,9 +3,12 @@
 The Python SDK uses Pydantic v2 as its model and validation machinery while
 following the same managed-release semantics as the Go and TypeScript SDKs.
 Every non-secret field belongs to a JSON parameter group and has a source
-default. Every secret is a required, default-free `Secret` field.
+default. A secret may be required or have a credential-only `Secret` default;
+that default may contain `bind_key` but no plaintext, path, version, or content
+type.
 
 ```python
+import os
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict
@@ -19,7 +22,9 @@ class AppConfig(BaseModel):
 
     port: Annotated[int, Parameter("runtime", reload="restart")] = 8080
     debug: Annotated[bool, Parameter("runtime")] = False
-    password: Annotated[Secret, SecretField("db_password")]
+    password: Annotated[Secret, SecretField("db_password")] = Secret(
+        bind_key=os.environ["DB_PASSWORD_KMS_BINDING_KEY"]
+    )
 
 binding = ConfigBinding(AppConfig, {})
 ```
@@ -45,8 +50,9 @@ store from source defaults, then start the sync or asyncio manager:
 from app.config_generated import GeneratedConfigStore
 from kms_paramstore.configstore import Callbacks
 
-# Source defaults contain only parameters and unmanaged fields. Secrets come
-# exclusively from exact release pins.
+# Binding keys are extracted privately from credential-only secret defaults.
+# They are removed from source-default payloads and resolved snapshots; secret
+# plaintext still comes exclusively from exact release pins.
 store = GeneratedConfigStore({})
 manager = store.start(
     client,

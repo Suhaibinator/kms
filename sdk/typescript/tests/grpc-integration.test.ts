@@ -401,7 +401,7 @@ describe("protocol-faithful gRPC integration", () => {
     server.addService(SecretServiceService, {
       listSecrets,
       getSecretMetadata,
-      putSecret,
+      putSecretV03: putSecret,
       deleteSecret,
       disableSecret,
       destroySecretVersion,
@@ -449,10 +449,9 @@ describe("protocol-faithful gRPC integration", () => {
       const putResult = await client.putSecret("password", plaintext, {
         contentType: "application/octet-stream",
         metadataJson: '{"rotation":"integration"}',
-        clientBound: true,
+        bindingKey: "put-binding-key",
         generateAccessToken: true,
         expiresAtUnixMs: firstExactInteger + 100n,
-        secretToken: "put-token",
       });
       expect(putResult).toEqual({
         version: firstExactInteger + 15n,
@@ -474,7 +473,7 @@ describe("protocol-faithful gRPC integration", () => {
             app: "api",
             key: "password",
             contentType: "application/octet-stream",
-            clientBound: true,
+            bound: true,
             hasAccessToken: true,
             metadataJson: '{"classification":"metadata-only"}',
             createdAtUnixMs: firstExactInteger + 10n,
@@ -491,6 +490,8 @@ describe("protocol-faithful gRPC integration", () => {
                 destroyedAtUnixMs: 0n,
                 expiresAtUnixMs: firstExactInteger + 12n,
                 metadataJson: '{"source":"loopback"}',
+                bound: true,
+                hasAccessToken: true,
               },
             ],
           },
@@ -522,20 +523,15 @@ describe("protocol-faithful gRPC integration", () => {
       await expect(
         client.setSecretEnabled("password", false, {
           version: firstExactInteger + 10n,
-          secretToken: "disable-token",
         }),
       ).resolves.toBe(firstExactInteger + 21n);
-      await expect(
-        client.setSecretEnabled("password", true, { secretToken: "enable-token" }),
-      ).resolves.toBe(firstExactInteger + 22n);
-      await expect(
-        client.destroySecretVersion("password", firstExactInteger + 10n, {
-          secretToken: "destroy-token",
-        }),
-      ).resolves.toBe(firstExactInteger + 23n);
-      const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n, {
-        secretToken: "promote-token",
-      });
+      await expect(client.setSecretEnabled("password", true)).resolves.toBe(
+        firstExactInteger + 22n,
+      );
+      await expect(client.destroySecretVersion("password", firstExactInteger + 10n)).resolves.toBe(
+        firstExactInteger + 23n,
+      );
+      const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n);
       expect(promoted).toEqual({
         currentVersion: firstExactInteger + 12n,
         previousVersion: firstExactInteger + 10n,
@@ -553,17 +549,18 @@ describe("protocol-faithful gRPC integration", () => {
           pageToken: "secret-page",
         },
       ]);
-      expect(secretMetadataRequests).toEqual([{ ref: { namespace, key: "password" } }]);
+      expect(secretMetadataRequests).toEqual([
+        { ref: { namespace, key: "password" }, version: 0n, label: "" },
+      ]);
       expect(putSecretRequests).toEqual([
         {
           ref: { namespace, key: "password" },
           value: Buffer.from([0, 1, 254, 255]),
           contentType: "application/octet-stream",
           metadataJson: '{"rotation":"integration"}',
-          clientBound: true,
+          bindingKey: "put-binding-key",
           generateAccessToken: true,
           expiresAtUnixMs: firstExactInteger + 100n,
-          secretToken: "put-token",
         },
       ]);
       expect(deleteSecretRequests).toEqual([{ ref: { namespace, key: "retired" } }]);
@@ -712,7 +709,7 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
   return {
     ref: { namespace, key },
     contentType: "application/octet-stream",
-    clientBound: true,
+    bound: true,
     hasAccessToken: true,
     metadataJson: '{"classification":"metadata-only"}',
     createdAtUnixMs: version,
@@ -727,6 +724,8 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
         destroyedAtUnixMs: 0n,
         expiresAtUnixMs: version + 2n,
         metadataJson: '{"source":"loopback"}',
+        bound: true,
+        hasAccessToken: true,
       },
     ],
   };

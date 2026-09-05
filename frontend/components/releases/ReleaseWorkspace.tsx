@@ -223,7 +223,6 @@ export function ReleaseWorkspace({
                     <th>Version</th>
                     <th>Content type</th>
                     <th>Parameter digest</th>
-                    <th>Secret protection</th>
                     <th>Metadata</th>
                   </tr>
                 </thead>
@@ -236,14 +235,6 @@ export function ReleaseWorkspace({
                       <td>{entry.version}</td>
                       <td>{entry.content_type || "—"}</td>
                       <td className="mono">{entry.parameter_digest || "—"}</td>
-                      <td>
-                        {entry.kind === "secret"
-                          ? [
-                              entry.has_access_token ? "token" : "no token",
-                              entry.client_bound ? "client-bound" : "shared",
-                            ].join(" · ")
-                          : "—"}
-                      </td>
                       <td className="mono">{entry.metadata_json || "{}"}</td>
                     </tr>
                   ))}

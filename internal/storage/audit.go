@@ -4,11 +4,20 @@ import (
 	"context"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 // AppendAudit stores one audit event.
 func (s *SQLStore) AppendAudit(ctx context.Context, ev domain.AuditEvent) error {
+	return appendAudit(s.db.WithContext(ctx), ev)
+}
+
+// appendAudit inserts an audit row through db, which may be the caller's
+// already-open transaction. Binding mutations use this so their wrapping or
+// tombstone changes, changelog entry, and allow audit are indivisible.
+func appendAudit(db *gorm.DB, ev domain.AuditEvent) error {
 	created := ev.CreatedAt
 	if created.IsZero() {
 		created = nowUTC()
@@ -30,7 +39,7 @@ func (s *SQLStore) AppendAudit(ctx context.Context, ev domain.AuditEvent) error 
 		CreatedAt:           fmtTime(created),
 		MetadataJSON:        zeroOr(ev.Metadata, "{}"),
 	}
-	return s.db.WithContext(ctx).Create(&m).Error
+	return db.Create(&m).Error
 }
 
 // ListAudit returns audit events matching f, newest first (ordered by id DESC).

@@ -78,7 +78,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 
 	pr := core.Principal{Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin}}
 	stripeRef := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-key"}
-	val, err := svc.RevealSecret(context.Background(), pr, stripeRef, 0, "")
+	val, err := svc.RevealSecret(context.Background(), pr, stripeRef, 0, "", "")
 	if err != nil {
 		t.Fatalf("reveal imported secret: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCheckUninitializedDatabase(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "fresh.db")
 	c := newTestCLI()
-	// A freshly opened (migrated) but un-keyed database reports that it needs init.
+	// A freshly materialized but un-keyed database reports that it needs init.
 	if code := c.cmdCheck([]string{"--sqlite-path", db}); code != 0 {
 		t.Fatalf("check exit=%d stderr=%s", code, c.stderr())
 	}
@@ -460,7 +460,7 @@ func TestCheckJSONReportsEachVerdict(t *testing.T) {
 		t.Fatalf("master_key = %v, want not_checked", got)
 	}
 
-	// A migrated but un-keyed database needs init, and says so.
+	// A baseline database without a master key needs init, and says so.
 	fresh := newTestCLI()
 	if code := fresh.Run([]string{"-o", "json", "check", "--sqlite-path", filepath.Join(t.TempDir(), "fresh.db")}); code != 0 {
 		t.Fatalf("check exit=%d stderr=%s", code, fresh.stderr())
@@ -470,25 +470,15 @@ func TestCheckJSONReportsEachVerdict(t *testing.T) {
 	}
 }
 
-func TestMigrateAndBackupJSON(t *testing.T) {
+func TestBackupJSON(t *testing.T) {
 	db, _ := initDB(t)
-
-	migrated := newTestCLI()
-	if code := migrated.Run([]string{"-o", "json", "migrate", "--sqlite-path", db}); code != 0 {
-		t.Fatalf("migrate exit=%d stderr=%s", code, migrated.stderr())
-	}
-	document := decodeJSONStdout(t, migrated)
-	assertJSONFields(t, document, "sqlite_path", "sqlite_path_source", "migrated")
-	if document["migrated"] != true || document["sqlite_path"] != absPath(db) {
-		t.Fatalf("migrate document = %v", document)
-	}
 
 	out := filepath.Join(t.TempDir(), "backup.db")
 	backup := newTestCLI()
 	if code := backup.Run([]string{"-o", "json", "backup", "--sqlite-path", db, "--out", out}); code != 0 {
 		t.Fatalf("backup exit=%d stderr=%s", code, backup.stderr())
 	}
-	document = decodeJSONStdout(t, backup)
+	document := decodeJSONStdout(t, backup)
 	assertJSONFields(t, document, "backup_file", "sqlite_path")
 	if document["backup_file"] != out {
 		t.Fatalf("backup document = %v", document)

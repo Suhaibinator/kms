@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import threading
 import time
@@ -14,7 +15,7 @@ import pytest
 import kms_paramstore
 from kms_paramstore import (
     AsyncClient, Client, ConfigError, FailedPreconditionError, Page, Parameter,
-    ParameterValue, Secret, SecretValue,
+    ParameterValue, ParamStoreError, PermissionDeniedError, Secret, SecretValue,
 )
 from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef, Ref
@@ -25,7 +26,18 @@ from tests.conftest import NS
 from tests.helpers import wait_until
 
 
-def test_cache_is_bounded_cleans_expired_and_clones_secrets():
+def test_non_read_secret_mutations_do_not_accept_unused_secret_tokens():
+    for client_type in (Client, AsyncClient):
+        for method_name in (
+            "set_secret_enabled",
+            "destroy_secret_version",
+            "promote_secret_version",
+        ):
+            signature = inspect.signature(getattr(client_type, method_name))
+            assert "secret_token" not in signature.parameters
+
+
+def test_cache_is_bounded_cleans_expired_and_never_retains_secrets():
     cache = Cache(60, max_entries=2)
     for index in range(3):
         cache.put_param(f"/prod/app/{index}", 0, "", str(index))
@@ -34,11 +46,8 @@ def test_cache_is_bounded_cleans_expired_and_clones_secrets():
 
     secret = Secret(b"canary", env="prod", app="app", key="secret")
     cache.put_secret(secret.path, 0, "", secret)
-    first = cache.get_secret(secret.path, 0, "")
-    assert first is not None
-    first._value = b"mutated"
-    second = cache.get_secret(secret.path, 0, "")
-    assert second is not None and second.value == b"canary"
+    assert cache.get_secret(secret.path, 0, "") is None
+    assert cache.secret_size == 0
 
     expiring = Cache(0.001, max_entries=2)
     expiring.put_param("/prod/app/old", 0, "", "old")
@@ -143,6 +152,576 @@ def test_sync_list_timeout_reaches_rpc_layer():
         assert observed == [0.25]
     finally:
         client.close()
+
+
+class _ReflectedSecretError(grpc.RpcError):
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def code(self):
+        return grpc.StatusCode.PERMISSION_DENIED
+
+    def details(self):
+        return self._details
+
+    def __str__(self) -> str:
+        return self._details
+
+
+class _RejectingSecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        def reject(*_args, **_kwargs):
+            raise _ReflectedSecretError(self._details)
+
+        return reject
+
+
+class _AsyncRejectingSecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        async def reject(*_args, **_kwargs):
+            raise _ReflectedSecretError(self._details)
+
+        return reject
+
+
+class _RejectingArbitrarySecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        def reject(*_args, **_kwargs):
+            raise RuntimeError(self._details)
+
+        return reject
+
+
+class _AsyncRejectingArbitrarySecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        async def reject(*_args, **_kwargs):
+            raise RuntimeError(self._details)
+
+        return reject
+
+
+class _PurgeStatusError(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
+
+    def __str__(self) -> str:
+        return self._details
+
+
+class _PurgeStub:
+    def __init__(self, error: grpc.RpcError) -> None:
+        self._error = error
+
+    def PurgeSecretBindingCohort(self, *_args, **_kwargs):
+        raise self._error
+
+
+class _AsyncPurgeStub:
+    def __init__(self, error: grpc.RpcError) -> None:
+        self._error = error
+
+    async def PurgeSecretBindingCohort(self, *_args, **_kwargs):
+        raise self._error
+
+
+@pytest.mark.parametrize("options", ({}, {"label": "previous"}), ids=("default", "label"))
+def test_sync_secret_read_rejects_zero_response_version(options):
+    plaintext = "zero-version-plaintext-must-not-return"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+
+    def get_secret(request, **_kwargs):
+        return kms_pb2.GetSecretResponse(
+            ref=request.ref,
+            version=0,
+            value=plaintext.encode(),
+            content_type="text/plain",
+        )
+
+    client._secret_stub = SimpleNamespace(GetSecret=get_secret)
+    try:
+        with pytest.raises(ParamStoreError) as caught:
+            client.get_secret("key", **options)
+        assert caught.value.code == "internal"
+        assert str(caught.value) == "KMS secret response contained an invalid version"
+        assert plaintext not in str(caught.value) + repr(caught.value)
+    finally:
+        client.close()
+
+
+def test_async_secret_read_rejects_zero_response_version_for_default_and_label():
+    async def exercise() -> None:
+        plaintext = "async-zero-version-plaintext-must-not-return"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+
+        async def get_secret(request, **_kwargs):
+            return kms_pb2.GetSecretResponse(
+                ref=request.ref,
+                version=0,
+                value=plaintext.encode(),
+                content_type="text/plain",
+            )
+
+        client._secret_stub = SimpleNamespace(GetSecret=get_secret)
+        try:
+            for options in ({}, {"label": "previous"}):
+                with pytest.raises(ParamStoreError) as caught:
+                    await client.get_secret("key", **options)
+                assert caught.value.code == "internal"
+                assert str(caught.value) == "KMS secret response contained an invalid version"
+                assert plaintext not in str(caught.value) + repr(caught.value)
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("env", "app", "key"),
+    (("prod", "app", "other"), ("prod", "other", "key")),
+    ids=("key", "namespace"),
+)
+def test_sync_secret_metadata_rejects_mismatched_response_identity(env, app, key):
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+
+    def get_metadata(*_args, **_kwargs):
+        return kms_pb2.GetSecretMetadataResponse(
+            secret=kms_pb2.SecretMetadata(
+                ref=kms_pb2.ResourceRef(
+                    namespace=kms_pb2.NamespaceRef(env=env, app=app), key=key,
+                ),
+            ),
+        )
+
+    client._secret_stub = SimpleNamespace(GetSecretMetadata=get_metadata)
+    try:
+        with pytest.raises(ParamStoreError) as caught:
+            client.get_secret_metadata("key")
+        assert caught.value.code == "internal"
+        assert str(caught.value) == "KMS secret metadata response identity mismatch"
+    finally:
+        client.close()
+
+
+def test_async_secret_metadata_rejects_mismatched_response_identity():
+    async def exercise() -> None:
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        try:
+            for env, app, key in (
+                ("prod", "app", "other"),
+                ("prod", "other", "key"),
+            ):
+                async def get_metadata(*_args, **_kwargs):
+                    return kms_pb2.GetSecretMetadataResponse(
+                        secret=kms_pb2.SecretMetadata(
+                            ref=kms_pb2.ResourceRef(
+                                namespace=kms_pb2.NamespaceRef(env=env, app=app), key=key,
+                            ),
+                        ),
+                    )
+
+                client._secret_stub = SimpleNamespace(GetSecretMetadata=get_metadata)
+                with pytest.raises(ParamStoreError) as caught:
+                    await client.get_secret_metadata("key")
+                assert caught.value.code == "internal"
+                assert str(caught.value) == "KMS secret metadata response identity mismatch"
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
+    plaintext = "secret-plaintext-reflection-canary"
+    token = "secret-token-reflection-canary"
+    binding_key = "binding-key-reflection-canary-000000000000"
+    details = f"server reflected {plaintext} {token} {binding_key}"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    client._secret_stub = _RejectingSecretStub(details)
+    calls = (
+        lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+        lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+        lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+        lambda: client.rotate_secret_binding_key(
+            "key", expected_current_version=1, binding_key=binding_key,
+            new_binding_key=binding_key + "-new",
+        ),
+        lambda: client.purge_secret_binding_cohort(
+            "key", binding_key=binding_key,
+            expected_revision=1, expected_affected_versions=(1,),
+        ),
+        lambda: client.preview_secret_unbound_versions("key"),
+        lambda: client.purge_secret_unbound_versions(
+            "key", expected_revision=1, expected_affected_versions=(1,),
+        ),
+    )
+    try:
+        for call in calls:
+            with pytest.raises(PermissionDeniedError) as caught:
+                call()
+            rendered = str(caught.value) + repr(caught.value)
+            assert caught.value.code == "permission_denied"
+            assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+            assert caught.value.__context__ is None
+            assert rendered == (
+                "secret operation failed (permission_denied)"
+                "PermissionDeniedError('secret operation failed (permission_denied)')"
+            )
+            assert plaintext not in rendered
+            assert token not in rendered
+            assert binding_key not in rendered
+    finally:
+        client.close()
+
+
+def test_sync_rotation_sends_identical_keys_for_server_validation():
+    key = "same-binding-key-0123456789abcdef"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    rotate = mock.MagicMock(return_value=kms_pb2.SecretVersionTransitionResponse(
+        current_version=2, previous_version=1, revision=3,
+    ))
+    client._secret_stub = SimpleNamespace(RotateSecretBindingKey=rotate)
+    try:
+        result = client.rotate_secret_binding_key(
+            "secret", expected_current_version=1, binding_key=key, new_binding_key=key,
+        )
+        assert (result.current_version, result.previous_version) == (2, 1)
+        request = rotate.call_args.args[0]
+        assert request.binding_key == key == request.new_binding_key
+    finally:
+        client.close()
+
+
+def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
+    async def exercise() -> None:
+        plaintext = "async-secret-plaintext-reflection-canary"
+        token = "async-secret-token-reflection-canary"
+        binding_key = "async-binding-key-reflection-canary-000000"
+        details = f"server reflected {plaintext} {token} {binding_key}"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        client._secret_stub = _AsyncRejectingSecretStub(details)
+        calls = (
+            lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+            lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+            lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+            lambda: client.rotate_secret_binding_key(
+                "key", expected_current_version=1, binding_key=binding_key,
+                new_binding_key=binding_key + "-new",
+            ),
+            lambda: client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            ),
+            lambda: client.preview_secret_unbound_versions("key"),
+            lambda: client.purge_secret_unbound_versions(
+                "key", expected_revision=1, expected_affected_versions=(1,),
+            ),
+        )
+        try:
+            for call in calls:
+                with pytest.raises(PermissionDeniedError) as caught:
+                    await call()
+                rendered = str(caught.value) + repr(caught.value)
+                assert caught.value.code == "permission_denied"
+                assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+                assert caught.value.__context__ is None
+                assert plaintext not in rendered
+                assert token not in rendered
+                assert binding_key not in rendered
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_async_rotation_sends_identical_keys_for_server_validation():
+    async def exercise() -> None:
+        key = "same-binding-key-0123456789abcdef"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        rotate = mock.AsyncMock(return_value=kms_pb2.SecretVersionTransitionResponse(
+            current_version=2, previous_version=1, revision=3,
+        ))
+        client._secret_stub = SimpleNamespace(RotateSecretBindingKey=rotate)
+        try:
+            result = await client.rotate_secret_binding_key(
+                "secret", expected_current_version=1, binding_key=key, new_binding_key=key,
+            )
+            assert (result.current_version, result.previous_version) == (2, 1)
+            request = rotate.await_args.args[0]
+            assert request.binding_key == key == request.new_binding_key
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_all_sync_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions():
+    plaintext = "sync-arbitrary-plaintext-canary"
+    token = "sync-arbitrary-token-canary"
+    binding_key = "sync-arbitrary-binding-key-canary-0000000000"
+    details = f"transport reflected {plaintext} {token} {binding_key}"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    client._secret_stub = _RejectingArbitrarySecretStub(details)
+    calls = (
+        lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+        lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+        lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+        lambda: client.rotate_secret_binding_key(
+            "key", expected_current_version=1, binding_key=binding_key,
+            new_binding_key=binding_key + "-new",
+        ),
+        lambda: client.purge_secret_binding_cohort(
+            "key", binding_key=binding_key,
+            expected_revision=1, expected_affected_versions=(1,),
+        ),
+        lambda: client.preview_secret_unbound_versions("key"),
+        lambda: client.purge_secret_unbound_versions(
+            "key", expected_revision=1, expected_affected_versions=(1,),
+        ),
+    )
+    try:
+        for call in calls:
+            with pytest.raises(ParamStoreError) as caught:
+                call()
+            rendered = str(caught.value) + repr(caught.value)
+            assert type(caught.value) is ParamStoreError
+            assert caught.value.code == "unknown"
+            assert caught.value.grpc_code is None
+            assert caught.value.__cause__ is None
+            assert caught.value.__context__ is None
+            assert rendered == (
+                "secret operation failed (unknown)"
+                "ParamStoreError('secret operation failed (unknown)')"
+            )
+            assert plaintext not in rendered
+            assert token not in rendered
+            assert binding_key not in rendered
+    finally:
+        client.close()
+
+
+def test_all_async_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions():
+    async def exercise() -> None:
+        plaintext = "async-arbitrary-plaintext-canary"
+        token = "async-arbitrary-token-canary"
+        binding_key = "async-arbitrary-binding-key-canary-000000000"
+        details = f"transport reflected {plaintext} {token} {binding_key}"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        client._secret_stub = _AsyncRejectingArbitrarySecretStub(details)
+        calls = (
+            lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+            lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+            lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+            lambda: client.rotate_secret_binding_key(
+                "key", expected_current_version=1, binding_key=binding_key,
+                new_binding_key=binding_key + "-new",
+            ),
+            lambda: client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            ),
+            lambda: client.preview_secret_unbound_versions("key"),
+            lambda: client.purge_secret_unbound_versions(
+                "key", expected_revision=1, expected_affected_versions=(1,),
+            ),
+        )
+        try:
+            for call in calls:
+                with pytest.raises(ParamStoreError) as caught:
+                    await call()
+                rendered = str(caught.value) + repr(caught.value)
+                assert type(caught.value) is ParamStoreError
+                assert caught.value.code == "unknown"
+                assert caught.value.grpc_code is None
+                assert caught.value.__cause__ is None
+                assert caught.value.__context__ is None
+                assert plaintext not in rendered
+                assert token not in rendered
+                assert binding_key not in rendered
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_secret_value_sanitizes_arbitrary_client_errors_and_preserves_fallback():
+    canary = "sync-secret-value-binding-key-error-canary"
+
+    class FailingClient:
+        def __init__(self, allow_default: bool) -> None:
+            self.allow_default = allow_default
+            self.logs = []
+
+        def get_secret(self, *_args, **_kwargs):
+            raise RuntimeError(canary)
+
+        def _default_allowed_for_error(self, _error):
+            return self.allow_default
+
+        def _logf(self, *args):
+            self.logs.append(args)
+
+    class RequiredConfig:
+        secret = SecretValue("key", bind_key=canary)
+
+    required = RequiredConfig()
+    descriptor = RequiredConfig.__dict__["secret"]
+    with pytest.raises(ParamStoreError) as caught:
+        descriptor._init(required, FailingClient(False))
+    rendered = str(caught.value) + repr(caught.value)
+    assert str(caught.value) == "resolve secret 'key': secret operation failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert canary not in rendered
+
+    class DefaultConfig:
+        secret = SecretValue("key", bind_key=canary, default="fallback")
+
+    default_client = FailingClient(True)
+    default = DefaultConfig()
+    DefaultConfig.__dict__["secret"]._init(default, default_client)
+    assert default.secret.string_value == "fallback"
+    assert canary not in repr(default_client.logs)
+
+
+def test_async_secret_value_sanitizes_arbitrary_client_errors_and_preserves_fallback():
+    async def exercise() -> None:
+        canary = "async-secret-value-binding-key-error-canary"
+
+        class FailingClient:
+            def __init__(self, allow_default: bool) -> None:
+                self.allow_default = allow_default
+
+            async def get_secret(self, *_args, **_kwargs):
+                raise RuntimeError(canary)
+
+            def _default_allowed_for_error(self, _error):
+                return self.allow_default
+
+        class RequiredConfig:
+            secret = SecretValue("key", bind_key=canary)
+
+        required = RequiredConfig()
+        descriptor = RequiredConfig.__dict__["secret"]
+        with pytest.raises(ParamStoreError) as caught:
+            await descriptor._init_async(required, FailingClient(False))
+        rendered = str(caught.value) + repr(caught.value)
+        assert str(caught.value) == "resolve secret 'key': secret operation failed"
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert canary not in rendered
+
+        class DefaultConfig:
+            secret = SecretValue("key", bind_key=canary, default="fallback")
+
+        default = DefaultConfig()
+        await DefaultConfig.__dict__["secret"]._init_async(default, FailingClient(True))
+        assert default.secret.string_value == "fallback"
+
+    asyncio.run(exercise())
+
+
+def test_sync_purge_cleanup_pending_is_exact_public_and_drops_rpc_context():
+    canonical = "secret purge committed; database artifact cleanup is pending"
+    binding_key = "sync-purge-binding-key-canary-000000000000"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    try:
+        client._secret_stub = _PurgeStub(
+            _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, canonical)
+        )
+        with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
+            client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            )
+        assert caught.value.code == "purge_cleanup_pending"
+        assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
+        assert str(caught.value) == canonical
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+        reflected = canonical + " " + binding_key
+        client._secret_stub = _PurgeStub(
+            _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, reflected)
+        )
+        with pytest.raises(ParamStoreError) as generic:
+            client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            )
+        assert type(generic.value) is ParamStoreError
+        assert generic.value.code == "unavailable"
+        assert str(generic.value) == "secret operation failed (unavailable)"
+        assert generic.value.__context__ is None
+        assert binding_key not in str(generic.value) + repr(generic.value)
+    finally:
+        client.close()
+
+
+def test_async_purge_cleanup_pending_requires_unavailable_and_drops_rpc_context():
+    async def exercise() -> None:
+        canonical = "secret purge committed; database artifact cleanup is pending"
+        binding_key = "async-purge-binding-key-canary-0000000000"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        try:
+            client._secret_stub = _AsyncPurgeStub(
+                _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, canonical)
+            )
+            with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
+                await client.purge_secret_binding_cohort(
+                    "key", binding_key=binding_key,
+                    expected_revision=1, expected_affected_versions=(1,),
+                )
+            assert caught.value.code == "purge_cleanup_pending"
+            assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
+            assert str(caught.value) == canonical
+            assert caught.value.__context__ is None
+
+            client._secret_stub = _AsyncPurgeStub(
+                _PurgeStatusError(grpc.StatusCode.INTERNAL, canonical)
+            )
+            with pytest.raises(ParamStoreError) as generic:
+                await client.purge_secret_binding_cohort(
+                    "key", binding_key=binding_key,
+                    expected_revision=1, expected_affected_versions=(1,),
+                )
+            assert not isinstance(
+                generic.value, kms_paramstore.PurgeCleanupPendingError
+            )
+            assert generic.value.code == "internal"
+            assert str(generic.value) == "secret operation failed (internal)"
+            assert generic.value.__context__ is None
+            assert binding_key not in str(generic.value) + repr(generic.value)
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
 
 
 def test_async_reconcile_uses_captured_fence_and_tombstones_absence():

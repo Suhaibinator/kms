@@ -19,7 +19,12 @@ export type KmsErrorCode =
   | "internal"
   | "unavailable"
   | "data_loss"
+  | "purge_cleanup_pending"
   | "unknown";
+
+/** Fixed wire-safe text for a purge that committed before artifact cleanup failed. */
+export const PURGE_CLEANUP_PENDING_MESSAGE =
+  "secret purge committed; database artifact cleanup is pending";
 
 export interface KmsErrorOptions extends ErrorOptions {
   /** The original gRPC status code, when the error came from an RPC. */
@@ -75,6 +80,21 @@ export class RateLimitedError extends KmsError {
   constructor(message: string, options: KmsErrorOptions = {}) {
     super("resource_exhausted", message, options);
     this.name = "RateLimitedError";
+  }
+}
+
+/**
+ * A secret purge committed, but live SQLite artifacts still require cleanup.
+ * No mutation result accompanies this error. Do not retry the purge: its
+ * exact preview guard is now stale, and a retired binding key may already
+ * have been discarded.
+ */
+export class PurgeCleanupPendingError extends KmsError {
+  constructor() {
+    super("purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE, {
+      grpcCode: status.UNAVAILABLE,
+    });
+    this.name = "PurgeCleanupPendingError";
   }
 }
 
@@ -162,6 +182,80 @@ export function mapGrpcError(error: ServiceError | Error | unknown): Error | und
     cause: error,
     grpcCode: error.code as status,
   });
+}
+
+/**
+ * Normalize a secret-bearing RPC failure without retaining server-supplied
+ * text or causes that could reflect plaintext or credentials.
+ */
+export function mapSecretGrpcError(error: ServiceError | Error | unknown): KmsError | undefined {
+  if (error === undefined || error === null) return undefined;
+  if (error instanceof KmsError) {
+    return new KmsError(error.code, "KMS secret operation failed", {
+      ...(error.grpcCode === undefined ? {} : { grpcCode: error.grpcCode }),
+    });
+  }
+  const errorName = safeErrorName(error);
+  if (errorName === "AbortError") {
+    return new KmsError("cancelled", "KMS secret operation failed");
+  }
+  if (errorName === "TimeoutError") {
+    return new KmsError("deadline_exceeded", "KMS secret operation failed");
+  }
+  const grpcCode = grpcCodeOf(error);
+  if (grpcCode === status.OK) return undefined;
+  const code = grpcCode === undefined ? "unknown" : (GRPC_CODES[grpcCode] ?? "unknown");
+  return new KmsError(code, "KMS secret operation failed", {
+    ...(grpcCode === undefined ? {} : { grpcCode }),
+  });
+}
+
+/**
+ * Preserve the one distinct post-commit purge outcome without retaining any
+ * other server-provided text or cause.
+ */
+export function mapPurgeSecretGrpcError(
+  error: ServiceError | Error | unknown,
+): KmsError | undefined {
+  if (isPurgeCleanupPending(error)) return new PurgeCleanupPendingError();
+  return mapSecretGrpcError(error);
+}
+
+function isPurgeCleanupPending(error: unknown): boolean {
+  try {
+    return (
+      isGrpcErrorLike(error) &&
+      error.code === status.UNAVAILABLE &&
+      error.details === PURGE_CLEANUP_PENDING_MESSAGE
+    );
+  } catch {
+    return false;
+  }
+}
+
+function safeErrorName(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  try {
+    return typeof error.name === "string" ? error.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function grpcCodeOf(error: unknown): status | undefined {
+  if (!(error instanceof Error)) return undefined;
+  let code: unknown;
+  try {
+    code = (error as Partial<GrpcErrorLike>).code;
+  } catch {
+    return undefined;
+  }
+  return typeof code === "number" &&
+    Number.isInteger(code) &&
+    code >= status.OK &&
+    code <= status.UNAUTHENTICATED
+    ? (code as status)
+    : undefined;
 }
 
 /** Backwards-friendly alias used by transport implementations. */

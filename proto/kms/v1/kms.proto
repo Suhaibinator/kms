@@ -56,7 +56,9 @@ message ParameterVersionInfo {
 message SecretMetadata {
   ResourceRef ref = 1; // namespace + relative key
   string content_type = 2;
-  bool client_bound = 3;
+  // bound summarizes the version selected by the current label. Callers that
+  // operate on an exact version must use SecretVersionInfo.bound instead.
+  bool bound = 3;
   bool has_access_token = 4;
   string metadata_json = 5;
   int64 created_at_unix_ms = 6;
@@ -73,6 +75,8 @@ message SecretVersionInfo {
   int64 destroyed_at_unix_ms = 5;
   int64 expires_at_unix_ms = 6;
   string metadata_json = 7;
+  bool bound = 8;
+  bool has_access_token = 9;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,25 +157,46 @@ message GetParameterMetadataResponse {
 // Identity authentication travels in standard gRPC metadata:
 //   "authorization": "Bearer <per-client token>"
 // Per-secret credentials are fields on only the requests that consume them.
+// Any supplied binding key must be valid UTF-8 and contain 32-1024 bytes.
 
 service SecretService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
-  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+  // PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+  // receive an explicit rejection instead of silently losing client_bound.
+  // v0.3 clients must use PutSecretV03.
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse) {
+    option deprecated = true;
+  }
+  rpc PutSecretV03(PutSecretRequest) returns (PutSecretResponse);
   rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
   rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
   rpc DisableSecret(DisableSecretRequest) returns (DisableSecretResponse);
   rpc DestroySecretVersion(DestroySecretVersionRequest) returns (DestroySecretVersionResponse);
   rpc GetSecretMetadata(GetSecretMetadataRequest) returns (GetSecretMetadataResponse);
   rpc PromoteSecretVersion(PromoteSecretVersionRequest) returns (PromoteSecretVersionResponse);
+  rpc BindSecret(BindSecretRequest) returns (SecretVersionTransitionResponse);
+  rpc UnbindSecret(UnbindSecretRequest) returns (SecretVersionTransitionResponse);
+  rpc PreviewSecretBindingCohort(PreviewSecretBindingCohortRequest)
+      returns (SecretBindingCohortResponse);
+  rpc RotateSecretBindingKey(RotateSecretBindingKeyRequest)
+      returns (SecretVersionTransitionResponse);
+  rpc PurgeSecretBindingCohort(PurgeSecretBindingCohortRequest)
+      returns (SecretBindingCohortResponse);
+  rpc PreviewSecretUnboundVersions(PreviewSecretUnboundVersionsRequest)
+      returns (SecretVersionSetResponse);
+  rpc PurgeSecretUnboundVersions(PurgeSecretUnboundVersionsRequest)
+      returns (SecretVersionSetResponse);
 }
 
 message GetSecretRequest {
   ResourceRef ref = 1;
   uint64 version = 2; // 0 = use label
   string label = 3;   // default "current"
-  // Per-secret access token. For client-bound secrets this is also the
-  // caller-held key share and is never logged or persisted in plaintext.
+  // Per-secret access token, independent of the version's binding key.
   string secret_token = 4;
+  // Operator-owned key for opening a bound version. It is request-scoped and
+  // is never logged, hashed, fingerprinted, or persisted by KMS.
+  string binding_key = 5;
 }
 
 message GetSecretResponse {
@@ -188,18 +213,14 @@ message PutSecretRequest {
   bytes value = 2;
   string content_type = 3;
   string metadata_json = 4;
-  // client_bound opts this secret into client-bound double wrapping. Only
-  // honored on first creation; later puts must match the existing mode.
-  bool client_bound = 5;
+  // A non-empty operator-owned key creates a bound version. It is request-
+  // scoped and is never logged, hashed, fingerprinted, or persisted by KMS.
+  string binding_key = 5;
   // generate_access_token asks the server to mint a per-secret access token.
-  // The token is returned exactly once in the response. Required (or an
-  // existing token supplied in secret_token) when client_bound is true.
+  // The token is returned exactly once in the response.
   bool generate_access_token = 6;
   // expires_at for the new version, 0 = never.
   int64 expires_at_unix_ms = 7;
-  // Current per-secret token, required when updating an existing client-bound
-  // secret. It is scoped to this operation and never logged or persisted.
-  string secret_token = 8;
 }
 
 message PutSecretResponse {
@@ -253,6 +274,14 @@ message DestroySecretVersionResponse {
 
 message GetSecretMetadataRequest {
   ResourceRef ref = 1;
+  // With no version or label, returns full history. A non-zero version returns
+  // only this exact version:
+  // labels are omitted, versions contains exactly one item, and the envelope's
+  // bound field describes that requested version rather than the current label.
+  uint64 version = 2;
+  // Mutually exclusive with version. Returns only the version selected by this
+  // label and its label mapping, resolved together in one database snapshot.
+  string label = 3;
 }
 
 message GetSecretMetadataResponse {
@@ -268,6 +297,87 @@ message PromoteSecretVersionResponse {
   uint64 current_version = 1;
   uint64 previous_version = 2;
   uint64 revision = 3;
+}
+
+// BindSecret creates a new bound version from the version currently labeled
+// "current". expected_current_version is a required compare-and-swap guard.
+message BindSecretRequest {
+  ResourceRef ref = 1;
+  uint64 expected_current_version = 2;
+  string binding_key = 3;
+}
+
+// UnbindSecret creates a new unbound version from the version currently
+// labeled "current". The supplied key must open that version and
+// expected_current_version is a required compare-and-swap guard.
+message UnbindSecretRequest {
+  ResourceRef ref = 1;
+  uint64 expected_current_version = 2;
+  string binding_key = 3;
+}
+
+message SecretVersionTransitionResponse {
+  uint64 current_version = 1;
+  uint64 previous_version = 2;
+  uint64 revision = 3;
+}
+
+// PreviewSecretBindingCohort discovers up to 128 contiguous bound versions
+// around anchor_version without mutating them. anchor_version 0 selects
+// current. A larger cohort is rejected rather than returned partially.
+message PreviewSecretBindingCohortRequest {
+  ResourceRef ref = 1;
+  uint64 anchor_version = 2;
+  string binding_key = 3;
+}
+
+// RotateSecretBindingKey creates a new version of the current bound secret
+// under a different binding key. Historical versions are not changed.
+message RotateSecretBindingKeyRequest {
+  ResourceRef ref = 1;
+  uint64 expected_current_version = 2;
+  string binding_key = 3;
+  string new_binding_key = 4;
+}
+
+// PurgeSecretBindingCohort is an admin-only irreversible destruction of the
+// contiguous cohort around anchor_version and bypasses release-reference
+// protection; anchor_version 0 selects current. The preview guards are
+// required and must exactly match a prior preview.
+message PurgeSecretBindingCohortRequest {
+  ResourceRef ref = 1;
+  uint64 anchor_version = 2;
+  string binding_key = 3;
+  uint64 expected_revision = 4;
+  repeated uint64 expected_affected_versions = 5;
+}
+
+// SecretBindingCohortResponse contains no key-derived identity. Versions are
+// sorted in ascending order; revision is current for a preview and resulting
+// for a successful mutation.
+message SecretBindingCohortResponse {
+  uint64 anchor_version = 1;
+  repeated uint64 affected_versions = 2;
+  uint64 revision = 3;
+}
+
+// PreviewSecretUnboundVersions discovers every non-destroyed unbound version
+// of one secret. The result is the mandatory compare-and-swap input to purge.
+message PreviewSecretUnboundVersionsRequest {
+  ResourceRef ref = 1;
+}
+
+// PurgeSecretUnboundVersions is an admin-only irreversible destruction of an
+// exact previously previewed set. It bypasses release-reference protection.
+message PurgeSecretUnboundVersionsRequest {
+  ResourceRef ref = 1;
+  uint64 expected_revision = 2;
+  repeated uint64 expected_affected_versions = 3;
+}
+
+message SecretVersionSetResponse {
+  repeated uint64 affected_versions = 1;
+  uint64 revision = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,32 +441,26 @@ message ConfigurationReleaseEntry {
   string metadata_json = 6;
   // SHA-256 hex digest of the exact parameter bytes. Empty for secrets.
   string parameter_digest = 7;
-  bool client_bound = 8;
-  bool has_access_token = 9;
 }
 
 message ConfigurationRelease {
   NamespaceRef namespace = 1;
   string name = 2;
   uint64 version = 3;
-  reserved 4;
-  reserved "schema_id";
-  uint64 schema_version = 5;
-  repeated ConfigurationReleaseEntry entries = 6;
-  string digest = 7;
-  string metadata_json = 8;
-  string created_by = 9;
-  int64 created_at_unix_ms = 10;
+  uint64 schema_version = 4;
+  repeated ConfigurationReleaseEntry entries = 5;
+  string digest = 6;
+  string metadata_json = 7;
+  string created_by = 8;
+  int64 created_at_unix_ms = 9;
 }
 
 message CreateReleaseRequest {
   NamespaceRef namespace = 1;
   string name = 2;
-  reserved 3;
-  reserved "schema_id";
-  uint64 schema_version = 4;
-  repeated ReleaseEntrySelector entries = 5;
-  string metadata_json = 6;
+  uint64 schema_version = 3;
+  repeated ReleaseEntrySelector entries = 4;
+  string metadata_json = 5;
 }
 
 message CreateReleaseResponse {
@@ -538,26 +642,22 @@ service ConfigurationSchemaService {
 }
 
 message ConfigurationSchema {
-  reserved 1;
-  reserved "id";
-  uint64 version = 2;
-  string schema_json = 3;
-  string digest = 4;
-  string metadata_json = 5;
-  string created_by = 6;
-  int64 created_at_unix_ms = 7;
-  string application = 8;
-  string release_name = 9;
+  uint64 version = 1;
+  string schema_json = 2;
+  string digest = 3;
+  string metadata_json = 4;
+  string created_by = 5;
+  int64 created_at_unix_ms = 6;
+  string application = 7;
+  string release_name = 8;
 }
 
 message CreateSchemaRequest {
-  reserved 1;
-  reserved "id";
-  string schema_json = 2;
-  string metadata_json = 3;
+  string schema_json = 1;
+  string metadata_json = 2;
   // KMS derives the immutable schema lineage's release name from the
   // application's canonical release name.
-  string application = 4;
+  string application = 3;
 }
 
 message CreateSchemaResponse {
@@ -565,11 +665,9 @@ message CreateSchemaResponse {
 }
 
 message GetSchemaRequest {
-  reserved 1;
-  reserved "id";
-  uint64 version = 2;
-  string application = 3;
-  string release_name = 4;
+  uint64 version = 1;
+  string application = 2;
+  string release_name = 3;
 }
 
 message GetSchemaResponse {
@@ -577,12 +675,10 @@ message GetSchemaResponse {
 }
 
 message ListSchemasRequest {
-  reserved 1;
-  reserved "id";
-  int32 page_size = 2;
-  string page_token = 3;
-  string application = 4;
-  string release_name = 5;
+  int32 page_size = 1;
+  string page_token = 2;
+  string application = 3;
+  string release_name = 4;
 }
 
 message ListSchemasResponse {
@@ -626,7 +722,9 @@ message ParameterChange {
 // never pushed over the stream; clients refetch through GetSecret.
 message SecretMetadataChange {
   ResourceRef ref = 1;
-  string change_type = 2; // put | delete | promote | disable | enable | destroy
+  // put | delete | promote | disable | enable | destroy | bind | unbind |
+  // rotate_binding_key | purge_binding_cohort | purge_unbound_versions
+  string change_type = 2;
   uint64 version = 3;
   string label = 4;
 }
@@ -934,8 +1032,8 @@ message AuditEvent {
   int64 created_at_unix_ms = 14;
   string metadata_json = 15;
   // The immutable incarnation ID of the namespace the event was authorized
-  // against (0 for global events and legacy rows), so a deleted-and-recreated
-  // env/app can be told apart in an export.
+  // against. It is 0 only for global/non-namespaced events, so a
+  // deleted-and-recreated env/app can be told apart in an export.
   int64 resource_namespace_id = 16;
 }
 

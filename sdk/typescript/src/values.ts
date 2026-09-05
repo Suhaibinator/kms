@@ -1,4 +1,11 @@
-import { ConfigError, isKmsError, NotInitializedError, wrapError } from "./errors.js";
+import {
+  ConfigError,
+  isKmsError,
+  KmsError,
+  mapSecretGrpcError,
+  NotInitializedError,
+  wrapError,
+} from "./errors.js";
 import { type ResourceRef, splitDisplayPath, type VersionRef } from "./refs.js";
 import { REDACTED, Secret } from "./secret.js";
 
@@ -12,6 +19,7 @@ export interface ValueReadOptions extends VersionRef {
 
 export interface SecretReadOptions extends ValueReadOptions {
   readonly secretToken?: string;
+  readonly bindingKey?: string;
 }
 
 export type ParameterUpdateHandler = (value: string, present: boolean) => void;
@@ -73,8 +81,10 @@ export interface ValueResolver {
 
 export interface SecretValueOptions {
   readonly key?: string;
-  /** Per-secret access token (and key share for client-bound secrets). */
+  /** Per-secret access token. */
   readonly token?: string;
+  /** Operator-owned binding key for this secret declaration. */
+  readonly bindKey?: string;
   /** A non-empty environment value wins and avoids all store access. */
   readonly envVar?: string;
   /** Non-empty development fallback. Used for not-found by default. */
@@ -95,11 +105,20 @@ function secretOptions(
 ): Required<SecretValueOptions> {
   const input = typeof keyOrOptions === "string" ? { ...options, key: keyOrOptions } : keyOrOptions;
   return {
-    key: input.key ?? "",
-    token: input.token ?? "",
-    envVar: input.envVar ?? "",
-    default: input.default ?? "",
+    key: optionalSecretOption(input?.key, "key"),
+    token: optionalSecretOption(input?.token, "token"),
+    bindKey: optionalSecretOption(input?.bindKey, "bindKey"),
+    envVar: optionalSecretOption(input?.envVar, "envVar"),
+    default: optionalSecretOption(input?.default, "default"),
   };
+}
+
+function optionalSecretOption(value: unknown, name: string): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") {
+    throw new ConfigError(`SecretValue ${name} must be a string`);
+  }
+  return value;
 }
 
 function parameterOptions(
@@ -148,6 +167,7 @@ function fallbackAllowed(client: ValueResolver, error: unknown): boolean {
 export class SecretValue {
   readonly #key: string;
   readonly #token: string;
+  readonly #bindKey: string;
   readonly #envVar: string;
   readonly #default: string;
   #resolved: Secret | undefined;
@@ -160,6 +180,7 @@ export class SecretValue {
     const normalized = secretOptions(keyOrOptions, options);
     this.#key = normalized.key;
     this.#token = normalized.token;
+    this.#bindKey = normalized.bindKey;
     this.#envVar = normalized.envVar;
     this.#default = normalized.default;
   }
@@ -170,6 +191,10 @@ export class SecretValue {
 
   get token(): string {
     return this.#token;
+  }
+
+  get bindKey(): string {
+    return this.#bindKey;
   }
 
   get envVar(): string {
@@ -222,6 +247,7 @@ export class SecretValue {
         const secret = await client.getSecret(this.#key, {
           ...readOptions(options),
           ...(this.#token.length === 0 ? {} : { secretToken: this.#token }),
+          ...(this.#bindKey.length === 0 ? {} : { bindingKey: this.#bindKey }),
         });
         if (!(secret instanceof Secret)) {
           throw new ConfigError("ValueResolver.getSecret() must return a Secret");
@@ -236,7 +262,13 @@ export class SecretValue {
           this.#resolved = new Secret(this.#default, { path: this.#key });
           return;
         }
-        throw wrapError(`resolve secret ${JSON.stringify(this.#key)}`, error);
+        const mapped =
+          mapSecretGrpcError(error) ?? new KmsError("unknown", "KMS secret operation failed");
+        throw new KmsError(
+          mapped.code,
+          `resolve secret ${JSON.stringify(this.#key)}: ${mapped.message}`,
+          mapped.grpcCode === undefined ? {} : { grpcCode: mapped.grpcCode },
+        );
       }
     }
 

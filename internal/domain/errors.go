@@ -27,7 +27,7 @@ var (
 	ErrPermissionDenied = errors.New("permission denied")
 
 	// ErrFailedPrecondition: state forbids the operation (disabled version,
-	// destroyed version, client-bound mismatch, missing token...).
+	// destroyed version, binding-state mismatch, missing token...).
 	ErrFailedPrecondition = errors.New("failed precondition")
 
 	// ErrAborted: a compare-and-swap or other concurrency guard conflicted.
@@ -38,7 +38,7 @@ var (
 	ErrResourceExhausted = errors.New("resource exhausted")
 
 	// ErrDecryptFailed: a value could not be decrypted. Callers other than
-	// admins receive it without further detail so a wrong client token and a
+	// admins receive it without further detail so a wrong binding key and a
 	// corrupted ciphertext are indistinguishable.
 	ErrDecryptFailed = errors.New("decryption failed")
 

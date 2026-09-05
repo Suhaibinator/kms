@@ -121,10 +121,11 @@ export class Snapshot {
 }
 
 export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
-export type StartOptions = Omit<ManagedConfigOptions, "contract">;
+export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;
 
 export class Store {
   readonly #defaults: ConfigSnapshot<RootConfig>;
+  readonly #bindingKeys: Readonly<Record<string, string>>;
   readonly #validate: ValidateConfig;
   #active: ConfigSnapshot<RootConfig> | undefined;
   #started = false;
@@ -132,6 +133,8 @@ export class Store {
   constructor(defaults: RootConfig, validate: ValidateConfig) {
     if (typeof validate !== "function") throw new TypeError("generated config store: validate callback is required");
     const copiedDefaults = writableClone(defaults);
+    const bindingKeys = Object.create(null) as Record<string, string>;
+    this.#bindingKeys = Object.freeze(bindingKeys);
     this.#defaults = immutableSnapshot(copiedDefaults);
     this.#validate = validate;
   }
@@ -145,7 +148,7 @@ export class Store {
     this.#started = true;
     return startManagedConfig(
       client,
-      { ...options, contract: generatedContract },
+      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },
       (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),
       signal,
     );

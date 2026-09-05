@@ -7,7 +7,10 @@ no key patterns in policy and no watch selectors. **The namespace `(env, app)`
 is the single unit of authorization scope, subscription, and isolation; keys
 are opaque strings the server never interprets.** Section 15 records a
 completed simplification, not remaining work. For the current operator and API
-contracts, use `README.md` and `docs/`.
+contracts, use `README.md` and `docs/`. Its `0.2.x` client-bound/token-file
+material is superseded by the `0.3.x`
+[binding-key plan](docs/plans/version-cohort-binding-keys.md) and
+[current operator contract](docs/binding-keys.md).
 
 This plan superseded the path-string data model in [`plan.md`](plan.md) (§13.1
 path format, §12 storage, §8 API shapes). The current code and reference docs

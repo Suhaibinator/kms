@@ -36,9 +36,9 @@ func readinessActive(env string, version, revision, previous uint64, dbPin, rate
 	ns := domain.NamespaceRef{Env: env, App: "gradethis"}
 	return &domain.ActiveConfigurationRelease{ActivationRevision: revision, PreviousVersion: previous, Release: domain.ConfigurationRelease{
 		Namespace: ns, Name: "runtime", Version: version, Entries: []domain.ConfigurationReleaseEntry{
-			{Alias: "database", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "database"}, Version: dbPin, ContentType: "json"},
-			{Alias: "db_password", Kind: domain.ReleaseEntrySecret, Ref: domain.Ref{NS: ns, Key: "db_password"}, Version: 1, ContentType: "text/plain"},
-			{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "rate_limits"}, Version: ratePin, ContentType: "integer"},
+			{Alias: "database", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "database"}, ResourceNamespaceID: 1, Version: dbPin, ContentType: "json"},
+			{Alias: "db_password", Kind: domain.ReleaseEntrySecret, Ref: domain.Ref{NS: ns, Key: "db_password"}, ResourceNamespaceID: 1, Version: 1, ContentType: "text/plain"},
+			{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "rate_limits"}, ResourceNamespaceID: 1, Version: ratePin, ContentType: "integer"},
 		}}}
 }
 
@@ -243,6 +243,30 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		in.SchemaMissing = true
 		if out := computeEnvironmentReadiness(in); out.Status != domain.EnvStatusBlocked {
 			t.Fatalf("schema missing env = %s", out.Status)
+		}
+		in = base("dev")
+		in.Active = readinessActive("dev", 1, 10, 0, 1, 1)
+		in.Active.Release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "gradethis"}
+		in.Refs["database"] = in.Active.Release.Entries[0].Ref
+		out = computeEnvironmentReadiness(in)
+		if out.Status != domain.EnvStatusBlocked || out.ValuesState != domain.ValuesStateIncomplete {
+			t.Fatalf("foreign pin env = %s/%s findings=%v", out.Status, out.ValuesState, findingCodes(out.Findings))
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingContractReleaseMismatch); !ok {
+			t.Fatalf("foreign pin missing contract mismatch: %v", findingCodes(out.Findings))
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingResourceMissing); !ok {
+			t.Fatalf("foreign pin was treated as present: %v", findingCodes(out.Findings))
+		}
+		in = base("dev")
+		in.Active = readinessActive("dev", 1, 10, 0, 1, 1)
+		in.Active.Release.Entries[0].ResourceNamespaceID = 0
+		out = computeEnvironmentReadiness(in)
+		if out.Status != domain.EnvStatusBlocked {
+			t.Fatalf("zero namespace identity env = %s findings=%v", out.Status, findingCodes(out.Findings))
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingContractReleaseMismatch); !ok {
+			t.Fatalf("zero namespace identity missing contract mismatch: %v", findingCodes(out.Findings))
 		}
 	})
 

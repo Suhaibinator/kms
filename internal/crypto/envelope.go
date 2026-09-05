@@ -1,87 +1,115 @@
 package crypto
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
-
-	"golang.org/x/crypto/hkdf"
-
-	"crypto/sha256"
+	"io"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"golang.org/x/crypto/hkdf"
 )
 
-// Domain-separation suffixes appended to the caller AAD so the value
-// ciphertext, the DEK wrap layer, and the client-bound inner layer can never
-// be confused for one another.
+// Domain-separation suffixes prevent ciphertext from one layer being replayed
+// at another layer.
 const (
 	aadSuffixValue    = "|layer:value"
 	aadSuffixDEK      = "|layer:dek"
 	aadSuffixDEKInner = "|layer:dek-inner"
 )
 
-// hkdfInfoClientBound fixes the HKDF context for client-key derivation.
-const hkdfInfoClientBound = "kms/v1 client-bound key"
+const (
+	hkdfInfoBindingKey = "kms/v1 binding key"
+	BindingKeySaltSize = 32
+	MinBindingKeyBytes = 32
+	// MaxBindingKeyBytes keeps caller-controlled HKDF input small. A generated
+	// 256-bit Base64URL key is only 43 bytes; 1 KiB leaves ample room for opaque
+	// operator formats without allowing multi-megabyte derivation work.
+	MaxBindingKeyBytes = 1024
+)
 
-const clientKeySaltSize = 32
-
-// ErrClientTokenRequired is returned when decrypting a client-bound version
-// without a token. Transport layers must surface it generically.
-var ErrClientTokenRequired = errors.New("client token required")
+var (
+	ErrBindingKeyRequired    = errors.New("binding key required")
+	ErrBindingKeyTooShort    = errors.New("binding key must be at least 32 UTF-8 bytes")
+	ErrBindingKeyTooLong     = errors.New("binding key must be at most 1024 UTF-8 bytes")
+	ErrBindingKeyInvalidUTF8 = errors.New("binding key must be valid UTF-8")
+)
 
 // BuildAAD returns the canonical associated-data string binding a secret
 // version's ciphertext to its namespace-native identity. It is persisted
 // alongside the ciphertext and must match byte-for-byte at decrypt time.
-//
-// The env, app, and key components are expected to be keyutil-validated by the
-// caller (env/app are [a-z0-9-]; key segments are [a-z0-9._-] joined by '/'),
-// none of which can contain the ';' or '=' delimiters, so the encoding is
-// unambiguous without escaping.
 func BuildAAD(env, app, key string, version uint64) string {
 	return fmt.Sprintf("env=%s;app=%s;key=%s;version=%d", env, app, key, version)
 }
 
+// ValidateBindingKey validates only the binding-key wire contract. Binding
+// keys are otherwise opaque: in particular, no trimming or normalization is
+// performed and their content is never included in an error.
+func ValidateBindingKey(bindingKey string) error {
+	if bindingKey == "" {
+		return ErrBindingKeyRequired
+	}
+	if len(bindingKey) > MaxBindingKeyBytes {
+		return ErrBindingKeyTooLong
+	}
+	if !utf8.ValidString(bindingKey) {
+		return ErrBindingKeyInvalidUTF8
+	}
+	if len(bindingKey) < MinBindingKeyBytes {
+		return ErrBindingKeyTooShort
+	}
+	return nil
+}
+
 // EncryptResult carries everything storage persists for one secret version.
 type EncryptResult struct {
-	Ciphertext    []byte
-	EncryptedDEK  []byte // packed nonce||ct; contains the inner layer for client-bound
-	KEKID         string
-	WrapMode      string
-	ClientKeySalt []byte // nil for standard wrapping
-	Algorithm     string
-	Nonce         []byte // nonce of the value encryption
-	AAD           string
+	Ciphertext     []byte
+	EncryptedDEK   []byte // packed nonce||ct; contains the inner binding layer when bound
+	KEKID          string
+	WrapMode       string
+	BindingKeySalt []byte // nil for standard wrapping
+	Algorithm      string
+	Nonce          []byte // nonce of the value encryption
+	AAD            string
 }
 
-// DecryptInput carries the stored fields needed to recover a secret value.
+// DecryptInput carries the stored fields and caller credential needed to
+// recover a secret value.
 type DecryptInput struct {
-	Ciphertext    []byte
-	EncryptedDEK  []byte
-	Nonce         []byte
-	AAD           string
-	WrapMode      string
-	ClientKeySalt []byte
-	ClientToken   string // required iff WrapMode == client_bound
+	Ciphertext     []byte
+	EncryptedDEK   []byte
+	Nonce          []byte
+	AAD            string
+	WrapMode       string
+	BindingKeySalt []byte
+	BindingKey     string // required iff WrapMode == binding_key
 }
 
-// Encrypt performs standard envelope encryption: fresh 32-byte DEK encrypts
-// the plaintext; the KEK wraps the DEK.
+type bindingWrapResult struct {
+	EncryptedDEK   []byte
+	BindingKeySalt []byte
+	WrapMode       string
+	KEKID          string
+}
+
+// Encrypt performs standard envelope encryption: a fresh 32-byte DEK
+// encrypts the plaintext and the KEK wraps that DEK directly.
 func Encrypt(kek *KEK, plaintext []byte, aad string) (EncryptResult, error) {
 	return encrypt(kek, plaintext, aad, "")
 }
 
-// EncryptClientBound performs double-wrapped envelope encryption: the DEK is
-// first encrypted under a key derived from the client token (HKDF-SHA256 with
-// a fresh random salt), then the result is wrapped under the KEK. The token
-// itself is never returned or stored.
-func EncryptClientBound(kek *KEK, plaintext []byte, aad, clientToken string) (EncryptResult, error) {
-	if clientToken == "" {
-		return EncryptResult{}, ErrClientTokenRequired
+// EncryptBindingKey performs double-wrapped envelope encryption. A key
+// derived from the operator-supplied binding key wraps the DEK first, then the
+// server KEK wraps that inner ciphertext. The binding key is never retained.
+func EncryptBindingKey(kek *KEK, plaintext []byte, aad, bindingKey string) (EncryptResult, error) {
+	if err := ValidateBindingKey(bindingKey); err != nil {
+		return EncryptResult{}, err
 	}
-	return encrypt(kek, plaintext, aad, clientToken)
+	return encrypt(kek, plaintext, aad, bindingKey)
 }
 
-func encrypt(kek *KEK, plaintext []byte, aad, clientToken string) (EncryptResult, error) {
+func encrypt(kek *KEK, plaintext []byte, aad, bindingKey string) (EncryptResult, error) {
 	if kek == nil {
 		return EncryptResult{}, errors.New("nil KEK")
 	}
@@ -91,93 +119,88 @@ func encrypt(kek *KEK, plaintext []byte, aad, clientToken string) (EncryptResult
 	}
 	defer Zero(dek)
 
-	nonce, ct, err := seal(dek, plaintext, []byte(aad+aadSuffixValue))
+	nonce, ciphertext, err := seal(dek, plaintext, []byte(aad+aadSuffixValue))
 	if err != nil {
 		return EncryptResult{}, err
 	}
 
-	res := EncryptResult{
-		Ciphertext: ct,
+	result := EncryptResult{
+		Ciphertext: ciphertext,
 		KEKID:      kek.ID,
 		WrapMode:   domain.WrapModeStandard,
 		Algorithm:  AlgorithmAES256GCM,
 		Nonce:      nonce,
 		AAD:        aad,
 	}
-
-	toWrap := dek
-	if clientToken != "" {
-		salt, err := randomBytes(clientKeySaltSize)
-		if err != nil {
-			return EncryptResult{}, err
-		}
-		clientKey, err := deriveClientKey(clientToken, salt)
-		if err != nil {
-			return EncryptResult{}, err
-		}
-		inner, err := sealPacked(clientKey, dek, []byte(aad+aadSuffixDEKInner))
-		Zero(clientKey)
-		if err != nil {
-			return EncryptResult{}, err
-		}
-		res.WrapMode = domain.WrapModeClientBound
-		res.ClientKeySalt = salt
-		toWrap = inner
+	if bindingKey == "" {
+		result.EncryptedDEK, err = sealPacked(kek.key, dek, []byte(aad+aadSuffixDEK))
+		return result, err
 	}
 
-	wrapped, err := sealPacked(kek.key, toWrap, []byte(aad+aadSuffixDEK))
+	rewrapped, err := wrapDEKWithBindingKey(kek, dek, aad, bindingKey)
 	if err != nil {
 		return EncryptResult{}, err
 	}
-	res.EncryptedDEK = wrapped
-	return res, nil
+	result.EncryptedDEK = rewrapped.EncryptedDEK
+	result.WrapMode = rewrapped.WrapMode
+	result.BindingKeySalt = rewrapped.BindingKeySalt
+	return result, nil
 }
 
-// Decrypt reverses Encrypt/EncryptClientBound. Any failure — wrong KEK, wrong
-// client token, tampered ciphertext, AAD mismatch — surfaces as
-// domain.ErrDecryptFailed with no distinguishing detail.
+// Decrypt reverses Encrypt or EncryptBindingKey. Authentication failures are
+// deliberately collapsed to domain.ErrDecryptFailed.
 func Decrypt(kek *KEK, in DecryptInput) ([]byte, error) {
 	if kek == nil {
 		return nil, errors.New("nil KEK")
 	}
-	inner, err := openPacked(kek.key, in.EncryptedDEK, []byte(in.AAD+aadSuffixDEK))
-	if err != nil {
-		return nil, domain.ErrDecryptFailed
-	}
-	defer Zero(inner)
 
-	dek := inner
+	var dek []byte
+	var err error
 	switch in.WrapMode {
 	case domain.WrapModeStandard:
-	case domain.WrapModeClientBound:
-		if in.ClientToken == "" {
-			return nil, ErrClientTokenRequired
-		}
-		clientKey, err := deriveClientKey(in.ClientToken, in.ClientKeySalt)
-		if err != nil {
+		if len(in.BindingKeySalt) != 0 {
 			return nil, domain.ErrDecryptFailed
 		}
-		unwrapped, err := openPacked(clientKey, inner, []byte(in.AAD+aadSuffixDEKInner))
-		Zero(clientKey)
-		if err != nil {
-			return nil, domain.ErrDecryptFailed
+		dek, err = openStandardDEK(kek, in.EncryptedDEK, in.AAD)
+	case domain.WrapModeBindingKey:
+		if err := ValidateBindingKey(in.BindingKey); err != nil {
+			return nil, err
 		}
-		defer Zero(unwrapped)
-		dek = unwrapped
+		dek, err = openBindingKeyDEK(kek, in.EncryptedDEK, in.BindingKeySalt, in.AAD, in.BindingKey)
 	default:
 		return nil, fmt.Errorf("unknown wrap mode %q: %w", in.WrapMode, domain.ErrDecryptFailed)
 	}
-
-	pt, err := open(dek, in.Nonce, in.Ciphertext, []byte(in.AAD+aadSuffixValue))
 	if err != nil {
 		return nil, domain.ErrDecryptFailed
 	}
-	return pt, nil
+	defer Zero(dek)
+
+	plaintext, err := open(dek, in.Nonce, in.Ciphertext, []byte(in.AAD+aadSuffixValue))
+	if err != nil {
+		return nil, domain.ErrDecryptFailed
+	}
+	return plaintext, nil
 }
 
-// RewrapDEK re-encrypts a stored encrypted DEK from one KEK to another
-// without touching the value ciphertext or, for client-bound versions, the
-// inner client layer. This keeps KEK rotation a server-side-only operation.
+// TestBindingKeyDEK cryptographically tests cohort membership. It returns no
+// key material and zeroes the opened DEK before returning.
+func TestBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindingKey string) error {
+	if kek == nil {
+		return errors.New("nil KEK")
+	}
+	if err := ValidateBindingKey(bindingKey); err != nil {
+		return err
+	}
+	dek, err := openBindingKeyDEK(kek, encryptedDEK, bindingKeySalt, aad, bindingKey)
+	if err != nil {
+		return domain.ErrDecryptFailed
+	}
+	Zero(dek)
+	return nil
+}
+
+// RewrapDEK re-encrypts the outer DEK layer from one KEK to another without
+// touching the value ciphertext or any binding-key inner layer.
 func RewrapDEK(from, to *KEK, encryptedDEK []byte, aad string) ([]byte, error) {
 	if from == nil || to == nil {
 		return nil, errors.New("nil KEK")
@@ -190,15 +213,95 @@ func RewrapDEK(from, to *KEK, encryptedDEK []byte, aad string) ([]byte, error) {
 	return sealPacked(to.key, inner, []byte(aad+aadSuffixDEK))
 }
 
-// deriveClientKey derives the 32-byte client key from the per-secret token.
-func deriveClientKey(token string, salt []byte) ([]byte, error) {
-	if len(salt) != clientKeySaltSize {
-		return nil, fmt.Errorf("client key salt must be %d bytes", clientKeySaltSize)
-	}
-	key := make([]byte, keySize)
-	r := hkdf.New(sha256.New, []byte(token), salt, []byte(hkdfInfoClientBound))
-	if _, err := r.Read(key); err != nil {
+func openStandardDEK(kek *KEK, encryptedDEK []byte, aad string) ([]byte, error) {
+	dek, err := openPacked(kek.key, encryptedDEK, []byte(aad+aadSuffixDEK))
+	if err != nil {
 		return nil, err
 	}
-	return key, nil
+	if len(dek) != keySize {
+		Zero(dek)
+		return nil, errAEAD
+	}
+	return dek, nil
+}
+
+func openBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindingKey string) ([]byte, error) {
+	if len(bindingKeySalt) != BindingKeySaltSize {
+		return nil, errAEAD
+	}
+	inner, err := openPacked(kek.key, encryptedDEK, []byte(aad+aadSuffixDEK))
+	if err != nil {
+		return nil, err
+	}
+	defer Zero(inner)
+
+	derivedKey, err := deriveBindingKey(bindingKey, bindingKeySalt)
+	if err != nil {
+		return nil, err
+	}
+	defer Zero(derivedKey)
+	dek, err := openPacked(derivedKey, inner, []byte(aad+aadSuffixDEKInner))
+	if err != nil {
+		return nil, err
+	}
+	if len(dek) != keySize {
+		Zero(dek)
+		return nil, errAEAD
+	}
+	return dek, nil
+}
+
+func wrapDEKWithBindingKey(kek *KEK, dek []byte, aad, bindingKey string) (bindingWrapResult, error) {
+	if err := ValidateBindingKey(bindingKey); err != nil {
+		return bindingWrapResult{}, err
+	}
+	salt, err := randomBytes(BindingKeySaltSize)
+	if err != nil {
+		return bindingWrapResult{}, err
+	}
+	derivedKey, err := deriveBindingKey(bindingKey, salt)
+	if err != nil {
+		Zero(salt)
+		return bindingWrapResult{}, err
+	}
+	inner, err := sealPacked(derivedKey, dek, []byte(aad+aadSuffixDEKInner))
+	Zero(derivedKey)
+	if err != nil {
+		Zero(salt)
+		return bindingWrapResult{}, err
+	}
+	defer Zero(inner)
+
+	outer, err := sealPacked(kek.key, inner, []byte(aad+aadSuffixDEK))
+	if err != nil {
+		Zero(salt)
+		return bindingWrapResult{}, err
+	}
+	return bindingWrapResult{
+		EncryptedDEK:   outer,
+		BindingKeySalt: salt,
+		WrapMode:       domain.WrapModeBindingKey,
+		KEKID:          kek.ID,
+	}, nil
+}
+
+func deriveBindingKey(bindingKey string, salt []byte) ([]byte, error) {
+	if err := ValidateBindingKey(bindingKey); err != nil {
+		return nil, err
+	}
+	if len(salt) != BindingKeySaltSize {
+		return nil, fmt.Errorf("binding key salt must be %d bytes", BindingKeySaltSize)
+	}
+
+	// The conversion is required by HKDF. Zero this mutable copy promptly; the
+	// caller-owned Go string itself cannot be reliably erased.
+	inputKeyMaterial := []byte(bindingKey)
+	defer Zero(inputKeyMaterial)
+	derivedKey := make([]byte, keySize)
+	r := hkdf.New(sha256.New, inputKeyMaterial, salt, []byte(hkdfInfoBindingKey))
+	if _, err := io.ReadFull(r, derivedKey); err != nil {
+		Zero(derivedKey)
+		return nil, err
+	}
+	return derivedKey, nil
 }

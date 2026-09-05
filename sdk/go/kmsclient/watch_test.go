@@ -381,11 +381,11 @@ func TestWatchNamespace(t *testing.T) {
 	}
 }
 
-func TestWatchSecretChangeInvalidatesCache(t *testing.T) {
+func TestWatchSecretChangeAndFreshRead(t *testing.T) {
 	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
 	srv.SetSecret(testNS, "db/pw", []byte("v1"))
 
-	// Prime the cache.
+	// Read once before the change; secret plaintext is never cached.
 	if s, _ := c.GetSecret(context.Background(), "db/pw"); s.StringValue() != "v1" {
 		t.Fatalf("prime = %q", s.StringValue())
 	}
@@ -414,12 +414,12 @@ func TestWatchSecretChangeInvalidatesCache(t *testing.T) {
 		t.Fatal("secret change event not delivered")
 	}
 
-	// After invalidation, a fresh read should see the rotated value.
+	// A fresh read sees the rotated value.
 	if !eventually(t, waitTimeout, func() bool {
 		s, _ := c.GetSecret(context.Background(), "db/pw")
 		return s.StringValue() == "v2"
 	}) {
-		t.Error("secret cache not invalidated by secret_change event")
+		t.Error("fresh secret read did not see secret_change value")
 	}
 }
 
@@ -628,26 +628,6 @@ func TestDeleteTombstoneFencesStaleReconcile(t *testing.T) {
 	m.mu.Unlock()
 	if !ok || known.present || known.rev != 6 {
 		t.Fatalf("known state after stale reconcile = %+v, present=%v; want rev-6 tombstone", known, ok)
-	}
-}
-
-func TestFullSnapshotInvalidatesSecretsInStreamNamespaces(t *testing.T) {
-	c, _ := newTestClient(t, Config{CacheTTL: time.Minute})
-	m := c.subs()
-	scoped := "/prod/app/db/password"
-	other := "/prod/other/db/password"
-	c.cache.putSecret(scoped, 0, "", Secret{})
-	c.cache.putSecret(other, 0, "", Secret{})
-	m.mu.Lock()
-	m.streamNamespaces = []namespaceRef{{env: "prod", app: "app"}}
-	m.mu.Unlock()
-
-	m.applySnapshot(&kmsv1.Snapshot{}, 20)
-	if _, ok := c.cache.getSecret(scoped, 0, ""); ok {
-		t.Fatal("full snapshot left a scoped secret cache entry stale")
-	}
-	if _, ok := c.cache.getSecret(other, 0, ""); !ok {
-		t.Fatal("full snapshot invalidated a secret outside its stream scope")
 	}
 }
 

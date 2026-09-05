@@ -5,6 +5,7 @@ import json
 import logging
 
 import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from kms_paramstore import Secret
 
@@ -74,3 +75,41 @@ def test_unhashable():
         hash(Secret(b"a"))
     with pytest.raises(TypeError):
         {Secret(b"a")}
+
+
+def test_binding_declaration_copy_and_pydantic_rendering_are_redacted():
+    import copy
+
+    binding_key = "binding-key-canary-that-must-not-leak"
+    declaration = Secret(bind_key=binding_key)
+    assert declaration.bind_key == binding_key
+    assert declaration.is_empty()
+    assert copy.copy(declaration).bind_key == binding_key
+    assert copy.deepcopy(declaration).bind_key == binding_key
+    assert binding_key not in repr(declaration)
+
+    class Model(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+        secret: Secret
+
+    model = Model(secret=declaration)
+    assert model.model_dump() == {"secret": "[REDACTED]"}
+    assert json.loads(model.model_dump_json()) == {"secret": "[REDACTED]"}
+    with pytest.raises(ValidationError) as caught:
+        Model(secret=binding_key)  # type: ignore[arg-type]
+    assert binding_key not in str(caught.value)
+
+
+def test_binding_key_type_error_never_renders_the_rejected_value():
+    canary = "wrong-bind-key-type-canary"
+
+    class HostileValue:
+        def __repr__(self) -> str:
+            return canary
+
+        __str__ = __repr__
+
+    with pytest.raises(TypeError) as caught:
+        Secret(bind_key=HostileValue())  # type: ignore[arg-type]
+    assert canary not in str(caught.value)
+    assert canary not in repr(caught.value)

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -21,9 +23,9 @@ import (
 	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
-// schemaVersion is the schema version this build supports. Opening a database
-// stamped with a higher version is refused.
-const schemaVersion = 8
+// schemaVersion is the greenfield 0.3.x baseline. This build intentionally has
+// no executable migration path from any 0.2.x schema.
+const schemaVersion = 1
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -46,6 +48,7 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	value          TEXT,
 	content_type   TEXT NOT NULL DEFAULT '',
 	version_number INTEGER NOT NULL DEFAULT 0,
+	affected_versions_json TEXT NOT NULL DEFAULT '[]',
 	label          TEXT NOT NULL DEFAULT '',
 	created_at     TEXT NOT NULL
 )`
@@ -53,9 +56,22 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 const changeLogIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_ns ON change_log(env, app)`
 const changeLogNamespaceIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_namespace_revision ON change_log(namespace_id, revision)`
 
+const (
+	sqlStoreMaxOpenConns = 0 // database/sql default: unlimited
+	sqlStoreMaxIdleConns = 2 // database/sql default, made explicit for restoration after purge
+)
+
+var baselineReferenceID atomic.Uint64
+
 // SQLStore is the SQLite-backed implementation of Store.
 type SQLStore struct {
 	db *gorm.DB
+
+	// purgeMu serializes the temporary database/sql pool quiescence used by a
+	// physical secret purge. It does not protect ordinary SQL transactions.
+	purgeMu          sync.Mutex
+	poolMaxOpenConns int
+	poolMaxIdleConns int
 }
 
 // compile-time assertion that *SQLStore satisfies Store.
@@ -77,7 +93,7 @@ func Open(path string) (*SQLStore, error) {
 }
 
 // ValidateKMSDatabase opens an existing database read-only and verifies that
-// it is a migrated KMS database supported by this build. Unlike Open it never
+// it is an exact KMS database baseline supported by this build. Unlike Open it never
 // creates a missing file or adds KMS tables to an unrelated SQLite database.
 func ValidateKMSDatabase(path string) error {
 	if path == "" {
@@ -90,42 +106,12 @@ func ValidateKMSDatabase(path string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("database %q is not a regular file", path)
 	}
-	abs, err := filepath.Abs(path)
+	empty, err := inspectBaselinePath(path)
 	if err != nil {
-		return fmt.Errorf("resolve database path %q: %w", path, err)
+		return err
 	}
-	databaseURI := sqliteFileURI(filepath.ToSlash(abs))
-	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
-		Logger:                 logger.Default.LogMode(logger.Silent),
-		SkipDefaultTransaction: true,
-	})
-	if err != nil {
-		return fmt.Errorf("open database %q read-only: %w", path, err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return fmt.Errorf("access database %q: %w", path, err)
-	}
-	defer func() { _ = sqlDB.Close() }()
-
-	for _, table := range []string{"schema_migrations", "key_metadata", "namespaces", "identities", "change_log"} {
-		var count int64
-		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
-			return fmt.Errorf("inspect database %q: %w", path, err)
-		}
-		if count != 1 {
-			return fmt.Errorf("database %q is not a KMS database (missing table %s)", path, table)
-		}
-	}
-	var stored schemaMigrationModel
-	if err := db.Order("version DESC").First(&stored).Error; err != nil {
-		return fmt.Errorf("database %q has no valid KMS schema version: %w", path, err)
-	}
-	if stored.Version > schemaVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d; upgrade the binary", stored.Version, schemaVersion)
-	}
-	if stored.Version < 1 {
-		return fmt.Errorf("database %q has invalid KMS schema version %d", path, stored.Version)
+	if empty {
+		return incompatibleBaseline("database %q is empty", path)
 	}
 	return nil
 }
@@ -144,19 +130,34 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	// effective permissions to the process umask. Reserve a missing path with a
 	// restrictive mode first; O_EXCL also ensures this step never truncates an
 	// existing database. Existing databases retain their operator-selected mode.
+	initialize := false
 	created, err := fileutil.OpenPrivateExclusive(stablePath)
 	if err == nil {
+		initialize = true
 		if err := created.Close(); err != nil {
 			return nil, fmt.Errorf("close new database %q: %w", path, err)
 		}
 	} else if errors.Is(err, os.ErrExist) {
-		// Never hand SQLite a symlink, an attacker-owned pre-existing entry, or
-		// an inherited broad ACL. The entry-stable parent plus exact-file checks
-		// make the secured path safe to reuse for SQLite's pathname open.
+		// Compatibility inspection must precede any permission normalization.
+		// A rejected database is operator data, not ours to chmod or otherwise
+		// mutate. First prove, without chmod or writes, that the existing entry is
+		// the current user's already-private stable regular file.
+		stablePath, err = fileutil.ValidateExistingPrivateFile(stablePath)
+		if err != nil {
+			return nil, fmt.Errorf("validate existing database %q: %w", path, err)
+		}
+		empty, inspectErr := inspectBaselinePath(stablePath)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		// Only a compatible baseline (or a truly schema-empty file) becomes KMS
+		// state. At that point enforce the private-file contract before reopening
+		// it read-write.
 		stablePath, err = fileutil.SecureExistingPrivateFile(stablePath)
 		if err != nil {
 			return nil, fmt.Errorf("secure existing database %q: %w", path, err)
 		}
+		initialize = empty
 	} else {
 		return nil, fmt.Errorf("create database %q: %w", path, err)
 	}
@@ -175,7 +176,7 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	// PutParameter calls racing to assign the next version).
 	databaseURI := sqliteFileURI(filepath.ToSlash(absPath))
 	dsn := fmt.Sprintf(
-		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(%s)",
+		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=secure_delete(ON)&_pragma=synchronous(%s)",
 		databaseURI, busy.Milliseconds(), sync,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -185,8 +186,37 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database %q: %w", path, err)
 	}
-	s := &SQLStore{db: db}
-	if err := s.migrate(); err != nil {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("access database %q: %w", path, err)
+	}
+	// Own the pool policy explicitly. database/sql exposes the current max-open
+	// value but has no max-idle getter, while physical purge temporarily changes
+	// both and must restore them exactly.
+	sqlDB.SetMaxOpenConns(sqlStoreMaxOpenConns)
+	sqlDB.SetMaxIdleConns(sqlStoreMaxIdleConns)
+	s := &SQLStore{
+		db:               db,
+		poolMaxOpenConns: sqlStoreMaxOpenConns,
+		poolMaxIdleConns: sqlStoreMaxIdleConns,
+	}
+	if initialize {
+		err = initializeBaseline(db)
+	} else {
+		err = verifyBaselineDB(db)
+	}
+	if err == nil {
+		// Recover from a crash after a logically committed purge but before its
+		// WAL cleanup. The store is not returned to callers until every frame has
+		// been checkpointed and the WAL has been truncated.
+		err = db.WithContext(context.Background()).Connection(func(conn *gorm.DB) error {
+			return truncateWAL(conn)
+		})
+		if err != nil {
+			err = fmt.Errorf("prepare database %q for service: %w", path, err)
+		}
+	}
+	if err != nil {
 		if sqlDB, e := db.DB(); e == nil {
 			_ = sqlDB.Close()
 		}
@@ -216,170 +246,187 @@ func isWindowsDriveSlashPath(path string) bool {
 	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
-func (s *SQLStore) migrate() error {
-	if err := s.db.AutoMigrate(&schemaMigrationModel{}); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
-	}
-	var stored schemaMigrationModel
-	current := 0
-	err := s.db.Order("version DESC").First(&stored).Error
-	switch {
-	case err == nil:
-		current = stored.Version
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		current = 0
-	default:
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if current > schemaVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d; upgrade the binary", current, schemaVersion)
-	}
-	needsOwnershipRewrite := current < 8 && ((s.db.Migrator().HasTable("configuration_schemas") && s.db.Migrator().HasColumn("configuration_schemas", "id")) ||
-		(s.db.Migrator().HasTable("applications") && s.db.Migrator().HasColumn("applications", "schema_id")) ||
-		(s.db.Migrator().HasTable("configuration_releases") && s.db.Migrator().HasColumn("configuration_releases", "schema_id")))
-	if needsOwnershipRewrite {
-		// The complete v8 upgrade, including unrelated additive migrations and
-		// the version stamp, is atomic for every database that still needs an
-		// ownership rewrite. This is intentionally conditional: GORM cannot
-		// rebuild an already-v8 SQLite table graph inside a foreign-key-enabled
-		// transaction, which matters only for stale stamps on an already migrated
-		// physical schema (where no ownership rewrite remains to roll back).
-		return s.db.Transaction(func(tx *gorm.DB) error {
-			return migrateSchema(tx, current)
-		})
-	}
-	return migrateSchema(s.db, current)
+func incompatibleBaseline(format string, args ...any) error {
+	return fmt.Errorf("incompatible 0.3.x database baseline: "+format+"; create a fresh database for KMS 0.3.x", args...)
 }
 
-func migrateSchema(db *gorm.DB, current int) error {
-	// change_log is created explicitly to guarantee AUTOINCREMENT regardless of
-	// how GORM renders the tag.
-	if err := db.Exec(changeLogDDL).Error; err != nil {
+func inspectBaselinePath(path string) (bool, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve database path %q: %w", path, err)
+	}
+	databaseURI := sqliteFileURI(filepath.ToSlash(abs))
+	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Silent),
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		return false, incompatibleBaseline("cannot inspect database %q read-only: %v", path, err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return false, fmt.Errorf("access database %q: %w", path, err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	return inspectBaselineDB(db)
+}
+
+type baselineSchemaObject struct {
+	Type      string
+	Name      string
+	TableName string
+	SQL       string
+}
+
+func readBaselineSchema(db *gorm.DB) ([]baselineSchemaObject, error) {
+	var objects []baselineSchemaObject
+	err := db.Raw(`SELECT type, name, tbl_name AS table_name, COALESCE(sql, '') AS sql
+		FROM sqlite_master
+		WHERE type IN ('table', 'index', 'trigger', 'view')
+		  AND name NOT GLOB 'sqlite_*'
+		ORDER BY type, name`).Scan(&objects).Error
+	return objects, err
+}
+
+func materializeBaseline(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&schemaMigrationModel{}); err != nil {
+		return fmt.Errorf("create schema version table: %w", err)
+	}
+	if err := tx.AutoMigrate(autoMigrateModels...); err != nil {
+		return fmt.Errorf("create 0.3.x baseline: %w", err)
+	}
+	if err := tx.Exec(changeLogDDL).Error; err != nil {
 		return fmt.Errorf("create change_log: %w", err)
 	}
-	// CREATE TABLE IF NOT EXISTS does not evolve existing raw-DDL tables. Legacy
-	// rows remain namespace_id=0 and therefore fail closed for incarnation-bound
-	// watch replay; all new rows are stamped by appendChange.
-	if !db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
-		if err := db.Exec("ALTER TABLE change_log ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 0").Error; err != nil {
-			return fmt.Errorf("add change_log namespace incarnation: %w", err)
-		}
-	}
-	if err := db.Exec(changeLogIndexDDL).Error; err != nil {
+	if err := tx.Exec(changeLogIndexDDL).Error; err != nil {
 		return fmt.Errorf("create change_log index: %w", err)
 	}
-	if err := db.Exec(changeLogNamespaceIndexDDL).Error; err != nil {
-		return fmt.Errorf("create change_log namespace incarnation index: %w", err)
+	if err := tx.Exec(changeLogNamespaceIndexDDL).Error; err != nil {
+		return fmt.Errorf("create change_log namespace index: %w", err)
 	}
-	if err := ensureReleaseSubscriberIdentityKeys(db); err != nil {
+	if err := tx.Create(&schemaMigrationModel{Version: schemaVersion, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	return nil
+}
+
+func referenceBaselineSchema() ([]baselineSchemaObject, error) {
+	// Shared in-memory databases are keyed by name. A timestamp is not unique
+	// enough here: Windows clocks can return the same value to concurrent calls,
+	// making otherwise independent verifiers race over one schema_migrations
+	// table. The process-local sequence is collision-free for the lifetime in
+	// which an in-memory database can exist.
+	dsn := fmt.Sprintf("file:kms-baseline-reference-%d?mode=memory&cache=shared", baselineReferenceID.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Silent),
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create baseline verifier: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("access baseline verifier: %w", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	if err := db.Transaction(materializeBaseline); err != nil {
+		return nil, fmt.Errorf("materialize baseline verifier: %w", err)
+	}
+	return readBaselineSchema(db)
+}
+
+func inspectBaselineDB(db *gorm.DB) (bool, error) {
+	actual, err := readBaselineSchema(db)
+	if err != nil {
+		return false, incompatibleBaseline("cannot inspect schema: %v", err)
+	}
+	// Initialization is allowed only for a database with no user schema objects
+	// whatsoever. A view, trigger, or standalone user index is state just as a
+	// table is and must never be overwritten by KMS initialization.
+	if len(actual) == 0 {
+		return true, nil
+	}
+
+	expected, err := referenceBaselineSchema()
+	if err != nil {
+		return false, err
+	}
+	if len(actual) != len(expected) {
+		return false, incompatibleBaseline("physical schema has %d objects; expected %d", len(actual), len(expected))
+	}
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return false, incompatibleBaseline("physical schema differs at %s %q", actual[i].Type, actual[i].Name)
+		}
+	}
+
+	var stamps []schemaMigrationModel
+	if err := db.Order("version ASC").Find(&stamps).Error; err != nil {
+		return false, incompatibleBaseline("cannot read schema version: %v", err)
+	}
+	if len(stamps) != 1 || stamps[0].Version != schemaVersion {
+		versions := make([]string, 0, len(stamps))
+		for _, stamp := range stamps {
+			versions = append(versions, strconv.Itoa(stamp.Version))
+		}
+		return false, incompatibleBaseline("schema stamp must be exactly %d (found %s)", schemaVersion, strings.Join(versions, ", "))
+	}
+	return false, nil
+}
+
+func verifyBaselineDB(db *gorm.DB) error {
+	empty, err := inspectBaselineDB(db)
+	if err != nil {
 		return err
 	}
-	needsSecretVersionAttributeBackfill := current < 2 ||
-		!db.Migrator().HasColumn(&secretVersionModel{}, "ContentType") ||
-		!db.Migrator().HasColumn(&secretVersionModel{}, "ClientBound") ||
-		!db.Migrator().HasColumn(&secretVersionModel{}, "HasAccessToken")
-	migratedSchemaOwnership := current < 8 && ((db.Migrator().HasTable("configuration_schemas") && db.Migrator().HasColumn("configuration_schemas", "id")) ||
-		(db.Migrator().HasTable("applications") && db.Migrator().HasColumn("applications", "schema_id")) ||
-		(db.Migrator().HasTable("configuration_releases") && db.Migrator().HasColumn("configuration_releases", "schema_id")))
-	// GORM attempts to rebuild manually repaired SQLite composite-key tables
-	// when its inferred DDL differs textually, even when the physical key is
-	// already correct. Migrate the ordinary models first, then create subscriber
-	// tables only when absent; existing tables were repaired and are verified by
-	// physical schema below.
-	ordinaryModels := make([]any, 0, len(autoMigrateModels)-2)
-	for _, model := range autoMigrateModels {
-		switch model.(type) {
-		case *releaseSubscriberStateModel, *releaseSubscriberConnectionModel:
-			continue
-		case *applicationModel, *configurationReleaseModel, *configurationSchemaModel:
-			if migratedSchemaOwnership {
-				// These three tables are rebuilt by the ownership migration below.
-				// Asking GORM to reinterpret their SQLite DDL can trigger another
-				// lossy rebuild while configuration_schemas has an inbound FK.
-				continue
-			}
-		}
-		ordinaryModels = append(ordinaryModels, model)
+	if empty {
+		return incompatibleBaseline("database is empty")
 	}
-	autoMigrateDB := db
-	ignoreRelationships := autoMigrateDB.IgnoreRelationshipsWhenMigrating
-	if migratedSchemaOwnership {
-		// Do not let associations on otherwise unrelated models recursively add
-		// one of the three ownership tables back into GORM's migration set.
-		autoMigrateDB.IgnoreRelationshipsWhenMigrating = true
-	}
-	err := autoMigrateDB.AutoMigrate(ordinaryModels...)
-	autoMigrateDB.IgnoreRelationshipsWhenMigrating = ignoreRelationships
-	if err != nil {
-		return fmt.Errorf("auto-migrate: %w", err)
-	}
-	if !db.Migrator().HasTable(&releaseSubscriberStateModel{}) {
-		if err := db.AutoMigrate(&releaseSubscriberStateModel{}); err != nil {
-			return fmt.Errorf("create release subscriber states: %w", err)
-		}
-	}
-	if !db.Migrator().HasTable(&releaseSubscriberConnectionModel{}) {
-		if err := db.AutoMigrate(&releaseSubscriberConnectionModel{}); err != nil {
-			return fmt.Errorf("create release subscriber connections: %w", err)
-		}
-	}
-	if err := verifyReleaseSubscriberIdentityKeys(db); err != nil {
-		return fmt.Errorf("verify release subscriber identity keys: %w", err)
-	}
-	// v7: applied-generation divergence on subscriber lifecycle rows. The
-	// states table is created only when absent (see above), so an existing
-	// table gains the columns through explicit DDL. Legacy rows read as
-	// not-divergent, which is the correct pre-v7 meaning.
-	for _, column := range []struct{ field, ddl string }{
-		{"AppliedDivergent", "ALTER TABLE release_subscriber_states ADD COLUMN applied_divergent INTEGER NOT NULL DEFAULT 0"},
-		{"DivergentFieldCount", "ALTER TABLE release_subscriber_states ADD COLUMN divergent_field_count INTEGER NOT NULL DEFAULT 0"},
-	} {
-		if db.Migrator().HasColumn(&releaseSubscriberStateModel{}, column.field) {
-			continue
-		}
-		if err := db.Exec(column.ddl).Error; err != nil {
-			return fmt.Errorf("add release subscriber divergence column %s: %w", column.field, err)
-		}
-	}
-	if needsSecretVersionAttributeBackfill {
-		// v2 makes content/protection metadata immutable per secret version.
-		// Older schemas only retained the latest values on secrets, so that is
-		// the only safe backfill available for existing version history. Future
-		// writes persist the attributes alongside every new version.
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			return tx.Exec(`UPDATE secret_versions
-				SET content_type = (SELECT content_type FROM secrets WHERE secrets.id = secret_versions.secret_id),
-				    client_bound = (SELECT client_bound FROM secrets WHERE secrets.id = secret_versions.secret_id),
-				    has_access_token = CASE WHEN COALESCE(length((SELECT access_token_hash FROM secrets WHERE secrets.id = secret_versions.secret_id)), 0) > 0 THEN 1 ELSE 0 END`).Error
-		}); err != nil {
-			return fmt.Errorf("backfill secret version attributes: %w", err)
-		}
-	}
+	return nil
+}
 
-	// Defensive verification of the critical AUTOINCREMENT invariant.
-	var ddl string
-	if err := db.Raw("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_log'").Scan(&ddl).Error; err != nil {
-		return fmt.Errorf("inspect change_log: %w", err)
-	}
-	if !strings.Contains(strings.ToUpper(ddl), "AUTOINCREMENT") {
-		return fmt.Errorf("change_log is missing AUTOINCREMENT: %q", ddl)
-	}
+func initializeBaseline(db *gorm.DB) error {
+	return initializeBaselineWithVerifier(db, verifyBaselineDB)
+}
 
-	if current < schemaVersion {
-		// The ownership rewrite and the v8 stamp are one transaction. If either
-		// the strict legacy validation/rebuild or the final stamp fails, SQLite
-		// rolls both back and the database remains a repairable pre-v8 database.
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			if err := migrateSchemaOwnershipV8(tx, current); err != nil {
-				return err
-			}
-			if err := tx.Create(&schemaMigrationModel{Version: schemaVersion, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
-				return fmt.Errorf("record schema version: %w", err)
-			}
-			return nil
-		}); err != nil {
+func initializeBaselineWithVerifier(db *gorm.DB, verify func(*gorm.DB) error) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'index', 'trigger', 'view') AND name NOT GLOB 'sqlite_*'").Scan(&count).Error; err != nil {
+			return fmt.Errorf("inspect empty database: %w", err)
+		}
+		if count != 0 {
+			return incompatibleBaseline("database changed while it was being opened")
+		}
+		if err := materializeBaseline(tx); err != nil {
 			return err
 		}
+		// Exact physical-schema and stamp verification belongs inside this same
+		// transaction. If model materialization ever drifts from the accepted
+		// baseline, returning the verifier error rolls every DDL change back.
+		return verify(tx)
+	})
+}
+
+type walCheckpointResult struct {
+	Busy         int
+	Log          int
+	Checkpointed int
+}
+
+// truncateWAL checkpoints every committed frame into the main database and
+// truncates the live WAL artifact. SQLite documents a successful TRUNCATE
+// checkpoint as the exact tuple (busy, log, checkpointed) = (0, 0, 0); merely
+// executing the PRAGMA without inspecting its row can silently accept BUSY.
+// db must be pinned to one physical connection when concurrent use is possible.
+func truncateWAL(db *gorm.DB) error {
+	var result walCheckpointResult
+	row := db.Raw("PRAGMA main.wal_checkpoint(TRUNCATE)").Row()
+	if err := row.Scan(&result.Busy, &result.Log, &result.Checkpointed); err != nil {
+		return fmt.Errorf("truncate SQLite WAL: %w", err)
+	}
+	if result.Busy != 0 || result.Log != 0 || result.Checkpointed != 0 {
+		return fmt.Errorf("truncate SQLite WAL incomplete (busy=%d, log=%d, checkpointed=%d)", result.Busy, result.Log, result.Checkpointed)
 	}
 	return nil
 }
@@ -603,6 +650,9 @@ func appendChange(tx *gorm.DB, cl *changeLogModel) (uint64, error) {
 	}
 	if cl.CreatedAt == "" {
 		cl.CreatedAt = fmtTime(time.Now())
+	}
+	if cl.AffectedVersionsJSON == "" {
+		cl.AffectedVersionsJSON = "[]"
 	}
 	if err := tx.Omit(clause.Associations).Create(cl).Error; err != nil {
 		return 0, err

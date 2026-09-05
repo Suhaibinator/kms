@@ -20,6 +20,7 @@ import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { StatusChip } from "@/components/StatusChip";
+import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import ShipModal from "@/components/ship/ShipModal";
 import { TransportBadge } from "@/components/TransportBadge";
@@ -27,10 +28,9 @@ import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
-import { api } from "@/lib/api";
+import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
-import { utf8ToBase64 } from "@/lib/encoding";
 import { links } from "@/lib/links";
 import type { FixAction } from "@/lib/readiness";
 import type {
@@ -200,6 +200,11 @@ export function ApplicationHome({
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
+  const [secretTarget, setSecretTarget] = useState<{
+    env: string;
+    app: string;
+    key: string;
+  } | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
   const [secretSaving, setSecretSaving] = useState(false);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
@@ -291,6 +296,10 @@ export function ApplicationHome({
     setSecretSeed({ environment, key: alias });
   }
 
+  function openExistingSecret(environment: string, key: string) {
+    setSecretTarget({ env: environment, app: application.name, key });
+  }
+
   function onSetupAction(action: SetupAction) {
     switch (action.kind) {
       case "edit-definition":
@@ -358,7 +367,7 @@ export function ApplicationHome({
         void router.push(links.parameterDetail({ ...ns, key: keyFor(finding) }));
         break;
       case "open_secret":
-        void router.push(links.secretDetail({ ...ns, key: keyFor(finding) }));
+        openExistingSecret(ns.env, keyFor(finding));
         break;
       case "open_release": {
         const active = environments.find((candidate) => candidate.namespace.env === scopeEnv)
@@ -590,6 +599,7 @@ export function ApplicationHome({
               callbacks={{
                 onAddValue: openAddValue,
                 onAddSecret: openSecret,
+                onOpenSecret: openExistingSecret,
                 onShip: (environment, alias) => setShipTarget({ env: environment, alias }),
                 onRollback: setRollbackEnv,
                 onConnect: setConnectEnv,
@@ -631,6 +641,7 @@ export function ApplicationHome({
               }))}
               rows={overview.rows}
               onAddSecret={openSecret}
+              onOpenSecret={openExistingSecret}
               onEdit={openWriteRow}
             />
           </TabsContent>
@@ -755,25 +766,43 @@ export function ApplicationHome({
               env: request.environment,
               app: application.name,
               key: request.key,
-              value_base64: utf8ToBase64(request.value),
+              value_base64: request.valueBase64,
               content_type: request.contentType,
-              metadata_json: "{}",
-              client_bound: false,
-              generate_access_token: false,
-              expires_at_unix_ms: 0,
+              metadata_json: request.metadataJson,
+              ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
+              generate_access_token: request.generateAccessToken,
+              create_only: true,
+              expires_at_unix_ms: request.expiresAtUnixMs,
             });
             toast.success(
               `Secret created (version ${response.version})`,
-              `${application.name} · ${request.environment} · ${request.key}`,
+              response.access_token
+                ? "Save the access token before continuing."
+                : `${application.name} · ${request.environment} · ${request.key}`,
             );
-            setSecretSeed(null);
-            await reload();
+            return response;
           } catch (error) {
-            toast.error(error, "Failed to create secret");
+            if (isSecretAlreadyExists(error)) {
+              toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+            } else {
+              toast.error(error, "Failed to create secret");
+            }
+            throw error;
           } finally {
             setSecretSaving(false);
           }
         }}
+        onCreated={(ref) => {
+          setSecretSeed(null);
+          setSecretTarget(ref);
+          void reload();
+        }}
+      />
+      <SecretWorkspace
+        secretRef={secretTarget}
+        onClose={() => setSecretTarget(null)}
+        onChanged={() => void reload()}
+        onDeleted={() => void reload()}
       />
       <ImportDefaultsModal
         application={application.name}

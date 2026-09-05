@@ -76,7 +76,7 @@ func TestUnsealInitializeAndUnlockFileMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unseal(unlock): %v", err)
 	}
-	got, err := Decrypt(ring2.Active(), stdInput(res))
+	got, err := Decrypt(ring2.Active(), decryptInput(res, ""))
 	if err != nil {
 		t.Fatalf("Decrypt with re-unsealed keyring: %v", err)
 	}

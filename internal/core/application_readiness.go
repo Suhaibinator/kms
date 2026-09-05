@@ -123,13 +123,11 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		}
 		value.Key = ref.Key
 		if ref.NS != here {
-			// A cross-namespace pin: rows only cover this application, so the
-			// active pin is the evidence of presence.
-			value.Present = value.PinnedVersion > 0
-			if !value.Present {
-				incomplete = true
-				add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind}))
-			}
+			// Releases and derived refs are home-namespace only. Treat corrupt
+			// foreign refs as absent rather than accepting a pin as evidence that
+			// the resource exists.
+			incomplete = true
+			add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind}))
 			out.Values = append(out.Values, value)
 			continue
 		}
@@ -151,7 +149,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		value.Present = true
 		value.ContentType = cell.ContentType
 		value.CurrentVersion = cell.Version
-		value.ClientBound = cell.ClientBound
+		value.Bound = cell.Bound
 		switch field.Kind {
 		case domain.ReleaseEntryParameter:
 			if cell.ContentType != field.ContentType {
@@ -197,7 +195,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			Release: active.Release, ActivationRevision: active.ActivationRevision, PreviousVersion: active.PreviousVersion,
 			IsRolledBack: active.PreviousVersion > 0 && active.Release.Version < active.PreviousVersion,
 		}
-		if len(in.App.Contract) > 0 && !releaseMatchesContract(in.App.Contract, active.Release.Entries) {
+		if !releaseMatchesContract(in.App.Contract, here, active.Release) {
 			blocked = true
 			add(finding(domain.FindingContractReleaseMismatch, domain.FindingBlocking, envScope, nil))
 		}
@@ -323,14 +321,18 @@ func sortFindings(findings []domain.Finding) {
 	sort.SliceStable(findings, func(i, j int) bool { return severityRank[findings[i].Severity] < severityRank[findings[j].Severity] })
 }
 
-// releaseMatchesContract reports whether the entries are exactly the
-// contract's (alias, kind, parameter content type) set, in any order.
-func releaseMatchesContract(contract []domain.ApplicationContractField, entries []domain.ConfigurationReleaseEntry) bool {
-	if len(contract) != len(entries) {
+// releaseMatchesContract reports whether release belongs to home and its
+// entries are exactly the contract's (alias, kind, parameter content type)
+// set, in any order. Every pin must also belong to home.
+func releaseMatchesContract(contract []domain.ApplicationContractField, home domain.NamespaceRef, release domain.ConfigurationRelease) bool {
+	if release.Namespace != home || len(contract) != len(release.Entries) {
 		return false
 	}
-	byAlias := make(map[string]domain.ConfigurationReleaseEntry, len(entries))
-	for _, entry := range entries {
+	byAlias := make(map[string]domain.ConfigurationReleaseEntry, len(release.Entries))
+	for _, entry := range release.Entries {
+		if entry.Ref.NS != home || entry.ResourceNamespaceID <= 0 {
+			return false
+		}
 		byAlias[entry.Alias] = entry
 	}
 	for _, field := range contract {

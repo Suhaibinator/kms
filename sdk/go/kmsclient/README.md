@@ -23,7 +23,7 @@ cert/key plus the operator's server CA bundle.
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
-    CacheTTL:  time.Minute,                                         // optional in-memory read cache
+    CacheTTL:  time.Minute, // optional parameter cache; secrets are never cached
 })
 if err != nil {
     return err
@@ -77,7 +77,10 @@ Read options:
 ```go
 client.GetParameter(ctx, key, kmsclient.WithVersion(3))
 client.GetSecret(ctx, key, kmsclient.WithLabel("previous"))
-client.GetSecret(ctx, key, kmsclient.WithSecretToken(tok)) // token-protected / client-bound
+client.GetSecret(ctx, key,
+    kmsclient.WithSecretToken(tok),   // when access-token protected
+    kmsclient.WithBindingKey(bindKey), // when bound; independent of the token
+)
 ```
 
 ## Redaction
@@ -177,6 +180,16 @@ reconnects in the background.
 
 ## Atomic configuration releases
 
+Store declaration credentials as `BindingKey` values using
+`NewBindingKey(value)`; `Secret.BindKey` and `SecretValue.BindKey` both use this
+type. The zero value means absent (`IsSet()` is false). Wrapped keys have no
+public plaintext getter; pass them to `WithBindingKeyValue` or
+`WithPutBindingKeyValue`. The string request options remain supported.
+Formatting, JSON, YAML, supported TOML encoding, and `slog` redact the credential.
+This protects against accidental disclosure, not deliberate reflective/debugger
+inspection, and does not guarantee erasure of immutable Go strings. See the
+[credential contract](../../../docs/sdk-go.md) for details.
+
 Use a release loader when related values must be resolved and installed
 together rather than through independent key callbacks:
 
@@ -187,6 +200,7 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := localTokens[alias]
         return token, ok
     },
+    BindingKeys: map[string]kmsclient.BindingKey{"openai_api_key": kmsclient.NewBindingKey(openAIBindingKey)},
 })
 if err != nil { return err }
 
@@ -229,6 +243,13 @@ if errors.Is(err, kmsclient.ErrNotFound) { ... }
 `ErrNotFound`, `ErrPermissionDenied`, `ErrUnauthenticated`,
 `ErrFailedPrecondition`, `ErrNoNamespace`. No error ever contains secret
 plaintext.
+
+`ErrPurgeCleanupPending` is special: the logical bound-cohort or unbound-version
+purge committed, but KMS could not yet prove removal from all live database
+artifacts. The purge method returns a zero result with this sentinel. Treat the
+selected versions as purged; do not retry a cohort purge with the retired key
+or an unbound purge as though its preview were still live. An operator must
+restore KMS so it can complete its artifact cleanup.
 
 ## Testing against a fake
 

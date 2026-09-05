@@ -71,7 +71,11 @@ export interface SecretMetadata {
   /** namespace + relative key */
   ref: ResourceRef | undefined;
   contentType: string;
-  clientBound: boolean;
+  /**
+   * bound summarizes the version selected by the current label. Callers that
+   * operate on an exact version must use SecretVersionInfo.bound instead.
+   */
+  bound: boolean;
   hasAccessToken: boolean;
   metadataJson: string;
   createdAtUnixMs: bigint;
@@ -95,6 +99,8 @@ export interface SecretVersionInfo {
   destroyedAtUnixMs: bigint;
   expiresAtUnixMs: bigint;
   metadataJson: string;
+  bound: boolean;
+  hasAccessToken: boolean;
 }
 
 export interface GetParameterRequest {
@@ -175,11 +181,13 @@ export interface GetSecretRequest {
   version: bigint;
   /** default "current" */
   label: string;
-  /**
-   * Per-secret access token. For client-bound secrets this is also the
-   * caller-held key share and is never logged or persisted in plaintext.
-   */
+  /** Per-secret access token, independent of the version's binding key. */
   secretToken: string;
+  /**
+   * Operator-owned key for opening a bound version. It is request-scoped and
+   * is never logged, hashed, fingerprinted, or persisted by KMS.
+   */
+  bindingKey: string;
 }
 
 export interface GetSecretResponse {
@@ -197,23 +205,17 @@ export interface PutSecretRequest {
   contentType: string;
   metadataJson: string;
   /**
-   * client_bound opts this secret into client-bound double wrapping. Only
-   * honored on first creation; later puts must match the existing mode.
+   * A non-empty operator-owned key creates a bound version. It is request-
+   * scoped and is never logged, hashed, fingerprinted, or persisted by KMS.
    */
-  clientBound: boolean;
+  bindingKey: string;
   /**
    * generate_access_token asks the server to mint a per-secret access token.
-   * The token is returned exactly once in the response. Required (or an
-   * existing token supplied in secret_token) when client_bound is true.
+   * The token is returned exactly once in the response.
    */
   generateAccessToken: boolean;
   /** expires_at for the new version, 0 = never. */
   expiresAtUnixMs: bigint;
-  /**
-   * Current per-secret token, required when updating an existing client-bound
-   * secret. It is scoped to this operation and never logged or persisted.
-   */
-  secretToken: string;
 }
 
 export interface PutSecretResponse {
@@ -275,7 +277,21 @@ export interface DestroySecretVersionResponse {
 }
 
 export interface GetSecretMetadataRequest {
-  ref: ResourceRef | undefined;
+  ref:
+    | ResourceRef
+    | undefined;
+  /**
+   * With no version or label, returns full history. A non-zero version returns
+   * only this exact version:
+   * labels are omitted, versions contains exactly one item, and the envelope's
+   * bound field describes that requested version rather than the current label.
+   */
+  version: bigint;
+  /**
+   * Mutually exclusive with version. Returns only the version selected by this
+   * label and its label mapping, resolved together in one database snapshot.
+   */
+  label: string;
 }
 
 export interface GetSecretMetadataResponse {
@@ -293,6 +309,103 @@ export interface PromoteSecretVersionRequest {
 export interface PromoteSecretVersionResponse {
   currentVersion: bigint;
   previousVersion: bigint;
+  revision: bigint;
+}
+
+/**
+ * BindSecret creates a new bound version from the version currently labeled
+ * "current". expected_current_version is a required compare-and-swap guard.
+ */
+export interface BindSecretRequest {
+  ref: ResourceRef | undefined;
+  expectedCurrentVersion: bigint;
+  bindingKey: string;
+}
+
+/**
+ * UnbindSecret creates a new unbound version from the version currently
+ * labeled "current". The supplied key must open that version and
+ * expected_current_version is a required compare-and-swap guard.
+ */
+export interface UnbindSecretRequest {
+  ref: ResourceRef | undefined;
+  expectedCurrentVersion: bigint;
+  bindingKey: string;
+}
+
+export interface SecretVersionTransitionResponse {
+  currentVersion: bigint;
+  previousVersion: bigint;
+  revision: bigint;
+}
+
+/**
+ * PreviewSecretBindingCohort discovers up to 128 contiguous bound versions
+ * around anchor_version without mutating them. anchor_version 0 selects
+ * current. A larger cohort is rejected rather than returned partially.
+ */
+export interface PreviewSecretBindingCohortRequest {
+  ref: ResourceRef | undefined;
+  anchorVersion: bigint;
+  bindingKey: string;
+}
+
+/**
+ * RotateSecretBindingKey creates a new version of the current bound secret
+ * under a different binding key. Historical versions are not changed.
+ */
+export interface RotateSecretBindingKeyRequest {
+  ref: ResourceRef | undefined;
+  expectedCurrentVersion: bigint;
+  bindingKey: string;
+  newBindingKey: string;
+}
+
+/**
+ * PurgeSecretBindingCohort is an admin-only irreversible destruction of the
+ * contiguous cohort around anchor_version and bypasses release-reference
+ * protection; anchor_version 0 selects current. The preview guards are
+ * required and must exactly match a prior preview.
+ */
+export interface PurgeSecretBindingCohortRequest {
+  ref: ResourceRef | undefined;
+  anchorVersion: bigint;
+  bindingKey: string;
+  expectedRevision: bigint;
+  expectedAffectedVersions: bigint[];
+}
+
+/**
+ * SecretBindingCohortResponse contains no key-derived identity. Versions are
+ * sorted in ascending order; revision is current for a preview and resulting
+ * for a successful mutation.
+ */
+export interface SecretBindingCohortResponse {
+  anchorVersion: bigint;
+  affectedVersions: bigint[];
+  revision: bigint;
+}
+
+/**
+ * PreviewSecretUnboundVersions discovers every non-destroyed unbound version
+ * of one secret. The result is the mandatory compare-and-swap input to purge.
+ */
+export interface PreviewSecretUnboundVersionsRequest {
+  ref: ResourceRef | undefined;
+}
+
+/**
+ * PurgeSecretUnboundVersions is an admin-only irreversible destruction of an
+ * exact previously previewed set. It bypasses release-reference protection.
+ */
+export interface PurgeSecretUnboundVersionsRequest {
+  ref: ResourceRef | undefined;
+  expectedRevision: bigint;
+  expectedAffectedVersions: bigint[];
+}
+
+export interface SecretVersionSetResponse {
+  affectedVersions: bigint[];
   revision: bigint;
 }
 
@@ -320,8 +433,6 @@ export interface ConfigurationReleaseEntry {
   metadataJson: string;
   /** SHA-256 hex digest of the exact parameter bytes. Empty for secrets. */
   parameterDigest: string;
-  clientBound: boolean;
-  hasAccessToken: boolean;
 }
 
 export interface ConfigurationRelease {
@@ -626,7 +737,10 @@ export interface SecretMetadataChange {
   ref:
     | ResourceRef
     | undefined;
-  /** put | delete | promote | disable | enable | destroy */
+  /**
+   * put | delete | promote | disable | enable | destroy | bind | unbind |
+   * rotate_binding_key | purge_binding_cohort | purge_unbound_versions
+   */
   changeType: string;
   version: bigint;
   label: string;
@@ -968,8 +1082,8 @@ export interface AuditEvent {
   metadataJson: string;
   /**
    * The immutable incarnation ID of the namespace the event was authorized
-   * against (0 for global events and legacy rows), so a deleted-and-recreated
-   * env/app can be told apart in an export.
+   * against. It is 0 only for global/non-namespaced events, so a
+   * deleted-and-recreated env/app can be told apart in an export.
    */
   resourceNamespaceId: bigint;
 }
@@ -1793,7 +1907,7 @@ function createBaseSecretMetadata(): SecretMetadata {
   return {
     ref: undefined,
     contentType: "",
-    clientBound: false,
+    bound: false,
     hasAccessToken: false,
     metadataJson: "",
     createdAtUnixMs: 0n,
@@ -1811,8 +1925,8 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     if (message.contentType !== "") {
       writer.uint32(18).string(message.contentType);
     }
-    if (message.clientBound !== false) {
-      writer.uint32(24).bool(message.clientBound);
+    if (message.bound !== false) {
+      writer.uint32(24).bool(message.bound);
     }
     if (message.hasAccessToken !== false) {
       writer.uint32(32).bool(message.hasAccessToken);
@@ -1875,7 +1989,7 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
               break;
             }
 
-            message.clientBound = reader.bool();
+            message.bound = reader.bool();
             continue;
           }
           case 4: {
@@ -1949,11 +2063,7 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
         : isSet(object.content_type)
         ? globalThis.String(object.content_type)
         : "",
-      clientBound: isSet(object.clientBound)
-        ? globalThis.Boolean(object.clientBound)
-        : isSet(object.client_bound)
-        ? globalThis.Boolean(object.client_bound)
-        : false,
+      bound: isSet(object.bound) ? globalThis.Boolean(object.bound) : false,
       hasAccessToken: isSet(object.hasAccessToken)
         ? globalThis.Boolean(object.hasAccessToken)
         : isSet(object.has_access_token)
@@ -2002,8 +2112,8 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     if (message.contentType !== "") {
       obj.contentType = message.contentType;
     }
-    if (message.clientBound !== false) {
-      obj.clientBound = message.clientBound;
+    if (message.bound !== false) {
+      obj.bound = message.bound;
     }
     if (message.hasAccessToken !== false) {
       obj.hasAccessToken = message.hasAccessToken;
@@ -2039,7 +2149,7 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     const message = createBaseSecretMetadata();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
     message.contentType = object.contentType ?? "";
-    message.clientBound = object.clientBound ?? false;
+    message.bound = object.bound ?? false;
     message.hasAccessToken = object.hasAccessToken ?? false;
     message.metadataJson = object.metadataJson ?? "";
     message.createdAtUnixMs = (object.createdAtUnixMs !== undefined && object.createdAtUnixMs !== null)
@@ -2159,6 +2269,8 @@ function createBaseSecretVersionInfo(): SecretVersionInfo {
     destroyedAtUnixMs: 0n,
     expiresAtUnixMs: 0n,
     metadataJson: "",
+    bound: false,
+    hasAccessToken: false,
   };
 }
 
@@ -2196,6 +2308,12 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
     }
     if (message.metadataJson !== "") {
       writer.uint32(58).string(message.metadataJson);
+    }
+    if (message.bound !== false) {
+      writer.uint32(64).bool(message.bound);
+    }
+    if (message.hasAccessToken !== false) {
+      writer.uint32(72).bool(message.hasAccessToken);
     }
     return writer;
   },
@@ -2269,6 +2387,22 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
             message.metadataJson = reader.string();
             continue;
           }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.bound = reader.bool();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.hasAccessToken = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2310,6 +2444,12 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
         : isSet(object.metadata_json)
         ? globalThis.String(object.metadata_json)
         : "",
+      bound: isSet(object.bound) ? globalThis.Boolean(object.bound) : false,
+      hasAccessToken: isSet(object.hasAccessToken)
+        ? globalThis.Boolean(object.hasAccessToken)
+        : isSet(object.has_access_token)
+        ? globalThis.Boolean(object.has_access_token)
+        : false,
     };
   },
 
@@ -2336,6 +2476,12 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
     }
+    if (message.bound !== false) {
+      obj.bound = message.bound;
+    }
+    if (message.hasAccessToken !== false) {
+      obj.hasAccessToken = message.hasAccessToken;
+    }
     return obj;
   },
 
@@ -2357,6 +2503,8 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
       ? BigInt(object.expiresAtUnixMs)
       : 0n;
     message.metadataJson = object.metadataJson ?? "";
+    message.bound = object.bound ?? false;
+    message.hasAccessToken = object.hasAccessToken ?? false;
     return message;
   },
 };
@@ -3496,7 +3644,7 @@ export const GetParameterMetadataResponse_LabelsEntry: MessageFns<GetParameterMe
 };
 
 function createBaseGetSecretRequest(): GetSecretRequest {
-  return { ref: undefined, version: 0n, label: "", secretToken: "" };
+  return { ref: undefined, version: 0n, label: "", secretToken: "", bindingKey: "" };
 }
 
 export const GetSecretRequest: MessageFns<GetSecretRequest> = {
@@ -3515,6 +3663,9 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     }
     if (message.secretToken !== "") {
       writer.uint32(34).string(message.secretToken);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(42).string(message.bindingKey);
     }
     return writer;
   },
@@ -3564,6 +3715,14 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
             message.secretToken = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3586,6 +3745,11 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
         : isSet(object.secret_token)
         ? globalThis.String(object.secret_token)
         : "",
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
     };
   },
 
@@ -3603,6 +3767,9 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     if (message.secretToken !== "") {
       obj.secretToken = message.secretToken;
     }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
     return obj;
   },
 
@@ -3615,6 +3782,7 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     message.label = object.label ?? "";
     message.secretToken = object.secretToken ?? "";
+    message.bindingKey = object.bindingKey ?? "";
     return message;
   },
 };
@@ -3801,10 +3969,9 @@ function createBasePutSecretRequest(): PutSecretRequest {
     value: Buffer.alloc(0),
     contentType: "",
     metadataJson: "",
-    clientBound: false,
+    bindingKey: "",
     generateAccessToken: false,
     expiresAtUnixMs: 0n,
-    secretToken: "",
   };
 }
 
@@ -3822,8 +3989,8 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     if (message.metadataJson !== "") {
       writer.uint32(34).string(message.metadataJson);
     }
-    if (message.clientBound !== false) {
-      writer.uint32(40).bool(message.clientBound);
+    if (message.bindingKey !== "") {
+      writer.uint32(42).string(message.bindingKey);
     }
     if (message.generateAccessToken !== false) {
       writer.uint32(48).bool(message.generateAccessToken);
@@ -3833,9 +4000,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         throw new globalThis.Error("value provided for field message.expiresAtUnixMs of type int64 too large");
       }
       writer.uint32(56).int64(message.expiresAtUnixMs);
-    }
-    if (message.secretToken !== "") {
-      writer.uint32(66).string(message.secretToken);
     }
     return writer;
   },
@@ -3886,11 +4050,11 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
             continue;
           }
           case 5: {
-            if (tag !== 40) {
+            if (tag !== 42) {
               break;
             }
 
-            message.clientBound = reader.bool();
+            message.bindingKey = reader.string();
             continue;
           }
           case 6: {
@@ -3907,14 +4071,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
             }
 
             message.expiresAtUnixMs = reader.int64() as bigint;
-            continue;
-          }
-          case 8: {
-            if (tag !== 66) {
-              break;
-            }
-
-            message.secretToken = reader.string();
             continue;
           }
         }
@@ -3943,11 +4099,11 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         : isSet(object.metadata_json)
         ? globalThis.String(object.metadata_json)
         : "",
-      clientBound: isSet(object.clientBound)
-        ? globalThis.Boolean(object.clientBound)
-        : isSet(object.client_bound)
-        ? globalThis.Boolean(object.client_bound)
-        : false,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
       generateAccessToken: isSet(object.generateAccessToken)
         ? globalThis.Boolean(object.generateAccessToken)
         : isSet(object.generate_access_token)
@@ -3958,11 +4114,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         : isSet(object.expires_at_unix_ms)
         ? BigInt(object.expires_at_unix_ms)
         : 0n,
-      secretToken: isSet(object.secretToken)
-        ? globalThis.String(object.secretToken)
-        : isSet(object.secret_token)
-        ? globalThis.String(object.secret_token)
-        : "",
     };
   },
 
@@ -3980,17 +4131,14 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
     }
-    if (message.clientBound !== false) {
-      obj.clientBound = message.clientBound;
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
     }
     if (message.generateAccessToken !== false) {
       obj.generateAccessToken = message.generateAccessToken;
     }
     if (message.expiresAtUnixMs !== 0n) {
       obj.expiresAtUnixMs = message.expiresAtUnixMs.toString();
-    }
-    if (message.secretToken !== "") {
-      obj.secretToken = message.secretToken;
     }
     return obj;
   },
@@ -4004,12 +4152,11 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     message.value = object.value ?? Buffer.alloc(0);
     message.contentType = object.contentType ?? "";
     message.metadataJson = object.metadataJson ?? "";
-    message.clientBound = object.clientBound ?? false;
+    message.bindingKey = object.bindingKey ?? "";
     message.generateAccessToken = object.generateAccessToken ?? false;
     message.expiresAtUnixMs = (object.expiresAtUnixMs !== undefined && object.expiresAtUnixMs !== null)
       ? BigInt(object.expiresAtUnixMs)
       : 0n;
-    message.secretToken = object.secretToken ?? "";
     return message;
   },
 };
@@ -4817,13 +4964,22 @@ export const DestroySecretVersionResponse: MessageFns<DestroySecretVersionRespon
 };
 
 function createBaseGetSecretMetadataRequest(): GetSecretMetadataRequest {
-  return { ref: undefined };
+  return { ref: undefined, version: 0n, label: "" };
 }
 
 export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   encode(message: GetSecretMetadataRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.ref !== undefined) {
       ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    if (message.label !== "") {
+      writer.uint32(26).string(message.label);
     }
     return writer;
   },
@@ -4849,6 +5005,22 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
             message.ref = ResourceRef.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.label = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4862,13 +5034,23 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   },
 
   fromJSON(object: any): GetSecretMetadataRequest {
-    return { ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined };
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+    };
   },
 
   toJSON(message: GetSecretMetadataRequest): unknown {
     const obj: any = {};
     if (message.ref !== undefined) {
       obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
     }
     return obj;
   },
@@ -4879,6 +5061,8 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   fromPartial(object: DeepPartial<GetSecretMetadataRequest>): GetSecretMetadataRequest {
     const message = createBaseGetSecretMetadataRequest();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.label = object.label ?? "";
     return message;
   },
 };
@@ -5162,6 +5346,1220 @@ export const PromoteSecretVersionResponse: MessageFns<PromoteSecretVersionRespon
   },
 };
 
+function createBaseBindSecretRequest(): BindSecretRequest {
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "" };
+}
+
+export const BindSecretRequest: MessageFns<BindSecretRequest> = {
+  encode(message: BindSecretRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(26).string(message.bindingKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): BindSecretRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseBindSecretRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedCurrentVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): BindSecretRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
+        : 0n,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
+    };
+  },
+
+  toJSON(message: BindSecretRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
+    }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<BindSecretRequest>): BindSecretRequest {
+    return BindSecretRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<BindSecretRequest>): BindSecretRequest {
+    const message = createBaseBindSecretRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
+    message.bindingKey = object.bindingKey ?? "";
+    return message;
+  },
+};
+
+function createBaseUnbindSecretRequest(): UnbindSecretRequest {
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "" };
+}
+
+export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
+  encode(message: UnbindSecretRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(26).string(message.bindingKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UnbindSecretRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseUnbindSecretRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedCurrentVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): UnbindSecretRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
+        : 0n,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
+    };
+  },
+
+  toJSON(message: UnbindSecretRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
+    }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<UnbindSecretRequest>): UnbindSecretRequest {
+    return UnbindSecretRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<UnbindSecretRequest>): UnbindSecretRequest {
+    const message = createBaseUnbindSecretRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
+    message.bindingKey = object.bindingKey ?? "";
+    return message;
+  },
+};
+
+function createBaseSecretVersionTransitionResponse(): SecretVersionTransitionResponse {
+  return { currentVersion: 0n, previousVersion: 0n, revision: 0n };
+}
+
+export const SecretVersionTransitionResponse: MessageFns<SecretVersionTransitionResponse> = {
+  encode(message: SecretVersionTransitionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.currentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.currentVersion) !== message.currentVersion) {
+        throw new globalThis.Error("value provided for field message.currentVersion of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.currentVersion);
+    }
+    if (message.previousVersion !== 0n) {
+      if (BigInt.asUintN(64, message.previousVersion) !== message.previousVersion) {
+        throw new globalThis.Error("value provided for field message.previousVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.previousVersion);
+    }
+    if (message.revision !== 0n) {
+      if (BigInt.asUintN(64, message.revision) !== message.revision) {
+        throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SecretVersionTransitionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSecretVersionTransitionResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.currentVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.previousVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.revision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SecretVersionTransitionResponse {
+    return {
+      currentVersion: isSet(object.currentVersion)
+        ? BigInt(object.currentVersion)
+        : isSet(object.current_version)
+        ? BigInt(object.current_version)
+        : 0n,
+      previousVersion: isSet(object.previousVersion)
+        ? BigInt(object.previousVersion)
+        : isSet(object.previous_version)
+        ? BigInt(object.previous_version)
+        : 0n,
+      revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
+    };
+  },
+
+  toJSON(message: SecretVersionTransitionResponse): unknown {
+    const obj: any = {};
+    if (message.currentVersion !== 0n) {
+      obj.currentVersion = message.currentVersion.toString();
+    }
+    if (message.previousVersion !== 0n) {
+      obj.previousVersion = message.previousVersion.toString();
+    }
+    if (message.revision !== 0n) {
+      obj.revision = message.revision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SecretVersionTransitionResponse>): SecretVersionTransitionResponse {
+    return SecretVersionTransitionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SecretVersionTransitionResponse>): SecretVersionTransitionResponse {
+    const message = createBaseSecretVersionTransitionResponse();
+    message.currentVersion = (object.currentVersion !== undefined && object.currentVersion !== null)
+      ? BigInt(object.currentVersion)
+      : 0n;
+    message.previousVersion = (object.previousVersion !== undefined && object.previousVersion !== null)
+      ? BigInt(object.previousVersion)
+      : 0n;
+    message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
+function createBasePreviewSecretBindingCohortRequest(): PreviewSecretBindingCohortRequest {
+  return { ref: undefined, anchorVersion: 0n, bindingKey: "" };
+}
+
+export const PreviewSecretBindingCohortRequest: MessageFns<PreviewSecretBindingCohortRequest> = {
+  encode(message: PreviewSecretBindingCohortRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.anchorVersion !== 0n) {
+      if (BigInt.asUintN(64, message.anchorVersion) !== message.anchorVersion) {
+        throw new globalThis.Error("value provided for field message.anchorVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.anchorVersion);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(26).string(message.bindingKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PreviewSecretBindingCohortRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePreviewSecretBindingCohortRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.anchorVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PreviewSecretBindingCohortRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      anchorVersion: isSet(object.anchorVersion)
+        ? BigInt(object.anchorVersion)
+        : isSet(object.anchor_version)
+        ? BigInt(object.anchor_version)
+        : 0n,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
+    };
+  },
+
+  toJSON(message: PreviewSecretBindingCohortRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.anchorVersion !== 0n) {
+      obj.anchorVersion = message.anchorVersion.toString();
+    }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PreviewSecretBindingCohortRequest>): PreviewSecretBindingCohortRequest {
+    return PreviewSecretBindingCohortRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PreviewSecretBindingCohortRequest>): PreviewSecretBindingCohortRequest {
+    const message = createBasePreviewSecretBindingCohortRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
+      ? BigInt(object.anchorVersion)
+      : 0n;
+    message.bindingKey = object.bindingKey ?? "";
+    return message;
+  },
+};
+
+function createBaseRotateSecretBindingKeyRequest(): RotateSecretBindingKeyRequest {
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "", newBindingKey: "" };
+}
+
+export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyRequest> = {
+  encode(message: RotateSecretBindingKeyRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(26).string(message.bindingKey);
+    }
+    if (message.newBindingKey !== "") {
+      writer.uint32(34).string(message.newBindingKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RotateSecretBindingKeyRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRotateSecretBindingKeyRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedCurrentVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.newBindingKey = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RotateSecretBindingKeyRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
+        : 0n,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
+      newBindingKey: isSet(object.newBindingKey)
+        ? globalThis.String(object.newBindingKey)
+        : isSet(object.new_binding_key)
+        ? globalThis.String(object.new_binding_key)
+        : "",
+    };
+  },
+
+  toJSON(message: RotateSecretBindingKeyRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
+    }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
+    if (message.newBindingKey !== "") {
+      obj.newBindingKey = message.newBindingKey;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<RotateSecretBindingKeyRequest>): RotateSecretBindingKeyRequest {
+    return RotateSecretBindingKeyRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<RotateSecretBindingKeyRequest>): RotateSecretBindingKeyRequest {
+    const message = createBaseRotateSecretBindingKeyRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
+    message.bindingKey = object.bindingKey ?? "";
+    message.newBindingKey = object.newBindingKey ?? "";
+    return message;
+  },
+};
+
+function createBasePurgeSecretBindingCohortRequest(): PurgeSecretBindingCohortRequest {
+  return { ref: undefined, anchorVersion: 0n, bindingKey: "", expectedRevision: 0n, expectedAffectedVersions: [] };
+}
+
+export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohortRequest> = {
+  encode(message: PurgeSecretBindingCohortRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.anchorVersion !== 0n) {
+      if (BigInt.asUintN(64, message.anchorVersion) !== message.anchorVersion) {
+        throw new globalThis.Error("value provided for field message.anchorVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.anchorVersion);
+    }
+    if (message.bindingKey !== "") {
+      writer.uint32(26).string(message.bindingKey);
+    }
+    if (message.expectedRevision !== 0n) {
+      if (BigInt.asUintN(64, message.expectedRevision) !== message.expectedRevision) {
+        throw new globalThis.Error("value provided for field message.expectedRevision of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.expectedRevision);
+    }
+    writer.uint32(42).fork();
+    for (const v of message.expectedAffectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error(
+          "a value provided in array field expectedAffectedVersions of type uint64 is too large",
+        );
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PurgeSecretBindingCohortRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePurgeSecretBindingCohortRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.anchorVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.bindingKey = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.expectedRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag === 40) {
+              message.expectedAffectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 42) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.expectedAffectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PurgeSecretBindingCohortRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      anchorVersion: isSet(object.anchorVersion)
+        ? BigInt(object.anchorVersion)
+        : isSet(object.anchor_version)
+        ? BigInt(object.anchor_version)
+        : 0n,
+      bindingKey: isSet(object.bindingKey)
+        ? globalThis.String(object.bindingKey)
+        : isSet(object.binding_key)
+        ? globalThis.String(object.binding_key)
+        : "",
+      expectedRevision: isSet(object.expectedRevision)
+        ? BigInt(object.expectedRevision)
+        : isSet(object.expected_revision)
+        ? BigInt(object.expected_revision)
+        : 0n,
+      expectedAffectedVersions: globalThis.Array.isArray(object?.expectedAffectedVersions)
+        ? object.expectedAffectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.expected_affected_versions)
+        ? object.expected_affected_versions.map((e: any) => BigInt(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PurgeSecretBindingCohortRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.anchorVersion !== 0n) {
+      obj.anchorVersion = message.anchorVersion.toString();
+    }
+    if (message.bindingKey !== "") {
+      obj.bindingKey = message.bindingKey;
+    }
+    if (message.expectedRevision !== 0n) {
+      obj.expectedRevision = message.expectedRevision.toString();
+    }
+    if (message.expectedAffectedVersions?.length) {
+      obj.expectedAffectedVersions = message.expectedAffectedVersions.map((e) => e.toString());
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PurgeSecretBindingCohortRequest>): PurgeSecretBindingCohortRequest {
+    return PurgeSecretBindingCohortRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PurgeSecretBindingCohortRequest>): PurgeSecretBindingCohortRequest {
+    const message = createBasePurgeSecretBindingCohortRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
+      ? BigInt(object.anchorVersion)
+      : 0n;
+    message.bindingKey = object.bindingKey ?? "";
+    message.expectedRevision = (object.expectedRevision !== undefined && object.expectedRevision !== null)
+      ? BigInt(object.expectedRevision)
+      : 0n;
+    message.expectedAffectedVersions = object.expectedAffectedVersions?.map((e) => BigInt(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSecretBindingCohortResponse(): SecretBindingCohortResponse {
+  return { anchorVersion: 0n, affectedVersions: [], revision: 0n };
+}
+
+export const SecretBindingCohortResponse: MessageFns<SecretBindingCohortResponse> = {
+  encode(message: SecretBindingCohortResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.anchorVersion !== 0n) {
+      if (BigInt.asUintN(64, message.anchorVersion) !== message.anchorVersion) {
+        throw new globalThis.Error("value provided for field message.anchorVersion of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.anchorVersion);
+    }
+    writer.uint32(18).fork();
+    for (const v of message.affectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field affectedVersions of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.revision !== 0n) {
+      if (BigInt.asUintN(64, message.revision) !== message.revision) {
+        throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SecretBindingCohortResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSecretBindingCohortResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.anchorVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag === 16) {
+              message.affectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 18) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.affectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.revision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SecretBindingCohortResponse {
+    return {
+      anchorVersion: isSet(object.anchorVersion)
+        ? BigInt(object.anchorVersion)
+        : isSet(object.anchor_version)
+        ? BigInt(object.anchor_version)
+        : 0n,
+      affectedVersions: globalThis.Array.isArray(object?.affectedVersions)
+        ? object.affectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.affected_versions)
+        ? object.affected_versions.map((e: any) => BigInt(e))
+        : [],
+      revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
+    };
+  },
+
+  toJSON(message: SecretBindingCohortResponse): unknown {
+    const obj: any = {};
+    if (message.anchorVersion !== 0n) {
+      obj.anchorVersion = message.anchorVersion.toString();
+    }
+    if (message.affectedVersions?.length) {
+      obj.affectedVersions = message.affectedVersions.map((e) => e.toString());
+    }
+    if (message.revision !== 0n) {
+      obj.revision = message.revision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SecretBindingCohortResponse>): SecretBindingCohortResponse {
+    return SecretBindingCohortResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SecretBindingCohortResponse>): SecretBindingCohortResponse {
+    const message = createBaseSecretBindingCohortResponse();
+    message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
+      ? BigInt(object.anchorVersion)
+      : 0n;
+    message.affectedVersions = object.affectedVersions?.map((e) => BigInt(e)) || [];
+    message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
+function createBasePreviewSecretUnboundVersionsRequest(): PreviewSecretUnboundVersionsRequest {
+  return { ref: undefined };
+}
+
+export const PreviewSecretUnboundVersionsRequest: MessageFns<PreviewSecretUnboundVersionsRequest> = {
+  encode(message: PreviewSecretUnboundVersionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PreviewSecretUnboundVersionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePreviewSecretUnboundVersionsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PreviewSecretUnboundVersionsRequest {
+    return { ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined };
+  },
+
+  toJSON(message: PreviewSecretUnboundVersionsRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PreviewSecretUnboundVersionsRequest>): PreviewSecretUnboundVersionsRequest {
+    return PreviewSecretUnboundVersionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PreviewSecretUnboundVersionsRequest>): PreviewSecretUnboundVersionsRequest {
+    const message = createBasePreviewSecretUnboundVersionsRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    return message;
+  },
+};
+
+function createBasePurgeSecretUnboundVersionsRequest(): PurgeSecretUnboundVersionsRequest {
+  return { ref: undefined, expectedRevision: 0n, expectedAffectedVersions: [] };
+}
+
+export const PurgeSecretUnboundVersionsRequest: MessageFns<PurgeSecretUnboundVersionsRequest> = {
+  encode(message: PurgeSecretUnboundVersionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.expectedRevision !== 0n) {
+      if (BigInt.asUintN(64, message.expectedRevision) !== message.expectedRevision) {
+        throw new globalThis.Error("value provided for field message.expectedRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedRevision);
+    }
+    writer.uint32(26).fork();
+    for (const v of message.expectedAffectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error(
+          "a value provided in array field expectedAffectedVersions of type uint64 is too large",
+        );
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PurgeSecretUnboundVersionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePurgeSecretUnboundVersionsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag === 24) {
+              message.expectedAffectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 26) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.expectedAffectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PurgeSecretUnboundVersionsRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      expectedRevision: isSet(object.expectedRevision)
+        ? BigInt(object.expectedRevision)
+        : isSet(object.expected_revision)
+        ? BigInt(object.expected_revision)
+        : 0n,
+      expectedAffectedVersions: globalThis.Array.isArray(object?.expectedAffectedVersions)
+        ? object.expectedAffectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.expected_affected_versions)
+        ? object.expected_affected_versions.map((e: any) => BigInt(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PurgeSecretUnboundVersionsRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.expectedRevision !== 0n) {
+      obj.expectedRevision = message.expectedRevision.toString();
+    }
+    if (message.expectedAffectedVersions?.length) {
+      obj.expectedAffectedVersions = message.expectedAffectedVersions.map((e) => e.toString());
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PurgeSecretUnboundVersionsRequest>): PurgeSecretUnboundVersionsRequest {
+    return PurgeSecretUnboundVersionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PurgeSecretUnboundVersionsRequest>): PurgeSecretUnboundVersionsRequest {
+    const message = createBasePurgeSecretUnboundVersionsRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.expectedRevision = (object.expectedRevision !== undefined && object.expectedRevision !== null)
+      ? BigInt(object.expectedRevision)
+      : 0n;
+    message.expectedAffectedVersions = object.expectedAffectedVersions?.map((e) => BigInt(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSecretVersionSetResponse(): SecretVersionSetResponse {
+  return { affectedVersions: [], revision: 0n };
+}
+
+export const SecretVersionSetResponse: MessageFns<SecretVersionSetResponse> = {
+  encode(message: SecretVersionSetResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.affectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field affectedVersions of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.revision !== 0n) {
+      if (BigInt.asUintN(64, message.revision) !== message.revision) {
+        throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SecretVersionSetResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSecretVersionSetResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag === 8) {
+              message.affectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 10) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.affectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.revision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SecretVersionSetResponse {
+    return {
+      affectedVersions: globalThis.Array.isArray(object?.affectedVersions)
+        ? object.affectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.affected_versions)
+        ? object.affected_versions.map((e: any) => BigInt(e))
+        : [],
+      revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
+    };
+  },
+
+  toJSON(message: SecretVersionSetResponse): unknown {
+    const obj: any = {};
+    if (message.affectedVersions?.length) {
+      obj.affectedVersions = message.affectedVersions.map((e) => e.toString());
+    }
+    if (message.revision !== 0n) {
+      obj.revision = message.revision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SecretVersionSetResponse>): SecretVersionSetResponse {
+    return SecretVersionSetResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SecretVersionSetResponse>): SecretVersionSetResponse {
+    const message = createBaseSecretVersionSetResponse();
+    message.affectedVersions = object.affectedVersions?.map((e) => BigInt(e)) || [];
+    message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
 function createBaseReleaseEntrySelector(): ReleaseEntrySelector {
   return { alias: "", kind: "", ref: undefined, version: 0n, label: "" };
 }
@@ -5299,17 +6697,7 @@ export const ReleaseEntrySelector: MessageFns<ReleaseEntrySelector> = {
 };
 
 function createBaseConfigurationReleaseEntry(): ConfigurationReleaseEntry {
-  return {
-    alias: "",
-    kind: "",
-    ref: undefined,
-    version: 0n,
-    contentType: "",
-    metadataJson: "",
-    parameterDigest: "",
-    clientBound: false,
-    hasAccessToken: false,
-  };
+  return { alias: "", kind: "", ref: undefined, version: 0n, contentType: "", metadataJson: "", parameterDigest: "" };
 }
 
 export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = {
@@ -5337,12 +6725,6 @@ export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = 
     }
     if (message.parameterDigest !== "") {
       writer.uint32(58).string(message.parameterDigest);
-    }
-    if (message.clientBound !== false) {
-      writer.uint32(64).bool(message.clientBound);
-    }
-    if (message.hasAccessToken !== false) {
-      writer.uint32(72).bool(message.hasAccessToken);
     }
     return writer;
   },
@@ -5416,22 +6798,6 @@ export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = 
             message.parameterDigest = reader.string();
             continue;
           }
-          case 8: {
-            if (tag !== 64) {
-              break;
-            }
-
-            message.clientBound = reader.bool();
-            continue;
-          }
-          case 9: {
-            if (tag !== 72) {
-              break;
-            }
-
-            message.hasAccessToken = reader.bool();
-            continue;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5465,16 +6831,6 @@ export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = 
         : isSet(object.parameter_digest)
         ? globalThis.String(object.parameter_digest)
         : "",
-      clientBound: isSet(object.clientBound)
-        ? globalThis.Boolean(object.clientBound)
-        : isSet(object.client_bound)
-        ? globalThis.Boolean(object.client_bound)
-        : false,
-      hasAccessToken: isSet(object.hasAccessToken)
-        ? globalThis.Boolean(object.hasAccessToken)
-        : isSet(object.has_access_token)
-        ? globalThis.Boolean(object.has_access_token)
-        : false,
     };
   },
 
@@ -5501,12 +6857,6 @@ export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = 
     if (message.parameterDigest !== "") {
       obj.parameterDigest = message.parameterDigest;
     }
-    if (message.clientBound !== false) {
-      obj.clientBound = message.clientBound;
-    }
-    if (message.hasAccessToken !== false) {
-      obj.hasAccessToken = message.hasAccessToken;
-    }
     return obj;
   },
 
@@ -5522,8 +6872,6 @@ export const ConfigurationReleaseEntry: MessageFns<ConfigurationReleaseEntry> = 
     message.contentType = object.contentType ?? "";
     message.metadataJson = object.metadataJson ?? "";
     message.parameterDigest = object.parameterDigest ?? "";
-    message.clientBound = object.clientBound ?? false;
-    message.hasAccessToken = object.hasAccessToken ?? false;
     return message;
   },
 };
@@ -5560,25 +6908,25 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
-      writer.uint32(40).uint64(message.schemaVersion);
+      writer.uint32(32).uint64(message.schemaVersion);
     }
     for (const v of message.entries) {
-      ConfigurationReleaseEntry.encode(v!, writer.uint32(50).fork()).join();
+      ConfigurationReleaseEntry.encode(v!, writer.uint32(42).fork()).join();
     }
     if (message.digest !== "") {
-      writer.uint32(58).string(message.digest);
+      writer.uint32(50).string(message.digest);
     }
     if (message.metadataJson !== "") {
-      writer.uint32(66).string(message.metadataJson);
+      writer.uint32(58).string(message.metadataJson);
     }
     if (message.createdBy !== "") {
-      writer.uint32(74).string(message.createdBy);
+      writer.uint32(66).string(message.createdBy);
     }
     if (message.createdAtUnixMs !== 0n) {
       if (BigInt.asIntN(64, message.createdAtUnixMs) !== message.createdAtUnixMs) {
         throw new globalThis.Error("value provided for field message.createdAtUnixMs of type int64 too large");
       }
-      writer.uint32(80).int64(message.createdAtUnixMs);
+      writer.uint32(72).int64(message.createdAtUnixMs);
     }
     return writer;
   },
@@ -5620,12 +6968,20 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
             message.version = reader.uint64() as bigint;
             continue;
           }
-          case 5: {
-            if (tag !== 40) {
+          case 4: {
+            if (tag !== 32) {
               break;
             }
 
             message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.entries.push(ConfigurationReleaseEntry.decode(reader, reader.uint32()));
             continue;
           }
           case 6: {
@@ -5633,7 +6989,7 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
               break;
             }
 
-            message.entries.push(ConfigurationReleaseEntry.decode(reader, reader.uint32()));
+            message.digest = reader.string();
             continue;
           }
           case 7: {
@@ -5641,7 +6997,7 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
               break;
             }
 
-            message.digest = reader.string();
+            message.metadataJson = reader.string();
             continue;
           }
           case 8: {
@@ -5649,19 +7005,11 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
               break;
             }
 
-            message.metadataJson = reader.string();
-            continue;
-          }
-          case 9: {
-            if (tag !== 74) {
-              break;
-            }
-
             message.createdBy = reader.string();
             continue;
           }
-          case 10: {
-            if (tag !== 80) {
+          case 9: {
+            if (tag !== 72) {
               break;
             }
 
@@ -5784,13 +7132,13 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
-      writer.uint32(32).uint64(message.schemaVersion);
+      writer.uint32(24).uint64(message.schemaVersion);
     }
     for (const v of message.entries) {
-      ReleaseEntrySelector.encode(v!, writer.uint32(42).fork()).join();
+      ReleaseEntrySelector.encode(v!, writer.uint32(34).fork()).join();
     }
     if (message.metadataJson !== "") {
-      writer.uint32(50).string(message.metadataJson);
+      writer.uint32(42).string(message.metadataJson);
     }
     return writer;
   },
@@ -5824,24 +7172,24 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
             message.name = reader.string();
             continue;
           }
-          case 4: {
-            if (tag !== 32) {
+          case 3: {
+            if (tag !== 24) {
               break;
             }
 
             message.schemaVersion = reader.uint64() as bigint;
             continue;
           }
-          case 5: {
-            if (tag !== 42) {
+          case 4: {
+            if (tag !== 34) {
               break;
             }
 
             message.entries.push(ReleaseEntrySelector.decode(reader, reader.uint32()));
             continue;
           }
-          case 6: {
-            if (tag !== 50) {
+          case 5: {
+            if (tag !== 42) {
               break;
             }
 
@@ -8815,31 +10163,31 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       if (BigInt.asUintN(64, message.version) !== message.version) {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
-      writer.uint32(16).uint64(message.version);
+      writer.uint32(8).uint64(message.version);
     }
     if (message.schemaJson !== "") {
-      writer.uint32(26).string(message.schemaJson);
+      writer.uint32(18).string(message.schemaJson);
     }
     if (message.digest !== "") {
-      writer.uint32(34).string(message.digest);
+      writer.uint32(26).string(message.digest);
     }
     if (message.metadataJson !== "") {
-      writer.uint32(42).string(message.metadataJson);
+      writer.uint32(34).string(message.metadataJson);
     }
     if (message.createdBy !== "") {
-      writer.uint32(50).string(message.createdBy);
+      writer.uint32(42).string(message.createdBy);
     }
     if (message.createdAtUnixMs !== 0n) {
       if (BigInt.asIntN(64, message.createdAtUnixMs) !== message.createdAtUnixMs) {
         throw new globalThis.Error("value provided for field message.createdAtUnixMs of type int64 too large");
       }
-      writer.uint32(56).int64(message.createdAtUnixMs);
+      writer.uint32(48).int64(message.createdAtUnixMs);
     }
     if (message.application !== "") {
-      writer.uint32(66).string(message.application);
+      writer.uint32(58).string(message.application);
     }
     if (message.releaseName !== "") {
-      writer.uint32(74).string(message.releaseName);
+      writer.uint32(66).string(message.releaseName);
     }
     return writer;
   },
@@ -8857,12 +10205,20 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 2: {
-            if (tag !== 16) {
+          case 1: {
+            if (tag !== 8) {
               break;
             }
 
             message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.schemaJson = reader.string();
             continue;
           }
           case 3: {
@@ -8870,7 +10226,7 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
               break;
             }
 
-            message.schemaJson = reader.string();
+            message.digest = reader.string();
             continue;
           }
           case 4: {
@@ -8878,7 +10234,7 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
               break;
             }
 
-            message.digest = reader.string();
+            message.metadataJson = reader.string();
             continue;
           }
           case 5: {
@@ -8886,35 +10242,27 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
               break;
             }
 
-            message.metadataJson = reader.string();
-            continue;
-          }
-          case 6: {
-            if (tag !== 50) {
-              break;
-            }
-
             message.createdBy = reader.string();
             continue;
           }
-          case 7: {
-            if (tag !== 56) {
+          case 6: {
+            if (tag !== 48) {
               break;
             }
 
             message.createdAtUnixMs = reader.int64() as bigint;
             continue;
           }
-          case 8: {
-            if (tag !== 66) {
+          case 7: {
+            if (tag !== 58) {
               break;
             }
 
             message.application = reader.string();
             continue;
           }
-          case 9: {
-            if (tag !== 74) {
+          case 8: {
+            if (tag !== 66) {
               break;
             }
 
@@ -9021,13 +10369,13 @@ function createBaseCreateSchemaRequest(): CreateSchemaRequest {
 export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
   encode(message: CreateSchemaRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.schemaJson !== "") {
-      writer.uint32(18).string(message.schemaJson);
+      writer.uint32(10).string(message.schemaJson);
     }
     if (message.metadataJson !== "") {
-      writer.uint32(26).string(message.metadataJson);
+      writer.uint32(18).string(message.metadataJson);
     }
     if (message.application !== "") {
-      writer.uint32(34).string(message.application);
+      writer.uint32(26).string(message.application);
     }
     return writer;
   },
@@ -9045,24 +10393,24 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 2: {
-            if (tag !== 18) {
+          case 1: {
+            if (tag !== 10) {
               break;
             }
 
             message.schemaJson = reader.string();
             continue;
           }
-          case 3: {
-            if (tag !== 26) {
+          case 2: {
+            if (tag !== 18) {
               break;
             }
 
             message.metadataJson = reader.string();
             continue;
           }
-          case 4: {
-            if (tag !== 34) {
+          case 3: {
+            if (tag !== 26) {
               break;
             }
 
@@ -9202,13 +10550,13 @@ export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
       if (BigInt.asUintN(64, message.version) !== message.version) {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
-      writer.uint32(16).uint64(message.version);
+      writer.uint32(8).uint64(message.version);
     }
     if (message.application !== "") {
-      writer.uint32(26).string(message.application);
+      writer.uint32(18).string(message.application);
     }
     if (message.releaseName !== "") {
-      writer.uint32(34).string(message.releaseName);
+      writer.uint32(26).string(message.releaseName);
     }
     return writer;
   },
@@ -9226,24 +10574,24 @@ export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 2: {
-            if (tag !== 16) {
+          case 1: {
+            if (tag !== 8) {
               break;
             }
 
             message.version = reader.uint64() as bigint;
             continue;
           }
-          case 3: {
-            if (tag !== 26) {
+          case 2: {
+            if (tag !== 18) {
               break;
             }
 
             message.application = reader.string();
             continue;
           }
-          case 4: {
-            if (tag !== 34) {
+          case 3: {
+            if (tag !== 26) {
               break;
             }
 
@@ -9376,16 +10724,16 @@ function createBaseListSchemasRequest(): ListSchemasRequest {
 export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
   encode(message: ListSchemasRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.pageSize !== 0) {
-      writer.uint32(16).int32(message.pageSize);
+      writer.uint32(8).int32(message.pageSize);
     }
     if (message.pageToken !== "") {
-      writer.uint32(26).string(message.pageToken);
+      writer.uint32(18).string(message.pageToken);
     }
     if (message.application !== "") {
-      writer.uint32(34).string(message.application);
+      writer.uint32(26).string(message.application);
     }
     if (message.releaseName !== "") {
-      writer.uint32(42).string(message.releaseName);
+      writer.uint32(34).string(message.releaseName);
     }
     return writer;
   },
@@ -9403,12 +10751,20 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 2: {
-            if (tag !== 16) {
+          case 1: {
+            if (tag !== 8) {
               break;
             }
 
             message.pageSize = reader.int32();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.pageToken = reader.string();
             continue;
           }
           case 3: {
@@ -9416,19 +10772,11 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
               break;
             }
 
-            message.pageToken = reader.string();
+            message.application = reader.string();
             continue;
           }
           case 4: {
             if (tag !== 34) {
-              break;
-            }
-
-            message.application = reader.string();
-            continue;
-          }
-          case 5: {
-            if (tag !== 42) {
               break;
             }
 
@@ -17008,8 +18356,24 @@ export const SecretServiceService = {
     responseSerialize: (value: GetSecretResponse): Buffer => Buffer.from(GetSecretResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetSecretResponse => GetSecretResponse.decode(value),
   },
+  /**
+   * PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+   * receive an explicit rejection instead of silently losing client_bound.
+   * v0.3 clients must use PutSecretV03.
+   *
+   * @deprecated
+   */
   putSecret: {
     path: "/kms.v1.SecretService/PutSecret" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PutSecretRequest): Buffer => Buffer.from(PutSecretRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PutSecretRequest => PutSecretRequest.decode(value),
+    responseSerialize: (value: PutSecretResponse): Buffer => Buffer.from(PutSecretResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): PutSecretResponse => PutSecretResponse.decode(value),
+  },
+  putSecretV03: {
+    path: "/kms.v1.SecretService/PutSecretV03" as const,
     requestStream: false as const,
     responseStream: false as const,
     requestSerialize: (value: PutSecretRequest): Buffer => Buffer.from(PutSecretRequest.encode(value).finish()),
@@ -17079,17 +18443,114 @@ export const SecretServiceService = {
       Buffer.from(PromoteSecretVersionResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): PromoteSecretVersionResponse => PromoteSecretVersionResponse.decode(value),
   },
+  bindSecret: {
+    path: "/kms.v1.SecretService/BindSecret" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: BindSecretRequest): Buffer => Buffer.from(BindSecretRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): BindSecretRequest => BindSecretRequest.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
+  },
+  unbindSecret: {
+    path: "/kms.v1.SecretService/UnbindSecret" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: UnbindSecretRequest): Buffer => Buffer.from(UnbindSecretRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): UnbindSecretRequest => UnbindSecretRequest.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
+  },
+  previewSecretBindingCohort: {
+    path: "/kms.v1.SecretService/PreviewSecretBindingCohort" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PreviewSecretBindingCohortRequest): Buffer =>
+      Buffer.from(PreviewSecretBindingCohortRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PreviewSecretBindingCohortRequest =>
+      PreviewSecretBindingCohortRequest.decode(value),
+    responseSerialize: (value: SecretBindingCohortResponse): Buffer =>
+      Buffer.from(SecretBindingCohortResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretBindingCohortResponse => SecretBindingCohortResponse.decode(value),
+  },
+  rotateSecretBindingKey: {
+    path: "/kms.v1.SecretService/RotateSecretBindingKey" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: RotateSecretBindingKeyRequest): Buffer =>
+      Buffer.from(RotateSecretBindingKeyRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): RotateSecretBindingKeyRequest => RotateSecretBindingKeyRequest.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
+  },
+  purgeSecretBindingCohort: {
+    path: "/kms.v1.SecretService/PurgeSecretBindingCohort" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PurgeSecretBindingCohortRequest): Buffer =>
+      Buffer.from(PurgeSecretBindingCohortRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PurgeSecretBindingCohortRequest =>
+      PurgeSecretBindingCohortRequest.decode(value),
+    responseSerialize: (value: SecretBindingCohortResponse): Buffer =>
+      Buffer.from(SecretBindingCohortResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretBindingCohortResponse => SecretBindingCohortResponse.decode(value),
+  },
+  previewSecretUnboundVersions: {
+    path: "/kms.v1.SecretService/PreviewSecretUnboundVersions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PreviewSecretUnboundVersionsRequest): Buffer =>
+      Buffer.from(PreviewSecretUnboundVersionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PreviewSecretUnboundVersionsRequest =>
+      PreviewSecretUnboundVersionsRequest.decode(value),
+    responseSerialize: (value: SecretVersionSetResponse): Buffer =>
+      Buffer.from(SecretVersionSetResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionSetResponse => SecretVersionSetResponse.decode(value),
+  },
+  purgeSecretUnboundVersions: {
+    path: "/kms.v1.SecretService/PurgeSecretUnboundVersions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PurgeSecretUnboundVersionsRequest): Buffer =>
+      Buffer.from(PurgeSecretUnboundVersionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PurgeSecretUnboundVersionsRequest =>
+      PurgeSecretUnboundVersionsRequest.decode(value),
+    responseSerialize: (value: SecretVersionSetResponse): Buffer =>
+      Buffer.from(SecretVersionSetResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionSetResponse => SecretVersionSetResponse.decode(value),
+  },
 } as const;
 
 export interface SecretServiceServer extends UntypedServiceImplementation {
   getSecret: handleUnaryCall<GetSecretRequest, GetSecretResponse>;
+  /**
+   * PutSecret is the pre-v0.3 wire path and is retained only so stale clients
+   * receive an explicit rejection instead of silently losing client_bound.
+   * v0.3 clients must use PutSecretV03.
+   *
+   * @deprecated
+   */
   putSecret: handleUnaryCall<PutSecretRequest, PutSecretResponse>;
+  putSecretV03: handleUnaryCall<PutSecretRequest, PutSecretResponse>;
   listSecrets: handleUnaryCall<ListSecretsRequest, ListSecretsResponse>;
   deleteSecret: handleUnaryCall<DeleteSecretRequest, DeleteSecretResponse>;
   disableSecret: handleUnaryCall<DisableSecretRequest, DisableSecretResponse>;
   destroySecretVersion: handleUnaryCall<DestroySecretVersionRequest, DestroySecretVersionResponse>;
   getSecretMetadata: handleUnaryCall<GetSecretMetadataRequest, GetSecretMetadataResponse>;
   promoteSecretVersion: handleUnaryCall<PromoteSecretVersionRequest, PromoteSecretVersionResponse>;
+  bindSecret: handleUnaryCall<BindSecretRequest, SecretVersionTransitionResponse>;
+  unbindSecret: handleUnaryCall<UnbindSecretRequest, SecretVersionTransitionResponse>;
+  previewSecretBindingCohort: handleUnaryCall<PreviewSecretBindingCohortRequest, SecretBindingCohortResponse>;
+  rotateSecretBindingKey: handleUnaryCall<RotateSecretBindingKeyRequest, SecretVersionTransitionResponse>;
+  purgeSecretBindingCohort: handleUnaryCall<PurgeSecretBindingCohortRequest, SecretBindingCohortResponse>;
+  previewSecretUnboundVersions: handleUnaryCall<PreviewSecretUnboundVersionsRequest, SecretVersionSetResponse>;
+  purgeSecretUnboundVersions: handleUnaryCall<PurgeSecretUnboundVersionsRequest, SecretVersionSetResponse>;
 }
 
 export type WatchServiceService = typeof WatchServiceService;
@@ -17593,5 +19054,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: a10210192fc0e8fa38a65eab536131cb1d2d703e9b19de368c3c24af673f5d4c
+// source-sha256: 1de1b0ab2fa3fe630aab055b10615080ba27c735f901f41cd28761c4f984ce6e
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

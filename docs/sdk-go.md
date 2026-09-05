@@ -66,7 +66,7 @@ created with `--namespace prod/gradethis` discovers that binding through
 | `Token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** when `TLS` carries a client certificate (the cert proves identity); required only for token-method identities. Empty is also allowed against an unauthenticated/dev server. |
 | `TLS` | `*tls.Config`. Build one with `TLSFromFiles`/`TLSConfig` (server-auth only) or `MTLSFromFiles`/`MTLSConfig` (client cert + server auth). The `*FromFiles` variants panic on error and are meant for inline use in a `Config` literal; the non-panicking variants return an error. When `TLS` is `nil`, the client requires either `Insecure: true` or explicit custom transport credentials in `DialOptions`. |
 | `Insecure` | Explicitly opts into a cleartext connection for local development. Defaults to `false` and is mutually exclusive with `TLS`; never enable it across an untrusted network. |
-| `CacheTTL` | Enables an in-memory read cache for `GetParameter`/`GetSecret` when `> 0`. Cache entries are invalidated automatically by watch events once a subscription is active (see Hot reload below), and unconditionally on every write. |
+| `CacheTTL` | Enables an in-memory read cache for `GetParameter` when `> 0`. Secret plaintext is never cached. Parameter entries are invalidated automatically by watch events once a subscription is active, and on writes. |
 | `FallbackToDefaultsOnError` | When `false` (default), a declarative field's `Default` is used only when the store affirmatively reports the value **absent** (`ErrNotFound`); every other fetch error fails `Init`/`Resolve`, so a process cannot silently boot on a dev default because the store was briefly unreachable. Set `true` to restore permissive any-error → `Default`. |
 | `Timeout` | Default per-RPC deadline applied when the caller's `context.Context` has no earlier deadline. Defaults to 5s. Does not apply to the long-lived `Subscribe` stream. |
 | `ClientName` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `filepath.Base(os.Args[0])`. |
@@ -135,7 +135,14 @@ Both accept `GetOption`s (`sdk/go/kmsclient/options.go`):
 
 - `WithVersion(n uint64)` — pin to an immutable version (takes precedence over `WithLabel`).
 - `WithLabel(label string)` — read the version a label points at (e.g. `"current"`, `"previous"`); the server default when neither option is given is `"current"`.
-- `WithSecretToken(token string)` — sets the operation-specific `GetSecret` request field; required for token-protected and client-bound secrets. The shared option is accepted by `GetParameter` for compatibility but is never transmitted there.
+- `WithSecretToken(token string)` — sets the independent per-secret access-token
+  field for a token-gated version. The shared option is accepted by
+  `GetParameter` for compatibility but is never transmitted there.
+- `WithBindingKey(key string)` — supplies the opaque operator-owned key needed
+  by a bound version. It is independent of `WithSecretToken`.
+- `WithBindingKeyValue(key BindingKey)` — supplies an already wrapped credential
+  without exposing its plaintext. Like the string option, it is never sent by
+  `GetParameter`.
 
 `GetParameter` returns `(string, error)`. `GetSecret` returns `(Secret,
 error)`. `Secret` (`secret.go`) is a value type carrying plaintext plus
@@ -143,7 +150,35 @@ error)`. `Secret` (`secret.go`) is a value type carrying plaintext plus
 `String`/`GoString`/`Format`/`MarshalJSON` all print `"[REDACTED]"` regardless
 of verb, so it is safe to pass to `fmt.Printf`, a structured logger, or
 `json.Marshal`. `Value() ([]byte)` / `StringValue() (string)` are the only way
-to read plaintext.
+to read plaintext. `Secret.BindKey` is declaration-only support for generated
+managed configuration: `Clone` preserves it while building declarations, but
+generated stores extract and clear it before retaining defaults or publishing
+snapshots. A `Secret` returned by `GetSecret` always has an empty `BindKey`.
+
+`Secret.BindKey` and `SecretValue.BindKey` have type `kmsclient.BindingKey`.
+Construct credentials with `kmsclient.NewBindingKey(os.Getenv("KMS_BIND_KEY"))`.
+Use `IsSet()` to check presence and `kmsclient.BindingKey{}` to clear one copy.
+The constructor preserves the string exactly; validation belongs to the server
+for the requested operation. There is no public plaintext getter. For writes,
+`WithPutBindingKeyValue(key)` accepts a wrapped credential; the existing
+`WithPutBindingKey(string)` remains available.
+
+`BindingKey` has immutable private pointer-backed storage and value-receiver
+redaction for `fmt`, JSON v1/v2, YAML (`gopkg.in/yaml.v3`), TOML
+(`github.com/pelletier/go-toml/v2` through `encoding.TextMarshaler`), and `slog`.
+Tests also cover Zap's `Any` and `Reflect` paths. Serializers that respect field
+visibility cannot discover an exported plaintext field. Private pointer-backed
+storage avoids inline plaintext when `fmt` bypasses methods on an unexported
+field in an enclosing struct. Deliberate reflection, debuggers, and memory dumps
+can still inspect the credential; arbitrary inspection libraries are not
+guaranteed to redact. Serialized output is diagnostic and cannot restore a key.
+Use a zero `BindingKey` for absence, rather than a nil pointer (some serializers,
+including YAML v3 with an interface-held typed nil, may invoke methods on nil).
+
+Go strings cannot be reliably erased. Clearing a credential releases only that
+copy's reference; other copies and the loader's defensively copied map retain
+their keys for as long as they are needed. Wrapping a key does not shorten its
+memory lifetime or erase the caller's environment variable/string.
 
 Writes (mainly for tooling, not typical application code):
 
@@ -157,14 +192,34 @@ res, err := client.PutSecret(ctx, "stripe-api-key", []byte("sk_live_..."),
 // and is never retrievable again after this call returns.
 ```
 
-`PutSecretOption`s: `WithSecretContentType`, `WithSecretMetadataJSON`,
-`WithClientBound()` (opt in to client-bound double wrapping — fixed at first
-creation), `WithGenerateAccessToken()`, `WithExpiresAt(unixMS int64)`, and
-`WithPutSecretToken(token string)`. New client-bound secrets require both
-`WithClientBound()` and `WithGenerateAccessToken()`; preserve the returned
-one-time token. Updates require `WithClientBound()` plus
-`WithPutSecretToken(currentToken)`; adding `WithGenerateAccessToken()` rotates
-the token for the new version.
+`PutSecretOption`s are `WithSecretContentType`, `WithSecretMetadataJSON`,
+`WithPutBindingKey(key string)`, `WithGenerateAccessToken()`, and
+`WithExpiresAt(unixMS int64)`. A non-empty binding key creates a bound version;
+empty creates an unbound version even when the preceding version was bound.
+Binding keys are opaque valid UTF-8 of at least 32 bytes. Access-token
+generation is independent; there is no write-side secret token.
+
+The client also exposes `GetSecretMetadata`, `BindSecret`, `UnbindSecret`,
+`RotateSecretBindingKey`, `PreviewSecretBindingCohort`,
+`PurgeSecretBindingCohort`, `PreviewSecretUnboundVersions`, and
+`PurgeSecretUnboundVersions`. Bind, unbind, and rotation require the current
+version observed by the caller and return `SecretVersionTransitionResult`;
+each creates one new current version and leaves the source unchanged.
+`PurgeSecretBindingCohort` requires the exact `SecretBindingCohortResult`
+returned by its preview. Unbound purge likewise requires the exact
+`SecretVersionSetResult` returned by its preview. Purge is
+irreversible and requires an administrator. The server proves
+the supplied current key before rejecting a byte-for-byte unchanged rotation
+replacement, preserving the canonical credential-failure boundary.
+See [`binding-keys.md`](binding-keys.md).
+
+`SecretMetadata.Bound` summarizes the current-labeled version, while the
+top-level `HasAccessToken` reports whether the secret currently has an access
+token hash. Use `SecretMetadata.Versions[n].Bound` and `.HasAccessToken` for an
+exact pin.
+
+Secret plaintext is never cached. Each call that needs a secret fetches it;
+watch notifications remain metadata-only.
 
 ## Errors
 
@@ -181,7 +236,7 @@ case errors.Is(err, kmsclient.ErrPermissionDenied):
 case errors.Is(err, kmsclient.ErrUnauthenticated):
     // missing/invalid/expired identity token
 case errors.Is(err, kmsclient.ErrFailedPrecondition):
-    // e.g. client_bound mode mismatch on an existing secret
+    // e.g. trying to bind an already-bound current version
 }
 ```
 
@@ -192,9 +247,18 @@ available (unbound identity, empty `Config.Namespace`) — see
 resolution; `ParameterValue.Get` returns `""` before resolution. The exported
 `ErrNotInitialized` sentinel is reserved for compatibility and is not currently
 emitted. None of these errors, nor anything wrapping them, ever carries secret
-plaintext. Errors outside this mapped set (e.g. `Unavailable`,
-`DeadlineExceeded`, `Internal`) are returned as the original gRPC status
-error.
+plaintext. Credential-bearing secret RPCs preserve the structured status or
+sentinel while replacing every remote diagnostic with fixed safe text; a buggy
+or hostile peer cannot reflect plaintext, an access token, or a binding key
+into the returned error. For non-secret RPCs, errors outside the mapped set
+(for example `Unavailable`, `DeadlineExceeded`, or `Internal`) remain the
+original gRPC status error.
+
+`ErrPurgeCleanupPending` is the exceptional purge outcome: the logical purge
+transaction committed, but active SQLite/WAL cleanup is still pending. Do not
+retry a bound-cohort purge with the retired binding key, or an unbound-version
+purge as though its preview were still live. gRPC cannot return a mutation
+result alongside an error, so the returned purge result is zero in this case.
 
 ## Declarative config: `SecretValue` and `ParameterValue`
 
@@ -212,6 +276,7 @@ cfg := Config{
     StripeAPIKey: kmsclient.SecretValue{
         Key:     "stripe-api-key",
         Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token, if required
+        BindKey: kmsclient.NewBindingKey(os.Getenv("STRIPE_API_KMS_BIND_KEY")), // binding key, if required
         EnvVar:  "STRIPE_API_KEY",                  // env override still wins
         Default: "sk_test_dev_only",                // dev-only fallback
     },
@@ -231,9 +296,9 @@ if err := client.Resolve(ctx, &cfg); err != nil {
 ```
 
 **`SecretValue` fields:** `Key` (relative key or absolute `/env/app/key`),
-`Token` (per-secret access token; for client-bound secrets this is also the
-client key share — see [`security.md`](security.md)), `EnvVar` (optional
-override), `Default` (dev-only fallback).
+`Token` (per-secret access token), `BindKey` (independent binding key), `EnvVar`
+(optional override), and `Default` (dev-only fallback). The key is sent only
+for a store read; an environment override or default performs no secret RPC.
 
 **`ParameterValue` fields:** `Key`, `EnvVar`, `Default`, and `Static`.
 
@@ -475,6 +540,9 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := bootstrapSecretTokens[alias]
         return token, ok
     },
+    BindingKeys: map[string]kmsclient.BindingKey{
+        "db_password": kmsclient.NewBindingKey(os.Getenv("DB_PASSWORD_KMS_BIND_KEY")),
+    },
 })
 if err != nil {
     return err
@@ -512,18 +580,24 @@ contains only release identity and copied entry metadata; no parameter value,
 secret plaintext, or token. Generated managed bindings install this hook
 automatically.
 
-The `SecretTokenProvider(alias, path)` callback is invoked only for entries
-captured as token-protected or client-bound. Tokens remain local and are sent
-only as metadata on that pinned secret's `GetSecret` RPC; they never enter the
+For each exact secret pin the loader first fetches live metadata and verifies
+the response identity, exact version, state, expiry, `Bound`, and
+`HasAccessToken`. `SecretTokenProvider(alias, path)` is invoked only when that
+version is access-token gated. `BindingKeys` is a defensively copied alias-keyed
+map used only when that version is bound. The two credentials are resolved and
+sent independently in the pinned `GetSecret` request; neither enters the
 release, snapshot formatting, watch event, acknowledgement, metric, or KMS
-storage.
+storage. A missing required credential rejects the whole candidate as
+`token_unavailable`; a failed read/wrong credential is `resolution_failed`.
 
 `ReleaseSnapshot` provides `Namespace`, `Name`, `Version`,
 `ActivationRevision`, `SchemaVersion`, `Digest`, and
 `MetadataJSON`, plus alias-keyed `Entry`/`Entries`, `Parameter`/`Parameters`,
 and `Secret`/`Secrets` accessors. Maps returned from plural accessors are
 copies. Each entry exposes exact path/version, content type, captured metadata,
-parameter digest, and non-sensitive secret protection flags. `String`, every
+and parameter digest. Release entries carry no protection flags; those are
+looked up on the exact secret version and are immutable while it remains live,
+so the pin implicitly fixes the protection mode. `String`, every
 `fmt` verb, and JSON marshaling exclude resolved parameter and secret values;
 `Secret` retains its existing `[REDACTED]` formatting.
 

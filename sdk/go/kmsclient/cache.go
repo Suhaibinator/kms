@@ -6,15 +6,12 @@ import (
 	"time"
 )
 
-// defaultMaxCacheEntries bounds the number of cached entries per kind
-// (parameters, secrets) so a long-lived client that reads many distinct
-// (path,version,label) tuples cannot grow the cache without limit (defect L2).
+// defaultMaxCacheEntries bounds the number of cached parameter entries.
 const defaultMaxCacheEntries = 4096
 
-// cache is an optional in-memory read cache for parameters and secrets. It is
-// keyed by path, then by a (version,label) subkey so that different reads of
-// the same path do not collide. Invalidation is per-path, which lets watch
-// events cheaply drop every cached view of a changed path.
+// cache is an optional in-memory read cache for parameters. Secret plaintext
+// is deliberately never retained because every read must be authorized and a
+// version's availability can change independently of its value.
 //
 // A nil *cache is a no-op cache: all reads miss and writes are dropped. This
 // keeps the hot path branch-free when CacheTTL is 0.
@@ -22,20 +19,13 @@ type cache struct {
 	ttl        time.Duration
 	maxEntries int
 
-	mu          sync.Mutex
-	params      map[string]map[string]paramEntry
-	secrets     map[string]map[string]secretEntry
-	paramCount  int
-	secretCount int
+	mu         sync.Mutex
+	params     map[string]map[string]paramEntry
+	paramCount int
 }
 
 type paramEntry struct {
 	value   string
-	expires time.Time
-}
-
-type secretEntry struct {
-	secret  Secret
 	expires time.Time
 }
 
@@ -47,7 +37,6 @@ func newCache(ttl time.Duration) *cache {
 		ttl:        ttl,
 		maxEntries: defaultMaxCacheEntries,
 		params:     make(map[string]map[string]paramEntry),
-		secrets:    make(map[string]map[string]secretEntry),
 	}
 }
 
@@ -131,84 +120,6 @@ func (c *cache) evictOneParamLocked() bool {
 	return false
 }
 
-func (c *cache) getSecret(path string, version uint64, label string) (Secret, bool) {
-	if c == nil {
-		return Secret{}, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	byKey, ok := c.secrets[path]
-	if !ok {
-		return Secret{}, false
-	}
-	e, ok := byKey[subKey(version, label)]
-	if !ok || time.Now().After(e.expires) {
-		return Secret{}, false
-	}
-	// A caller may mutate Secret.Value(). Never let that caller-owned buffer
-	// alias the cache entry shared by later reads.
-	return e.secret.Clone(), true
-}
-
-func (c *cache) putSecret(path string, version uint64, label string, s Secret) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	byKey := c.secrets[path]
-	if byKey == nil {
-		byKey = make(map[string]secretEntry)
-		c.secrets[path] = byKey
-	}
-	sk := subKey(version, label)
-	if _, exists := byKey[sk]; !exists {
-		c.secretCount++
-	}
-	// Take ownership of an independent plaintext buffer. The caller receives
-	// the original Secret from the RPC path and may mutate it after this call.
-	byKey[sk] = secretEntry{secret: s.Clone(), expires: time.Now().Add(c.ttl)}
-	if c.secretCount > c.maxEntries {
-		c.evictSecretsLocked()
-	}
-}
-
-// evictSecretsLocked mirrors evictParamsLocked for the secret cache.
-func (c *cache) evictSecretsLocked() {
-	now := time.Now()
-	for path, byKey := range c.secrets {
-		for sk, e := range byKey {
-			if now.After(e.expires) {
-				delete(byKey, sk)
-				c.secretCount--
-			}
-		}
-		if len(byKey) == 0 {
-			delete(c.secrets, path)
-		}
-	}
-	for c.secretCount > c.maxEntries {
-		if !c.evictOneSecretLocked() {
-			return
-		}
-	}
-}
-
-func (c *cache) evictOneSecretLocked() bool {
-	for path, byKey := range c.secrets {
-		for sk := range byKey {
-			delete(byKey, sk)
-			c.secretCount--
-			if len(byKey) == 0 {
-				delete(c.secrets, path)
-			}
-			return true
-		}
-		delete(c.secrets, path)
-	}
-	return false
-}
-
 // invalidateParam drops every cached view of a parameter path.
 func (c *cache) invalidateParam(path string) {
 	if c == nil {
@@ -219,40 +130,5 @@ func (c *cache) invalidateParam(path string) {
 	if byKey, ok := c.params[path]; ok {
 		c.paramCount -= len(byKey)
 		delete(c.params, path)
-	}
-}
-
-// invalidateSecret drops every cached view of a secret path.
-func (c *cache) invalidateSecret(path string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if byKey, ok := c.secrets[path]; ok {
-		c.secretCount -= len(byKey)
-		delete(c.secrets, path)
-	}
-}
-
-// invalidateSecretsInNamespaces drops every cached secret whose path belongs
-// to one of namespaces. A reconnect snapshot is parameter-only, so this closes
-// the cache gap for secret changes lost beyond the replay window.
-func (c *cache) invalidateSecretsInNamespaces(namespaces []namespaceRef) {
-	if c == nil || len(namespaces) == 0 {
-		return
-	}
-	scope := make(map[namespaceRef]struct{}, len(namespaces))
-	for _, ns := range namespaces {
-		scope[ns] = struct{}{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for path, byKey := range c.secrets {
-		if _, ok := scope[refOf(path).ns]; !ok {
-			continue
-		}
-		c.secretCount -= len(byKey)
-		delete(c.secrets, path)
 	}
 }

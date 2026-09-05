@@ -388,9 +388,8 @@ class _SubManager:
         # removed while we were disconnected past the replay window. Keys
         # outside the subscribed namespaces are untouched.
         # Secret events are metadata-only and are not represented in a full
-        # parameter snapshot. Invalidate tokenless cached secrets throughout
-        # the authoritative stream scope so a pruned secret change cannot
-        # leave stale plaintext cached until TTL expiry.
+        # parameter snapshot. Secret-cache invalidation remains a compatibility
+        # no-op because this SDK never retains secret plaintext.
         with self._lock:
             stream_namespaces = list(self._stream_namespaces)
         self._client._cache.invalidate_secrets_in_namespaces(stream_namespaces)

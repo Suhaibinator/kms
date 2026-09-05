@@ -107,6 +107,7 @@ var ReleaseOutcomes = []string{
 const (
 	LimiterVerifyDefaultsRequests = "verify_defaults_requests"
 	LimiterVerifyDefaultsMismatch = "verify_defaults_mismatch"
+	LimiterBindingCohortPreview   = "binding_cohort_preview"
 )
 
 // Audit decisions as written to domain.AuditEvent.Decision.

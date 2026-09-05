@@ -59,7 +59,6 @@ def _release(version: int, revision: int, param_version: Optional[int] = None):
                 ref=_ref("password"),
                 version=param_version,
                 content_type="string",
-                has_access_token=True,
             ),
         ],
     )
@@ -88,13 +87,40 @@ class _ParameterStub:
 class _SecretStub:
     def __init__(self) -> None:
         self.tokens: List[str] = []
+        self.binding_keys: List[str] = []
+        self.bound = False
+        self.has_access_token = True
+        self.state = "enabled"
+        self.destroyed_at_unix_ms = 0
+        self.expires_at_unix_ms = 0
+        self.expected_binding_key = "local-binding-key"
+        self.metadata_calls = 0
+        self.metadata_versions: List[int] = []
+
+    def GetSecretMetadata(self, request, **_kwargs):
+        self.metadata_calls += 1
+        self.metadata_versions.append(request.version)
+        return kms_pb2.GetSecretMetadataResponse(
+            secret=kms_pb2.SecretMetadata(
+                ref=request.ref, content_type="string", labels={"current": 1},
+                versions=[kms_pb2.SecretVersionInfo(
+                    version=version, state=self.state,
+                    destroyed_at_unix_ms=self.destroyed_at_unix_ms,
+                    expires_at_unix_ms=self.expires_at_unix_ms,
+                    bound=self.bound, has_access_token=self.has_access_token,
+                ) for version in range(1, 10)],
+            )
+        )
 
     def GetSecret(self, request, *, metadata, **_kwargs):
         assert "x-kms-secret-token" not in dict(metadata)
         token = request.secret_token
         self.tokens.append(token)
-        if token != "local-token":
+        self.binding_keys.append(request.binding_key)
+        if self.has_access_token and token != "local-token":
             raise AssertionError("protected secret fetched without its local token")
+        if self.bound and request.binding_key != self.expected_binding_key:
+            raise AssertionError("bound secret fetched without its binding key")
         return kms_pb2.GetSecretResponse(
             ref=request.ref,
             value=f"secret-{request.version}".encode(),
@@ -222,6 +248,7 @@ class _Client:
         version=0,
         label="",
         secret_token="",
+        binding_key="",
         timeout=None,
     ):
         del label
@@ -234,6 +261,7 @@ class _Client:
                 ),
                 version=version,
                 secret_token=secret_token,
+                binding_key=binding_key,
             ),
             metadata=self._auth_metadata(),
             timeout=self._call_timeout(timeout),
@@ -246,6 +274,16 @@ class _Client:
             version=response.version,
             content_type=response.content_type,
         )
+
+    def _get_secret_metadata_version(self, key, *, version, timeout=None):
+        del timeout
+        env, app, resource_key = key[1:].split("/", 2)
+        response = self._secret_stub.GetSecretMetadata(
+            kms_pb2.GetSecretMetadataRequest(ref=kms_pb2.ResourceRef(
+                namespace=kms_pb2.NamespaceRef(env=env, app=app), key=resource_key,
+            ), version=version)
+        )
+        return kms_paramstore.models._secret_info_from_proto(response.secret)
 
 
 class _Prepared:
@@ -369,11 +407,75 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     assert "value-1" not in repr(snapshot)
     assert "[REDACTED]" in repr(snapshot)
     assert client._secret_stub.tokens == ["local-token"]
+    assert client._secret_stub.metadata_versions == [1]
     with pytest.raises(TypeError):
         snapshot.parameters["setting"] = "changed"
     with pytest.raises(FrozenInstanceError):
         snapshot.version = 99
     assert loader.stats().acknowledgements["applied"] == 1
+
+
+def test_bound_release_uses_defensive_alias_key_copy_and_both_credentials(monkeypatch):
+    keys = {"password": "local-binding-key"}
+    loader, stub, client = _loader(
+        monkeypatch, _release(1, 10), binding_keys=keys,
+    )
+    client._secret_stub.bound = True
+    keys["password"] = "mutated-after-construction"
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: prepared.commits == 1)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert client._secret_stub.tokens == ["local-token"]
+    assert client._secret_stub.binding_keys == ["local-binding-key"]
+    assert "local-binding-key" not in repr(loader._config)
+
+
+def test_missing_binding_key_is_token_unavailable_before_plaintext_fetch(monkeypatch):
+    loader, stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.bound = True
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "token_unavailable"
+    assert client._secret_stub.binding_keys == []
+
+
+def test_wrong_binding_key_and_unavailable_live_version_are_resolution_failures(monkeypatch):
+    loader, _stub, client = _loader(
+        monkeypatch, _release(1, 10), binding_keys={"password": "wrong"},
+    )
+    client._secret_stub.bound = True
+    with pytest.raises(ReleaseStartupError) as wrong:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(wrong.value, "category") == "resolution_failed"
+
+    loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.state = "disabled"
+    with pytest.raises(ReleaseStartupError) as disabled:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(disabled.value, "category") == "resolution_failed"
+    assert client._secret_stub.tokens == []
+
+    loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.state = "enabled"
+    client._secret_stub.destroyed_at_unix_ms = 1
+    with pytest.raises(ReleaseStartupError) as destroyed:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(destroyed.value, "category") == "resolution_failed"
+    assert client._secret_stub.tokens == []
+
+
+def test_foreign_release_entry_is_rejected_before_resource_fetch(monkeypatch):
+    initial = _release(1, 10)
+    initial[0].entries[1].ref.namespace.app = "other"
+    initial[0].digest = release_module._release_digest(initial[0])
+    loader, _stub, client = _loader(monkeypatch, initial)
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "resolution_failed"
+    assert client._secret_stub.metadata_calls == 0
 
 
 def test_manifest_validation_precedes_fetch_and_is_immutable(monkeypatch):
@@ -383,7 +485,7 @@ def test_manifest_validation_precedes_fetch_and_is_immutable(monkeypatch):
         assert not cancel.is_set()
         order.append("manifest")
         assert manifest.namespace == "prod/app"
-        assert manifest.entry("password").has_access_token
+        assert not hasattr(manifest.entry("password"), "has_access_token")
         with pytest.raises(TypeError):
             manifest.entries["other"] = manifest.entry("setting")
 
@@ -612,6 +714,49 @@ def test_newer_activation_cancels_and_aborts_stale_candidate(monkeypatch):
     assert loader.stats().rejections["superseded"] >= 1
 
 
+def test_superseded_candidate_stops_after_blocked_live_metadata(monkeypatch):
+    loader, stub, client = _loader(monkeypatch, _release(1, 10))
+    prepared: Dict[int, _Prepared] = {}
+
+    thread, raised = _run_in_thread(
+        loader,
+        lambda _cancel, snapshot: prepared.setdefault(snapshot.version, _Prepared()),
+    )
+    assert wait_until(lambda: loader.status().applied_version == 1)
+    client._secret_stub.tokens.clear()
+    client._secret_stub.binding_keys.clear()
+
+    metadata_entered = threading.Event()
+    release_metadata = threading.Event()
+    original_get_metadata = client._get_secret_metadata_version
+    should_block = True
+
+    def blocking_get_metadata(*args, **kwargs):
+        nonlocal should_block
+        result = original_get_metadata(*args, **kwargs)
+        if should_block:
+            should_block = False
+            metadata_entered.set()
+            assert release_metadata.wait(timeout=2)
+        return result
+
+    client._get_secret_metadata_version = blocking_get_metadata
+    stub.activate(_release(2, 20))
+    assert metadata_entered.wait(timeout=2)
+    stub.activate(_release(3, 30))
+    assert wait_until(lambda: loader.status().observed_version == 3)
+    release_metadata.set()
+
+    assert wait_until(lambda: loader.status().applied_version == 3)
+    loader.stop()
+    thread.join(timeout=2)
+
+    assert not raised
+    assert 2 not in prepared
+    assert prepared[3].commits == 1
+    assert client._secret_stub.tokens == ["local-token"]
+
+
 def test_active_fence_includes_release_name(monkeypatch):
     loader, stub, _client = _loader(monkeypatch, _release(1, 10))
     stale = _Prepared()
@@ -668,6 +813,48 @@ def test_prepare_rejection_keeps_last_known_good(monkeypatch):
     rejected = [ack for ack in stub.acknowledgements if ack.state == "rejected"]
     assert rejected[-1].diagnostic == ""
     assert "sensitive" not in rejected[-1].diagnostic
+
+
+@pytest.mark.parametrize(
+    ("alias", "category"),
+    [("setting", "digest_mismatch"), ("password", "version_mismatch")],
+)
+def test_empty_pinned_content_type_rejects_without_replacing_lkg(
+    monkeypatch, alias, category
+):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    prepared: Dict[int, _Prepared] = {}
+    published = []
+
+    def prepare(_cancel, snapshot):
+        published.append(snapshot.version)
+        return prepared.setdefault(snapshot.version, _Prepared())
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: loader.status().applied_version == 1)
+
+    tampered = _release(2, 20)
+    entry = next(item for item in tampered[0].entries if item.alias == alias)
+    entry.content_type = ""
+    # Recompute the projection digest so this reaches exact-version resolution;
+    # an empty pin must never act as a wildcard.
+    tampered[0].digest = release_module._release_digest(tampered[0])
+    stub.activate(tampered)
+
+    assert wait_until(lambda: loader.status().last_failure_category == category)
+    assert loader.status().applied_version == 1
+    assert published == [1]
+    assert prepared[1].commits == 1
+    assert 2 not in prepared
+    assert wait_until(
+        lambda: any(
+            ack.state == "rejected" and ack.activation_revision == 20
+            for ack in stub.acknowledgements
+        )
+    )
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
 
 
 def test_commit_exception_is_fatal_and_never_aborted_or_applied(monkeypatch):

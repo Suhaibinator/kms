@@ -24,6 +24,7 @@ from kms_paramstore.configstore import (
     ConfigSnapshot,
     Duration,
     start_async_managed_config,
+    start_managed_config,
 )
 from kms_paramstore.release import ReleaseSnapshot
 from kms_paramstore.secret import Secret
@@ -221,12 +222,57 @@ def test_default_mismatch_callback_is_required_and_callable() -> None:
         Callbacks(None)  # type: ignore[arg-type]
 
 
-def test_defaults_model_input_omits_required_secret_fields() -> None:
-    defaults = RuntimeConfig(password=Secret(b"source-default-must-not-serialize"))
-    binding = ConfigBinding(RuntimeConfig, defaults)
-    encoded = "".join(binding.encode_defaults_groups().values())
-    assert "source-default-must-not-serialize" not in encoded
-    assert json.loads(binding.encode_defaults_groups()["runtime"])["port"] == 8080
+def test_secret_defaults_must_be_credential_only_and_are_extracted_then_stripped() -> None:
+    key = "binding-key-canary-that-must-not-leak"
+
+    class BoundConfig(BaseModel):
+        model_config = ConfigDict(
+            frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True,
+        )
+        port: Annotated[int, Parameter("runtime")] = 8080
+        password: Annotated[Secret, SecretField("password")] = Secret(bind_key=key)
+
+    binding = ConfigBinding(BoundConfig, {})
+    assert dict(binding._binding_keys) == {"password": key}
+    assert key not in repr(binding)
+    assert key not in "".join(binding.encode_defaults_groups().values())
+    with pytest.raises(TypeError):
+        binding._binding_keys["password"] = "changed"  # type: ignore[index]
+
+    with pytest.raises(TypeError, match="credential-only"):
+        ConfigBinding(RuntimeConfig, RuntimeConfig(password=Secret(b"plaintext")))
+
+
+@pytest.mark.parametrize(
+    "default",
+    [
+        Secret(b"plaintext"),
+        Secret(env="prod"),
+        Secret(app="app"),
+        Secret(key="secret"),
+        Secret(version=1),
+        Secret(content_type="text/plain"),
+    ],
+)
+def test_secret_source_default_rejects_any_value_or_resource_metadata(default: Secret) -> None:
+    class BadDefault(BaseModel):
+        model_config = ConfigDict(
+            frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True,
+        )
+        password: Annotated[Secret, SecretField("password")] = default
+
+    with pytest.raises(TypeError, match="credential-only"):
+        ConfigSpec.from_model(BadDefault)
+
+
+def test_managed_start_does_not_accept_a_caller_binding_map() -> None:
+    binding = ConfigBinding(RuntimeConfig, {})
+    with pytest.raises(TypeError, match="derived from secret defaults"):
+        start_managed_config(
+            object(), release="runtime", binding=binding,
+            callbacks=Callbacks(lambda _report: None),
+            binding_keys={"db_password": "must-not-be-accepted"},
+        )
 
 
 def test_secret_values_never_appear_in_errors() -> None:

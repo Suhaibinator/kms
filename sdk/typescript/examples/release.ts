@@ -22,9 +22,9 @@ function requiredEnvironment(name: string): string {
 const client = createClient({
   endpoint: requiredEnvironment("KMS_ENDPOINT"),
   credentials: mtlsFromFiles(
-    requiredEnvironment("KMS_CLIENT_CERT"),
-    requiredEnvironment("KMS_CLIENT_KEY"),
-    requiredEnvironment("KMS_SERVER_CA"),
+    requiredEnvironment("KMS_CLIENT_CERT_FILE"),
+    requiredEnvironment("KMS_CLIENT_KEY_FILE"),
+    requiredEnvironment("KMS_CA_FILE"),
   ),
 });
 const loader = await client.createReleaseLoader({ name: "runtime" });

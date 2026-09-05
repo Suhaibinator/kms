@@ -32,8 +32,6 @@ export interface ReleaseEntryMetadataInit {
   readonly contentType?: string;
   readonly metadataJson?: string;
   readonly parameterDigest?: string;
-  readonly clientBound?: boolean;
-  readonly hasAccessToken?: boolean;
 }
 
 /** Non-sensitive metadata for one immutable release resource pin. */
@@ -45,8 +43,6 @@ export class ReleaseEntryMetadata {
   readonly contentType: string;
   readonly metadataJson: string;
   readonly parameterDigest: string;
-  readonly clientBound: boolean;
-  readonly hasAccessToken: boolean;
 
   constructor(init: ReleaseEntryMetadataInit) {
     assertUint64(init.version, "release entry version");
@@ -57,8 +53,6 @@ export class ReleaseEntryMetadata {
     this.contentType = init.contentType ?? "";
     this.metadataJson = init.metadataJson ?? "";
     this.parameterDigest = init.parameterDigest ?? "";
-    this.clientBound = init.clientBound ?? false;
-    this.hasAccessToken = init.hasAccessToken ?? false;
     Object.freeze(this);
   }
 
@@ -71,8 +65,6 @@ export class ReleaseEntryMetadata {
       contentType: this.contentType,
       metadataJson: this.metadataJson,
       parameterDigest: this.parameterDigest,
-      clientBound: this.clientBound,
-      hasAccessToken: this.hasAccessToken,
     };
   }
 }

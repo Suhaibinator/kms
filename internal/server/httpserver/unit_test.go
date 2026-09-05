@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 func TestMapError(t *testing.T) {
@@ -25,12 +26,20 @@ func TestMapError(t *testing.T) {
 		{domain.Errorf(domain.ErrAlreadyExists, "dup"), 409, "already_exists"},
 		{domain.Errorf(domain.ErrFailedPrecondition, "state"), 412, "failed_precondition"},
 		{domain.Errorf(domain.ErrNotReady, "wait"), 503, "unavailable"},
+		{fmt.Errorf("post-commit cleanup: %w", storage.ErrPurgeCleanupPending), 503, "purge_cleanup_pending"},
 	}
 	for _, c := range cases {
 		status, code, _ := mapError(c.err)
 		if status != c.wantStatus || code != c.wantCode {
 			t.Errorf("mapError(%v) = (%d,%s), want (%d,%s)", c.err, status, code, c.wantStatus, c.wantCode)
 		}
+	}
+}
+
+func TestMapErrorPurgeCleanupPendingSaysPurgeCommitted(t *testing.T) {
+	status, code, msg := mapError(fmt.Errorf("wrapped: %w", storage.ErrPurgeCleanupPending))
+	if status != http.StatusServiceUnavailable || code != "purge_cleanup_pending" || msg != storage.ErrPurgeCleanupPending.Error() {
+		t.Fatalf("mapError = (%d,%s,%q)", status, code, msg)
 	}
 }
 
@@ -79,7 +88,8 @@ func TestDecodeJSONUsesStrictSingleDocumentV2Semantics(t *testing.T) {
 		"empty":           {body: nil},
 		"whitespace only": {body: []byte(" \n\t")},
 		"exact case":      {body: []byte(`{"name":"ok"}`), want: "ok"},
-		"wrong case":      {body: []byte(`{"Name":"ignored"}`)},
+		"wrong case":      {body: []byte(`{"Name":"ignored"}`), wantErr: true},
+		"unknown member":  {body: []byte(`{"name":"ok","extra":true}`), wantErr: true},
 		"duplicate":       {body: []byte(`{"name":"one","name":"two"}`), wantErr: true},
 		"trailing value":  {body: []byte(`{"name":"one"} {}`), wantErr: true},
 		"invalid UTF-8":   {body: []byte{'{', '"', 'n', 'a', 'm', 'e', '"', ':', '"', 0xff, '"', '}'}, wantErr: true},

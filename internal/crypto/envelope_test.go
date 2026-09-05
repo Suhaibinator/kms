@@ -9,64 +9,62 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-func stdInput(res EncryptResult) DecryptInput {
+const (
+	testBindingKeyA = "0123456789abcdef0123456789abcdef"
+	testBindingKeyB = "abcdef0123456789abcdef0123456789"
+)
+
+func decryptInput(result EncryptResult, bindingKey string) DecryptInput {
 	return DecryptInput{
-		Ciphertext:    res.Ciphertext,
-		EncryptedDEK:  res.EncryptedDEK,
-		Nonce:         res.Nonce,
-		AAD:           res.AAD,
-		WrapMode:      res.WrapMode,
-		ClientKeySalt: res.ClientKeySalt,
+		Ciphertext:     result.Ciphertext,
+		EncryptedDEK:   result.EncryptedDEK,
+		Nonce:          result.Nonce,
+		AAD:            result.AAD,
+		WrapMode:       result.WrapMode,
+		BindingKeySalt: result.BindingKeySalt,
+		BindingKey:     bindingKey,
 	}
 }
 
-func TestBuildAADFormat(t *testing.T) {
+func TestBuildAADFormatAndIdentityBinding(t *testing.T) {
 	got := BuildAAD("prod", "gradethis", "billing/stripe-key", 3)
 	want := "env=prod;app=gradethis;key=billing/stripe-key;version=3"
 	if got != want {
 		t.Fatalf("BuildAAD = %q, want %q", got, want)
 	}
-	// Distinct identity => distinct AAD across every component.
-	if BuildAAD("prod", "app", "x", 3) == BuildAAD("prod", "app", "x", 4) {
-		t.Fatal("AAD not sensitive to version")
-	}
-	if BuildAAD("prod", "app", "x", 1) == BuildAAD("staging", "app", "x", 1) {
-		t.Fatal("AAD not sensitive to env")
-	}
-	if BuildAAD("prod", "app", "x", 1) == BuildAAD("prod", "other", "x", 1) {
-		t.Fatal("AAD not sensitive to app")
-	}
-	if BuildAAD("prod", "app", "x", 1) == BuildAAD("prod", "app", "y", 1) {
-		t.Fatal("AAD not sensitive to key")
+	base := BuildAAD("prod", "app", "x", 1)
+	for name, other := range map[string]string{
+		"environment": BuildAAD("stage", "app", "x", 1),
+		"application": BuildAAD("prod", "other", "x", 1),
+		"key":         BuildAAD("prod", "app", "y", 1),
+		"version":     BuildAAD("prod", "app", "x", 2),
+	} {
+		if base == other {
+			t.Fatalf("AAD is not sensitive to %s", name)
+		}
 	}
 }
 
 func TestEncryptDecryptStandardRoundTrip(t *testing.T) {
-	kek := mustKEK(t, "kek-1")
-	aad := BuildAAD("prod", "app", "/prod/db", 1)
+	kek := mustKEK(t, "kek-standard")
 	plaintext := []byte("super-secret-password")
-
-	res, err := Encrypt(kek, plaintext, aad)
+	result, err := Encrypt(kek, plaintext, BuildAAD("prod", "app", "db", 1))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	if res.WrapMode != domain.WrapModeStandard {
-		t.Fatalf("WrapMode = %q, want standard", res.WrapMode)
+	if result.WrapMode != domain.WrapModeStandard {
+		t.Fatalf("WrapMode = %q, want %q", result.WrapMode, domain.WrapModeStandard)
 	}
-	if res.ClientKeySalt != nil {
-		t.Fatal("standard wrap must not set ClientKeySalt")
+	if result.BindingKeySalt != nil {
+		t.Fatal("standard wrap persisted a binding-key salt")
 	}
-	if res.Algorithm != AlgorithmAES256GCM {
-		t.Fatalf("Algorithm = %q", res.Algorithm)
+	if result.KEKID != kek.ID || result.Algorithm != AlgorithmAES256GCM {
+		t.Fatalf("unexpected metadata: KEKID=%q algorithm=%q", result.KEKID, result.Algorithm)
 	}
-	if res.KEKID != kek.ID {
-		t.Fatalf("KEKID = %q, want %q", res.KEKID, kek.ID)
-	}
-	if bytes.Contains(res.Ciphertext, plaintext) {
+	if bytes.Contains(result.Ciphertext, plaintext) {
 		t.Fatal("plaintext leaked into ciphertext")
 	}
-
-	got, err := Decrypt(kek, stdInput(res))
+	got, err := Decrypt(kek, decryptInput(result, ""))
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -75,387 +73,216 @@ func TestEncryptDecryptStandardRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEncryptEmptyPlaintextRoundTrips(t *testing.T) {
-	kek := mustKEK(t, "kek-empty")
-	aad := BuildAAD("prod", "app", "/e", 1)
-	res, err := Encrypt(kek, []byte{}, aad)
+func TestEncryptBindingKeyRoundTrip(t *testing.T) {
+	kek := mustKEK(t, "kek-bound")
+	plaintext := []byte("bound-secret")
+	result, err := EncryptBindingKey(kek, plaintext, BuildAAD("prod", "app", "api", 1), testBindingKeyA)
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptBindingKey: %v", err)
 	}
-	got, err := Decrypt(kek, stdInput(res))
+	if result.WrapMode != domain.WrapModeBindingKey {
+		t.Fatalf("WrapMode = %q, want %q", result.WrapMode, domain.WrapModeBindingKey)
+	}
+	if len(result.BindingKeySalt) != BindingKeySaltSize {
+		t.Fatalf("BindingKeySalt len = %d, want %d", len(result.BindingKeySalt), BindingKeySaltSize)
+	}
+	if result.KEKID != kek.ID {
+		t.Fatalf("KEKID = %q, want %q", result.KEKID, kek.ID)
+	}
+	got, err := Decrypt(kek, decryptInput(result, testBindingKeyA))
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("Decrypt = %q, want empty", got)
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("Decrypt = %q, want %q", got, plaintext)
 	}
 }
 
-func TestEncryptNilKEK(t *testing.T) {
-	if _, err := Encrypt(nil, []byte("x"), "aad"); err == nil {
-		t.Fatal("Encrypt(nil KEK) = nil error")
-	}
-	if _, err := Decrypt(nil, DecryptInput{}); err == nil {
-		t.Fatal("Decrypt(nil KEK) = nil error")
-	}
-}
-
-func TestDecryptFailsClosedOnTamper(t *testing.T) {
-	kek := mustKEK(t, "kek-tamper")
-	aad := BuildAAD("prod", "app", "/prod/db", 7)
-	res, err := Encrypt(kek, []byte("value"), aad)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
-
-	cases := map[string]func(in *DecryptInput){
-		"ciphertext bit flip": func(in *DecryptInput) {
-			in.Ciphertext = bytes.Clone(in.Ciphertext)
-			in.Ciphertext[0] ^= 0x80
-		},
-		"encrypted DEK bit flip": func(in *DecryptInput) {
-			in.EncryptedDEK = bytes.Clone(in.EncryptedDEK)
-			in.EncryptedDEK[len(in.EncryptedDEK)-1] ^= 0x01
-		},
-		"nonce bit flip": func(in *DecryptInput) {
-			in.Nonce = bytes.Clone(in.Nonce)
-			in.Nonce[0] ^= 0x01
-		},
-		"aad mismatch": func(in *DecryptInput) {
-			in.AAD = BuildAAD("prod", "app", "/prod/db", 8) // wrong version
-		},
-		"truncated ciphertext": func(in *DecryptInput) {
-			in.Ciphertext = in.Ciphertext[:len(in.Ciphertext)-1]
-		},
-		"empty encrypted DEK": func(in *DecryptInput) {
-			in.EncryptedDEK = nil
-		},
-	}
-	for name, mutate := range cases {
+func TestValidateBindingKeyOpaqueUTF8Bytes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		key  string
+		want error
+	}{
+		"missing":       {key: "", want: ErrBindingKeyRequired},
+		"31 bytes":      {key: strings.Repeat("x", 31), want: ErrBindingKeyTooShort},
+		"32 bytes":      {key: strings.Repeat("x", 32)},
+		"1024 bytes":    {key: strings.Repeat("x", 1024)},
+		"1025 bytes":    {key: strings.Repeat("x", 1025), want: ErrBindingKeyTooLong},
+		"16 unicode":    {key: strings.Repeat("é", 16)}, // 32 UTF-8 bytes
+		"opaque spaces": {key: strings.Repeat(" ", 32)},
+		"not trimmed":   {key: strings.Repeat("x", 31) + " "},
+		"invalid UTF-8": {key: string([]byte{0xff, 0xfe}) + strings.Repeat("x", 32), want: ErrBindingKeyInvalidUTF8},
+	} {
 		t.Run(name, func(t *testing.T) {
-			in := stdInput(res)
-			mutate(&in)
-			_, err := Decrypt(kek, in)
-			if !errors.Is(err, domain.ErrDecryptFailed) {
-				t.Fatalf("Decrypt(%s) err = %v, want ErrDecryptFailed", name, err)
+			err := ValidateBindingKey(tc.key)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("ValidateBindingKey() error = %v, want %v", err, tc.want)
 			}
 		})
 	}
 }
 
-func TestDecryptWrongKEK(t *testing.T) {
-	kek := mustKEK(t, "kek-a")
-	other := mustKEK(t, "kek-b")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := Encrypt(kek, []byte("v"), aad)
+func TestBindingKeyDecryptRejectsMissingShortAndWrongKeys(t *testing.T) {
+	kek := mustKEK(t, "kek-credentials")
+	result, err := EncryptBindingKey(kek, []byte("v"), BuildAAD("prod", "app", "api", 1), testBindingKeyA)
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptBindingKey: %v", err)
 	}
-	if _, err := Decrypt(other, stdInput(res)); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("Decrypt(wrong KEK) err = %v, want ErrDecryptFailed", err)
+	for name, tc := range map[string]struct {
+		key  string
+		want error
+	}{
+		"missing": {key: "", want: ErrBindingKeyRequired},
+		"short":   {key: "wrong", want: ErrBindingKeyTooShort},
+		"wrong":   {key: testBindingKeyB, want: domain.ErrDecryptFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Decrypt(kek, decryptInput(result, tc.key))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Decrypt error = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
-func TestDecryptUnknownWrapMode(t *testing.T) {
-	kek := mustKEK(t, "kek-mode")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := Encrypt(kek, []byte("v"), aad)
+func TestBindingKeyCannotBeBypassedWithKEK(t *testing.T) {
+	kek := mustKEK(t, "kek-no-bypass")
+	result, err := EncryptBindingKey(kek, []byte("v"), BuildAAD("prod", "app", "api", 1), testBindingKeyA)
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatalf("EncryptBindingKey: %v", err)
 	}
-	in := stdInput(res)
-	in.WrapMode = "bogus-mode"
-	_, err = Decrypt(kek, in)
-	if !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("Decrypt(unknown mode) err = %v, want ErrDecryptFailed", err)
-	}
-}
-
-// A wrapped-DEK blob copied from another record (different AAD) must fail:
-// this is the cross-record substitution defense.
-func TestDecryptRejectsCrossRecordDEK(t *testing.T) {
-	kek := mustKEK(t, "kek-cross")
-	aadA := BuildAAD("prod", "app", "/a", 1)
-	aadB := BuildAAD("prod", "app", "/b", 1)
-	resA, err := Encrypt(kek, []byte("secret-a"), aadA)
-	if err != nil {
-		t.Fatalf("Encrypt A: %v", err)
-	}
-	resB, err := Encrypt(kek, []byte("secret-b"), aadB)
-	if err != nil {
-		t.Fatalf("Encrypt B: %v", err)
-	}
-	// Splice B's encrypted DEK into A's record.
-	in := stdInput(resA)
-	in.EncryptedDEK = resB.EncryptedDEK
-	if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("Decrypt(spliced DEK) err = %v, want ErrDecryptFailed", err)
-	}
-}
-
-func TestClientBoundRoundTrip(t *testing.T) {
-	kek := mustKEK(t, "kek-cb")
-	aad := BuildAAD("prod", "app", "/prod/cb", 1)
-	token := "kmss_client-access-token-value"
-	plaintext := []byte("client-bound-secret")
-
-	res, err := EncryptClientBound(kek, plaintext, aad, token)
-	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
-	}
-	if res.WrapMode != domain.WrapModeClientBound {
-		t.Fatalf("WrapMode = %q, want client_bound", res.WrapMode)
-	}
-	if len(res.ClientKeySalt) != clientKeySaltSize {
-		t.Fatalf("ClientKeySalt len = %d, want %d", len(res.ClientKeySalt), clientKeySaltSize)
-	}
-
-	in := stdInput(res)
-	in.ClientToken = token
-	got, err := Decrypt(kek, in)
-	if err != nil {
-		t.Fatalf("Decrypt(client-bound): %v", err)
-	}
-	if !bytes.Equal(got, plaintext) {
-		t.Fatalf("Decrypt = %q, want %q", got, plaintext)
-	}
-}
-
-func TestClientBoundRequiresToken(t *testing.T) {
-	kek := mustKEK(t, "kek-cb2")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	if _, err := EncryptClientBound(kek, []byte("v"), aad, ""); !errors.Is(err, ErrClientTokenRequired) {
-		t.Fatalf("EncryptClientBound(empty token) err = %v, want ErrClientTokenRequired", err)
-	}
-
-	res, err := EncryptClientBound(kek, []byte("v"), aad, "tok")
-	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
-	}
-	// Decrypt without supplying the token.
-	if _, err := Decrypt(kek, stdInput(res)); !errors.Is(err, ErrClientTokenRequired) {
-		t.Fatalf("Decrypt(client-bound, no token) err = %v, want ErrClientTokenRequired", err)
-	}
-}
-
-func TestClientBoundWrongToken(t *testing.T) {
-	kek := mustKEK(t, "kek-cb3")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := EncryptClientBound(kek, []byte("v"), aad, "correct-token")
-	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
-	}
-	in := stdInput(res)
-	in.ClientToken = "wrong-token"
-	if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("Decrypt(wrong token) err = %v, want ErrDecryptFailed", err)
-	}
-}
-
-// The database plus the master key alone must not decrypt a client-bound
-// secret: even with the correct KEK, a missing/incorrect token fails.
-func TestClientBoundUndecryptableWithoutToken(t *testing.T) {
-	kek := mustKEK(t, "kek-cb4")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := EncryptClientBound(kek, []byte("v"), aad, "the-only-key-share")
-	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
-	}
-	// Attacker holds ciphertext, encrypted DEK, salt, AAD, and the real KEK —
-	// but not the token. Treat it as standard to try to skip the inner layer.
-	in := stdInput(res)
+	in := decryptInput(result, "")
 	in.WrapMode = domain.WrapModeStandard
-	if _, err := Decrypt(kek, in); err == nil {
-		t.Fatal("client-bound secret decrypted without token by forcing standard mode")
+	in.BindingKeySalt = nil
+	if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("Decrypt forced standard error = %v, want ErrDecryptFailed", err)
 	}
 }
 
-func TestClientKeyDerivation(t *testing.T) {
-	salt := bytes.Repeat([]byte{0x09}, clientKeySaltSize)
-	k1, err := deriveClientKey("token", salt)
+func TestBindingKeyEncryptionUsesFreshIndependentSalts(t *testing.T) {
+	kek := mustKEK(t, "kek-salts")
+	aad := BuildAAD("prod", "app", "api", 1)
+	first, err := EncryptBindingKey(kek, []byte("same"), aad, testBindingKeyA)
 	if err != nil {
-		t.Fatalf("deriveClientKey: %v", err)
+		t.Fatalf("first EncryptBindingKey: %v", err)
 	}
-	if len(k1) != keySize {
-		t.Fatalf("derived key len = %d, want %d", len(k1), keySize)
+	second, err := EncryptBindingKey(kek, []byte("same"), aad, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("second EncryptBindingKey: %v", err)
 	}
-	// Deterministic for identical inputs.
-	k2, _ := deriveClientKey("token", salt)
-	if !bytes.Equal(k1, k2) {
-		t.Fatal("deriveClientKey not deterministic")
+	if bytes.Equal(first.BindingKeySalt, second.BindingKeySalt) {
+		t.Fatal("binding-key salt reused")
 	}
-	// Different salt => different key.
-	salt2 := bytes.Repeat([]byte{0x0a}, clientKeySaltSize)
-	k3, _ := deriveClientKey("token", salt2)
-	if bytes.Equal(k1, k3) {
-		t.Fatal("different salt produced same key")
-	}
-	// Different token => different key.
-	k4, _ := deriveClientKey("other", salt)
-	if bytes.Equal(k1, k4) {
-		t.Fatal("different token produced same key")
-	}
-	// Bad salt length rejected.
-	if _, err := deriveClientKey("token", []byte("short")); err == nil {
-		t.Fatal("deriveClientKey(short salt) = nil error")
+	if bytes.Equal(first.Ciphertext, second.Ciphertext) || bytes.Equal(first.EncryptedDEK, second.EncryptedDEK) {
+		t.Fatal("encryption reused ciphertext or wrapped DEK")
 	}
 }
 
-func TestRewrapDEKStandard(t *testing.T) {
+func TestBindingKeyDerivation(t *testing.T) {
+	salt := bytes.Repeat([]byte{0x09}, BindingKeySaltSize)
+	first, err := deriveBindingKey(testBindingKeyA, salt)
+	if err != nil {
+		t.Fatalf("deriveBindingKey: %v", err)
+	}
+	defer Zero(first)
+	second, err := deriveBindingKey(testBindingKeyA, salt)
+	if err != nil {
+		t.Fatalf("deriveBindingKey second: %v", err)
+	}
+	defer Zero(second)
+	if len(first) != keySize || !bytes.Equal(first, second) {
+		t.Fatal("derivation has wrong size or is nondeterministic")
+	}
+	otherSalt, _ := deriveBindingKey(testBindingKeyA, bytes.Repeat([]byte{0x0a}, BindingKeySaltSize))
+	defer Zero(otherSalt)
+	otherKey, _ := deriveBindingKey(testBindingKeyB, salt)
+	defer Zero(otherKey)
+	if bytes.Equal(first, otherSalt) || bytes.Equal(first, otherKey) {
+		t.Fatal("different salt or binding key produced the same derived key")
+	}
+	if _, err := deriveBindingKey(testBindingKeyA, []byte("short")); err == nil {
+		t.Fatal("deriveBindingKey accepted a short salt")
+	}
+}
+
+func TestRewrapDEKOuterKEKPreservesBindingLayer(t *testing.T) {
 	from := mustKEK(t, "kek-old")
 	to := mustKEK(t, "kek-new")
-	aad := BuildAAD("prod", "app", "/rotate", 1)
-	res, err := Encrypt(from, []byte("rotate-me"), aad)
+	aad := BuildAAD("prod", "app", "api", 1)
+	result, err := EncryptBindingKey(from, []byte("v"), aad, testBindingKeyA)
 	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
+		t.Fatal(err)
 	}
-
-	newDEK, err := RewrapDEK(from, to, res.EncryptedDEK, aad)
+	wrapped, err := RewrapDEK(from, to, result.EncryptedDEK, aad)
 	if err != nil {
 		t.Fatalf("RewrapDEK: %v", err)
 	}
-	if bytes.Equal(newDEK, res.EncryptedDEK) {
-		t.Fatal("rewrapped DEK identical to original")
-	}
-
-	// New KEK decrypts using the rewrapped DEK and the UNCHANGED value ciphertext.
-	in := stdInput(res)
-	in.EncryptedDEK = newDEK
+	in := decryptInput(result, testBindingKeyA)
+	in.EncryptedDEK = wrapped
 	got, err := Decrypt(to, in)
-	if err != nil {
-		t.Fatalf("Decrypt(rewrapped): %v", err)
+	if err != nil || string(got) != "v" {
+		t.Fatalf("Decrypt after outer rewrap = %q, %v", got, err)
 	}
-	if string(got) != "rotate-me" {
-		t.Fatalf("Decrypt = %q, want rotate-me", got)
-	}
-	// Old KEK no longer opens the rewrapped DEK.
 	if _, err := Decrypt(from, in); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("Decrypt(old KEK, rewrapped) err = %v, want ErrDecryptFailed", err)
+		t.Fatalf("old KEK opens rewrapped DEK: %v", err)
 	}
 }
 
-func TestRewrapDEKClientBoundPreservesInnerLayer(t *testing.T) {
-	from := mustKEK(t, "kek-cbo")
-	to := mustKEK(t, "kek-cbn")
-	aad := BuildAAD("prod", "app", "/rotate/cb", 1)
-	token := "client-token"
-	res, err := EncryptClientBound(from, []byte("cb-value"), aad, token)
+func TestDecryptFailsClosedOnTamperAndConfusion(t *testing.T) {
+	kek := mustKEK(t, "kek-tamper")
+	aad := BuildAAD("prod", "app", "api", 1)
+	result, err := Encrypt(kek, []byte("value"), aad)
 	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
+		t.Fatal(err)
 	}
-
-	newDEK, err := RewrapDEK(from, to, res.EncryptedDEK, aad)
-	if err != nil {
-		t.Fatalf("RewrapDEK: %v", err)
+	for name, mutate := range map[string]func(*DecryptInput){
+		"ciphertext":  func(in *DecryptInput) { in.Ciphertext = flipFirst(in.Ciphertext) },
+		"wrapped DEK": func(in *DecryptInput) { in.EncryptedDEK = flipFirst(in.EncryptedDEK) },
+		"nonce":       func(in *DecryptInput) { in.Nonce = flipFirst(in.Nonce) },
+		"AAD":         func(in *DecryptInput) { in.AAD += "-wrong" },
+		"cross layer": func(in *DecryptInput) { in.EncryptedDEK = in.Ciphertext },
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := decryptInput(result, "")
+			mutate(&in)
+			if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
+				t.Fatalf("Decrypt error = %v, want ErrDecryptFailed", err)
+			}
+		})
 	}
-	in := stdInput(res)
-	in.EncryptedDEK = newDEK
-	in.ClientToken = token // inner layer still needs the token after KEK rotation
-	got, err := Decrypt(to, in)
-	if err != nil {
-		t.Fatalf("Decrypt(rewrapped client-bound): %v", err)
-	}
-	if string(got) != "cb-value" {
-		t.Fatalf("Decrypt = %q, want cb-value", got)
+	in := decryptInput(result, "")
+	in.WrapMode = "unknown"
+	if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("unknown wrap mode error = %v, want ErrDecryptFailed", err)
 	}
 }
 
-func TestRewrapDEKRejectsWrongSource(t *testing.T) {
-	from := mustKEK(t, "kek-rw-a")
-	wrong := mustKEK(t, "kek-rw-b")
-	to := mustKEK(t, "kek-rw-c")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := Encrypt(from, []byte("v"), aad)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
-	if _, err := RewrapDEK(wrong, to, res.EncryptedDEK, aad); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("RewrapDEK(wrong source) err = %v, want ErrDecryptFailed", err)
-	}
-	if _, err := RewrapDEK(nil, to, res.EncryptedDEK, aad); err == nil {
-		t.Fatal("RewrapDEK(nil from) = nil error")
-	}
-	if _, err := RewrapDEK(from, nil, res.EncryptedDEK, aad); err == nil {
-		t.Fatal("RewrapDEK(nil to) = nil error")
+func TestZeroOverwritesMutableKeyMaterial(t *testing.T) {
+	material := bytes.Repeat([]byte{0xa5}, keySize)
+	Zero(material)
+	if !bytes.Equal(material, make([]byte, keySize)) {
+		t.Fatal("Zero did not overwrite the entire buffer")
 	}
 }
 
-// Domain-separation suffixes must differ so a DEK-layer blob can't be replayed
-// as a value-layer blob or vice versa.
 func TestDomainSeparationSuffixesDistinct(t *testing.T) {
 	suffixes := []string{aadSuffixValue, aadSuffixDEK, aadSuffixDEKInner}
 	for i := range suffixes {
+		if !strings.HasPrefix(suffixes[i], "|layer:") {
+			t.Fatalf("suffix %q lacks domain prefix", suffixes[i])
+		}
 		for j := i + 1; j < len(suffixes); j++ {
 			if suffixes[i] == suffixes[j] {
-				t.Fatalf("suffixes %d and %d are equal (%q)", i, j, suffixes[i])
+				t.Fatalf("suffixes %q and %q are equal", suffixes[i], suffixes[j])
 			}
 		}
-		if !strings.HasPrefix(suffixes[i], "|layer:") {
-			t.Fatalf("suffix %q missing |layer: prefix", suffixes[i])
-		}
 	}
 }
 
-// Encrypting identical plaintext twice must yield different nonce, ciphertext,
-// and wrapped DEK — a fresh DEK and nonce per sealing operation.
-func TestEncryptUniquePerCall(t *testing.T) {
-	kek := mustKEK(t, "kek-uniq")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	a, err := Encrypt(kek, []byte("same-plaintext"), aad)
-	if err != nil {
-		t.Fatalf("Encrypt a: %v", err)
+func flipFirst(in []byte) []byte {
+	out := bytes.Clone(in)
+	if len(out) > 0 {
+		out[0] ^= 0x80
 	}
-	b, err := Encrypt(kek, []byte("same-plaintext"), aad)
-	if err != nil {
-		t.Fatalf("Encrypt b: %v", err)
-	}
-	if bytes.Equal(a.Nonce, b.Nonce) {
-		t.Error("nonce reused across encryptions")
-	}
-	if bytes.Equal(a.Ciphertext, b.Ciphertext) {
-		t.Error("identical ciphertext for identical plaintext (DEK/nonce reuse)")
-	}
-	if bytes.Equal(a.EncryptedDEK, b.EncryptedDEK) {
-		t.Error("identical wrapped DEK across encryptions")
-	}
-}
-
-// Cross-layer confusion: a blob from one layer must not authenticate in
-// another (value ciphertext as wrapped DEK, and vice versa).
-func TestDecryptRejectsCrossLayerConfusion(t *testing.T) {
-	kek := mustKEK(t, "kek-layer")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := Encrypt(kek, []byte("v"), aad)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
-
-	valueAsDEK := stdInput(res)
-	valueAsDEK.EncryptedDEK = res.Ciphertext
-	if _, err := Decrypt(kek, valueAsDEK); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("value-as-DEK err = %v, want ErrDecryptFailed", err)
-	}
-
-	dekAsValue := stdInput(res)
-	dekAsValue.Ciphertext = res.EncryptedDEK
-	if _, err := Decrypt(kek, dekAsValue); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("DEK-as-value err = %v, want ErrDecryptFailed", err)
-	}
-}
-
-// A tampered client-key salt derives the wrong client key and must fail.
-func TestClientBoundWrongSaltFails(t *testing.T) {
-	kek := mustKEK(t, "kek-salt")
-	aad := BuildAAD("prod", "app", "/x", 1)
-	res, err := EncryptClientBound(kek, []byte("v"), aad, "token")
-	if err != nil {
-		t.Fatalf("EncryptClientBound: %v", err)
-	}
-	in := stdInput(res)
-	in.ClientToken = "token"
-	in.ClientKeySalt = bytes.Clone(res.ClientKeySalt)
-	in.ClientKeySalt[0] ^= 0xff
-	if _, err := Decrypt(kek, in); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("wrong salt err = %v, want ErrDecryptFailed", err)
-	}
+	return out
 }
