@@ -3636,8 +3636,9 @@
       left: 0;
       width: 100%;
       max-width: 100%;
-      height: var(--mobile-modal-height, 100dvh);
-      max-height: var(--mobile-modal-height, 100dvh);
+      /* WebKit can briefly report the previous visual viewport after a resize. */
+      height: min(var(--mobile-modal-height, 100dvh), 100dvh);
+      max-height: min(var(--mobile-modal-height, 100dvh), 100dvh);
       transform: none;
       translate: 0px 0px;
       animation: none;

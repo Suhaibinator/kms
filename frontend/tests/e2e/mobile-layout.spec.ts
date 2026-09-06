@@ -144,3 +144,31 @@ test("full-screen editor follows visual viewport changes without losing its draf
   const rect = await footer.boundingBox();
   expect((rect?.y ?? 0) + (rect?.height ?? 0)).toBeLessThanOrEqual(460);
 });
+
+test("mobile editor stays within the viewport when visual viewport measurements are stale", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 400, height: 800 });
+  await mockConsole(page, incidentState());
+  await page.goto("/secrets?env=prod&app=gradethis");
+  await page.getByRole("link", { name: "New secret", exact: true }).first().click();
+  const editor = page.getByRole("dialog", { name: "New secret", exact: true });
+  await editor.getByPlaceholder("stripe-api-key").fill("resize-draft");
+  // Reproduce WebKit returning the old height while the layout viewport has shrunk.
+  await page.evaluate(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) throw new Error("Visual viewport unavailable");
+    Object.defineProperty(viewport, "height", { configurable: true, get: () => 800 });
+  });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.evaluate(() => window.visualViewport?.dispatchEvent(new Event("resize")));
+  await expect.poll(async () => (await editor.boundingBox())?.height).toBe(568);
+  const footer = editor.locator('[data-slot="dialog-footer"]');
+  await expect
+    .poll(async () => {
+      const rect = await footer.boundingBox();
+      return rect ? rect.y + rect.height : Number.POSITIVE_INFINITY;
+    })
+    .toBeLessThanOrEqual(568);
+  await expect(editor.getByPlaceholder("stripe-api-key")).toHaveValue("resize-draft");
+});
