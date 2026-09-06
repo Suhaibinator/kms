@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 import { incidentState, mockConsole } from "./fakes/console-api";
 
 for (const entry of ["list", "application"] as const) {
-  for (const token of [false, true]) {
-    test(`secret creation from ${entry} keeps its width${token ? " through token reveal" : ""}`, async ({
+  for (const bound of [false, true]) {
+    test(`secret creation from ${entry} keeps its width (${bound ? "bound" : "unbound"})`, async ({
       page,
       isMobile,
     }) => {
@@ -29,17 +29,17 @@ for (const entry of ["list", "application"] as const) {
       const width = isMobile ? page.viewportSize()?.width : 720;
       if (!width) throw new Error("Missing viewport width");
       await expect.poll(async () => (await create.boundingBox())?.width).toBeCloseTo(width, 0);
-      if (token) {
+      if (bound) {
         await create.getByText("Advanced options", { exact: true }).click();
-        await create.getByRole("checkbox", { name: /Generate a per-secret access token/ }).check();
+        await create
+          .getByRole("checkbox", { name: /Bind this version to an application key/ })
+          .check();
+        await create
+          .getByLabel("Binding key", { exact: true })
+          .fill("modal-binding-key-01234567890123456789");
+        await expect.poll(async () => (await create.boundingBox())?.width).toBeCloseTo(width, 0);
       }
       await create.getByRole("button", { name: "Create secret", exact: true }).click();
-      if (token) {
-        const reveal = page.getByRole("dialog", { name: "Save this access token now" });
-        await expect(reveal).toBeVisible();
-        await expect.poll(async () => (await reveal.boundingBox())?.width).toBeCloseTo(width, 0);
-        await reveal.getByRole("button", { name: "I've saved it — manage secret" }).click();
-      }
       const manager = page.getByRole("dialog", { name: "/prod/gradethis/modal-size-test" });
       await expect(manager.getByRole("tab", { name: "Overview" })).toBeVisible();
       await expect.poll(async () => (await manager.boundingBox())?.width).toBeCloseTo(width, 0);
