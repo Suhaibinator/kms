@@ -130,22 +130,39 @@ export function TableSkeleton({
   headers,
   rows = SKELETON_ROWS_DEFAULT,
   rowHeight,
+  leading = 0,
+  trailing = 0,
 }: {
   headers: string[];
   rows?: number;
   /** Override for tables whose real rows are taller than the common
    *  one-line-plus-actions case `.skeleton-row td` is sized for. */
   rowHeight?: number | string;
+  /** Structural columns the loaded table adds before the data columns (a
+   *  select-all cell) and after them (an actions cell), so the column count
+   *  matches and nothing shifts on arrival. */
+  leading?: number;
+  trailing?: number;
 }) {
+  const pad = (count: number, tag: "th" | "td", prefix: string) =>
+    Array.from({ length: count }, (_, i) =>
+      tag === "th" ? (
+        <th key={`${prefix}${i}`} className="skeleton-structural" />
+      ) : (
+        <td key={`${prefix}${i}`} className="skeleton-structural" />
+      ),
+    );
   return (
     <div className="table-wrap card-table" aria-busy="true">
       <span className="sr-only">Loading…</span>
       <table className="data">
         <thead>
           <tr>
+            {pad(leading, "th", "l")}
             {headers.map((h) => (
               <th key={h}>{h}</th>
             ))}
+            {pad(trailing, "th", "t")}
           </tr>
         </thead>
         <tbody>
@@ -155,11 +172,13 @@ export function TableSkeleton({
               className="skeleton-row"
               style={rowHeight === undefined ? undefined : { height: rowHeight }}
             >
+              {pad(leading, "td", "l")}
               {headers.map((h, c) => (
                 <td key={h}>
                   <Skeleton width={SKELETON_WIDTHS[(r + c) % SKELETON_WIDTHS.length]} />
                 </td>
               ))}
+              {pad(trailing, "td", "t")}
             </tr>
           ))}
         </tbody>

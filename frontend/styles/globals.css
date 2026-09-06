@@ -502,6 +502,9 @@
   /* ---------- Cards ---------- */
 
   .card {
+    /* A grid or flex item otherwise keeps its min-content width and lets a
+       wide table inside it widen the whole column. */
+    min-width: 0;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -594,6 +597,15 @@
   .field {
     margin-bottom: var(--space-4);
   }
+  /* Gap-based containers own their spacing; the legacy block-flow margin
+     would otherwise stack on top of the gap. */
+  .stack > .field,
+  .rollback-dialog > .field,
+  .advanced-panel-content > .field,
+  .schema-form-fields > .field,
+  .rule-row .field {
+    margin-bottom: 0;
+  }
   fieldset.field {
     min-width: 0;
     padding: 0;
@@ -630,12 +642,18 @@
     gap: 10px;
   }
   .checkbox-row label {
-    display: inline-flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: var(--space-1);
+    /* Title above hint, always: as a wrapping row the hint printed on the
+       same line whenever it happened to fit. */
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
     font-size: 13px;
     cursor: pointer;
+  }
+  .checkbox-row + .checkbox-row {
+    margin-top: var(--space-3);
   }
   .schema-form {
     display: grid;
@@ -1046,6 +1064,10 @@
   /* ---------- Tables ---------- */
 
   .table-wrap {
+    /* A scroller must not push: as a block child it would still report the
+       table's min-content width upward and widen every ancestor. */
+    min-width: 0;
+    contain: inline-size;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     overflow-x: auto;
@@ -1064,6 +1086,23 @@
       var(--surface);
     background-attachment: local, local, scroll, scroll;
   }
+  /* ---------- Dialog structure (components/Modal.tsx, ui/dialog.tsx) ----------
+     The popup is a grid; its rows would otherwise keep their min-content
+     width and let a wide child resize the dialog between tabs. The body
+     reserves its scrollbar gutter for the same reason, and paints the page
+     ground so cards inside it read as cards. */
+  [data-slot="dialog-content"] > * {
+    min-width: 0;
+  }
+  [data-slot="dialog-title"] {
+    overflow-wrap: anywhere;
+  }
+  [data-modal-body] {
+    --modal-pad: var(--space-5);
+    scrollbar-gutter: stable;
+    background: var(--bg);
+  }
+
   table.data {
     width: 100%;
     border-collapse: collapse;
@@ -1168,6 +1207,9 @@
   table.data th.mono {
     font-family: var(--mono);
     font-size: 12.5px;
+    /* Keys, serials and digests are unbreakable tokens; without this a
+       single cell forces the whole table sideways. */
+    overflow-wrap: anywhere;
   }
   /* table.data already sets tabular-nums. Apply per table, to every numeric
      column at once — right-aligning one column of five reads as a mistake. */
@@ -1204,7 +1246,8 @@
   }
   .row-actions {
     display: flex;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: var(--space-2);
     justify-content: flex-end;
   }
   .action-unavailable {
@@ -1867,15 +1910,17 @@
     border-radius: var(--radius-lg);
   }
   .release-status-strip > div {
+    display: grid;
     min-width: 0;
+    gap: var(--space-1);
+    justify-items: start;
   }
-  .release-status-strip span,
-  .release-status-strip strong {
+  /* Only the label and the "—" fallback: a descendant `span` selector here
+     used to blockify the ident chips' inner spans and split them onto two lines. */
+  .release-status-strip > div > .faint,
+  .release-status-strip > div > strong {
     display: block;
     overflow-wrap: anywhere;
-  }
-  .release-status-strip strong {
-    margin-top: var(--space-1);
   }
   .section-toolbar,
   .release-workspace-toolbar,
@@ -2047,6 +2092,10 @@
     text-align: center;
     padding: var(--space-9) var(--space-5);
     color: var(--text-faint);
+    /* Same frame as .table-wrap, so a list does not lose its box when empty. */
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
   }
   .empty-state .empty-icon {
     display: grid;
@@ -2528,8 +2577,6 @@
 
   .application-matrix {
     overflow-x: auto;
-    /* Wide table descendants must not expand the mobile layout viewport. */
-    contain: inline-size layout paint;
   }
 
   .application-matrix table {
@@ -2623,15 +2670,24 @@
     border-top: 1px solid var(--border);
   }
 
+  /* Bleeds into the modal body's padding on both axes and restores it on
+     both: the tab list sits on the rule, the buttons keep clearance above and
+     below it. Sticky so the actions stay reachable while the body scrolls. */
   .secret-workspace-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
     gap: var(--space-4);
-    margin: calc(var(--space-5) * -1) calc(var(--space-5) * -1) var(--space-5);
-    padding: 0 var(--space-5);
+    margin: calc(var(--modal-pad) * -1) calc(var(--modal-pad) * -1) var(--space-2);
+    padding: var(--space-3) var(--modal-pad) 0;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
+  }
+  .secret-workspace-toolbar > .row-wrap {
+    margin-bottom: var(--space-2);
   }
 
   .secret-workspace-toolbar [role="tablist"] {
@@ -2640,6 +2696,7 @@
 
   .secret-workspace-stack {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
 
@@ -2751,8 +2808,10 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
+    min-width: 0;
     max-width: 100%;
-    height: calc(var(--control-h-sm) - var(--space-2)); /* 22px */
+    /* min-, not height: a chip that gains a line must grow, never spill. */
+    min-height: calc(var(--control-h-sm) - var(--space-2)); /* 22px */
     padding: 0 var(--space-2);
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -2773,8 +2832,12 @@
     opacity: 0.75;
   }
   .ident-value {
+    /* min-width lets the flex item shrink so the ellipsis can fire; the
+       line-height keeps descenders and underscores from being clipped. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    line-height: 1.5;
   }
   .ident-app {
     --ident-fg: var(--ident-app);
@@ -2826,6 +2889,7 @@
   }
   .ident-link {
     display: inline-flex;
+    min-width: 0;
     max-width: 100%;
     text-decoration: none;
   }
@@ -2837,6 +2901,7 @@
   }
   .ident-tip {
     display: inline-flex;
+    min-width: 0;
     max-width: 100%;
   }
 
@@ -2976,7 +3041,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
-    height: calc(var(--control-h-sm) - var(--space-2));
+    min-height: calc(var(--control-h-sm) - var(--space-2));
     padding: 0 var(--space-2);
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -3197,13 +3262,6 @@
     [data-slot="button"][data-size="default"],
     [data-slot="button"][data-size="icon"] {
       min-height: 44px;
-    }
-    [data-slot="button"][data-size="sm"] {
-      min-height: 40px;
-    }
-    [data-slot="button"][data-size="icon-sm"] {
-      min-height: 40px;
-      min-width: 40px;
     }
     [data-slot="input"],
     [data-slot="select-trigger"] {
@@ -3549,7 +3607,7 @@
       flex-wrap: wrap;
       bottom: max(12px, env(safe-area-inset-bottom));
     }
-    [data-slot="button"][data-size],
+    [data-slot="button"][data-size]:not([data-size="xs"]):not([data-size="icon-xs"]),
     [data-slot="dialog-close"],
     [data-slot="sheet-close"],
     [role="tab"],
@@ -3690,7 +3748,8 @@
       padding-bottom: 12px;
     }
     [data-mobile-fullscreen] > [data-modal-body] {
-      padding: 16px;
+      --modal-pad: 16px;
+      padding: var(--modal-pad);
       overscroll-behavior: contain;
     }
     [data-mobile-fullscreen] > [data-slot="dialog-close"] {

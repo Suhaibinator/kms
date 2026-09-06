@@ -39,7 +39,9 @@ export function Ident({ kind, value, href, tooltip, production, className }: Ide
           {entry.prefix}
         </span>
       ) : null}
-      <span className="ident-value">{displayValue(kind, value)}</span>
+      <span className="ident-value" title={displayValue(kind, value)}>
+        {displayValue(kind, value)}
+      </span>
     </>
   );
 

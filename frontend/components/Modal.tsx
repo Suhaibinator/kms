@@ -22,6 +22,7 @@ export function Modal({
   footer,
   wide,
   workspace,
+  wizard = false,
   mobileFullScreen = false,
   dismissible = true,
   dirty = false,
@@ -41,6 +42,8 @@ export function Modal({
   wide?: boolean;
   /** Use the available viewport for data-heavy editors and inspectors. */
   workspace?: boolean;
+  /** Multi-step content of varying height: keep a floor so the dialog does not resize and re-centre between steps. */
+  wizard?: boolean;
   /** Use a full-screen editor on phones while retaining the desktop footprint. */
   mobileFullScreen?: boolean;
   /**
@@ -148,13 +151,14 @@ export function Modal({
           wide && "sm:max-w-[720px]",
           // Workspace modals only change their footprint; the row layout is shared.
           workspace && "h-[calc(100dvh-2rem)] sm:max-w-[min(1200px,calc(100vw-2rem))]",
+          wizard && "min-h-[min(560px,calc(100dvh-2rem))]",
         )}
       >
         <DialogHeader className="border-b border-border px-5 py-4 pr-14">
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
-        <div data-modal-body className="min-h-0 overflow-y-auto p-5">
+        <div data-modal-body className="min-h-0 min-w-0 overflow-y-auto p-5">
           {children}
         </div>
         {footer ? (

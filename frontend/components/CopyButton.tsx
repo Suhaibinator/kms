@@ -1,6 +1,6 @@
-import { Button } from "@/components/ui/button";
 import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 
 interface CopyButtonProps {
@@ -72,8 +72,10 @@ export default function CopyButton({
       disabled={disabled}
       onClick={onCopy}
     >
-      {copied ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
-      {copied ? "Copied" : label}
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      {/* The label never changes, so the button never changes width; the icon
+          swap and the live region carry the confirmation. */}
+      {label}
       <span className="sr-only" aria-live="polite">
         {copied ? "Copied to clipboard" : ""}
       </span>
