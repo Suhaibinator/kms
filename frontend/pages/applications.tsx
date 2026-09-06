@@ -2,6 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationHome } from "@/components/applications/ApplicationHome";
+import { ApplicationHomeSkeleton } from "@/components/applications/ApplicationHomeSkeleton";
 import {
   type ApplicationArchiveFilter,
   ApplicationList,
@@ -185,12 +186,7 @@ export default function ApplicationsPage() {
   }
 
   if (!slot?.data) {
-    return (
-      <>
-        <PageHeader title={<span className="mono">{name}</span>} documentTitle={name} />
-        <TableSkeleton headers={["Values", "Release", "Subscribers"]} rows={6} />
-      </>
-    );
+    return <ApplicationHomeSkeleton name={name} />;
   }
 
   return (

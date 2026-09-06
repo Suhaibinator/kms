@@ -91,14 +91,17 @@ export function ApplicationList({
           <Input
             id={filterId}
             type="search"
-            className="application-list-filter"
+            className="application-list-filter min-w-[200px]"
             placeholder={firstPage ? "Filter by name or description" : "Filter this page"}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             disabled={loading && applications.length === 0}
           />
+          {/* Field's cva base is `w-full`, a utility no rule in the component
+              layer can beat, so the toolbar's one-row shape has to be set here
+              or the select takes a full-width line of its own. */}
           {onArchiveFilterChange ? (
-            <Field label="Lifecycle">
+            <Field label="Lifecycle" className="w-auto min-w-[200px] shrink-0">
               <AppSelect
                 value={archiveFilter}
                 onValueChange={(value) => onArchiveFilterChange(value as ApplicationArchiveFilter)}

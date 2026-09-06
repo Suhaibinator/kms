@@ -16,23 +16,50 @@
   /* ---------- Definition card ---------- */
 
   .definition-card {
+    container: definition-card / inline-size;
     margin-bottom: var(--space-4);
   }
+  /* The three tracks together need 630px, which the card has at 1024 and not at
+     768 beside the sidebar — the viewport is the wrong thing to ask, so the
+     card asks about itself. Track 2 holds the schema chip, whose text is a full
+     release identifier: at 180px it was ellipsised from 900 to 1100px while
+     track 3, a wrapping list of alias chips, still had room. 210px is the
+     measured requirement, 137px of value plus 73px of prefix and padding. */
   .definition-grid {
     display: grid;
-    grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) minmax(280px, 2fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-5);
     align-items: start;
   }
+  @container definition-card (width >= 660px) {
+    .definition-grid {
+      grid-template-columns: minmax(140px, 0.7fr) minmax(210px, 1fr) minmax(240px, 2fr);
+    }
+  }
+  /* Layout rule 2, one level down: the cell is itself a grid, and its single
+     track has to be minmax(0, …) or a nowrap alias chip inside it sets the
+     cell's width from its own min-content. */
   .definition-grid > div {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: var(--space-2);
     justify-items: start;
+  }
+  /* justify-items: start keeps a chip from stretching to the whole cell, but it
+     also sizes each row to fit-content, and min-width: 0 does not lower a
+     nowrap chip's min-content contribution — one long alias took 621px of a
+     485px track and painted past the card. The cap is what start-alignment
+     leaves out. */
+  .definition-grid > div > * {
+    max-width: 100%;
   }
   .definition-alias {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
+    min-width: 0;
+    max-width: 100%;
   }
   .definition-alignment {
     display: grid;
@@ -88,8 +115,18 @@
   /* Scroll affordance for four-plus environments: the same background stack
      as .table-wrap (globals.css), with the page ground as the cover colour. */
   .pipeline-scroll {
+    /* Layout rule 1. Without position: relative the sr-only spans inside every
+       CopyButton and icon button resolve against the page, sit outside the
+       clip at their static position and add 766px of phantom page scroll as
+       soon as the pipeline holds four environments. */
+    position: relative;
+    min-width: 0;
+    contain: inline-size;
     overflow-x: auto;
     padding-bottom: var(--space-2);
+    /* 300px columns and no snap leave one half-cut at both edges after an
+       arrow press or a trackpad flick; proximity only corrects a near miss. */
+    scroll-snap-type: inline proximity;
     background:
       linear-gradient(to right, var(--bg) 40%, transparent) left center / 32px 100% no-repeat,
       linear-gradient(to left, var(--bg) 40%, transparent) right center / 32px 100% no-repeat,
@@ -112,8 +149,11 @@
     gap: var(--space-4);
     align-items: start;
   }
+  /* The container makes the row actions' second line a decision the column
+     takes about its own width rather than one the viewport takes for it. */
   .pipeline-column {
     display: grid;
+    container: pipeline-column / inline-size;
     min-width: 0;
     gap: var(--space-4);
     padding: var(--space-4);
@@ -121,16 +161,35 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     outline: none;
+    scroll-snap-align: start;
+  }
+  /* Layout rule 2: the column is a grid, and its rows, sections and action
+     groups would otherwise each take their min-content width — one long alias
+     stretched every row to 519px and painted the More menu over the next
+     column, where it could not be clicked at all. */
+  .pipeline-column > *,
+  .pipeline-section > *,
+  .pipeline-rows > * {
+    min-width: 0;
   }
   .pipeline-column-prod {
     border-color: var(--warning);
     box-shadow: inset 0 0 0 1px var(--warning-soft);
   }
+  /* box-shadow is one property, so the prod rule below has to restate the
+     production marker or focusing a prod column silently removes it — the
+     3px warning ring is the same signal at ring weight, which the 1px
+     --warning-soft marker (a fill token, measured 1.17:1) never was.
+     Inset, not outer: a `?env=` deep link lands on the first or last column,
+     and Chrome puts neither a scroller's end-side padding nor an end margin in
+     its scrollable overflow region, so an outer ring there cannot be given
+     room to draw in — measured, the last column stays flush at max scroll
+     under both. */
   .pipeline-column-focused {
-    box-shadow: 0 0 0 3px var(--accent-border);
+    box-shadow: inset 0 0 0 3px var(--primary);
   }
   .pipeline-column-prod.pipeline-column-focused {
-    box-shadow: 0 0 0 3px var(--warning-soft);
+    box-shadow: inset 0 0 0 3px var(--warning);
   }
   /* The action button is the tallest thing in the head (icon-sm, 30px); the
      min-height keeps every column's head the same height even when a column
@@ -176,8 +235,9 @@
     min-height: var(--control-h-sm);
   }
   /* Copy key / Manage / Edit & ship sit together at the row's far edge. The
-     group may wrap onto its own line but never past the column's content box:
-     Copy is icon-only (30px) so the three fit the 266px minimum column. */
+     group is 265.4px wide, so it only shares a line with the alias and version
+     chips in a wide column; below that it takes a deliberate second line,
+     left-aligned under the identity rather than ragged-right. */
   .pipeline-row-actions {
     display: inline-flex;
     flex-wrap: wrap;
@@ -186,6 +246,12 @@
     margin-left: auto;
     max-width: 100%;
     min-width: 0;
+  }
+  @container pipeline-column (width < 420px) {
+    .pipeline-row-actions {
+      flex: 1 0 100%;
+      margin-left: 0;
+    }
   }
   .pipeline-release-meta {
     color: var(--text-faint);
@@ -220,9 +286,13 @@
   .pipeline-cta-ok {
     font-weight: 600;
   }
-  /* The disabled CTA's reason wraps under the button rather than beside it. */
+  /* The disabled CTA's reason wraps under the button rather than beside it.
+     The alias is interpolated into the sentence and underscores are not break
+     opportunities, so without the wrap the whole token sets the column's
+     minimum width and the line paints 137px into the next column. */
   .pipeline-cta-reason {
     flex: 1 1 100%;
+    overflow-wrap: anywhere;
     line-height: 1.4;
   }
   .pipeline-pills {
@@ -280,15 +350,11 @@
     gap: var(--space-3);
     margin-bottom: var(--space-3);
   }
-  /* align-items: center centres the flex item's *margin* box, so .field's
-     block-flow margin would drop the Lifecycle select below the search input
-     beside it and stack 16px under the toolbar. */
-  .application-list-toolbar .field {
-    margin-bottom: 0;
-  }
+  /* .field's block-flow margin is reset in the shared list in globals.css; the
+     Lifecycle field's width is a utility on the element, since Field's own
+     `w-full` beats any rule in this layer (layout rule 5). */
   .application-list-filter {
     flex: 0 1 320px;
-    min-width: 200px;
   }
 
   /* ---------- Configuration matrix cells ---------- */
@@ -411,7 +477,7 @@
     margin-bottom: var(--space-4);
   }
 
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     /* .page-actions is flex-shrink: 0, so six actions keep their ~800px
        max-content width and overflow the viewport; at full row width the
        buttons wrap onto as many lines as they need instead. */
@@ -423,9 +489,12 @@
     .application-home .page-header > div:first-child {
       min-width: 0;
     }
-    .definition-grid {
-      grid-template-columns: 1fr;
-    }
+    /* .definition-grid stacks through its own container query; a phone never
+       gives the card the 660px its three tracks need. */
+    /* The pipeline stacks to one column, so there is nothing to scroll here.
+       contain: inline-size from the base rule stays: it is the only thing
+       keeping a wide descendant (a pre, an unbroken digest) inside a column
+       from widening the whole document once the clip is gone. */
     .pipeline-scroll {
       overflow-x: visible;
     }
