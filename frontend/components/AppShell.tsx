@@ -236,6 +236,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => router.events.off("routeChangeStart", close);
   }, [router.events]);
 
+  // A drawer must release its portal and focus lock when desktop navigation returns.
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 769px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) setNavOpen(false);
+    };
+    closeOnDesktop();
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   // The shell owns the global shortcuts: ⌘K / Ctrl+K toggles the palette, and
   // `?` outside a text field opens the sheet that documents both. Registered
   // once here rather than per page, so every route answers to them identically.

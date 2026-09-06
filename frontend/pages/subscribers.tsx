@@ -2,7 +2,12 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import { TransportBadge } from "@/components/TransportBadge";
 import {
   Badge,
@@ -223,7 +228,8 @@ export default function SubscribersPage() {
                 {list.length} {list.length === 1 ? "subscriber" : "subscribers"}
               </span>
             </div>
-            <div className="table-wrap">
+            <div className="table-wrap card-table">
+              <MobileListToolbar controller={sort} />
               <table className="data">
                 {/* Every live subscriber is loaded at once, so "of" is the real total. */}
                 <TableSummary shown={list.length} noun="subscribers" />
@@ -239,20 +245,20 @@ export default function SubscribersPage() {
                         key={s.instance_id || `${s.client_name}-${s.remote_addr}`}
                         className={stale ? "stale" : undefined}
                       >
-                        <td>
+                        <td data-label="Client">
                           {s.client_name}
                           {s.instance_id ? (
                             <div className="faint text-sm mono">{s.instance_id}</div>
                           ) : null}
                         </td>
-                        <td className="mono">
+                        <td data-label="Identity" className="mono">
                           {s.identity ? (
                             <Link href={links.identities({ name: s.identity })}>{s.identity}</Link>
                           ) : (
                             <span className="faint">—</span>
                           )}
                         </td>
-                        <td>
+                        <td data-label="Namespaces">
                           <div className="row-wrap">
                             {(s.namespaces ?? []).length === 0 ? (
                               <span className="faint">—</span>
@@ -270,16 +276,24 @@ export default function SubscribersPage() {
                             )}
                           </div>
                         </td>
-                        <td className="mono">
+                        <td data-label="Remote address" className="mono">
                           {s.remote_addr || <span className="faint">—</span>}
                         </td>
-                        <td className="nowrap" title={formatUnixMs(s.connected_at_unix_ms)}>
+                        <td
+                          data-label="Connected"
+                          className="nowrap"
+                          title={formatUnixMs(s.connected_at_unix_ms)}
+                        >
                           {formatRelative(s.connected_at_unix_ms)}
                         </td>
-                        <td className="nowrap" title={formatUnixMs(s.last_heartbeat_unix_ms)}>
+                        <td
+                          data-label="Last heartbeat"
+                          className="nowrap"
+                          title={formatUnixMs(s.last_heartbeat_unix_ms)}
+                        >
                           {formatRelative(s.last_heartbeat_unix_ms)}
                         </td>
-                        <td>
+                        <td data-label="Applied revision">
                           {stale ? (
                             <Badge kind="warning">
                               v{s.last_acked_revision} · {behind} behind

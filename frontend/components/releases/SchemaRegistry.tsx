@@ -60,6 +60,7 @@ function SchemaViewer({
 
   return (
     <Modal
+      mobileFullScreen
       open={Boolean(schema)}
       workspace
       title={schema ? `Schema ${schemaLabel(schema)}` : "Schema"}
@@ -186,6 +187,7 @@ function RegisterSchemaDialog({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       workspace
       dismissible={!saving}

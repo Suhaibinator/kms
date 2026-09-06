@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -15,7 +17,11 @@ import (
 func legacyTokenDatabase(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "legacy.db")
-	if err := os.WriteFile(path, nil, 0600); err != nil {
+	file, err := fileutil.OpenPrivateExclusive(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
@@ -23,7 +29,11 @@ func legacyTokenDatabase(t *testing.T) string {
 		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()
-	defer sqlDB.Close()
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	objects, err := referenceSchema(true)
 	if err != nil {
 		t.Fatal(err)
@@ -67,12 +77,16 @@ func TestUnusedSecretTokenSchemaUpgrade(t *testing.T) {
 	if err := verifyBaselineDB(st.db); err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 	st, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSecretTokenUpgradeRejectsUsedColumns(t *testing.T) {
@@ -87,17 +101,23 @@ func TestSecretTokenUpgradeRejectsUsedColumns(t *testing.T) {
 			if err := db.Exec(query).Error; err != nil {
 				t.Fatal(err)
 			}
-			pool.Close()
+			if err := pool.Close(); err != nil {
+				t.Fatal(err)
+			}
 			before, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateKMSDatabase(path); err == nil {
-				t.Fatal("validation accepted token use")
+			if err := ValidateKMSDatabase(path); err == nil || !strings.Contains(err.Error(), "per-secret access tokens are in use") {
+				t.Fatalf("validation error = %v, want token-use rejection", err)
 			}
 			if st, err := Open(path); err == nil {
-				st.Close()
+				if err := st.Close(); err != nil {
+					t.Fatal(err)
+				}
 				t.Fatal("upgrade accepted token use")
+			} else if !strings.Contains(err.Error(), "per-secret access tokens are in use") {
+				t.Fatalf("upgrade error = %v, want token-use rejection", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil {
@@ -117,9 +137,13 @@ func TestSecretTokenUpgradeRollsBackOnStampFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool, _ := db.DB()
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	injected := fmt.Errorf("injected schema stamp failure")
-	if err := db.Callback().Update().Before("gorm:update").Register("test:fail-stamp", func(tx *gorm.DB) { tx.AddError(injected) }); err != nil {
+	if err := db.Callback().Update().Before("gorm:update").Register("test:fail-stamp", func(tx *gorm.DB) { _ = tx.AddError(injected) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := upgradeSecretTokenSchema(db); !errors.Is(err, injected) {

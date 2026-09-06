@@ -101,9 +101,7 @@ test("shows neutral certificate diagnostics and generic login failures", async (
   await expect(page.getByText(identity, { exact: true })).toHaveCount(0);
 });
 
-test("portalled dropdowns and filter controls stay visually consistent", async ({
-  page,
-}, testInfo) => {
+test("portalled dropdowns and filter controls stay visually consistent", async ({ page }) => {
   await mockAuthenticatedConsole(page, [
     {
       app: "billing",
@@ -141,7 +139,7 @@ test("portalled dropdowns and filter controls stay visually consistent", async (
   expect(boxes.every(Boolean)).toBe(true);
   const visibleBoxes = boxes.filter((box) => box !== null);
 
-  if (testInfo.project.name === "mobile-chromium") {
+  if ((page.viewportSize()?.width ?? 1280) <= 768) {
     expect(
       Math.max(...visibleBoxes.map((box) => box.width)) -
         Math.min(...visibleBoxes.map((box) => box.width)),
@@ -162,10 +160,8 @@ test("portalled dropdowns and filter controls stay visually consistent", async (
   }
 });
 
-test("mobile navigation is isolated, focus-managed, and capability-aware", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "mobile-chromium", "mobile-only drawer behavior");
+test("mobile navigation is isolated, focus-managed, and capability-aware", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1280) > 768, "mobile-only drawer behavior");
 
   await mockAuthenticatedConsole(page);
 

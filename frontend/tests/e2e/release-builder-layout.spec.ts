@@ -4,7 +4,7 @@ import { incidentState, mockConsole } from "./fakes/console-api";
 test("empty release resources stay closed and validation does not shift the row", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "desktop release-builder layout check");
+  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "desktop release-builder layout check");
   const state = incidentState();
   state.application.contract.unshift({ alias: "anthropic_api_key", kind: "secret" });
   state.namespaces.prod.secrets = {};
@@ -107,8 +107,11 @@ test("empty release resources stay closed and validation does not shift the row"
 
 test("a free-form entry keeps its empty resource picker closed across kind changes", async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "desktop release-builder interaction check");
+}) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1280) <= 768,
+    "desktop release-builder interaction check",
+  );
   const state = incidentState();
   state.application.contract = [];
   await mockConsole(page, state);

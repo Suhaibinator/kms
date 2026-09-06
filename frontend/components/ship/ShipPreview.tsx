@@ -134,7 +134,7 @@ export function ShipPreview({
                 <ReleaseIdent name={preview.release_name} version={nextVersion} />
               ) : null}
             </h4>
-            <div className="table-wrap">
+            <div className="table-wrap card-table">
               <table className="data ship-entries">
                 <thead>
                   <tr>
@@ -158,13 +158,17 @@ export function ShipPreview({
                         data-alias={entry.alias}
                         data-changed={changed ? "true" : "false"}
                       >
-                        <td className="mono">{entry.alias}</td>
-                        <td>{entry.kind}</td>
-                        <td className="mono">{entry.key || "—"}</td>
-                        <td className="mono">
+                        <td data-label="Alias" className="mono">
+                          {entry.alias}
+                        </td>
+                        <td data-label="Kind">{entry.kind}</td>
+                        <td data-label="Key" className="mono">
+                          {entry.key || "—"}
+                        </td>
+                        <td data-label="Version" className="mono">
                           {versionArrow(entry.from_version, entry.to_version)}
                         </td>
-                        <td>
+                        <td data-label="Change">
                           <Badge kind={CHANGE_TONE[entry.change]}>{entry.change}</Badge>
                         </td>
                       </tr>

@@ -12,7 +12,12 @@ import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   Badge,
   Checkbox,
@@ -726,6 +731,12 @@ export default function IdentitiesPage() {
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
+          <MobileListToolbar
+            controller={sort}
+            selection={canBulkRevoke ? selection : undefined}
+            selectionLabel="Select all active identities on this page"
+            hint={PAGE_SORT_HINT}
+          />
           <table className="data">
             <TableSummary
               shown={sortedIdentities.length}
@@ -808,7 +819,7 @@ export default function IdentitiesPage() {
                     <td className="nowrap" data-label="Created">
                       {formatUnixMs(id.created_at_unix_ms)}
                     </td>
-                    <td>
+                    <td data-label="Actions">
                       <div className="row-actions">
                         <Button
                           variant="outline"
@@ -895,6 +906,7 @@ export default function IdentitiesPage() {
 
       {/* Connect application */}
       <Modal
+        mobileFullScreen
         open={createOpen}
         wide
         title={
@@ -1202,6 +1214,7 @@ export default function IdentitiesPage() {
 
       {/* Manage certificates */}
       <Modal
+        mobileFullScreen
         // Stays open under the revoke confirmation (Base UI stacks portalled
         // dialogs in DOM order) so the user can see which row they are revoking.
         open={certsTarget !== null}
@@ -1290,7 +1303,7 @@ export default function IdentitiesPage() {
                   : "Issue one above to let this identity authenticate over mTLS."}
               </EmptyState>
             ) : (
-              <div className="table-wrap">
+              <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
                     <tr>
@@ -1310,19 +1323,25 @@ export default function IdentitiesPage() {
                         const revocable = status.label === "valid";
                         return (
                           <tr key={cert.serial}>
-                            <td className="mono text-sm">{cert.fingerprint}</td>
-                            <td className="mono text-sm">
+                            <td data-label="Fingerprint" className="mono text-sm">
+                              {cert.fingerprint}
+                            </td>
+                            <td data-label="Serial" className="mono text-sm">
                               <span className="row-wrap">
                                 <span>{shortSerial(cert.serial)}</span>
                                 <CopyButton label="Copy serial" value={cert.serial} />
                               </span>
                             </td>
-                            <td>
+                            <td data-label="State">
                               <Badge kind={status.kind}>{status.label}</Badge>
                             </td>
-                            <td className="nowrap">{formatUnixMs(cert.not_after_unix_ms)}</td>
-                            <td className="nowrap">{formatUnixMs(cert.created_at_unix_ms)}</td>
-                            <td>
+                            <td data-label="Expires" className="nowrap">
+                              {formatUnixMs(cert.not_after_unix_ms)}
+                            </td>
+                            <td data-label="Issued" className="nowrap">
+                              {formatUnixMs(cert.created_at_unix_ms)}
+                            </td>
+                            <td data-label="Actions">
                               {revocable ? (
                                 <Button
                                   variant="destructive"
@@ -1562,6 +1581,7 @@ function CredentialsModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={credentials !== null}
       wide
       dismissible={false}

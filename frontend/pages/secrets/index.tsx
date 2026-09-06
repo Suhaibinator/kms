@@ -11,7 +11,12 @@ import {
 } from "@/components/BulkSelection";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import { SecretWorkspace, shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import {
   Badge,
@@ -313,6 +318,12 @@ export default function SecretsPage() {
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
+          <MobileListToolbar
+            controller={sort}
+            selection={canBulkDelete ? selection : undefined}
+            selectionLabel="Select all secrets on this page"
+            hint={PAGE_SORT_HINT}
+          />
           <table className="data">
             <TableSummary
               shown={sortedSecrets.length}

@@ -485,8 +485,6 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	if prepared.commits.Load() != 1 || prepared.aborts.Load() != 0 {
 		t.Fatalf("commit/abort = %d/%d", prepared.commits.Load(), prepared.aborts.Load())
 	}
-	server.mu.Lock()
-	server.mu.Unlock()
 	if !eventually(t, 2*time.Second, func() bool {
 		status := loader.Status()
 		return status.AppliedVersion == 7 && status.AppliedRevision == 42

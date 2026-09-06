@@ -457,6 +457,7 @@ export function ReleaseBuilder({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       workspace
       dismissible={!saving}

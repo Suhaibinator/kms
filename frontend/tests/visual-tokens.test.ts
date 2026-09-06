@@ -54,6 +54,8 @@ describe("globals.css stays out of Tailwind's way", () => {
         "@theme inline",
         "@layer base",
         "@layer components",
+        // Mobile constraints override utility-authored footprints within the same layer.
+        "@layer utilities",
       ]);
       expect(openers.filter((o) => !allowed.has(o))).toEqual([]);
       expect(openers).toContain("@layer components");

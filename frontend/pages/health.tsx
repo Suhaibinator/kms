@@ -143,7 +143,7 @@ export default function HealthPage() {
                 The service exposes key metadata once a master key provider is configured.
               </EmptyState>
             ) : (
-              <div className="table-wrap">
+              <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
                     <tr>
@@ -156,12 +156,18 @@ export default function HealthPage() {
                   <tbody>
                     {keys.map((k) => (
                       <tr key={k.id}>
-                        <td className="mono">{k.id}</td>
-                        <td>{k.source || <span className="faint">—</span>}</td>
-                        <td>
+                        <td data-label="ID" className="mono">
+                          {k.id}
+                        </td>
+                        <td data-label="Source">{k.source || <span className="faint">—</span>}</td>
+                        <td data-label="State">
                           <Badge kind={keyStateKind(k.state)}>{k.state || "unknown"}</Badge>
                         </td>
-                        <td className="nowrap" title={formatUnixMs(k.created_at_unix_ms)}>
+                        <td
+                          data-label="Created"
+                          className="nowrap"
+                          title={formatUnixMs(k.created_at_unix_ms)}
+                        >
                           {formatRelative(k.created_at_unix_ms, now)}
                         </td>
                       </tr>

@@ -19,6 +19,7 @@ import { Icon } from "@/components/icons";
 import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
+import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
 import { StatusChip } from "@/components/StatusChip";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import RollbackDialog from "@/components/ship/RollbackDialog";
@@ -200,6 +201,11 @@ export function ApplicationHome({
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
+  const [parameterTarget, setParameterTarget] = useState<{
+    env: string;
+    app: string;
+    key: string;
+  } | null>(null);
   const [secretTarget, setSecretTarget] = useState<{
     env: string;
     app: string;
@@ -364,7 +370,7 @@ export function ApplicationHome({
         openSecret(scopeEnv ?? "", finding.scope.alias ?? "");
         break;
       case "open_resource":
-        void router.push(links.parameterDetail({ ...ns, key: keyFor(finding) }));
+        setParameterTarget({ ...ns, key: keyFor(finding) });
         break;
       case "open_secret":
         openExistingSecret(ns.env, keyFor(finding));
@@ -642,6 +648,9 @@ export function ApplicationHome({
               rows={overview.rows}
               onAddSecret={openSecret}
               onOpenSecret={openExistingSecret}
+              onOpenParameter={(env, key) =>
+                setParameterTarget({ env, app: application.name, key })
+              }
               onEdit={openWriteRow}
             />
           </TabsContent>
@@ -671,6 +680,7 @@ export function ApplicationHome({
         }}
       />
       <Modal
+        mobileFullScreen
         open={connectEnv !== null}
         title="Connect SDK"
         onClose={() => setConnectEnv(null)}
@@ -794,6 +804,12 @@ export function ApplicationHome({
           setSecretTarget(ref);
           void reload();
         }}
+      />
+      <ParameterWorkspace
+        parameterRef={parameterTarget}
+        onClose={() => setParameterTarget(null)}
+        onChanged={() => void reload()}
+        onDeleted={() => void reload()}
       />
       <SecretWorkspace
         secretRef={secretTarget}

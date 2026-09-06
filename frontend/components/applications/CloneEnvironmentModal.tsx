@@ -151,6 +151,7 @@ export default function CloneEnvironmentModal({
   return (
     <>
       <Modal
+        mobileFullScreen
         open={open}
         title={result ? `${result.namespace.env} created from ${source}` : "Copy an environment"}
         onClose={onClose}
@@ -193,7 +194,7 @@ export default function CloneEnvironmentModal({
             ) : (
               <div className="info-panel mb-4 text-sm">Every contract alias has a value.</div>
             )}
-            <div className="table-wrap">
+            <div className="table-wrap card-table">
               <table className="data">
                 <thead>
                   <tr>
@@ -206,9 +207,11 @@ export default function CloneEnvironmentModal({
                 <tbody>
                   {result.items.map((item) => (
                     <tr key={`${item.kind}:${item.alias}`}>
-                      <td className="mono">{item.alias}</td>
-                      <td>{item.kind}</td>
-                      <td>
+                      <td data-label="Alias" className="mono">
+                        {item.alias}
+                      </td>
+                      <td data-label="Kind">{item.kind}</td>
+                      <td data-label="Result">
                         <Badge kind={ACTION_TONE[item.action]}>{ACTION_LABEL[item.action]}</Badge>{" "}
                         {item.action === "copied" && item.target_version ? (
                           <span className="faint text-sm">
@@ -222,7 +225,7 @@ export default function CloneEnvironmentModal({
                           <span className="text-danger text-sm">{item.error}</span>
                         ) : null}
                       </td>
-                      <td>
+                      <td data-label="Actions">
                         {item.action === "needs_value" && onAddSecret ? (
                           <Button
                             type="button"

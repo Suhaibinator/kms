@@ -74,6 +74,7 @@ export function DeriveSchemaDialog({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       title="Derive schema from contract"
       onClose={onClose}

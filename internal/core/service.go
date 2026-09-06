@@ -12,7 +12,6 @@ package core
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -821,12 +820,3 @@ func (s *Service) buildEvent(pr Principal, eventType, resourceType string, ref d
 }
 
 // --- helpers ---------------------------------------------------------------
-
-// tokenHashMatches compares a supplied token against a stored hash in
-// constant time. Empty inputs never match.
-func tokenHashMatches(token string, storedHash []byte) bool {
-	if token == "" || len(storedHash) == 0 {
-		return false
-	}
-	return hmac.Equal(crypto.TokenHash(token), storedHash)
-}

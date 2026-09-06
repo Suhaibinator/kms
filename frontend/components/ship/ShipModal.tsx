@@ -511,6 +511,7 @@ export default function ShipModal({
   return (
     <>
       <Modal
+        mobileFullScreen
         open={open}
         wide
         title={title}

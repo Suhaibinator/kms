@@ -197,6 +197,7 @@ export function ImportDefaultsModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       title={`Import defaults to ${environment}`}
       onClose={onClose}
@@ -355,7 +356,7 @@ export function ImportDefaultsModal({
               </label>
             </div>
 
-            <div className="table-wrap">
+            <div className="table-wrap card-table">
               <table className="data">
                 <thead>
                   <tr>
@@ -369,13 +370,17 @@ export function ImportDefaultsModal({
                 <tbody>
                   {preview.entries.map((entry) => (
                     <tr key={entry.alias}>
-                      <td className="mono">{entry.alias}</td>
-                      <td className="mono">{entry.key}</td>
-                      <td>{entry.content_type}</td>
-                      <td>
+                      <td data-label="Alias" className="mono">
+                        {entry.alias}
+                      </td>
+                      <td data-label="Key" className="mono">
+                        {entry.key}
+                      </td>
+                      <td data-label="Content type">{entry.content_type}</td>
+                      <td data-label="Status">
                         <Badge kind={STATUS_TONE[entry.status]}>{STATUS_LABEL[entry.status]}</Badge>
                       </td>
-                      <td>
+                      <td data-label="Version">
                         {entry.applied_version > 0
                           ? `v${entry.applied_version} · rev${entry.revision}`
                           : entry.current_version > 0
