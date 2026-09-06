@@ -182,6 +182,35 @@ describe("schema-form model", () => {
 });
 
 describe("SchemaForm", () => {
+  it("visibly labels boolean array positions and values while editing", () => {
+    const booleanSchema: JsonSchema = {
+      type: "object",
+      properties: { flags: { type: "array", items: { type: "boolean" } } },
+    };
+    render(<Harness schema={booleanSchema} initial='{"flags":[false,false,true,true]}' />);
+    const list = screen.getByRole("list", { name: "flags items" });
+    const rows = within(list).getAllByRole("listitem");
+    rows.forEach((row, index) => {
+      expect(within(row).getByText(`Item ${index + 1}`)).toBeVisible();
+      expect(within(row).getByText(`(index ${index})`)).toBeVisible();
+      expect(within(row).getByText(String(index >= 2))).toBeVisible();
+    });
+
+    fireEvent.click(within(rows[0]).getByText("Item 1"));
+    expect(out()).toEqual({ flags: [true, false, true, true] });
+    expect(within(rows[0]).getByText("true")).toBeVisible();
+    expect(within(rows[0]).getByRole("checkbox", { name: /Item 1/ })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove flags item 2" }));
+    expect(out()).toEqual({ flags: [true, true, true] });
+    fireEvent.click(screen.getByRole("button", { name: "Add flags item" }));
+    expect(out()).toEqual({ flags: [true, true, true, false] });
+    const lastRow = within(list).getAllByRole("listitem")[3];
+    expect(within(lastRow).getByText("Item 4")).toBeVisible();
+    expect(within(lastRow).getByText("(index 3)")).toBeVisible();
+    expect(within(lastRow).getByText("false")).toBeVisible();
+  });
+
   it("renders every schema property as a field and seeds required fields", async () => {
     render(<Harness />);
     expect(screen.getByRole("group", { name: "Value editor" })).toBeInTheDocument();

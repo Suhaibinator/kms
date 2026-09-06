@@ -589,12 +589,22 @@ export function SchemaForm({
                 return (
                   <li key={itemKey} className="schema-form-list-row">
                     {field.item === "boolean" ? (
-                      <Checkbox
-                        aria-label={`${label} item ${index + 1}`}
-                        checked={item === true}
-                        disabled={disabled}
-                        onCheckedChange={(next) => setItem(next === true)}
-                      />
+                      <div className="checkbox-row">
+                        <Checkbox
+                          id={`${controlId}-item-${index}`}
+                          aria-label={`${label} item ${index + 1}`}
+                          checked={item === true}
+                          disabled={disabled}
+                          aria-invalid={itemError ? true : undefined}
+                          onCheckedChange={(next) => setItem(next === true)}
+                        />
+                        <label htmlFor={`${controlId}-item-${index}`}>
+                          <span>Item {index + 1}</span>{" "}
+                          <span className="faint">(index {index})</span>
+                          {" · "}
+                          <span className="font-mono">{String(item)}</span>
+                        </label>
+                      </div>
                     ) : field.enumValues ? (
                       <AppSelect
                         aria-label={`${label} item ${index + 1}`}
