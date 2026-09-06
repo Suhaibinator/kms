@@ -17,6 +17,7 @@ import {
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
+import { Badge as ShadcnBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
@@ -263,15 +264,24 @@ export default function SubscribersPage() {
                             {(s.namespaces ?? []).length === 0 ? (
                               <span className="faint">—</span>
                             ) : (
+                              // The anchor *is* the badge rather than sitting
+                              // inside it: a nested link would be painted blue
+                              // by the base anchor rules and its focus ring
+                              // clipped away by the badge's overflow-hidden.
                               s.namespaces.map((ns, i) => (
-                                <Badge key={i} kind="neutral">
-                                  <Link
-                                    href={links.releases({ app: ns.app, env: ns.env })}
-                                    title={`Releases in ${formatNamespace(ns)}`}
-                                  >
-                                    {formatNamespace(ns)}
-                                  </Link>
-                                </Badge>
+                                <ShadcnBadge
+                                  key={i}
+                                  variant="outline"
+                                  className="no-underline"
+                                  render={
+                                    <Link
+                                      href={links.releases({ app: ns.app, env: ns.env })}
+                                      title={`Releases in ${formatNamespace(ns)}`}
+                                    />
+                                  }
+                                >
+                                  {formatNamespace(ns)}
+                                </ShadcnBadge>
                               ))
                             )}
                           </div>

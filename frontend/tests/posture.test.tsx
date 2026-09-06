@@ -112,10 +112,15 @@ describe("security posture", () => {
     // admin table beside the one that is merely expiring.
     expect(screen.getByText("ops-oncall")).toBeVisible();
     expect(screen.getByText("no certificate")).toBeVisible();
-    expect(screen.getByText("ADMIN-SERIAL-1")).toBeVisible();
+    // A real serial is 40 hex characters and would drag the card sideways, so
+    // the cell shows a prefix and keeps the whole value in its tooltip.
+    expect(screen.getByText("ADMIN-SERIAL…")).toHaveAttribute("title", "ADMIN-SERIAL-1");
     expect(screen.getByText("billing-api")).toBeVisible();
     expect(screen.getByText("prod/billing")).toBeVisible();
-    expect(screen.getByText("CERT-SERIAL-1")).toBeVisible();
+    expect(screen.getByText("CERT-SERIAL-…")).toHaveAttribute("title", "CERT-SERIAL-1");
+    // Truncated in the cell, whole on the clipboard: the revoke command needs
+    // the serial exactly.
+    expect(screen.getAllByRole("button", { name: "Copy serial" })).toHaveLength(2);
     expect(screen.getByText("/prod/billing/db/password")).toBeVisible();
     expect(screen.getByText("v3")).toBeVisible();
     // The fixed admin-certificate look-ahead is stated, not implied.

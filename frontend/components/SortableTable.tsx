@@ -130,6 +130,23 @@ export function headerLabels<T>(columns: readonly SortColumn<T>[]): string[] {
   return columns.map((column) => column.label);
 }
 
+/**
+ * A controller for a table that orders nothing — health's key list, posture's
+ * expiry tables. Declaring the columns here rather than hand-rolling a
+ * `<thead><tr>` keeps every header on this surface on one code path, so a
+ * change to `SortHeaderRow` reaches the unsortable tables too. Pure, so it can
+ * be called at module scope beside the columns it describes.
+ */
+export function staticController<T>(columns: readonly SortColumn<T>[]): SortController<T> {
+  return {
+    sort: null,
+    columns,
+    apply: (rows) => [...rows],
+    toggle: () => {},
+    setSort: () => {},
+  };
+}
+
 /** Alternate controls for card lists; the desktop table header shares this state. */
 export function MobileListToolbar<T>({
   controller,

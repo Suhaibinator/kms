@@ -426,7 +426,7 @@ export default function PoliciesPage() {
       />
 
       {loading ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} trailing={1} />
       ) : policies.length === 0 ? (
         <EmptyState
           icon={<Icon.policy size={20} />}

@@ -881,6 +881,40 @@ describe("identity list", () => {
     );
   }
 
+  it("reserves the loaded table's column count while loading", async () => {
+    let settle: (page: { identities: Identity[]; next_page_token: string }) => void = () => {};
+    vi.mocked(api.listIdentities).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<IdentitiesPage />);
+    const skeletonColumns = document.querySelectorAll("thead th").length;
+    expect(skeletonColumns).toBeGreaterThan(0);
+
+    settle({ identities: [identity("alpha")], next_page_token: "" });
+    await screen.findByText("alpha");
+    // An admin sees a select-all cell as well as the actions gutter; the
+    // skeleton has to reserve both or the columns shift on arrival.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
+  it("names the bound namespace as a typed identifier, not a one-off chip", async () => {
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [identity("alpha")],
+      next_page_token: "",
+    });
+    render(<IdentitiesPage />);
+    const row = (await screen.findByText("alpha")).closest("tr") as HTMLElement;
+    const cell = within(row).getByText("prod/billing");
+
+    // The rest of the row is badges; a .chip beside them was a second chip
+    // system, four pixels taller and in a different typeface.
+    expect(cell.closest(".chip")).toBeNull();
+    expect(cell.closest(".ident")).toHaveAttribute("data-kind", "ns");
+  });
+
   it("reorders the loaded page from a column header and records the sort in the URL", async () => {
     vi.mocked(api.listIdentities).mockResolvedValue({
       identities: [identity("zeta"), identity("alpha")],
@@ -959,6 +993,34 @@ describe("identity list", () => {
     await waitFor(() => expect(screen.queryByText("Page 2")).not.toBeInTheDocument());
     expect(listIdentities).toHaveBeenLastCalledWith(100, undefined, expect.anything());
     expect(api.revokeIdentity).toHaveBeenCalledWith("second");
+  });
+
+  it("shortens a full fingerprint so the certificates table fits its modal", async () => {
+    const fingerprint = "a".repeat(64);
+    const withCert = identity("cert-owner", {
+      certs: [{ ...cert("0123456789abcdef"), fingerprint }],
+    });
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [withCert],
+      next_page_token: "",
+    });
+    mocks.namespaces = [namespace(["mtls"])];
+    render(<IdentitiesPage />);
+    const row = (await screen.findByText("cert-owner")).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Certificates" }));
+    const certsDialog = screen.getByRole("dialog", { name: "Certificates — cert-owner" });
+
+    // 64 unbreakable hex characters is a ~480px box in a 680px modal body: the
+    // cell shows a prefix and keeps the whole value in its tooltip.
+    expect(within(certsDialog).queryByText(fingerprint)).toBeNull();
+    const cell = within(certsDialog).getByText("aaaaaaaaaaaa…");
+    expect(cell).toHaveAttribute("title", fingerprint);
+    // The serial is shortened the same way and stays copyable in full.
+    expect(within(certsDialog).getByText("0123456789ab…")).toHaveAttribute(
+      "title",
+      "0123456789abcdef",
+    );
+    expect(within(certsDialog).getByRole("button", { name: "Copy serial" })).toBeVisible();
   });
 
   it("keeps the certificates modal open beneath the revoke confirmation", async () => {

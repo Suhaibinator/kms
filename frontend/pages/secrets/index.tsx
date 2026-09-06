@@ -291,13 +291,13 @@ export default function SecretsPage() {
       </form>
 
       {awaitingDeepLink ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} leading={canBulkDelete ? 1 : 0} />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its secrets.
         </EmptyState>
       ) : !settled || loading ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} leading={canBulkDelete ? 1 : 0} />
       ) : secrets.length === 0 ? (
         <EmptyState
           icon={<Icon.secret size={20} />}

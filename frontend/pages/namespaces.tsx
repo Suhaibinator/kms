@@ -285,7 +285,7 @@ export default function NamespacesPage() {
           The namespace list is unavailable. Check the connection and try again.
         </EmptyState>
       ) : loading && namespaces.length === 0 ? (
-        <TableSkeleton headers={TABLE_HEADERS} />
+        <TableSkeleton headers={TABLE_HEADERS} trailing={1} />
       ) : namespaces.length === 0 ? (
         <EmptyState
           icon={<Icon.namespace size={20} />}

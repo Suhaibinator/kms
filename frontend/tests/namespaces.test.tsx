@@ -87,6 +87,18 @@ describe("NamespacesPage", () => {
     expect(screen.getByText("dev").closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
   });
 
+  it("reserves the loaded table's column count while loading", () => {
+    mocks.namespaces.loading = true;
+    const { rerender } = render(<NamespacesPage />);
+    const skeletonColumns = document.querySelectorAll("thead th").length;
+
+    mocks.namespaces = { ...mocks.namespaces, loading: false, namespaces: [namespace("dev")] };
+    rerender(<NamespacesPage />);
+    // The loaded header adds an actions gutter the skeleton must stand in for,
+    // or every column shifts the moment the data arrives.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
   it("reorders every environment table from a column header and records it in the URL", () => {
     mocks.namespaces.namespaces = [
       namespace("dev", { parameters: 9 }),

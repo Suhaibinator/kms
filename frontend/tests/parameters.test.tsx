@@ -90,6 +90,30 @@ async function chooseNamespace(): Promise<void> {
 }
 
 describe("parameters page", () => {
+  it("reserves the loaded table's column count while loading", async () => {
+    let settle: (page: { parameters: Parameter[]; next_page_token: string }) => void = () => {};
+    vi.spyOn(api, "listParameters").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    // Deep-linked, so the list starts loading without a trip through the picker.
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    render(<ParametersPage />);
+    const skeletonColumns = await waitFor(() => {
+      const count = document.querySelectorAll("thead th").length;
+      expect(count).toBeGreaterThan(0);
+      return count;
+    });
+
+    settle({ parameters: [ALPHA], next_page_token: "" });
+    await screen.findByText("alpha");
+    // The loaded header adds a select-all cell and an actions gutter; without
+    // both, every column shifts the instant the rows arrive.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
   it("gives the filter and create namespace pickers distinct ids", async () => {
     vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
     render(<ParametersPage />);
