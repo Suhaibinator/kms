@@ -70,7 +70,7 @@ export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTab
                         </Button>
                       ) : null}
                       {href ? (
-                        <Link href={href} className="ship-link text-sm">
+                        <Link href={href} className="text-link text-sm">
                           Open {violation.alias}
                         </Link>
                       ) : null}
