@@ -73,11 +73,14 @@ function newRequestId(): string {
  * and may be disabled, so the control is looked up before any button.
  */
 
-/** "{n} aliases change ({m} secrets); runtime@3 → @4": the one line above Ship. */
+/** "{n} aliases changed ({m} secrets); runtime@3 → @4": the one line above Ship. */
 function confirmSummary(preview: ShipPreviewData): string {
   const changed = preview.entries.filter(entryChanged);
   const secrets = changed.filter((entry) => entry.kind === "secret").length;
-  const aliases = `${changed.length} ${changed.length === 1 ? "alias changes" : "aliases change"}`;
+  // "1 alias changes" read as a noun phrase ("one alias-changes"); the past
+  // participle carries the same meaning at every count. countNoun cannot help
+  // here: it strips the trailing "s" and would say "1 aliase".
+  const aliases = `${changed.length} ${changed.length === 1 ? "alias" : "aliases"} changed`;
   const secretNote = `${secrets} ${countNoun(secrets, "secrets")}`;
   const activation =
     preview.base_version > 0
@@ -577,11 +580,15 @@ export default function ShipModal({
             </>
           ) : phase === "compose" || phase === "shipping" ? (
             <>
-              {shipBlockedReason ? (
-                <p className="footer-note" role="status" data-testid="ship-blocked-reason">
-                  {shipBlockedReason}
-                </p>
-              ) : null}
+              {/* Always rendered: on a phone the footer is 22% of the screen
+                  and dropping this line handed 24px back to the scrolling
+                  body under the operator's finger, at the moment they finish
+                  typing the production name. A stable live region also
+                  announces the reason changing, which a remounted one does
+                  not. */}
+              <p className="footer-note" role="status" data-testid="ship-blocked-reason">
+                {shipBlockedReason ?? "\u00a0"}
+              </p>
               <Button type="button" variant="outline" onClick={close} disabled={disabled}>
                 Cancel
               </Button>
@@ -617,7 +624,7 @@ export default function ShipModal({
           {mode === "guided" ? <ShipSteps current={step} /> : null}
 
           {shipError ? (
-            <div className="danger-panel mb-4" role="alert">
+            <div className="danger-panel" role="alert">
               {shipError}
             </div>
           ) : null}
@@ -801,7 +808,7 @@ export default function ShipModal({
           {phase === "rollout" && activation ? (
             <>
               {rolledBack ? (
-                <div className="info-panel mb-4" role="status" data-testid="ship-rolled-back">
+                <div className="info-panel" role="status" data-testid="ship-rolled-back">
                   Rolled back to{" "}
                   <ReleaseIdent
                     name={rolledBack.release.name}
@@ -810,7 +817,7 @@ export default function ShipModal({
                   at <Ident kind="revision" value={String(rolledBack.activation_revision)} />.
                 </div>
               ) : (
-                <div className="ship-activation-line text-sm faint mb-3">
+                <div className="ship-activation-line text-sm faint">
                   {activation.previousVersion > 0 ? (
                     <>
                       <ReleaseIdent
@@ -854,7 +861,7 @@ export default function ShipModal({
                 refreshToken={rolledBack?.activation_revision}
               />
               {env?.rollout.total === 0 && env.rollout.connected === 0 ? (
-                <p className="faint text-sm mt-3">
+                <p className="faint text-sm">
                   <Badge>tip</Badge> No SDK is connected to this environment yet.
                 </p>
               ) : null}

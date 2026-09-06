@@ -3,13 +3,22 @@
    editor, preview, outcomes), .rollout-* (rollout panel), .conflict-* (CAS
    conflict panel), .rollback-* (rollback dialog). Colours come from the
    theme tokens only, so light and dark need no separate rules. Type sizes
-   follow the console scale: 12.5px (--text-sm) copy, 11.5px captions. */
+   follow the console scale: 14px section titles, 12.5px (--text-sm) copy,
+   11.5px (--text-xs) captions — no other size appears in this file. */
 
 @layer components {
   /* --- Modal chrome ------------------------------------------------------ */
   .ship-modal {
     display: grid;
     gap: var(--space-5);
+  }
+  /* One measure for every step. The cap used to sit on .ship-form alone, so
+     the stepper, the mode row and the rollout panel ran the full 1160px
+     workspace while the form they head ran 900px, and moving from Preview to
+     Rollout re-flowed the column. Wide tables still scroll inside their own
+     .table-wrap, so nothing needs the extra room. */
+  .ship-modal > * {
+    max-width: 900px;
   }
   /* Grid items default to `min-width: auto`, so one wide child — the preview
      table with its unbreakable mono aliases and keys — widens the shared
@@ -39,14 +48,13 @@
   .ship-mode-row {
     display: flex;
     justify-content: flex-end;
-    margin-bottom: calc(var(--space-3) * -1);
   }
   .ship-mode-toggle {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
   }
@@ -55,9 +63,6 @@
   }
   .ship-step-blurb {
     margin: 0;
-    /* The workspace footprint is up to 1200px wide for the release table's
-       sake; prose set across all of it runs ~185 characters to the line. */
-    max-width: 900px;
     padding: var(--space-3) var(--space-4);
     background: var(--bg-elev);
     border: 1px solid var(--border);
@@ -69,6 +74,8 @@
   }
   .ship-section-title {
     margin: 0;
+    /* 14px is the console's section-title size; it has no token yet (the type
+       scale is Lane H's, css 20). Keep this and .rollout-progress together. */
     font-size: 14px;
     font-weight: 700;
     color: var(--text);
@@ -79,16 +86,31 @@
     gap: var(--space-2);
     margin: 0 0 var(--space-2);
     color: var(--text-muted);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
+  /* An emphasised link in flow. `.ship-link` is the old name, still on
+     components/releases/ViolationTable.tsx; both resolve to one rule until
+     that caller moves to `.text-link`. */
+  .text-link,
   .ship-link {
     color: var(--primary);
     font-weight: 600;
     text-decoration: underline;
     text-underline-offset: 3px;
+  }
+  /* Bare <button>s carry no shadcn slot, so they take the console's outline
+     recipe (globals.css, "One focus ring for every interactive surface") — the
+     inset ring is for framed controls. One rule for all four, so a preview row
+     cannot show two idioms side by side. Each element brings its own
+     border-radius; the outline follows it. */
+  .ship-entry-alias:focus-visible,
+  .ship-row-expand:focus-visible,
+  .rollout-category-tip:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   /* --- Change step (editor) ---------------------------------------------- */
@@ -107,6 +129,17 @@
   }
   .ship-env-field {
     flex: 1 1 220px;
+  }
+  /* ship.css is imported before globals.css and shares its layer, so a bare
+     `.ship-env-field` loses every tie to `.field` — the 320px cap lost to the
+     mobile `.field { max-width: 100% }` reset between 641 and 767 (the
+     Environment select stretched to 526px beside a 320px "Add change…"), and
+     `margin-bottom: 0` lost to `.field { margin-bottom: 16px }` outright,
+     stacking 16px on top of the container's own gap. Both are structural, so
+     they carry the parent's class. .ship-editor and .ship-form belong in the
+     shared reset list in globals.css; until then this stands in for it. */
+  .ship-editor .ship-env-field,
+  .ship-form .ship-confirm {
     max-width: 320px;
     margin-bottom: 0;
   }
@@ -124,12 +157,24 @@
   .ship-rows,
   .ship-writes,
   .ship-optins,
+  .ship-secret-pins,
   .conflict-written {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
+  }
+  /* Gaps go by shape, not by feature: cards sit 12px apart, one-line rows 8px.
+     The pins used to be the odd list out at 4px, 20px from a 12px sibling. */
+  .ship-blockers,
+  .ship-rows {
     gap: var(--space-3);
+  }
+  .ship-writes,
+  .ship-optins,
+  .ship-secret-pins,
+  .conflict-written {
+    gap: var(--space-2);
   }
   .ship-blocker {
     display: flex;
@@ -141,8 +186,10 @@
     border-radius: var(--radius);
     color: var(--danger-fg);
   }
+  /* `flex: 1 1 auto` threw "Add secret" ~707px from the badge it acts on. The
+     body still shrinks; it just no longer grows into the empty column. */
   .ship-blocker-body {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
     font-size: var(--text-sm);
     line-height: 1.5;
@@ -157,6 +204,13 @@
   }
   .ship-row .field {
     margin-bottom: 0;
+  }
+  /* `space-between` over the full column stranded Remove ~375px from the alias
+     it removes. Capping the head's measure, not the whole form, keeps the
+     action within reach while wide content below still uses the column. */
+  .ship-row-head,
+  .ship-secret-pin {
+    max-width: 720px;
   }
   .ship-row-head {
     display: flex;
@@ -218,16 +272,12 @@
     margin: 0;
     padding: 0;
     border: 0;
+    border-radius: var(--radius-sm);
     background: none;
     font: inherit;
     color: var(--primary);
     font-weight: 600;
     cursor: pointer;
-  }
-  .ship-row-expand:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
   }
   .ship-row-diff {
     display: grid;
@@ -253,12 +303,17 @@
   .ship-confirm-summary {
     transition: opacity 120ms ease;
   }
-  /* The fade waits out the dry-run debounce, so ordinary typing never reaches
-     it; the restore has no delay, so a fresh preview brightens at once. Keep
-     the delay equal to PREVIEW_DEBOUNCE_MS in components/ship/model.ts. */
+  /* The fade skips a keystroke's worth of staleness, so ordinary typing never
+     reaches it; the restore has no delay, so a fresh preview brightens at
+     once. The delay was PREVIEW_DEBOUNCE_MS (400ms), which is exactly how long
+     the stale window lasts — measured, the rule never painted. Anything below
+     the debounce works; 150ms leaves the fade visible for the rest of it. */
+  .ship-preview.is-stale .ship-preview-body,
+  .ship-confirm-summary.is-stale {
+    transition-delay: 150ms;
+  }
   .ship-preview.is-stale .ship-preview-body {
     opacity: 0.55;
-    transition-delay: 400ms;
   }
   .ship-preview-head {
     display: flex;
@@ -298,9 +353,22 @@
   .ship-entries tr.ship-entry-changed td:first-child {
     box-shadow: inset 3px 0 0 var(--primary);
   }
+  /* Below the card-table breakpoint the row is a block and `td:first-child` is
+     just the Alias field, so the marker covered 18% of the card and floated
+     14px inside its left edge. Mark the card itself instead. */
+  @media (width < 640px) {
+    .ship-entries tr.ship-entry-changed td:first-child {
+      box-shadow: none;
+    }
+    .ship-entries tr.ship-entry-changed {
+      box-shadow: inset 3px 0 0 var(--primary);
+    }
+  }
+  /* The label can wrap; the box belongs on its first line, as .checkbox-row
+     already does in globals.css. */
   .ship-optin {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--space-2);
     font-size: var(--text-sm);
     cursor: pointer;
@@ -308,21 +376,46 @@
   .ship-optin code {
     color: var(--text);
   }
-  .ship-facts {
+  /* One definition for both fact grids; they were byte-identical apart from
+     the selector, here and again in the mobile block. */
+  .ship-facts,
+  .conflict-facts {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: var(--space-2) var(--space-4);
     margin: 0;
     font-size: var(--text-sm);
   }
-  .ship-facts dt {
+  .ship-facts dt,
+  .conflict-facts dt {
     color: var(--text-muted);
     font-weight: 600;
   }
-  .ship-facts dd {
+  .ship-facts dd,
+  .conflict-facts dd {
     margin: 0;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+  /* --- Violation tables (ship outcomes, preview, rollback) ---------------- */
+  /* A five-column violation table inside a modal has no scroller wide enough
+     to save it: its min-content is 642px against a 680px body at best. The
+     prose columns must break at every width, not only below 768 where
+     `[data-modal-body] { overflow-wrap: anywhere }` reaches. The Schema
+     pointer cell is `.mono`, which globals.css takes back to `normal` inside a
+     table; these attribute selectors outrank that. */
+  .ship-modal td[data-label="Message"],
+  .ship-modal td[data-label="Schema pointer"],
+  .rollback-dialog td[data-label="Message"],
+  .rollback-dialog td[data-label="Schema pointer"] {
+    overflow-wrap: anywhere;
+  }
+  /* A table inside a danger-panel started 16px right of its sibling table in
+     the same column. Bleed it through the panel's 15px inline padding so both
+     share one left edge. */
+  .ship-modal .danger-panel .table-wrap {
+    margin-inline: -15px;
+    width: auto;
   }
   .ship-valid {
     display: flex;
@@ -334,10 +427,7 @@
   }
 
   /* --- Ship step (confirm + outcomes) ------------------------------------ */
-  .ship-confirm {
-    max-width: 320px;
-    margin-bottom: 0;
-  }
+  /* Cap and margin reset live with .ship-env-field's, above. */
   .ship-outcome {
     display: grid;
     gap: var(--space-3);
@@ -376,20 +466,6 @@
     margin: var(--space-2) 0 0;
     color: var(--text-muted);
   }
-  .conflict-facts {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: var(--space-2) var(--space-4);
-    margin: 0;
-    font-size: var(--text-sm);
-  }
-  .conflict-facts dt {
-    color: var(--text-muted);
-    font-weight: 600;
-  }
-  .conflict-facts dd {
-    margin: 0;
-  }
   .conflict-written li {
     display: inline-flex;
     align-items: center;
@@ -413,7 +489,8 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    font-size: 15px;
+    /* The section-title size (see .ship-section-title); 15px was off-scale. */
+    font-size: 14px;
   }
   .rollout-tools {
     display: flex;
@@ -452,17 +529,13 @@
     border-radius: var(--radius-4xl);
     background: none;
   }
-  .rollout-category-tip:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: 2px;
-  }
   .rollout-remedy {
     display: grid;
     gap: var(--space-1);
   }
   .rollout-diagnostic {
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
     overflow-wrap: anywhere;
   }
 
@@ -479,24 +552,38 @@
   }
 
   /* --- Mobile ------------------------------------------------------------ */
-  @media (max-width: 640px) {
+  /* One breakpoint for the whole modal. This block used to end at 640 while
+     the mobile-fullscreen chrome, the 44px touch floor and the global `.field`
+     reset all ran to 768, which left a 128px band where a phone sheet held
+     desktop-width fields. `width < 768px` matches Tailwind's `md`, so the
+     sheet and its contents switch together. */
+  @media (width < 768px) {
     .ship-env-row {
       flex-direction: column;
       align-items: stretch;
     }
-    .ship-env-field,
+    .ship-editor .ship-env-field,
     .ship-add-row,
-    .ship-confirm {
+    .ship-form .ship-confirm {
       max-width: none;
     }
     .ship-env-field {
       flex: none;
       width: 100%;
     }
-    /* The summary commonly wraps onto its own line at this width, where it no
-       longer needs the desktop label offset. */
+    /* Stacked, the summary has nothing to line up with: neither the desktop
+       label offset nor the control height it borrowed to centre on the
+       select, which left a 38px box round one 17.8px line. */
     .ship-env-summary {
       margin-top: 0;
+      min-height: 0;
+    }
+    /* The touch floor as padding, not centring: the checkbox stays on the
+       label's first line even when the label wraps. */
+    .ship-optin,
+    .ship-mode-toggle {
+      min-height: 44px;
+      padding-block: calc((44px - 1lh) / 2);
     }
     .ship-facts,
     .conflict-facts {
@@ -512,9 +599,6 @@
       flex-direction: column;
       align-items: flex-start;
     }
-    .rollout-progress {
-      font-size: 14px;
-    }
     .ship-outcome-actions,
     .conflict-actions {
       justify-content: stretch;
@@ -526,13 +610,7 @@
   }
 
   /* --- Secret pins (Change step) ---------------------------------------- */
-  .ship-secret-pins {
-    display: grid;
-    gap: var(--space-1);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
+  /* The list resets and the gap live with the other one-line lists above. */
   .ship-secret-pin {
     display: flex;
     flex-wrap: wrap;
@@ -540,16 +618,15 @@
     gap: var(--space-2);
     min-height: var(--control-h-sm);
   }
+  /* The summary describes the last preview; once an edit outdates it, it fades
+     with the preview until the next dry run (transition above). */
   .ship-confirm-summary {
     color: var(--text-muted);
     font-size: var(--text-sm);
     margin: 0;
   }
-  /* The summary describes the last preview; once an edit outdates it, it fades
-     with the preview until the next dry run. */
   .ship-confirm-summary.is-stale {
     opacity: 0.6;
-    transition-delay: 400ms;
   }
   .ship-secret-pins-section {
     display: grid;
@@ -568,11 +645,6 @@
   .ship-form {
     display: grid;
     gap: var(--space-5);
-    /* A single-column form inside the 1200px workspace footprint stranded each
-       row's actions ~900px from the identity they act on, because every head
-       here is `justify-content: space-between`. Wide content still scrolls
-       inside its own .table-wrap. */
-    max-width: 900px;
   }
   .ship-form > * {
     min-width: 0;
@@ -581,6 +653,7 @@
   .ship-entry-alias {
     padding: 0;
     border: 0;
+    border-radius: 2px;
     background: none;
     font: inherit;
     color: var(--primary);
@@ -593,11 +666,6 @@
   .ship-entry-alias:hover,
   .ship-entry-alias:focus-visible {
     text-decoration-color: currentColor;
-  }
-  .ship-entry-alias:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: 2px;
-    border-radius: 2px;
   }
   .ship-entries-toggle {
     margin-top: var(--space-2);

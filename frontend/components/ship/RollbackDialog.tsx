@@ -183,6 +183,10 @@ export default function RollbackDialog({
 
   return (
     <Modal
+      // A schema-violation table is five columns wide and cannot break below
+      // its badges and buttons: at the default 560px it overflowed its
+      // wrapper by 124px and hid the Actions column entirely.
+      wide
       open={open}
       title={title}
       onClose={busy ? () => undefined : onClose}
@@ -226,7 +230,7 @@ export default function RollbackDialog({
               <Ident kind="env" value={namespace.env} /> in place of{" "}
               <ReleaseIdent name={name} version={target.version} />. Subscribers receive a new
               activation revision; nothing is deleted.{" "}
-              <Link href={compareHref} className="ship-link">
+              <Link href={compareHref} className="text-link">
                 See what changes (v{target.version} → v{previous})
               </Link>
             </>
@@ -258,7 +262,7 @@ export default function RollbackDialog({
                 <ViolationTable violations={check.violations} resolveHref={resolveHref} />
               </div>
               <div className="text-sm mt-3">
-                <Link href={releasesHref} className="ship-link">
+                <Link href={releasesHref} className="text-link">
                   Activate a different version…
                 </Link>
               </div>
@@ -270,7 +274,7 @@ export default function RollbackDialog({
                 {check.message}
               </div>
               <div className="text-sm mt-3">
-                <Link href={releasesHref} className="ship-link">
+                <Link href={releasesHref} className="text-link">
                   Activate a different version…
                 </Link>
               </div>
