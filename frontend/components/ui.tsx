@@ -221,11 +221,14 @@ export function TableSkeleton({
             <p className="mobile-list-hint">{toolbarHint === true ? " " : toolbarHint}</p>
           ) : null}
           {/* The loaded row is a <label>, which picks up the toolbar's own
-              `display: flex`, 6px gap and --text-sm type from its element selector;
-              a placeholder that is not labelable has to restate them or it
-              lays out as a text line and reserves 6.5px too much. */}
+              `display: flex`, 6px gap and --text-sm type from its element
+              selector; a placeholder that is not labelable has to restate them
+              or it lays out as a text line and reserves 6.5px too much.
+              `text-(length:--text-sm)`, not `text-sm`: the utility would set
+              Tailwind's own line-height with it (17.86px against the 1.5 this
+              row inherits), which is 1.81px per line on a label that wraps. */}
           {toolbarSelection ? (
-            <span className="mobile-list-selection flex items-center gap-1.5 text-sm">
+            <span className="mobile-list-selection flex items-center gap-1.5 text-(length:--text-sm)">
               <Skeleton width={16} height={16} />
               {toolbarSelection === true ? (
                 <Skeleton width="60%" height="1lh" />
