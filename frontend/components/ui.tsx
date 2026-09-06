@@ -140,7 +140,10 @@ export function TableSkeleton({
   leading = 0,
   trailing = 0,
   tableClassName,
+  colgroup,
   toolbar = false,
+  toolbarHint = false,
+  toolbarSelection = false,
   summary = false,
 }: {
   headers: string[];
@@ -157,9 +160,19 @@ export function TableSkeleton({
    *  column widths and header wrapping. Without it the skeleton's header row
    *  is 17px shorter than the one that replaces it. */
   tableClassName?: string;
+  /** The loaded table's own `<colgroup>`. The class above only names the rules;
+   *  the widths they apply to live on the `<col>` elements, and without them
+   *  the skeleton's columns are wide enough that the uppercase headers never
+   *  wrap — a 41.75px header row against the loaded 59px. */
+  colgroup?: ReactNode;
   /** Reserve the `MobileListToolbar` the loaded list renders below 640px;
    *  without it the list jumps down by up to 198px on arrival. */
   toolbar?: boolean;
+  /** Mirror the loaded `MobileListToolbar`'s own `hint` and `selection`: each
+   *  is a further full-width row of that toolbar, and a list that renders both
+   *  reserves 99px too little without them. */
+  toolbarHint?: boolean;
+  toolbarSelection?: boolean;
   /** Reserve the `TableSummary` caption the loaded list renders (34px). */
   summary?: boolean;
 }) {
@@ -174,8 +187,9 @@ export function TableSkeleton({
   return (
     <div className="table-wrap card-table" aria-busy="true">
       <span className="sr-only">Loading…</span>
-      {/* The loaded toolbar's two sort controls, as empty boxes: the fieldset's
-          own gap and padding then give it the loaded height. */}
+      {/* The loaded toolbar's rows, as empty boxes: the fieldset's own gap and
+          padding then give it the loaded height. Each row is the element the
+          loaded toolbar uses, so it picks up the same rules. */}
       {toolbar ? (
         <fieldset className="mobile-list-toolbar" aria-hidden>
           <span className="mobile-sort-field">
@@ -186,15 +200,41 @@ export function TableSkeleton({
             <Skeleton width="45%" height="1.5em" />
             <Skeleton height={44} />
           </span>
+          {toolbarHint ? <p className="mobile-list-hint">&nbsp;</p> : null}
+          {/* The loaded row is a <label>, which picks up the toolbar's own
+              `display: flex`, 6px gap and 13px type from its element selector;
+              a placeholder that is not labelable has to restate them or it
+              lays out as a text line and reserves 6.5px too much. */}
+          {toolbarSelection ? (
+            <span className="mobile-list-selection flex items-center gap-1.5 text-[13px]">
+              <Skeleton width={16} height={16} />
+              <Skeleton width="60%" height="1.5em" />
+            </span>
+          ) : null}
         </fieldset>
       ) : null}
+      {/* caption, then colgroup, then thead: the order the HTML table model
+          requires, and the order the loaded table renders. */}
       <table className={cn("data", tableClassName)}>
         {summary ? <caption className="table-summary">&nbsp;</caption> : null}
+        {colgroup}
         <thead>
           <tr>
             {pad(leading, "th", "l")}
+            {/* The loaded header is a `.sort-button` carrying the cell's whole
+                padding plus a 12px indicator, and that indicator is what tips a
+                two-word label onto a second line. A bare <th> never wraps, so
+                the skeleton's header row measured 41.75px against the loaded
+                59px on a table whose columns are narrow enough to wrap — with
+                `colgroup` and this shape together it lands on 59px exactly.
+                Both halves are needed; either alone changes nothing. */}
             {headers.map((h) => (
-              <th key={h}>{h}</th>
+              <th key={h} className="sortable">
+                <span className="sort-button">
+                  {h}
+                  <span className="sort-indicator size-3" aria-hidden />
+                </span>
+              </th>
             ))}
             {pad(trailing, "th", "t")}
           </tr>

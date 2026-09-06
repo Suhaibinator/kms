@@ -165,5 +165,39 @@ describe("TableSkeleton", () => {
     expect(container.querySelector("table")).toHaveClass("data");
     expect(container.querySelector(".mobile-list-toolbar")).toBeNull();
     expect(container.querySelector("caption")).toBeNull();
+    expect(container.querySelector("colgroup")).toBeNull();
+    expect(container.querySelector(".mobile-list-hint")).toBeNull();
+    expect(container.querySelector(".mobile-list-selection")).toBeNull();
+  });
+
+  // The loaded header is a sort button carrying the cell's padding and a 12px
+  // indicator; a bare <th> never wraps, so the two together are what make the
+  // skeleton's header row the same height as the one that replaces it.
+  it("renders its headers in the loaded sort-button shape", () => {
+    const { container } = render(<TableSkeleton headers={["Environment"]} rows={1} />);
+    const header = container.querySelector("th");
+    expect(header).toHaveClass("sortable");
+    expect(header?.querySelector(".sort-button")).toHaveTextContent("Environment");
+    expect(header?.querySelector(".sort-indicator")).not.toBeNull();
+  });
+
+  it("takes the loaded table's colgroup and the toolbar's own extra rows", () => {
+    const { container } = render(
+      <TableSkeleton
+        headers={["A"]}
+        rows={1}
+        toolbar
+        toolbarHint
+        toolbarSelection
+        colgroup={
+          <colgroup>
+            <col className="namespace-col-env" />
+          </colgroup>
+        }
+      />,
+    );
+    expect(container.querySelector("colgroup > col.namespace-col-env")).not.toBeNull();
+    expect(container.querySelector(".mobile-list-toolbar > .mobile-list-hint")).not.toBeNull();
+    expect(container.querySelector(".mobile-list-toolbar > .mobile-list-selection")).not.toBeNull();
   });
 });
