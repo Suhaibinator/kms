@@ -444,6 +444,13 @@
     font-size: 11px;
     color: var(--text-faint);
   }
+  /* Every other focusable child of .sidebar is inset 8px, so its 2px outset ring
+     fits; the brand is full-bleed (it owns the bottom border) and .sidebar's
+     overflow-y: auto computes overflow-x to auto, which clipped 4px of ring on
+     the left and 3px on the right. Inset the ring rather than the element. */
+  .sidebar-brand:focus-visible {
+    outline-offset: -2px;
+  }
 
   .nav {
     padding: var(--space-3) var(--space-2);
@@ -479,25 +486,32 @@
     background: var(--accent-soft);
     color: var(--text);
   }
-  .nav-link .nav-icon {
+  /* Unqualified: the sidebar search button uses the same box, so its glyph and
+     its label share the nav rows' two edges. */
+  .nav-icon {
     /* The 16px box exactly fits the size-4 icon inside it; centring it as a flex
        container beats text-align, which cannot centre an inline svg vertically. */
     display: flex;
     align-items: center;
     justify-content: center;
+    flex: 0 0 16px;
     width: 16px;
     opacity: 0.9;
   }
 
+  /* The inline padding matches `.nav`'s, so the identity card's border and the
+     nav row highlight above it share one left edge; the footer's own children
+     were 4px right of every nav row while the two columns read as one. */
   .sidebar-footer {
     border-top: 1px solid var(--border);
-    padding: 12px;
+    padding: var(--space-3) var(--space-2);
   }
   .identity-card {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 8px 10px;
+    /* .nav-link's padding, so the card's text starts on the nav labels' edge. */
+    padding: var(--space-2) var(--space-3);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -603,7 +617,16 @@
     }
   }
 
+  /* One component, two sizes. The strip variant in onboarding.css restates only
+     these three custom properties and its padding; every derived number below
+     — the value's box, and the badge and string rows that have to match it —
+     follows from --stat-value, so the two sizes cannot drift apart. The 35px
+     and 28px min-heights were `28 × 1.25` and `22 × 1.25` written out by hand,
+     and the second was 0.5px wrong. */
   .stat {
+    --stat-value: 28px;
+    --stat-label: 12px;
+    --stat-sub: 12px;
     min-width: 0;
     overflow-wrap: anywhere;
     background: var(--surface);
@@ -612,13 +635,13 @@
     padding: var(--space-4) var(--space-5);
   }
   .stat .stat-label {
-    font-size: 12px;
+    font-size: var(--stat-label);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .stat .stat-value {
-    font-size: 28px;
+    font-size: var(--stat-value);
     font-weight: 700;
     line-height: 1.25;
     margin-top: var(--space-1);
@@ -630,7 +653,7 @@
   .stat .stat-value-sm {
     display: flex;
     align-items: center;
-    min-height: 35px;
+    min-height: calc(var(--stat-value) * 1.25);
     margin-top: var(--space-1);
     font-size: 15px;
     font-weight: 600;
@@ -643,7 +666,7 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    min-height: 35px;
+    min-height: calc(var(--stat-value) * 1.25);
     margin-top: var(--space-1);
   }
   /* One line of the sub-caption, always: StatSkeleton's 9px placeholder sits in
@@ -651,7 +674,7 @@
      the whole dashboard down under the cursor. */
   .stat .stat-sub {
     min-height: 1.5em;
-    font-size: 12px;
+    font-size: var(--stat-sub);
     color: var(--text-faint);
     margin-top: var(--space-1);
   }
@@ -719,6 +742,23 @@
     color: var(--danger);
     margin-top: 0;
   }
+  /* Opt-in reservation of the validation line, the way .json-editor-status
+     already reserves its own. Without it the message's arrival grows the field
+     by one line: on /login the token input jumped up 10.9px and the submit
+     button down 10.9px as the centred card re-centred, so the control the
+     operator was about to fix moved out from under the pointer. A blanket
+     reserve would add a line to every field in the app, so callers ask for it.
+     The placeholder is a flex item of the field, so the field's own gap spaces
+     it exactly as it spaces the real message; it is dropped the moment one is
+     rendered. --text-sm's line-height is Tailwind's, the same the message
+     itself resolves — the two must agree or the reserve over- or under-shoots. */
+  .field-reserve:not([data-invalid])::after {
+    content: "";
+    display: block;
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    min-height: 1lh;
+  }
   .checkbox-row {
     display: flex;
     align-items: flex-start;
@@ -783,6 +823,9 @@
     cursor: not-allowed;
     opacity: 0.6;
   }
+  /* Inset, against the app's +2px default: .schema-form-toggle clips its
+     children (overflow: hidden, so the halves take the frame's radius), and an
+     outset ring on a half would be cut off on three sides. */
   .schema-form-toggle-button:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: -2px;
@@ -868,10 +911,10 @@
   .schema-form-list-item > .schema-form-group {
     margin: 0;
   }
-  .schema-form-reset {
-    margin-left: var(--space-1);
-    vertical-align: baseline;
-  }
+  /* No .schema-form-reset rule: it set height/padding/font-size on a
+     `Button variant="link" size="xs"`, whose h-6/px-2/text-xs are utilities and
+     beat a component-layer rule (header rule 5). The geometry that makes it
+     read as part of the hint sentence is on the element instead. */
   .schema-form-boolean {
     display: grid;
     gap: var(--space-1);
@@ -912,18 +955,27 @@
     min-height: 1lh;
     counter-increment: json-line;
   }
+  /* One expression for the line-number track and the code inset, shared by the
+     editor, the plain highlighter and the tree (`.json-tree[data-line-numbers]`
+     restates it), so the same document indents identically wherever it is
+     shown. `--json-caret` is the tree's fold-arrow column: the editor has no
+     carets but pays the same inset, because opening "New version" from a value
+     view otherwise shifted every line 12px sideways. */
   .json-highlight[data-line-numbers],
   .json-editor-stack {
-    --json-gutter: calc(var(--json-gutter-chars, 2) * 1ch + var(--space-5));
+    --json-gutter: calc(var(--json-gutter-chars, 2) * 1ch + var(--space-4));
+    --json-caret: var(--space-4);
+    --json-code-inset: calc(var(--json-gutter) + var(--json-caret));
   }
   .json-highlight[data-line-numbers] {
-    padding-left: var(--json-gutter);
+    padding-left: var(--json-code-inset);
   }
   .json-highlight[data-line-numbers] .json-line::before {
     content: counter(json-line);
     position: absolute;
-    left: calc(-1 * var(--json-gutter));
-    width: calc(var(--json-gutter) - var(--space-3));
+    left: calc(-1 * var(--json-code-inset));
+    /* Same right edge as the tree's number cell, which pays `--space-2`. */
+    width: calc(var(--json-gutter) - var(--space-2));
     text-align: right;
     color: var(--syntax-line-no);
     user-select: none;
@@ -986,14 +1038,10 @@
     position: relative;
     overflow: auto;
     resize: vertical;
-    min-height: calc(
-      var(--json-rows, 12) *
-      var(--json-line-height) *
-      var(--text-sm) +
-      2 *
-      var(--space-3) +
-      2px
-    );
+    /* `1lh` is this element's own font-size times its line-height, so the
+       reservation follows the 16px mobile bump below. The token form under-
+       reserved by ~24% on a phone: `rows={8}` opened showing 6.2 rows. */
+    min-height: calc(var(--json-rows, 12) * 1lh + 2 * var(--space-3) + 2px);
     padding: var(--space-3);
     border: 1px solid var(--input);
     border-radius: var(--radius-sm);
@@ -1030,8 +1078,10 @@
     grid-template-columns: minmax(100%, max-content);
     min-width: 100%;
   }
+  /* No numbers and no highlight layer: the text starts at the padding edge. */
   .json-editor[data-plain] .json-editor-stack {
     --json-gutter: 0px;
+    --json-caret: 0px;
   }
   .json-editor-highlight,
   .json-editor-input {
@@ -1059,7 +1109,7 @@
     display: block;
     width: 100%;
     height: 100%;
-    padding-left: var(--json-gutter, 0px);
+    padding-left: var(--json-code-inset, 0px);
     resize: none;
     overflow: hidden;
     outline: none;
@@ -1114,6 +1164,14 @@
       font-size: 16px;
     }
   }
+  @media (width < 640px) {
+    /* All three clauses wrap to two lines in a 343px row, and the status slot
+       reserves one — so focusing the editor grew everything below it by 16px.
+       The full text is still in the editor's `sr-only` hint. */
+    .json-editor-keys-more {
+      display: none;
+    }
+  }
 
   .form-row {
     display: grid;
@@ -1134,13 +1192,19 @@
        control (and only that control) upward relative to its siblings. */
     align-items: flex-start;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: var(--space-3);
   }
+  /* A definite basis, not only a floor. The column's child is a SelectTrigger
+     carrying `whitespace-nowrap`, so with flex-basis: auto its base size was
+     its max-content width: a 30-character operation took the column to 231px,
+     the row's five children then needed 768px of a 680px dialog, and "Remove"
+     wrapped onto its own line 69px below its siblings. */
   .rule-op {
+    flex: 0 1 180px;
     min-width: 180px;
   }
-  /* Wide enough for a namespace label plus the unknown-namespace hint; the
-     row wraps, so they may grow but never shrink below their caption. */
+  /* Wide enough for a namespace label; the unknown-namespace sentence is a
+     row-level .rule-note now, not a hint inside these columns. */
   .rule-app {
     flex: 1 1 130px;
     min-width: 130px;
@@ -1148,6 +1212,15 @@
   .rule-env {
     flex: 1 1 110px;
     min-width: 110px;
+  }
+  /* The full row, not the column that raised it: as a per-field hint the
+     unknown-namespace sentence wrapped to five lines in a 126px column and
+     took the row from 59px to 157px with 680px of dialog width unused. */
+  .rule-row > .rule-note {
+    flex: 1 0 100%;
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--warning-fg);
   }
   /* Bare action buttons have no label, so they clear one label block to line
      up with the labelled fields beside them. They are default-size buttons,
@@ -1243,6 +1316,12 @@
     font-size: 13px;
     font-variant-numeric: tabular-nums;
   }
+  /* --border-strong, not --border, on every rule that separates one row of data
+     from the next: there is no zebra striping and no gap here, so the 1px line
+     is the only thing dividing them, and WCAG 1.4.11's 3:1 floor for a
+     meaningful non-text boundary applies. --border measured 1.21:1 on --surface
+     in the dark theme (1.30:1 light); --border-strong is 1.87:1 / 1.85:1, which
+     is as far as this palette goes without the table reading as a grid. */
   table.data th {
     text-align: left;
     font-weight: 600;
@@ -1252,12 +1331,12 @@
     color: var(--text-faint);
     padding: var(--space-3) var(--space-4);
     background: var(--bg-elev);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-strong);
     white-space: nowrap;
   }
   table.data td {
     padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-strong);
     vertical-align: middle;
   }
   table.data tr:last-child td {
@@ -1379,7 +1458,11 @@
   }
   /* Seven columns of nowrap uppercase headers do not fit a 1280px viewport
      (sidebar and gutters leave ~978px); letting the two-word headers wrap
-     frees ~60px, so the table fits its wrapper instead of scrolling 5px. */
+     frees ~60px, so the table scrolls 5px instead of much more. On the button,
+     not the cell: `table.data th` is (0,1,2) and `.namespace-table th` (0,1,1),
+     so a rule on the cell loses the tie it looks like it should win — and the
+     text is in the button anyway, which is the shape TableSkeleton's headers
+     take too so its header row matches the loaded one. */
   .namespace-table th .sort-button {
     white-space: normal;
   }
@@ -1390,6 +1473,32 @@
     font-size: 12.5px;
     color: var(--text);
     overflow-wrap: normal;
+  }
+  /* A count that is also a link ("2" on /namespaces) is an 8.4 x 16px target —
+     the smallest in the console, and not inline in a sentence, so WCAG 2.5.8's
+     24px exemption does not cover it. Grow the hit surface with an ::after and
+     leave the ink alone, the same trick components/ui/checkbox.tsx uses; the
+     column keeps its width because the pseudo-element is out of flow. */
+  .cell-count {
+    position: relative;
+    display: inline-block;
+  }
+  .cell-count::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: max(24px, 100%);
+    height: 24px;
+    transform: translate(-50%, -50%);
+  }
+  /* The same floor the touch block gives every button and control. Kept here
+     rather than in that block because the surface is a pseudo-element: it is
+     the ::after that grows, not a min-height on the link. */
+  @media (width < 768px) {
+    .cell-count::after {
+      width: max(44px, 100%);
+      height: 44px;
+    }
   }
   .row-actions {
     display: flex;
@@ -1411,8 +1520,11 @@
       width: 1%;
     }
     /* Qualified by the cell, not bare: `.row-wrap` is a later rule of the same
-       specificity and /releases puts both classes on one element. */
-    table.data td > .row-actions {
+       specificity and /releases puts both classes on one element. Descendant,
+       not child: /namespaces nests the cluster inside `.navigable-row-end` so
+       the chevron can sit beside it, and with the child combinator that cell
+       kept wrapping — measured 93px rows at 1280 after the child form landed. */
+    table.data td .row-actions {
       flex-wrap: nowrap;
     }
   }
@@ -1493,7 +1605,9 @@
   .table-summary {
     caption-side: bottom;
     padding: var(--space-2) var(--space-4);
-    border-top: 1px solid var(--border);
+    /* Same rule as the row separators above: it divides the footer band from
+       the last row of data, so it is held to the same 3:1 floor. */
+    border-top: 1px solid var(--border-strong);
     background: var(--bg-elev);
     color: var(--text-faint);
     font-size: var(--text-xs);
@@ -1556,12 +1670,29 @@
 
   /* ---------- Keyboard shortcut sheet ---------- */
 
+  /* One track set for the whole sheet, resolved once on .shortcut-sheet and
+     inherited through subgrid — the same recipe as the contract editor. Each
+     group used to be its own grid, so `max-content` was resolved four times
+     against four sets of key chips and the description column started at four
+     different x positions down a single-column dialog. */
+  .shortcut-sheet {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+  }
+  .shortcut-group {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+  }
+  .shortcut-group > * {
+    grid-column: 1 / -1;
+  }
   .shortcut-group + .shortcut-group {
     margin-top: var(--space-5);
   }
   .shortcut-list {
     display: grid;
-    grid-template-columns: max-content 1fr;
+    grid-template-columns: subgrid;
     gap: var(--space-2) var(--space-4);
     margin: var(--space-3) 0 0;
     align-items: center;
@@ -1675,9 +1806,9 @@
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 12px 14px;
+    padding: var(--space-3) var(--space-4);
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     tab-size: 2;
     white-space: pre-wrap;
@@ -1685,6 +1816,15 @@
     max-height: 320px;
     overflow: auto;
     margin: 0;
+  }
+  @media (width < 768px) {
+    /* The editable twin goes to 16px on a phone to stop iOS zooming on focus,
+       which left the same document rendering at two sizes on the same screen
+       depending only on whether it was editable. 14px closes most of that
+       without spending the width 16px costs a read-only block. */
+    .json-block {
+      font-size: 14px;
+    }
   }
 
   /* ---------- Read-only value viewer (components/JsonView.tsx) ---------- */
@@ -1723,8 +1863,10 @@
   .json-tree {
     display: block;
     --json-gutter: 0px;
+    --json-caret: var(--space-4);
   }
-  /* Wide enough for the last line number of the fully expanded document. */
+  /* Wide enough for the last line number of the fully expanded document, and
+     the same expression the editor and the plain highlighter use. */
   .json-tree[data-line-numbers] {
     --json-gutter: calc(var(--json-gutter-chars, 2) * 1ch + var(--space-4));
   }
@@ -1732,7 +1874,7 @@
      row whether or not that row can be folded. */
   .json-tree-line {
     display: grid;
-    grid-template-columns: var(--json-gutter) var(--space-4) minmax(0, 1fr);
+    grid-template-columns: var(--json-gutter) var(--json-caret) minmax(0, 1fr);
     align-items: start;
     min-height: 1lh;
   }
@@ -1740,13 +1882,16 @@
      out of anything the operator selects and copies by hand. */
   .json-tree-line::before {
     content: "";
-    padding-right: var(--space-2);
     text-align: right;
     color: var(--syntax-line-no);
     user-select: none;
   }
+  /* The padding is the number's gap from the caret, so it belongs with the
+     number: without numbers the track is 0px and an 8px pseudo-element
+     overhung the caret column. */
   .json-tree[data-line-numbers] .json-tree-line::before {
     content: attr(data-line);
+    padding-right: var(--space-2);
   }
   /* The wrapping cell: it must be allowed to shrink under its longest token. */
   .json-tree-code {
@@ -1755,10 +1900,11 @@
   /* Preflight makes a bare svg `display: block`, which would drop the caret
      below the line box; inline-flex centres it in the slot instead. */
   .json-tree-caret {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: var(--space-4);
+    width: var(--json-caret);
     height: 1lh;
     padding: 0;
     border: 0;
@@ -1767,13 +1913,26 @@
     color: var(--text-faint);
     cursor: pointer;
   }
+  /* One glyph on a code line, so it cannot take the 44px box the touch floor
+     gives every other bare button: a 44px-tall hit area would reach 12px into
+     the lines above and below, and consecutive foldable lines are 19px apart,
+     so the lower caret would win taps meant for the upper one. The hit area
+     widens to 44px and stays inside its own line box. */
+  .json-tree-caret::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline: -14px;
+  }
   .json-tree-caret:hover {
     background: var(--surface-hover);
     color: var(--text);
   }
+  /* Inside the viewer's own `overflow: auto` box, so the ring goes inward — at
+     the same -2px every other clipped control uses, not a one-off -1px. */
   .json-tree-caret:focus-visible {
     outline: 2px solid var(--primary);
-    outline-offset: -1px;
+    outline-offset: -2px;
   }
   .json-tree-summary {
     color: var(--text-faint);
@@ -1834,8 +1993,14 @@
   .json-diff-table th + th {
     border-left: 1px solid var(--border);
   }
+  /* Under `table-layout: fixed` the used widths come from `<col>` or from the
+     first row's cells only, and the header is two auto `colSpan={2}` cells — so
+     a width on the body `td` was dead and all four columns took 25%. Four
+     digits plus the cell's own inline padding. */
+  .json-diff-col-num {
+    width: calc(4ch + 2 * var(--space-2));
+  }
   .json-diff-num {
-    width: 3.5ch;
     padding: 0 var(--space-2);
     color: var(--syntax-line-no);
     text-align: right;
@@ -1922,8 +2087,13 @@
     gap: var(--space-1);
     justify-items: start;
   }
+  /* The frame owns the control's height, not the halves inside it: with the
+     height on the labels the 1px border sat on top of it and the picker came
+     out 40px in a column of 38px controls (46px against 44px at mobile, where
+     the touch floor raises the halves). */
   .value-segment {
     display: inline-flex;
+    min-height: var(--control-h);
     border: 1px solid var(--input);
     border-radius: var(--radius-sm);
     overflow: hidden;
@@ -1941,7 +2111,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: var(--control-h);
+    align-self: stretch;
     min-width: 5rem;
     padding: 0 var(--space-4);
     font-family: var(--mono);
@@ -1950,6 +2120,13 @@
     color: var(--text-muted);
     background: transparent;
     cursor: pointer;
+  }
+  /* The mobile touch floor names .value-segment-button, which would put 44px
+     back on the half and 46px on the frame. Two classes so this outranks it;
+     the 44px target survives, because the frame is 44px there and the half
+     stretches into all of it. */
+  .value-segment > .value-segment-button {
+    min-height: 0;
   }
   .value-segment-button + .value-segment-button {
     border-left: 1px solid var(--border);
@@ -1961,6 +2138,8 @@
   .value-segment-button:has(input:disabled) {
     cursor: not-allowed;
   }
+  /* Inset, against the app's +2px default, for the reason
+     .schema-form-toggle-button's is: .value-segment clips its halves. */
   .value-segment-button:has(input:focus-visible) {
     outline: 2px solid var(--primary);
     outline-offset: -2px;
@@ -1990,11 +2169,9 @@
     margin: 0;
     color: var(--warning-fg);
   }
-  .value-type-clear {
-    height: auto;
-    padding: 0;
-    font-size: inherit;
-  }
+  /* No .value-type-clear rule: like .schema-form-reset it tried to shrink a
+     `Button variant="link" size="xs"` from a component-layer rule, and h-6/px-2
+     are utilities. Its geometry is on the element (header rule 5). */
   /* "Show changes" / "Metadata JSON" disclosures inside the version dialog. */
   .value-disclosure {
     display: grid;
@@ -2031,6 +2208,22 @@
   }
   .value-disclosure-body {
     min-width: 0;
+  }
+  /* Beside their own definitions rather than in the mobile block at the end of
+     the file: both of these are corrections to expressions three rules above,
+     and splitting them from what they correct is how the second one went
+     unnoticed. Neither has a competing rule, so source order is free. */
+  @media (width < 768px) {
+    /* Both controls are on the 44px floor here, so the derived offset — half
+       the 38/30 difference — is 4px of nothing, and hung the toggle 4px below
+       the input it belongs to. */
+    .value-input-toggle {
+      margin-top: 0;
+    }
+    /* Matches the floor the halves and every neighbouring control sit on. */
+    .value-segment {
+      min-height: 44px;
+    }
   }
   /* Secret value field (components/secrets/SecretValueField.tsx). The mask is
      a text-security rule so the control stays a multi-line textbox; browsers
@@ -2201,21 +2394,10 @@
   .release-workspace-toolbar {
     margin-bottom: var(--space-2);
   }
-  /* Only for a `line` tab list, which draws a 2px indicator 5px below the
-     trigger and so needs a rule to sit on. `flex-end` puts the list's bottom on
-     that rule, the -1px laps the indicator over it, and the button row keeps
-     its own clearance. The builder's toolbar carries a `default` (pill) list
-     and a caption instead, and wants neither. */
-  .release-workspace-tabs {
-    align-items: flex-end;
-    border-bottom: 1px solid var(--border);
-  }
-  .release-workspace-tabs > .row-wrap {
-    margin-bottom: var(--space-2);
-  }
-  .release-workspace-tabs [role="tablist"] {
-    margin-bottom: -1px;
-  }
+  /* Inside a dialog this toolbar shares one definition with
+     `.secret-workspace-toolbar` — see the workspace toolbar block further down.
+     The rule, the bleed and the sticky inset all live there, so nothing is
+     restated here. */
   .section-toolbar h2 {
     margin-bottom: 0;
   }
@@ -2259,13 +2441,23 @@
   .release-builder-entry > [data-slot="button"] {
     margin-top: var(--label-offset);
   }
+  /* Both offsets clear a label that is only beside these cells while the entry
+     is a row. Once it stacks there is nothing to clear and the offset reads as
+     a 33px hole between two 12px gaps. */
+  @media (width < 768px) {
+    .release-builder-entry > .release-builder-current,
+    .release-builder-entry > [data-slot="button"] {
+      margin-top: 0;
+    }
+  }
   /* Holds the remove button's track open on a contract-owned row, whose fields
      would otherwise share 38px more width than every other row's. */
   .release-builder-entry-spacer {
     width: var(--control-h);
   }
-  /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
-     can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */
+  /* The strip above the JSON editor: a summary line and the switch back to
+     Guided. The editor below it takes its own 60dvh bound from `maxHeight` on
+     the component, not from a utility here. */
   .release-builder-review {
     display: flex;
     justify-content: space-between;
@@ -2397,6 +2589,16 @@
     border-radius: var(--radius-lg);
     background: var(--surface);
   }
+  /* Inside a card the frame is already drawn: .card and .empty-state carry the
+     same border, radius and background, so the nested form painted two
+     concentric 1px rules of one colour 20px apart (/posture's three sections,
+     /health's key list). The empty state keeps only its inner spacing, and less
+     of it, because the card's own 16/20px padding is now the outer gutter. */
+  .card > .empty-state {
+    border: 0;
+    background: none;
+    padding: var(--space-6) var(--space-4);
+  }
   .empty-state .empty-icon {
     display: grid;
     place-items: center;
@@ -2425,8 +2627,8 @@
   .pagination {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-top: 16px;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
     flex-wrap: wrap;
   }
 
@@ -2494,7 +2696,7 @@
     min-height: 100dvh;
     display: grid;
     place-items: center;
-    padding: 24px;
+    padding: var(--space-6);
     background:
       radial-gradient(
         1200px 600px at 50% -10%,
@@ -2509,14 +2711,14 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 30px 28px;
+    padding: var(--space-7) var(--space-6);
     box-shadow: var(--shadow);
   }
   .auth-brand {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 22px;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
   }
   .auth-brand .logo {
     width: 38px;
@@ -2865,16 +3067,19 @@
 
   /* namespace management hub: application-grouped environment tables */
 
-  .application-matrix {
-    overflow-x: auto;
-  }
+  /* The element also carries .table-wrap, which is the scroller and brings
+     rule 1's guards with it; a second overflow-x here only suggested the
+     matrix had a scroller of its own with none of them. */
 
   .application-matrix table {
     min-width: 760px;
   }
 
-  .application-matrix th,
-  .application-matrix td {
+  /* `table.data td` is (0,1,2) and sets `middle`, so the unqualified pair was
+     dead: the Kind badge and the Edit button floated in the middle of a 150px
+     row instead of aligning with the first line of the values beside them. */
+  .application-matrix table.data th,
+  .application-matrix table.data td {
     vertical-align: top;
   }
 
@@ -2907,8 +3112,10 @@
   /* `table.data tr:last-child td` drops the bottom border on the last row of
      every row group, so with a tfoot present the totals row would otherwise be
      glued to the last data row. The footer draws the rule itself. */
-  .application-matrix tfoot td {
+  .application-matrix tfoot td:not(.matrix-key) {
     border-top: 1px solid var(--border);
+  }
+  .application-matrix tfoot td {
     color: var(--text-muted);
     font-size: var(--text-sm);
   }
@@ -2921,13 +3128,23 @@
     left: 0;
     z-index: 1;
     min-width: 210px;
+    /* The alias chip inside this cell is nowrap, so overflow-wrap cannot reach
+       it and its full 519px became the column's intrinsic width — three of six
+       environment columns off screen, in the one column meant to enable the
+       comparison. */
+    max-width: 340px;
     background: var(--surface);
     /* Underscores are not break opportunities, so one long key would pin the
        frozen column at its full min-content width on every row. */
     overflow-wrap: anywhere;
+    /* The frozen edge is also the boundary content scrolls behind, and
+       .table-wrap's own left affordance paints underneath this cell: at
+       --border weight the edge measured 1.3:1 in dark, so it carries
+       --border-strong plus the scroll shadow itself. */
     box-shadow:
       inset 0 -1px 0 var(--border),
-      1px 0 0 var(--border);
+      1px 0 0 var(--border-strong),
+      6px 0 6px -6px var(--scroll-shadow);
   }
   /* The totals row carries the rule above it instead of below it, and the
      table's final row carries none — the same shape the other columns get
@@ -2935,10 +3152,13 @@
   .application-matrix tfoot .matrix-key {
     box-shadow:
       inset 0 1px 0 var(--border),
-      1px 0 0 var(--border);
+      1px 0 0 var(--border-strong),
+      6px 0 6px -6px var(--scroll-shadow);
   }
   .application-matrix table:not(:has(tfoot)) tbody tr:last-child .matrix-key {
-    box-shadow: 1px 0 0 var(--border);
+    box-shadow:
+      1px 0 0 var(--border-strong),
+      6px 0 6px -6px var(--scroll-shadow);
   }
   @media (width < 768px) {
     /* Stays sticky — scrolling values away from their key leaves nothing to
@@ -2982,9 +3202,11 @@
     align-items: center;
     color: var(--text-faint);
   }
+  /* The min-width lives on the element as a utility: Input's own `min-w-0`
+     beats a component-layer rule however specific (layout rule 5). */
   .matrix-filter {
-    flex: 0 1 280px;
-    min-width: 180px;
+    flex: 1 1 280px;
+    max-width: 360px;
   }
 
   /* Tooltip trigger around a badge: inline-flex so the badge keeps its box. */
@@ -2992,31 +3214,49 @@
     display: inline-flex;
   }
 
-  /* Bleeds into the modal body's padding on both axes and restores it on
-     both: the tab list sits on the rule, the buttons keep clearance above and
-     below it. Sticky so the actions stay reachable while the body scrolls. */
-  .secret-workspace-toolbar {
+  /* One definition for every workspace toolbar. The secret, parameter and
+     release workspaces fill the same role in the same modal footprint, and had
+     drifted apart on position, background, bleed and inset.
+
+     Bleeds into the modal body's padding on both axes and restores it on both.
+     The sticky inset has to bleed with the negative margin: a sticky element's
+     constraint rectangle starts at the scroller's *content* edge, so `top: 0`
+     pinned the toolbar --modal-pad below the dialog's header rule and left a
+     strip of page ground above it.
+
+     Controls line up with the cards' frame, not their text. The tab list adds
+     `p-[3px]`, the trigger `px-1.5` plus a 1px transparent border and .card its
+     own 1px border, so no single padding can put both the first tab label and
+     the last button label on the cards' text edge. */
+  .secret-workspace-toolbar,
+  [data-modal-body] .release-workspace-toolbar {
     position: sticky;
-    top: 0;
+    top: calc(var(--modal-pad) * -1);
     z-index: 2;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
+    flex-wrap: wrap;
     margin: calc(var(--modal-pad) * -1) calc(var(--modal-pad) * -1) var(--space-2);
-    /* The extra --space-5 is .card's own inline padding: without it the tabs and
-       the Delete button line up with the cards' border rather than with their
-       content, and read as flush against the dialog edge. */
-    padding: var(--space-3) calc(var(--modal-pad) + var(--space-5)) 0;
+    padding: var(--space-3) var(--modal-pad) var(--space-2);
     border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
-  .secret-workspace-toolbar > .row-wrap {
-    margin-bottom: var(--space-2);
+  /* The clearance below the buttons is the toolbar's padding, not a margin on
+     the row: a margin joins the flex line's alignment and staggered the buttons
+     9px above the tab list under `align-items: flex-end`. */
+  .secret-workspace-toolbar > .row-wrap,
+  [data-modal-body] .release-workspace-toolbar > .row-wrap {
+    margin-bottom: 0;
   }
 
-  .secret-workspace-toolbar [role="tablist"] {
-    margin-bottom: -1px;
+  /* A `line` list draws its 2px indicator below the trigger, and the default
+     -5px lands it 1px outside the list — over whatever scrolls beneath the
+     sticky toolbar. -3px tucks it against the list's own bottom edge. */
+  .secret-workspace-toolbar [role="tablist"],
+  [data-modal-body] .release-workspace-toolbar [role="tablist"] {
+    --tab-underline-offset: -3px;
   }
 
   .secret-workspace-stack {
@@ -3030,7 +3270,12 @@
   }
 
   @media (width < 640px) {
-    .secret-workspace-toolbar {
+    /* Stacked, this toolbar is 130px of a 667px dialog. Pinning that much of a
+       phone screen costs more than it buys, so it scrolls away with the
+       content; the bleed and the rule stay. */
+    .secret-workspace-toolbar,
+    [data-modal-body] .release-workspace-toolbar {
+      position: static;
       align-items: stretch;
       flex-direction: column;
       gap: var(--space-2);
@@ -3256,6 +3501,27 @@
     color: var(--text);
     font-weight: 600;
   }
+  /* 769px is where the 236px sidebar comes back while the trail is unchanged,
+     so a five-crumb trail on a detail page wrapped to two lines through the
+     whole 769-1023 band — the truncation started only at 768. Three crumbs
+     here, two below 768 (the block near the bottom of this file, whose rule
+     stacks on top of this one). Same visually-hidden recipe as there. */
+  @media (width < 1024px) {
+    .crumb:not(:nth-last-child(-n + 3)) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border-width: 0;
+    }
+    .crumb:nth-last-child(3):not(:first-child)::before {
+      content: "…";
+    }
+  }
 
   /* ---------- Readiness status (components/StatusChip.tsx) ---------- */
 
@@ -3326,9 +3592,12 @@
     gap: var(--space-2);
     height: var(--control-h-sm);
     /* The side margin matches `.nav`'s inline padding, so the field's border
-       and the nav row highlight beneath it share one left edge. */
+       and the nav row highlight beneath it share one left edge. The padding is
+       .nav-link's less this field's 1px border, which the nav rows do not have:
+       both boxes are border-box, so the raw value put the glyph and the label
+       1px right of every row beneath them. */
     margin: var(--space-3) var(--space-2) var(--space-1);
-    padding: 0 var(--space-3);
+    padding: 0 calc(var(--space-3) - 1px);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
@@ -3365,10 +3634,18 @@
 
   /* ---------- Rollout transport (components/TransportBadge.tsx) ---------- */
 
+  /* The label goes "Loading…" → "Loaded · just now" on arrival, and the badge
+     sits in .page-actions beside buttons whose `loading` overlay already keeps
+     them still: without a floor the row grew 56px and slid sideways under the
+     cursor. 18ch is "Loaded · just now" at this font — the dashboard's own
+     longest string, and "just now" is the longest relative time — so the badge
+     reaches its loaded width before the data does. min-, not width: a longer
+     label ("Polling ·") still expands rather than clipping. */
   .transport-badge {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
+    min-width: 18ch;
     min-height: calc(var(--control-h-sm) - var(--space-2));
     padding: 0 var(--space-2);
     border: 1px solid var(--border);
@@ -3415,6 +3692,9 @@
     list-style: none;
   }
   .finding {
+    /* The severity column's width, shared by the row's grid at <768px so the
+       stacked Fix button lines up under the copy instead of guessing at it. */
+    --finding-severity-w: 4.75rem;
     display: flex;
     align-items: flex-start;
     gap: var(--space-3);
@@ -3434,8 +3714,13 @@
   .finding-info {
     border-left-color: var(--info);
   }
+  /* A shared column, not a badge sized by its own word: "blocking", "warning"
+     and "info" are 51, 49 and 22px wide, so the copy beside them started at
+     three different x positions down one list. The floor clears the widest
+     label; the Badge's own justify-center then centres the shorter two. */
   .finding-severity {
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    min-width: var(--finding-severity-w);
     text-transform: capitalize;
   }
   .finding-body {
@@ -3455,6 +3740,38 @@
   }
   .finding-fix {
     flex-shrink: 0;
+  }
+
+  /* ---------- Toasts (context/ToastContext.tsx) ---------- */
+
+  /* The toaster is pinned to the viewport's top-right corner at z-index
+     999999999 — which is exactly where the mobile top bar's drawer trigger
+     lives, and where every dialog puts its title and ✕. An error toast lasts
+     eight seconds, and for all eight elementFromPoint at the ✕ returned the
+     toast, not the button.
+     sonner writes --offset-* and --mobile-offset-* as inline styles on the
+     toaster, so no rule here can outrank them; ToastContext passes them
+     through as `var(--toast-offset-top, …)` and this is where that variable is
+     answered. <body> is the nearest ground both the toaster and the portalled
+     dialog share. */
+  body {
+    --toast-offset-top: var(--space-6);
+  }
+  /* Below the 65px sticky top bar. sonner's own mobile block stops at 600px, so
+     the variable has to answer for the whole range in which the bar exists —
+     which is also below a mobile full-screen dialog's ~62px header band. */
+  @media (width < 768px) {
+    body {
+      --toast-offset-top: calc(65px + var(--space-3));
+    }
+  }
+  /* Below an open dialog's header band. Every popup is capped at
+     `100dvh - var(--space-4) * 2`, so the tallest one — the workspace modals
+     this was reported on — starts 16px down and its header is 70px tall. */
+  @media (width >= 768px) {
+    body:has([data-slot="dialog-content"]) {
+      --toast-offset-top: calc(var(--space-4) + 70px + var(--space-3));
+    }
   }
 
   /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
@@ -3562,6 +3879,14 @@
     .mobile-sidebar .nav-search {
       min-height: 44px;
       font-size: 14px;
+      /* The drawer's .nav-link padding, less this field's 1px border. */
+      padding-inline: calc(14px - 1px);
+    }
+    /* Same edge for the footer rows: the drawer widens .nav-link's inline
+       padding to 14px, so the desktop 12px would leave them 2px shy of it. */
+    .mobile-sidebar .identity-card,
+    .mobile-sidebar .sidebar-theme {
+      padding-inline: 14px;
     }
     /* The client-identity strip shares the page gutter. */
     .identity-strip {
@@ -3569,24 +3894,45 @@
     }
     /* Breadcrumbs keep the last two crumbs visible; earlier ones stay in the
        accessibility tree (visually hidden, not display:none) and the first
-       visible crumb carries an ellipsis in place of its separator. */
+       visible crumb carries an ellipsis in place of its separator. The
+       declarations are `.sr-only`'s, in full: the partial copy left out
+       padding, margin and border, so any future border on .crumb would paint a
+       1px sliver of a crumb that is meant to be invisible. */
     .crumb:not(:nth-last-child(-n + 2)) {
       position: absolute;
       width: 1px;
       height: 1px;
+      padding: 0;
+      margin: -1px;
       overflow: hidden;
-      clip-path: inset(50%);
+      clip: rect(0, 0, 0, 0);
       white-space: nowrap;
+      border-width: 0;
     }
     .crumb:nth-last-child(2):not(:first-child)::before {
       content: "…";
     }
-    /* Findings stack their Fix button under the copy. */
+    /* Findings stack their Fix button under the copy. `flex-wrap: wrap` never
+       forced that wrap — badge + copy + button still fit in 343px, so the copy
+       was crushed into a 120px column — and the hand-computed indent beside it
+       assumed a 20px severity badge that measures 22-51px. A two-column grid
+       makes the wrap structural and derives the indent from the real column. */
     .finding {
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: var(--finding-severity-w) minmax(0, 1fr);
+      align-items: start;
+      gap: var(--space-2) var(--space-3);
+    }
+    .finding-severity {
+      grid-row: 1;
+    }
+    .finding-body,
+    .finding-fix {
+      grid-column: 2;
     }
     .finding-fix {
-      margin-left: calc(var(--space-2) + 20px + var(--space-3));
+      justify-self: start;
+      margin-left: 0;
     }
 
     /* Touch targets: buttons and inputs get comfortably tappable. */
@@ -3628,7 +3974,7 @@
     .rule-row {
       flex-direction: column;
       align-items: stretch;
-      gap: 8px;
+      gap: var(--space-2);
     }
     .rule-op,
     .rule-app,
@@ -3642,6 +3988,13 @@
     }
     .rule-row > .rule-remove {
       margin-top: 0;
+    }
+    /* Side by side the reserved validation line costs the row 21.8px once;
+       stacked it costs 21.8px three times, 65px a rule. And the jump it buys
+       off is a desktop one — measured, the phone dialog moves 91px on submit
+       whatever this row does, because every other field in it grows too. */
+    .rule-row .field-reserve:not([data-invalid])::after {
+      content: none;
     }
   }
 
@@ -3668,7 +4021,9 @@
       display: none;
     }
     .table-wrap.card-table tr {
-      border-bottom: 1px solid var(--border);
+      /* The one line between two stacked cards, held to the same 3:1 floor as
+         the desktop row separators. */
+      border-bottom: 1px solid var(--border-strong);
       padding: 12px 14px;
     }
     .table-wrap.card-table tr:last-child {
@@ -3705,26 +4060,33 @@
       flex-wrap: wrap;
       margin-top: 8px;
     }
-    /* The chevron is lifted out of flow and pinned right; the card's own content
-       has to stay clear of it. */
-    .table-wrap.card-table tr.navigable-row {
-      padding-right: 40px;
+    /* The chevron is lifted out of flow and pinned right; only the field it
+       sits beside has to stay clear of it, which is the first one. The row-wide
+       40px inset this replaces indented all seven field values to clear a glyph
+       that appears once. 26px = the 18px glyph plus an 8px gap, measured from
+       the card's own 14px content edge. */
+    .table-wrap.card-table tr.navigable-row > td:first-child {
+      padding-right: 26px;
     }
-    .table-wrap.card-table td.navigable-row-chevron {
+    /* Pinned to the first field's value line, not to the card's middle: at
+       `top: 50%` the glyph landed six fields down a 395px card and read as
+       belonging to whichever row it happened to stop beside. The offset is the
+       row's 12px padding, the cell's 6px, and the 15px label line plus its 3px
+       margin that td[data-label]::before prints above every value — the same
+       four literals the card block above uses, and they move together. */
+    .table-wrap.card-table td.navigable-row-chevron,
+    .table-wrap.card-table .navigable-row-end > .navigable-row-chevron {
       position: absolute;
-      top: 50%;
+      top: calc(12px + 6px + 15px + 3px);
       right: 14px;
+      display: flex;
+      align-items: center;
       width: auto;
-      transform: translateY(-50%);
+      height: 1lh;
+      transform: none;
     }
     .table-wrap.card-table .navigable-row-end {
       justify-content: flex-start;
-    }
-    .table-wrap.card-table .navigable-row-end > .navigable-row-chevron {
-      position: absolute;
-      top: 50%;
-      right: 14px;
-      transform: translateY(-50%);
     }
     .table-wrap.card-table .action-unavailable {
       align-items: flex-start;
@@ -3734,7 +4096,7 @@
     }
 
     .rule-row {
-      padding: 12px;
+      padding: var(--space-3);
       background: var(--bg-elev);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
@@ -3760,10 +4122,10 @@
     }
 
     .auth-wrap {
-      padding: 16px;
+      padding: var(--space-4);
     }
     .auth-card {
-      padding: 22px 18px;
+      padding: var(--space-5) var(--space-4);
     }
 
     .form-actions [data-slot="button"] {
@@ -3827,13 +4189,15 @@
     outline: 2px solid var(--primary);
     outline-offset: 2px;
   }
+  /* padding-inline is .nav-link's, not a 2px nudge: the "Appearance" label is a
+     footer row like any nav row and starts on the same text edge. */
   .sidebar-theme {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
     margin-bottom: var(--space-2);
-    padding: 0 2px;
+    padding-inline: var(--space-3);
     font-size: 12px;
     color: var(--text-muted);
   }
@@ -3842,10 +4206,10 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    margin-top: 18px;
-    padding-top: 14px;
+    margin-top: var(--space-5);
+    padding-top: var(--space-3);
     border-top: 1px solid var(--border);
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
   }
 }
@@ -3951,6 +4315,19 @@
       flex-wrap: wrap;
       bottom: max(12px, env(safe-area-inset-bottom));
     }
+    /* The spacer means "push the actions to the right" on a single line; once
+       the bar wraps it is gone from the second line and the two buttons fall
+       back to flex-start at opposite ends of a three-line, 114px bar. Give the
+       count a line of its own and let the buttons share the next one. */
+    .bulk-bar > .spacer {
+      display: none;
+    }
+    .bulk-bar-count {
+      flex: 1 0 100%;
+    }
+    .bulk-bar > [data-slot="button"] {
+      flex: 1 1 auto;
+    }
     /* sonner's dismiss bubble ships 20x20 and is pinned to the toast's corner
        with translate(-35%, -35%), so growing the box moves it with it — at 44px
        the circle started 14.4px outside the toast and covered its status icon.
@@ -4039,6 +4416,28 @@
     .contract-editor-head {
       display: none;
     }
+    /* One column and one gap left nothing to say where an alias ended: its
+       three fields and its remove button sat the same 8px apart as the next
+       alias's, so no trash icon belonged to anything. The frame is the row's
+       grouping; the outer gap separates the frames. Same recipe as the ≤640
+       .rule-row card, for the same reason. */
+    .contract-editor-rows {
+      gap: var(--space-3);
+    }
+    /* Scoped to the list: the caption row carries .contract-editor-row too,
+       and though it is display:none here it should not inherit a frame. */
+    .contract-editor-rows > .contract-editor-row {
+      gap: var(--space-2);
+      padding: var(--space-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elev);
+    }
+    /* An alias with no artifact/diverged badge renders an empty span, which as
+       a grid item still costs a gap inside the frame. */
+    .contract-editor-origin:empty {
+      display: none;
+    }
     .release-builder-basics,
     .release-builder-entry,
     .release-overview-grid {
@@ -4051,11 +4450,25 @@
 
   @media (width < 640px) {
     .mobile-list-toolbar {
+      /* One height for the select and for the chevron optically centred on it,
+         so the two cannot drift apart. 44px is the touch floor the block above
+         gives every control; it becomes --control-h-touch when that token
+         lands. */
+      --mobile-select-h: 44px;
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
       padding: 12px;
-      border-bottom: 1px solid var(--border);
+      /* Divides the toolbar band from the first card, like the row separators. */
+      border-bottom: 1px solid var(--border-strong);
+      /* Pinned to the scroll port, not to the table's content box: the toolbar
+         is a block child of `.table-wrap`, so a sideways-scrolling table would
+         otherwise carry it out of view. That is why /releases used to render it
+         outside the card, where it read as a naked rule floating above one. */
+      position: sticky;
+      left: 0;
+      width: min-content;
+      min-width: 100%;
     }
     /* The class as well as the element: TableSkeleton reserves this row with
        non-labelable placeholders, which must take the same box. */
@@ -4071,11 +4484,15 @@
     .mobile-sort-field {
       position: relative;
     }
+    /* Anchored to the select, which is the field's last child and so shares its
+       bottom edge: the glyph's centre sits half a select above it. The old
+       literal 20px only held while the label was exactly 19.5px + 6px + 44px,
+       and measured 1.5px above the control's centre. */
     .mobile-sort-field::after {
       content: "";
       position: absolute;
       right: 14px;
-      bottom: 20px;
+      bottom: calc((var(--mobile-select-h) - 7px) / 2);
       width: 7px;
       height: 7px;
       border-right: 1.5px solid currentColor;
@@ -4083,15 +4500,26 @@
       transform: rotate(45deg);
       pointer-events: none;
     }
+    /* A bare <select> is reached by none of the [data-slot] rules, so it is
+       written from the same tokens they compile to: --input for the border
+       (--border on --bg-elev measured 1.13:1, the weakest boundary of any
+       control in the app), --radius-md, the space scale, and Input's own
+       focus recipe instead of the UA outline it was falling back to. */
     .mobile-list-toolbar select {
       appearance: none;
-      height: 44px;
+      min-height: var(--mobile-select-h);
       width: 100%;
-      padding: 8px 32px 8px 8px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      background: var(--bg-elev);
+      padding: var(--space-2) var(--space-7) var(--space-2) var(--space-2);
+      border: 1px solid var(--input);
+      border-radius: var(--radius-md);
+      background: transparent;
       color: var(--text);
+      transition: border-color 0.12s ease;
+    }
+    .mobile-list-toolbar select:focus-visible {
+      outline: none;
+      border-color: var(--ring);
+      box-shadow: 0 0 0 3px var(--ring-glow);
     }
     .mobile-list-toolbar > .mobile-list-selection {
       flex: 1 1 100%;
