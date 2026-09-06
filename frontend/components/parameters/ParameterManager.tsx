@@ -383,7 +383,7 @@ export default function ParameterManager({
           ? "Could not load parameter"
           : displayPath(ref);
     return (
-      <Modal mobileFullScreen open workspace title={title} onClose={() => onClose?.()}>
+      <Modal mobileFullScreen open wide title={title} onClose={() => onClose?.()}>
         {loadState === "not-found" ? (
           <EmptyState title="Not found">No parameter exists at {displayPath(ref)}.</EmptyState>
         ) : loadState === "error" ? (
@@ -893,7 +893,7 @@ export default function ParameterManager({
       <Modal
         mobileFullScreen
         open
-        workspace
+        wide
         title={
           <span className="row-wrap">
             <span className="mono">{displayPath(ref)}</span>

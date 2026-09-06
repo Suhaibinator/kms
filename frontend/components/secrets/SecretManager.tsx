@@ -1,4 +1,3 @@
-import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -6,6 +5,7 @@ import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
 import {
@@ -44,9 +44,9 @@ import {
   validateSecretValue,
 } from "@/lib/encoding";
 import {
+  datetimeLocalToUnixMs,
   displayNamespace,
   displayPath,
-  datetimeLocalToUnixMs,
   formatUnixMs,
   isEmptyJson,
   labelEntries,
@@ -385,7 +385,7 @@ export default function SecretManager({
         <Modal
           mobileFullScreen
           open
-          workspace
+          wide
           title={hasRef ? displayPath(ref) : "Secret"}
           description={hasRef ? displayNamespace(ref) : "Loading secret details"}
           onClose={() => onClose?.()}
@@ -426,7 +426,7 @@ export default function SecretManager({
   if (loadState === "not-found") {
     if (surface === "workspace") {
       return (
-        <Modal mobileFullScreen open workspace title="Secret not found" onClose={() => onClose?.()}>
+        <Modal mobileFullScreen open wide title="Secret not found" onClose={() => onClose?.()}>
           <EmptyState icon={<Icon.secret size={20} />} title="Not found">
             No secret exists at <span className="mono">{displayPath(ref)}</span>.
           </EmptyState>
@@ -453,13 +453,7 @@ export default function SecretManager({
   if (loadState === "error" || !secret) {
     if (surface === "workspace") {
       return (
-        <Modal
-          mobileFullScreen
-          open
-          workspace
-          title="Could not load secret"
-          onClose={() => onClose?.()}
-        >
+        <Modal mobileFullScreen open wide title="Could not load secret" onClose={() => onClose?.()}>
           <EmptyState
             icon={<Icon.secret size={20} />}
             title="Secret unavailable"
@@ -842,7 +836,7 @@ export default function SecretManager({
       <Modal
         mobileFullScreen
         open
-        workspace
+        wide
         title={
           <span className="row-wrap">
             <span className="mono">{displayPath(ref)}</span>
