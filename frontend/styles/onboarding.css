@@ -1,7 +1,7 @@
 /* Feature styles for the onboarding surfaces. Append only; every rule stays inside
    the layer so Tailwind utilities keep winning. */
 
-@layer components {
+@layer features {
   /* ---------- Setup checklist (first run + application SetupPanel) ---------- */
 
   .setup-card {

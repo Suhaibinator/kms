@@ -1,3 +1,17 @@
+/* Layer order, declared before the first @import so it is the one that counts.
+   Tailwind's own `@layer theme, base, components, utilities` names layers that
+   already exist by then and reorders nothing.
+
+   `features` exists because the four feature stylesheets are imported at the
+   top of this file and used to write into `components` alongside it. Same
+   layer, earlier source position: a rule in applications.css or ship.css lost
+   every specificity tie to a rule in globals.css, which is the opposite of
+   what "the feature file overrides the base" suggests, and the console had
+   already met that once — the contract-editor mobile rules had to be written
+   in globals.css to take effect. Giving the four files a layer above
+   components makes the obvious reading true. Utilities still beat all of it. */
+@layer theme, base, components, features, utilities;
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -4455,33 +4469,6 @@
       display: block;
       padding: var(--space-3);
       color: var(--text-muted);
-    }
-    /* The rows stack to one column here, so a caption row above them would name
-       the wrong controls. (The duplicate 768px rules in applications.css were
-       dead — same specificity, emitted earlier in the layer — and are gone.) */
-    .contract-editor-grid,
-    .contract-editor-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .contract-editor-head {
-      display: none;
-    }
-    /* One column and one gap left nothing to say where an alias ended: its
-       three fields and its remove button sat the same 8px apart as the next
-       alias's, so no trash icon belonged to anything. The frame is the row's
-       grouping; the outer gap separates the frames. Same recipe as the ≤640
-       .rule-row card, for the same reason. */
-    .contract-editor-rows {
-      gap: var(--space-3);
-    }
-    /* Scoped to the list: the caption row carries .contract-editor-row too,
-       and though it is display:none here it should not inherit a frame. */
-    .contract-editor-rows > .contract-editor-row {
-      gap: var(--space-2);
-      padding: var(--space-3);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      background: var(--bg-elev);
     }
     /* An alias with no artifact/diverged badge renders an empty span, which as
        a grid item still costs a gap inside the frame. */

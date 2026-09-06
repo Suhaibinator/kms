@@ -1,7 +1,7 @@
 /* Feature styles for the palette surfaces. Append only; every rule stays inside
    the layer so Tailwind utilities keep winning. */
 
-@layer components {
+@layer features {
   .palette {
     display: flex;
     flex-direction: column;

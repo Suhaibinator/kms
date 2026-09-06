@@ -6,7 +6,7 @@
    read the console scale and never a literal: --text-base section titles,
    --text-sm copy, --text-xs captions — no other size appears in this file. */
 
-@layer components {
+@layer features {
   /* --- Modal chrome ------------------------------------------------------ */
   .ship-modal {
     display: grid;

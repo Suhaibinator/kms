@@ -115,7 +115,7 @@ describe("globals.css stays out of Tailwind's way", () => {
   // applies to every feature sheet, not just globals.css.
   it.each(sheets.map((sheet) => [sheet.file, sheet.css] as const))(
     "%s keeps every rule inside a Tailwind layer",
-    (_file, source) => {
+    (file, source) => {
       const openers = source
         .split("\n")
         .filter((line) => /^\S.*\{\s*$/.test(line))
@@ -127,13 +127,30 @@ describe("globals.css stays out of Tailwind's way", () => {
         "@theme inline",
         "@layer base",
         "@layer components",
+        // The four feature sheets, in a layer above components so they win the
+        // ties they look like they should win, and below utilities so they
+        // still lose to one.
+        "@layer features",
         // Mobile constraints override utility-authored footprints within the same layer.
         "@layer utilities",
       ]);
       expect(openers.filter((o) => !allowed.has(o))).toEqual([]);
-      expect(openers).toContain("@layer components");
+      expect(openers).toContain(file === "globals.css" ? "@layer components" : "@layer features");
     },
   );
+
+  // The `features` layer only outranks `components` because globals.css names
+  // the order before its first @import. Lose that line, or let a feature sheet
+  // fall back into `components`, and applications.css silently stops winning
+  // the ties the contract-editor rules depend on.
+  it("orders the feature layer between components and utilities", () => {
+    // Before the first @import, or the browser has already fixed an order.
+    const order = css.slice(0, css.indexOf('@import "tailwindcss";'));
+    expect(order).toContain("@layer theme, base, components, features, utilities;");
+    for (const sheet of sheets.filter((s) => s.file !== "globals.css")) {
+      expect(sheet.css).not.toContain("@layer components {");
+    }
+  });
 
   it("imports every feature sheet right after the framework imports", () => {
     const imports = [...css.matchAll(/^@import "([^"]+)";/gm)].map((match) => match[1]);

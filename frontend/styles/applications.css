@@ -1,7 +1,7 @@
 /* Feature styles for the applications surfaces. Append only; every rule stays inside
    the layer so Tailwind utilities keep winning. */
 
-@layer components {
+@layer features {
   /* ---------- Application page frame ---------- */
 
   /* The page is a flex child of the shell; without min-width: 0 a wide pipeline
@@ -416,6 +416,39 @@
   .contract-editor-head > span,
   .contract-editor-secret {
     padding-left: var(--space-3);
+  }
+
+  /* These four lived in globals.css's mobile block, where they beat the rules
+     above only because globals is emitted later in the same layer. They belong
+     beside what they override, and after the layer split this file wins the
+     tie on its own. */
+  @variant max-md {
+    /* The rows stack to one column here, so a caption row above them would
+       name the wrong controls. */
+    .contract-editor-grid,
+    .contract-editor-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .contract-editor-head {
+      display: none;
+    }
+    /* One column and one gap left nothing to say where an alias ended: its
+       three fields and its remove button sat the same 8px apart as the next
+       alias's, so no trash icon belonged to anything. The frame is the row's
+       grouping; the outer gap separates the frames. Same recipe as the ≤640
+       .rule-row card, for the same reason. */
+    .contract-editor-rows {
+      gap: var(--space-3);
+    }
+    /* Scoped to the list: the caption row carries .contract-editor-row too,
+       and though it is display:none here it should not inherit a frame. */
+    .contract-editor-rows > .contract-editor-row {
+      gap: var(--space-2);
+      padding: var(--space-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elev);
+    }
   }
   .contract-editor-origin {
     display: inline-flex;
