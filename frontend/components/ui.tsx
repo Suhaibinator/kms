@@ -195,15 +195,21 @@ export function TableSkeleton({
       <span className="sr-only">Loading…</span>
       {/* The loaded toolbar's rows, as empty boxes: the fieldset's own gap and
           padding then give it the loaded height. Each row is the element the
-          loaded toolbar uses, so it picks up the same rules. */}
+          loaded toolbar uses, so it picks up the same rules.
+
+          The label placeholders are `1lh`, not a multiple of the font size: the
+          loaded label is a bare text node, so its box is exactly one line box,
+          and `1lh` is that box at whatever type the toolbar is set in. `1.5em`
+          matched only while the label was 13px and went 0.89px out the moment
+          the toolbar was retokenised to --text-sm. */}
       {toolbar ? (
         <fieldset className="mobile-list-toolbar" aria-hidden>
           <span className="mobile-sort-field">
-            <Skeleton width="45%" height="1.5em" />
+            <Skeleton width="45%" height="1lh" />
             <Skeleton height={44} />
           </span>
           <span className="mobile-sort-field">
-            <Skeleton width="45%" height="1.5em" />
+            <Skeleton width="45%" height="1lh" />
             <Skeleton height={44} />
           </span>
           {/* The real sentence, not a bar: both of these are static chrome that
@@ -215,14 +221,14 @@ export function TableSkeleton({
             <p className="mobile-list-hint">{toolbarHint === true ? " " : toolbarHint}</p>
           ) : null}
           {/* The loaded row is a <label>, which picks up the toolbar's own
-              `display: flex`, 6px gap and 13px type from its element selector;
+              `display: flex`, 6px gap and --text-sm type from its element selector;
               a placeholder that is not labelable has to restate them or it
               lays out as a text line and reserves 6.5px too much. */}
           {toolbarSelection ? (
-            <span className="mobile-list-selection flex items-center gap-1.5 text-[13px]">
+            <span className="mobile-list-selection flex items-center gap-1.5 text-sm">
               <Skeleton width={16} height={16} />
               {toolbarSelection === true ? (
-                <Skeleton width="60%" height="1.5em" />
+                <Skeleton width="60%" height="1lh" />
               ) : (
                 <span>{toolbarSelection} (0 selected)</span>
               )}
