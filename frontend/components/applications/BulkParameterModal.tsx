@@ -135,6 +135,7 @@ export function BulkParameterModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={row !== null}
       title={row?.key ? `Update ${row.key}` : "New parameter"}
       onClose={onClose}

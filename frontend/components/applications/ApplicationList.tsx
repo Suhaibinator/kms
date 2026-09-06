@@ -153,7 +153,7 @@ export function ApplicationList({
             <tbody>
               {filtered.map((app) => (
                 <tr key={app.name} className="navigable-row">
-                  <td>
+                  <td data-label="Application">
                     <Link
                       className="navigable-row-link"
                       href={{ pathname: "/applications", query: { app: app.name } }}
@@ -164,15 +164,17 @@ export function ApplicationList({
                     </Link>
                     <div className="faint text-sm">{app.description || "No description"}</div>
                   </td>
-                  <td>{app.environment_count}</td>
-                  <td className="mono">{app.release_name}</td>
-                  <td className="mono">
+                  <td data-label="Environments">{app.environment_count}</td>
+                  <td data-label="Release" className="mono">
+                    {app.release_name}
+                  </td>
+                  <td data-label="Schema" className="mono">
                     {app.schema_version
                       ? `${app.name}/${app.release_name}@${app.schema_version}`
                       : "—"}
                   </td>
-                  <td>{app.contract.length} aliases</td>
-                  <td className="navigable-row-chevron" aria-hidden="true">
+                  <td data-label="Contract">{app.contract.length} aliases</td>
+                  <td data-label="Actions" className="navigable-row-chevron" aria-hidden="true">
                     <ChevronRight size={18} />
                   </td>
                 </tr>

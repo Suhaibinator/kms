@@ -22,6 +22,7 @@ export function Modal({
   footer,
   wide,
   workspace,
+  mobileFullScreen = false,
   dismissible = true,
   dirty = false,
   initialFocus,
@@ -40,6 +41,8 @@ export function Modal({
   wide?: boolean;
   /** Use the available viewport for data-heavy editors and inspectors. */
   workspace?: boolean;
+  /** Use a full-screen editor on phones while retaining the desktop footprint. */
+  mobileFullScreen?: boolean;
   /**
    * Whether Escape, the backdrop, and the header close button may dismiss.
    * Pass `dismissible={!busy}` whenever the modal performs an async action, so
@@ -56,9 +59,42 @@ export function Modal({
 }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  const [popupElement, setPopupElement] = useState<HTMLDivElement | null>(null);
+  const attachPopup = useCallback((node: HTMLDivElement | null) => {
+    popupRef.current = node;
+    setPopupElement(node);
+  }, []);
   useEffect(() => {
     if (!open) setConfirmingDiscard(false);
   }, [open]);
+
+  // Mobile keyboards can shrink the visual viewport without changing 100dvh.
+  // Update only geometry; resizing never remounts the editor or its draft state.
+  useEffect(() => {
+    const popup = popupElement;
+    const viewport = window.visualViewport;
+    if (!open || !mobileFullScreen || !popup || !viewport) return;
+    const update = () => {
+      if (window.innerWidth <= 768 && viewport.scale === 1) {
+        popup.style.setProperty("--mobile-modal-height", `${viewport.height}px`);
+        popup.style.setProperty("--mobile-modal-top", `${viewport.offsetTop}px`);
+      } else {
+        popup.style.removeProperty("--mobile-modal-height");
+        popup.style.removeProperty("--mobile-modal-top");
+      }
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      popup.style.removeProperty("--mobile-modal-height");
+      popup.style.removeProperty("--mobile-modal-top");
+    };
+  }, [open, mobileFullScreen, popupElement]);
 
   const requestClose = useCallback(() => {
     if (dirty) setConfirmingDiscard(true);
@@ -95,7 +131,8 @@ export function Modal({
       }}
     >
       <DialogContent
-        ref={popupRef}
+        ref={attachPopup}
+        data-mobile-fullscreen={mobileFullScreen || undefined}
         showCloseButton={dismissible}
         initialFocus={initialFocus}
         onKeyDown={(event) => {

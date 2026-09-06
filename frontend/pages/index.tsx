@@ -135,7 +135,7 @@ function RecentActivity({
           Administrative actions and policy decisions will appear here.
         </EmptyState>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap card-table">
           <table className="data">
             <thead>
               <tr>
@@ -152,17 +152,23 @@ function RecentActivity({
                 const href = links.auditResource(e);
                 return (
                   <tr key={e.id}>
-                    <td className="nowrap" title={formatUnixMs(e.created_at_unix_ms)}>
+                    <td
+                      data-label="When"
+                      className="nowrap"
+                      title={formatUnixMs(e.created_at_unix_ms)}
+                    >
                       {formatRelative(e.created_at_unix_ms, now)}
                     </td>
-                    <td className="mono">{e.event_type}</td>
-                    <td>
+                    <td data-label="Event" className="mono">
+                      {e.event_type}
+                    </td>
+                    <td data-label="Actor">
                       {e.actor_identity || <span className="faint">—</span>}
                       {e.actor_type ? (
                         <span className="faint text-sm"> · {e.actor_type}</span>
                       ) : null}
                     </td>
-                    <td className="cell-path">
+                    <td data-label="Resource" className="cell-path">
                       {resource && href ? (
                         <Link href={href} title={`Open ${e.resource_type}`}>
                           {resource}
@@ -171,7 +177,7 @@ function RecentActivity({
                         resource || <span className="faint">—</span>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Decision">
                       <Badge
                         kind={
                           e.decision === "allow"
@@ -240,7 +246,7 @@ function LiveSubscribers({
           Clients appear here once they open a watch stream.
         </EmptyState>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap card-table">
           <table className="data">
             <thead>
               <tr>
@@ -254,16 +260,20 @@ function LiveSubscribers({
                 const behind = currentRevision - s.last_acked_revision;
                 return (
                   <tr key={s.instance_id || `${s.client_name}-${s.remote_addr}`}>
-                    <td>
+                    <td data-label="Client">
                       {s.client_name}
                       {s.instance_id ? (
                         <span className="faint text-sm"> · {s.instance_id}</span>
                       ) : null}
                     </td>
-                    <td className="nowrap" title={formatUnixMs(s.last_heartbeat_unix_ms)}>
+                    <td
+                      data-label="Last heartbeat"
+                      className="nowrap"
+                      title={formatUnixMs(s.last_heartbeat_unix_ms)}
+                    >
                       {formatRelative(s.last_heartbeat_unix_ms, now)}
                     </td>
-                    <td>
+                    <td data-label="Applied revision">
                       {behind > 0 ? (
                         <Badge kind="warning">{behind} behind</Badge>
                       ) : (

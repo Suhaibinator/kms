@@ -2,12 +2,12 @@ import { Plus, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import CopyButton from "@/components/CopyButton";
 import { Ident } from "@/components/Ident";
-import { shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { ApplicationConfigurationRow } from "@/lib/types";
+import { shouldOpenWorkspace } from "@/lib/workspace";
 
 /** Tooltips are not scroll containers; a megabyte JSON value is not a tooltip. */
 const TITLE_MAX_CHARS = 200;
@@ -24,6 +24,7 @@ export function ConfigurationMatrix({
   rows,
   onAddSecret,
   onOpenSecret,
+  onOpenParameter,
   onEdit,
 }: {
   app: string;
@@ -31,10 +32,12 @@ export function ConfigurationMatrix({
   rows: ApplicationConfigurationRow[];
   onAddSecret: (environment: string, key: string) => void;
   onOpenSecret?: (environment: string, key: string) => void;
+  onOpenParameter?: (environment: string, key: string) => void;
   onEdit: (row: ApplicationConfigurationRow) => void;
 }) {
   return (
     <div className="table-wrap application-matrix">
+      <p className="mobile-comparison-hint">Scroll horizontally to compare environments.</p>
       <table className="data">
         <thead>
           <tr>
@@ -70,6 +73,7 @@ export function ConfigurationMatrix({
                     app={app}
                     onAddSecret={onAddSecret}
                     onOpenSecret={onOpenSecret}
+                    onOpenParameter={onOpenParameter}
                   />
                 </td>
               ))}
@@ -102,12 +106,14 @@ function MatrixCell({
   app,
   onAddSecret,
   onOpenSecret,
+  onOpenParameter,
 }: {
   row: ApplicationConfigurationRow;
   environment: string;
   app: string;
   onAddSecret: (environment: string, key: string) => void;
   onOpenSecret?: (environment: string, key: string) => void;
+  onOpenParameter?: (environment: string, key: string) => void;
 }) {
   const cell = row.environments[environment];
   if (!cell?.present) {
@@ -131,7 +137,7 @@ function MatrixCell({
       <Link
         href={links.secretDetail({ env: environment, app, key: row.key })}
         onClick={(event) => {
-          if (onOpenSecret && shouldOpenSecretWorkspace(event)) onOpenSecret(environment, row.key);
+          if (onOpenSecret && shouldOpenWorkspace(event)) onOpenSecret(environment, row.key);
         }}
       >
         <span className="secret-cell">
@@ -147,6 +153,9 @@ function MatrixCell({
     <div className="matrix-value">
       <Link
         href={detail}
+        onClick={(event) => {
+          if (onOpenParameter && shouldOpenWorkspace(event)) onOpenParameter(environment, row.key);
+        }}
         className="mono matrix-value-link"
         title={title}
         aria-label={`Open ${row.key} in ${environment}`}

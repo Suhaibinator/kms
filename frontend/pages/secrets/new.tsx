@@ -1,3 +1,4 @@
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
@@ -287,17 +288,14 @@ export default function NewSecretPage() {
           {bindVersion ? (
             <Field
               label="Binding key"
-              hint="At least 32 UTF-8 bytes. Used only for this request; KMS cannot recover it later."
+              hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it."
               error={shownBindingKeyError}
             >
-              <Input
-                className="font-mono"
-                type="password"
+              <SensitiveValueField
+                controlLabel="binding key"
                 value={bindingKey}
                 required
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(event) => setBindingKey(event.target.value)}
+                onChange={setBindingKey}
                 onBlur={() => errors.touch("bindingKey")}
                 placeholder="application binding key"
               />
@@ -328,6 +326,7 @@ export default function NewSecretPage() {
 
       {/* One-time access token reveal */}
       <Modal
+        mobileFullScreen
         open={mintedToken !== null}
         dismissible={false}
         title="Save this access token now"

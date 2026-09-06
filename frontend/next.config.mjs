@@ -22,6 +22,8 @@ export default function nextConfig(phase) {
     // runs as a normal dev server; production remains a fully static export.
     ...(isDev ? {} : { output: "export" }),
     reactStrictMode: true,
+    // Optional isolation for concurrent local browser-test servers.
+    distDir: process.env.KMS_NEXT_DIST_DIR ?? ".next",
     trailingSlash: false,
     // Static export cannot use the Next.js image optimization runtime.
     images: {

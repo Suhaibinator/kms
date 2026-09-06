@@ -24,7 +24,7 @@ export interface ViolationTableProps {
 export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTableProps) {
   const actionable = Boolean(resolveHref || onEdit);
   return (
-    <div className="table-wrap mt-3">
+    <div className="table-wrap mt-3 card-table">
       <table className="data">
         <thead>
           <tr>
@@ -40,14 +40,18 @@ export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTab
             const href = violation.alias && resolveHref ? resolveHref(violation.alias) : null;
             return (
               <tr key={JSON.stringify(violation)} data-alias={violation.alias || undefined}>
-                <td className="mono">{violation.alias || "release"}</td>
-                <td>
+                <td data-label="Alias" className="mono">
+                  {violation.alias || "release"}
+                </td>
+                <td data-label="Code">
                   <Badge kind="danger">{violation.code}</Badge>
                 </td>
-                <td className="mono">{violation.schema_pointer || "—"}</td>
-                <td>{violation.message}</td>
+                <td data-label="Schema pointer" className="mono">
+                  {violation.schema_pointer || "—"}
+                </td>
+                <td data-label="Message">{violation.message}</td>
                 {actionable ? (
-                  <td>
+                  <td data-label="Actions">
                     <div className="row-actions">
                       {onEdit && violation.alias ? (
                         <Button

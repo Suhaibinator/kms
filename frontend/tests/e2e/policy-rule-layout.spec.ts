@@ -34,7 +34,7 @@ async function openPolicyRule(page: Parameters<typeof mockConsole>[0]) {
 test("policy validation stays below its control without shifting the rule row", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "desktop policy layout check");
+  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "desktop policy layout check");
   const dialog = await openPolicyRule(page);
   const row = dialog.locator(".rule-row").first();
   const operation = row.getByRole("combobox", { name: "Operation" });
@@ -64,7 +64,7 @@ test("policy validation stays below its control without shifting the rule row", 
 });
 
 test("policy rule validation remains coherent when controls stack", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "mobile-chromium", "mobile policy layout check");
+  test.skip((page.viewportSize()?.width ?? 1280) > 768, "mobile policy layout check");
   const dialog = await openPolicyRule(page);
   const row = dialog.locator(".rule-row").first();
   await dialog.getByRole("button", { name: "Create policy" }).click();

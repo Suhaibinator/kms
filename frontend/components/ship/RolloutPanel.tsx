@@ -131,7 +131,7 @@ export function RolloutPanel({
           yet. Connect the SDK to see instances apply the release.
         </p>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap card-table">
           <table className="data rollout-table">
             <thead>
               <tr>
@@ -157,7 +157,7 @@ export function RolloutPanel({
                     data-testid="rollout-instance"
                     data-state={rejected ? "rejected" : stateLabel(instance, atCurrent)}
                   >
-                    <td>
+                    <td data-label="Instance">
                       <div className="rollout-instance">
                         <Ident
                           kind="instance"
@@ -167,7 +167,7 @@ export function RolloutPanel({
                         {!instance.connected ? <Badge>disconnected</Badge> : null}
                       </div>
                     </td>
-                    <td>
+                    <td data-label="State">
                       <div className="rollout-state">
                         <Badge kind={stateTone(instance, atCurrent)}>
                           {stateLabel(instance, atCurrent)}
@@ -190,14 +190,14 @@ export function RolloutPanel({
                         ) : null}
                       </div>
                     </td>
-                    <td className="mono">
+                    <td data-label="Serving" className="mono">
                       {rejected
                         ? `still serving v${instance.release_version}`
                         : instance.release_version > 0
                           ? `v${instance.release_version}`
                           : "—"}
                     </td>
-                    <td>
+                    <td data-label="Detail">
                       {rejected ? (
                         <div className="rollout-remedy">
                           <div className="text-sm">{guidance?.response}</div>

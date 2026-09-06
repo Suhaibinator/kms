@@ -1,21 +1,7 @@
-import type { MouseEvent } from "react";
 import type { ResourceRef } from "@/lib/api";
 import SecretManager from "./SecretManager";
 
-export function shouldOpenSecretWorkspace(event: MouseEvent<HTMLElement>): boolean {
-  if (
-    event.defaultPrevented ||
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  ) {
-    return false;
-  }
-  event.preventDefault();
-  return true;
-}
+export { shouldOpenWorkspace as shouldOpenSecretWorkspace } from "@/lib/workspace";
 
 export function SecretWorkspace({
   secretRef,

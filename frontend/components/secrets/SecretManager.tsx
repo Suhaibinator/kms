@@ -1,3 +1,4 @@
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -382,6 +383,7 @@ export default function SecretManager({
     if (surface === "workspace") {
       return (
         <Modal
+          mobileFullScreen
           open
           workspace
           title={hasRef ? displayPath(ref) : "Secret"}
@@ -424,7 +426,7 @@ export default function SecretManager({
   if (loadState === "not-found") {
     if (surface === "workspace") {
       return (
-        <Modal open workspace title="Secret not found" onClose={() => onClose?.()}>
+        <Modal mobileFullScreen open workspace title="Secret not found" onClose={() => onClose?.()}>
           <EmptyState icon={<Icon.secret size={20} />} title="Not found">
             No secret exists at <span className="mono">{displayPath(ref)}</span>.
           </EmptyState>
@@ -451,7 +453,13 @@ export default function SecretManager({
   if (loadState === "error" || !secret) {
     if (surface === "workspace") {
       return (
-        <Modal open workspace title="Could not load secret" onClose={() => onClose?.()}>
+        <Modal
+          mobileFullScreen
+          open
+          workspace
+          title="Could not load secret"
+          onClose={() => onClose?.()}
+        >
           <EmptyState
             icon={<Icon.secret size={20} />}
             title="Secret unavailable"
@@ -670,7 +678,7 @@ export default function SecretManager({
       {secret.versions.length === 0 ? (
         <EmptyState icon={<Icon.secret size={20} />} title="No versions" />
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap card-table">
           <table className="data">
             <thead>
               <tr>
@@ -832,6 +840,7 @@ export default function SecretManager({
   if (surface === "workspace") {
     return (
       <Modal
+        mobileFullScreen
         open
         workspace
         title={
@@ -911,22 +920,24 @@ function VersionRow({
   const expired = v.expires_at_unix_ms > 0 && v.expires_at_unix_ms <= Date.now();
   return (
     <tr>
-      <td>
+      <td data-label="Version">
         <div className="row-wrap">
           v{v.version}
           {isCurrent ? <Badge kind="accent">current</Badge> : null}
         </div>
       </td>
-      <td>
+      <td data-label="State & protection">
         <div className="row-wrap">
           <SecretStateBadge state={v.state} />
           {v.bound ? <Badge kind="warning">bound</Badge> : null}
           {v.has_access_token ? <Badge kind="accent">access token</Badge> : null}
         </div>
       </td>
-      <td>{v.created_by || <span className="faint">—</span>}</td>
-      <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
-      <td className="nowrap">
+      <td data-label="Created by">{v.created_by || <span className="faint">—</span>}</td>
+      <td data-label="Created" className="nowrap">
+        {formatUnixMs(v.created_at_unix_ms)}
+      </td>
+      <td data-label="Expires" className="nowrap">
         {v.expires_at_unix_ms > 0 ? (
           <div className="row-wrap">
             {formatUnixMs(v.expires_at_unix_ms)}
@@ -936,7 +947,7 @@ function VersionRow({
           <span className="faint">never</span>
         )}
       </td>
-      <td>
+      <td data-label="Actions">
         <div className="row-actions">
           {canReveal && v.state === "enabled" ? (
             <Button variant="outline" size="sm" onClick={() => onReveal(v.version)}>
@@ -1177,6 +1188,7 @@ function NewVersionModal({
   return (
     <>
       <Modal
+        mobileFullScreen
         open={open}
         wide
         title={mintedToken ? "Save this access token now" : "New secret version"}
@@ -1309,21 +1321,18 @@ function NewVersionModal({
                 {bindVersion ? (
                   <Field
                     label="Binding key"
-                    hint="At least 32 UTF-8 bytes. Used only for this write and never retained by KMS."
+                    hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it."
                     error={shownBindingKeyError}
                   >
-                    <Input
-                      className="font-mono"
-                      type="password"
+                    <SensitiveValueField
+                      controlLabel="binding key"
+                      placeholder="application binding key"
                       value={bindingKey}
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => setBindingKey(event.target.value)}
+                      onChange={setBindingKey}
                       onBlur={() => {
                         errors.touch("bindingKey");
                         if (bindingKeyError) setAdvancedOpen(true);
                       }}
-                      placeholder="application binding key"
                     />
                   </Field>
                 ) : null}
@@ -1600,6 +1609,7 @@ function BindingActionModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={action !== null}
       title={action ? bindingActionTitle(action) : "Binding key"}
       description={
@@ -1722,34 +1732,46 @@ function BindingActionModal({
               {action.kind !== "purge-unbound" ? (
                 <Field
                   label={action.kind === "bind" ? "New binding key" : "Current binding key"}
-                  hint="Used only for this request and cleared as soon as it starts."
+                  hint={
+                    action.kind === "bind"
+                      ? "Save this key before submitting; KMS does not store it. Cleared when the request starts."
+                      : "Used only for this request and cleared as soon as it starts."
+                  }
                   error={errors.shown("operationKey", operationKeyError)}
                 >
-                  <Input
-                    className="font-mono"
-                    type="password"
-                    value={operationKey}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(event) => setOperationKey(event.target.value)}
-                    onBlur={() => errors.touch("operationKey")}
-                  />
+                  {action.kind === "bind" ? (
+                    <SensitiveValueField
+                      controlLabel="binding key"
+                      placeholder="application binding key"
+                      value={operationKey}
+                      onChange={setOperationKey}
+                      onBlur={() => errors.touch("operationKey")}
+                    />
+                  ) : (
+                    <Input
+                      className="font-mono"
+                      type="password"
+                      value={operationKey}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setOperationKey(event.target.value)}
+                      onBlur={() => errors.touch("operationKey")}
+                    />
+                  )}
                 </Field>
               ) : null}
               {action.kind === "rotate" ? (
                 <>
                   <Field
                     label="New binding key"
-                    hint="At least 32 UTF-8 bytes. KMS creates one new bound version with fresh cryptographic material and salt."
+                    hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it. KMS creates one new bound version with fresh cryptographic material and salt."
                     error={errors.shown("newBindingKey", newBindingKeyError)}
                   >
-                    <Input
-                      className="font-mono"
-                      type="password"
+                    <SensitiveValueField
+                      controlLabel="binding key"
+                      placeholder="application binding key"
                       value={newBindingKey}
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => setNewBindingKey(event.target.value)}
+                      onChange={setNewBindingKey}
                       onBlur={() => errors.touch("newBindingKey")}
                     />
                   </Field>

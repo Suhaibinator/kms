@@ -108,6 +108,7 @@ export function ReleaseWorkspace({
 
   return (
     <Modal
+      mobileFullScreen
       open={Boolean(release)}
       workspace
       title={release ? `Release ${releaseKey(release)}` : "Release details"}
@@ -213,7 +214,7 @@ export function ReleaseWorkspace({
           </TabsContent>
 
           <TabsContent value="entries">
-            <div className="table-wrap">
+            <div className="table-wrap card-table">
               <table className="data">
                 <thead>
                   <tr>
@@ -229,13 +230,21 @@ export function ReleaseWorkspace({
                 <tbody>
                   {release.entries.map((entry) => (
                     <tr key={entry.alias}>
-                      <td className="mono">{entry.alias}</td>
-                      <td>{entry.kind}</td>
-                      <td className="mono">{refText(entry)}</td>
-                      <td>{entry.version}</td>
-                      <td>{entry.content_type || "—"}</td>
-                      <td className="mono">{entry.parameter_digest || "—"}</td>
-                      <td className="mono">{entry.metadata_json || "{}"}</td>
+                      <td data-label="Alias" className="mono">
+                        {entry.alias}
+                      </td>
+                      <td data-label="Kind">{entry.kind}</td>
+                      <td data-label="Reference" className="mono">
+                        {refText(entry)}
+                      </td>
+                      <td data-label="Version">{entry.version}</td>
+                      <td data-label="Content type">{entry.content_type || "—"}</td>
+                      <td data-label="Parameter digest" className="mono">
+                        {entry.parameter_digest || "—"}
+                      </td>
+                      <td data-label="Metadata" className="mono">
+                        {entry.metadata_json || "{}"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -264,7 +273,7 @@ export function ReleaseWorkspace({
             ) : diff.length === 0 ? (
               <div className="info-panel">No manifest differences.</div>
             ) : (
-              <div className="table-wrap">
+              <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
                     <tr>
@@ -276,9 +285,15 @@ export function ReleaseWorkspace({
                   <tbody>
                     {diff.map((item) => (
                       <tr key={item.alias}>
-                        <td className="mono">{item.alias}</td>
-                        <td className="mono">{item.left}</td>
-                        <td className="mono">{item.right}</td>
+                        <td data-label="Alias" className="mono">
+                          {item.alias}
+                        </td>
+                        <td data-label={releaseKey(comparison)} className="mono">
+                          {item.left}
+                        </td>
+                        <td data-label={releaseKey(release)} className="mono">
+                          {item.right}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -4,7 +4,12 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   Badge,
   Checkbox,
@@ -300,6 +305,7 @@ export default function NamespacesPage() {
                 </span>
               </div>
               <div className="table-wrap card-table">
+                <MobileListToolbar controller={sort} />
                 <table className="data namespace-table">
                   {/* The whole list is loaded, so "of" is the real total. */}
                   <TableSummary shown={group.list.length} noun="environments" />
@@ -347,7 +353,7 @@ export default function NamespacesPage() {
                           <td className="nowrap" data-label="Created">
                             {formatUnixMs(ns.created_at_unix_ms)}
                           </td>
-                          <td>
+                          <td data-label="Actions">
                             <div className="navigable-row-end">
                               <div className="row-actions">
                                 <Button variant="outline" size="sm" onClick={() => openEdit(ns)}>
@@ -402,6 +408,7 @@ export default function NamespacesPage() {
       )}
 
       <Modal
+        mobileFullScreen
         open={editTarget !== null}
         title={editTarget ? `Edit ${editTarget.env}/${editTarget.app}` : "Edit namespace"}
         onClose={() => setEditTarget(null)}
