@@ -90,9 +90,13 @@ test("phone workspace fits and preserves unsaved edits across resizing", async (
   await expect(value).toHaveValue("test-only-unsaved-value");
   await fits(page);
   const footer = editor.locator('[data-slot="dialog-footer"]');
-  const footerRect = await footer.boundingBox();
-  expect(footerRect).not.toBeNull();
-  expect((footerRect?.y ?? 0) + (footerRect?.height ?? 0)).toBeLessThanOrEqual(568);
+  // Visual viewport resize events settle after setViewportSize returns.
+  await expect
+    .poll(async () => {
+      const rect = await footer.boundingBox();
+      return rect ? rect.y + rect.height : Number.POSITIVE_INFINITY;
+    })
+    .toBeLessThanOrEqual(568);
   await editor.getByRole("button", { name: "Dismiss dialog" }).click();
   const discard = page.getByRole("dialog", { name: "Discard changes?" });
   await expect(discard).toBeVisible();
