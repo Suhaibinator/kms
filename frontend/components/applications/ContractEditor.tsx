@@ -25,6 +25,15 @@ export interface ContractEditorProps {
   /** Called after a successful Import (the wizard captures `schema_sha256`). */
   onImport?: (parsed: ParsedContractFile) => void;
   disabled?: boolean;
+  /**
+   * `<Field>` clones its control with these, so the editor has to accept them
+   * or the label's `htmlFor` points at an id that never reaches the DOM. They
+   * land on the first alias input, which is what the caption names; with no
+   * rows yet they land on the group wrapper instead.
+   */
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
 }
 
 type Origin = "artifact" | "diverged" | null;
@@ -75,6 +84,9 @@ export function ContractEditor({
   schemaJson,
   onImport,
   disabled,
+  id: controlId,
+  "aria-describedby": ariaDescribedBy,
+  "aria-invalid": ariaInvalid,
 }: ContractEditorProps) {
   const id = useId();
   // One stable id per row, so an artifact snapshot survives an alias edit. A
@@ -162,12 +174,22 @@ export function ContractEditor({
 
   const headers = ["Alias", "Kind", "Content type"];
 
+  const empty = value.length === 0;
+
   return (
-    <div className="contract-editor">
-      {value.length === 0 ? (
+    <div
+      className="contract-editor"
+      id={empty ? controlId : undefined}
+      role={empty ? "group" : undefined}
+      aria-describedby={empty ? ariaDescribedBy : undefined}
+    >
+      {empty ? (
         <div className="faint text-sm">No aliases yet. Add one or import a contract file.</div>
       ) : (
-        <>
+        // The caption row and the alias rows share one grid via subgrid, so the
+        // captions sit over the controls they name and every row is the same
+        // width whatever badges it carries.
+        <div className="contract-editor-grid">
           {/* Visually names the three columns; each input already carries its own accessible label. */}
           <div
             className="contract-editor-row contract-editor-head text-xs font-semibold text-muted-foreground"
@@ -189,9 +211,14 @@ export function ContractEditor({
                 <li className="contract-editor-row" key={rowId}>
                   <Input
                     className="font-mono"
+                    id={index === 0 ? controlId : undefined}
                     aria-label={`Alias ${index + 1}`}
-                    aria-invalid={rowProblem ? true : undefined}
-                    aria-describedby={rowProblem ? problemId : undefined}
+                    aria-invalid={rowProblem ? true : index === 0 ? ariaInvalid : undefined}
+                    aria-describedby={
+                      [rowProblem ? problemId : null, index === 0 ? ariaDescribedBy : null]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
                     value={entry.alias}
                     disabled={disabled}
                     placeholder="alias"
@@ -222,10 +249,11 @@ export function ContractEditor({
                     {origin === "artifact" ? <Badge kind="accent">from artifact</Badge> : null}
                     {origin === "diverged" ? <Badge kind="warning">diverged</Badge> : null}
                   </span>
+                  {/* icon, not sm: the row is 38px Inputs and selects. */}
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
+                    size="icon"
                     disabled={disabled}
                     aria-label={`Remove ${entry.alias || `row ${index + 1}`}`}
                     onClick={() => remove(index)}
@@ -241,7 +269,7 @@ export function ContractEditor({
               );
             })}
           </ul>
-        </>
+        </div>
       )}
       {problem ? (
         <div className="text-danger text-sm" role="alert">

@@ -147,7 +147,7 @@ function RowCard({
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 aria-label={`Remove ${row.alias}`}
                 disabled={disabled}
                 onClick={onRemove}

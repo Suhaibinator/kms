@@ -57,11 +57,15 @@ export default function RollbackDialog({
   const formId = useId();
   const production = isProductionEnvironment(namespace.env);
   const busy = outcome.kind === "busy";
-  // The typed confirmation renders only once the previous release validates,
-  // so it takes focus when it appears rather than when the dialog opens.
+  // The typed confirmation is in the flow for the whole of a production
+  // rollback and only becomes usable once the previous release validates.
+  // Mounting it on the async result grew the dialog about a second after it
+  // opened, jogging Confirm down under the pointer. Focus still waits for
+  // validity, so it takes focus when it becomes usable.
   const confirmRef = useRef<HTMLInputElement>(null);
-  const confirmShown = production && check.kind === "valid" && outcome.kind !== "already";
-  useFocusOnAppear(confirmRef, open && confirmShown);
+  const confirmShown = production && outcome.kind !== "already";
+  const confirmEnabled = confirmShown && check.kind === "valid";
+  useFocusOnAppear(confirmRef, open && confirmEnabled);
 
   const validate = useCallback(
     async (candidate: Target | null, signal: AbortSignal) => {
@@ -305,7 +309,7 @@ export default function RollbackDialog({
               value={typed}
               autoComplete="off"
               spellCheck={false}
-              disabled={busy}
+              disabled={busy || !confirmEnabled}
               data-testid="rollback-confirm-env"
               onChange={(event) => setTyped(event.target.value)}
             />
