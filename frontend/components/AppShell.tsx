@@ -149,7 +149,12 @@ function SidebarContent({
         onClick={onSearch}
         aria-keyshortcuts="Meta+K Control+K"
       >
-        <Search size={15} strokeWidth={1.9} aria-hidden />
+        {/* The nav rows' own icon box, so the glyph and the label beside it land
+            on the same two edges as every row beneath them; a bare 15px svg was
+            a 15px flex item and put both 1px out. */}
+        <span className="nav-icon">
+          <Search size={16} strokeWidth={1.9} aria-hidden />
+        </span>
         <span className="nav-search-label">Search…</span>
         <Kbd>{shortcutLabel}</Kbd>
       </button>
@@ -287,7 +292,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="hidden shrink-0 max-md:inline-flex max-md:size-11 max-md:min-w-11"
+                  // No hand-coded 44px any more: the mobile touch floor is keyed
+                  // on [data-size], which a Base UI `render` trigger keeps even
+                  // though it replaces data-slot="button" with its own slot.
+                  className="hidden shrink-0 max-md:inline-flex"
                   aria-label="Open navigation"
                 />
               }
@@ -302,7 +310,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <SheetContent
             side="left"
             closeLabel="Close navigation"
-            className="mobile-sidebar w-[min(84vw,300px)] max-w-none gap-0 p-0"
+            // The width utilities carry SheetContent's own `data-[side=left]:`
+            // prefix: twMerge only merges classes with the same prefix, and the
+            // attribute selector also outranks a bare utility, so the plain
+            // `w-[…] max-w-none` pair was dead and the drawer rendered at the
+            // component's 75% / max-w-sm instead of 300px.
+            className="mobile-sidebar gap-0 p-0 data-[side=left]:w-[min(84vw,300px)] data-[side=left]:sm:max-w-none"
           >
             <SheetTitle className="sr-only">Primary navigation</SheetTitle>
             <SidebarContent

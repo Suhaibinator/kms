@@ -77,10 +77,15 @@
   .setup-step-body {
     min-width: 0;
   }
+  /* The same measure as .setup-step-detail below. The step's third grid track
+     collapses to 0 when a step has no action, so the body column is 99px wider
+     on those rows; capping both lines at one measure means a title wraps at the
+     same width whether or not its step has a button. */
   .setup-step-title {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    max-width: 68ch;
     font-size: 13.5px;
     font-weight: 600;
     line-height: 23px;
@@ -203,8 +208,12 @@
   .setup-panel[open] > .setup-panel-summary::before {
     transform: rotate(90deg);
   }
+  /* Trailing, like every other summary-row control in the console
+     (.setup-item-action, the card-title link, the fleet head link): without the
+     auto margin the meter floated mid-row with 688px of empty summary after it. */
   .setup-panel-meter {
     flex: 0 0 120px;
+    margin-left: auto;
     height: 5px;
     border-radius: 999px;
     background: var(--bg-elev);
@@ -224,35 +233,52 @@
 
   /* ---------- Overview: service strip + fleet grid ---------- */
 
-  /* auto-fit, not a fixed track count behind a viewport media query: the strip
-     is laid out in `viewport − 236px sidebar − 64px page gutters`, so a
-     viewport breakpoint always sizes the wrong box. 170px is the width the
-     widest label ("CURRENT REVISION", ~125px) needs inside the card's 32px of
+  /* The strip holds exactly six cards, so only a column count that divides six
+     avoids a ragged last row: auto-fit gave four at 1024 (4 + 2) and five at
+     1280 (5 + 1, one short card alone on its own line). The queries measure the
+     viewport but the grid is laid out in `viewport − 236px sidebar − 64px page
+     gutters`, so each has to clear that 300px; 170px is the width the widest
+     label ("CURRENT REVISION", ~125px) needs inside the card's 32px of
      padding. */
   .stat-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
   }
+  /* 3 × 170 + 2 × 12 + 300 */
+  @media (min-width: 834px) {
+    .stat-strip {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  /* 6 × 170 + 5 × 12 + 300 */
+  @media (min-width: 1380px) {
+    .stat-strip {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+  }
+  /* The size variant of the same component: three custom properties and the
+     padding, not five font-size and min-height overrides. `.stat`'s own rules
+     in globals.css derive the value, badge and string boxes from --stat-value,
+     so the two sizes stay in step. */
   .stat-strip .stat {
+    --stat-value: 22px;
+    --stat-label: 11px;
+    --stat-sub: 11.5px;
     padding: var(--space-3) var(--space-4);
   }
-  .stat-strip .stat .stat-label {
-    font-size: 11px;
-  }
-  .stat-strip .stat .stat-value {
-    font-size: 22px;
-  }
   .stat-strip .stat .stat-badges {
-    min-height: 28px;
     gap: var(--space-1);
-  }
-  .stat-strip .stat .stat-sub {
-    font-size: 11.5px;
   }
 
   .fleet-section {
     margin-top: var(--space-6);
+  }
+  /* The section already owns the space above it; the card's own margin stacked
+     on top of it and gave the first-run state 44px where the loaded grid gets
+     the section's 24px. */
+  .fleet-section > .setup-card {
+    margin-top: 0;
   }
   .fleet-head {
     display: flex;
@@ -282,6 +308,10 @@
     /* The ground a .status-dot's halo has to match inside this card. */
     --dot-halo: var(--surface);
     padding: var(--space-4) var(--space-5);
+    /* Less the 2px the status accent adds to this edge only, so the content
+       column reads as centred: symmetric padding on an asymmetric border left
+       23px of inset on the left against 21px on the right. */
+    padding-left: calc(var(--space-5) - 2px);
     background: var(--surface);
     border: 1px solid var(--border);
     border-left-width: 3px;
@@ -410,6 +440,14 @@
     display: grid;
     gap: var(--space-4);
   }
+  /* Layout rule 2. The single implicit column is `auto`, so its minimum is the
+     largest min-content contribution among its items — and .connect-code's
+     longest snippet line (595px) travelled up through the Tabs root and blew
+     the column to 629px inside a 343px dialog body, which then scrolled
+     sideways by 270px. */
+  .connect-panel > * {
+    min-width: 0;
+  }
   .connect-sub {
     margin-top: var(--space-1);
     color: var(--text-muted);
@@ -472,7 +510,14 @@
     font-size: 11.5px;
     font-weight: 600;
   }
+  /* Layout rule 1. `overflow: auto` does not zero a plain block's intrinsic
+     contribution the way it does a flex or grid item's, so this scroller still
+     exported its longest line as a min-content floor; `contain: inline-size` is
+     the half that makes it size to its container and scroll inside itself. */
   .connect-code {
+    position: relative;
+    min-width: 0;
+    contain: inline-size;
     margin: 0;
     padding: var(--space-3) var(--space-4);
     max-height: 340px;
@@ -527,9 +572,10 @@
 
   /* ---------- Responsive ---------- */
 
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     /* min() so a 320px phone gets one card rather than an overflowing row:
-       a bare minmax(150px, …) track never shrinks below its floor. */
+       a bare minmax(150px, …) track never shrinks below its floor. Both counts
+       auto-fit reaches here (one and two) divide six. */
     .stat-strip {
       grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
     }
@@ -543,8 +589,11 @@
       grid-column: 2;
       justify-self: start;
     }
+    /* The 2px block padding was sized for one 28px row; once the action wraps
+       to a second line the 44px button ended 2px from the rounded edge. */
     .setup-item {
       flex-wrap: wrap;
+      padding-block: var(--space-2);
     }
     .setup-item-action {
       width: 100%;

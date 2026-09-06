@@ -125,10 +125,23 @@
     gap: var(--space-1);
   }
 
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     .palette {
       height: 100%;
       max-height: none;
+    }
+    /* The dialog goes edge to edge here (max-md:inset-0 max-md:h-full) and the
+       document is viewport-fit=cover, so this is the one full-bleed surface in
+       the console that has to inset itself — .page, .mobile-topbar and
+       .mobile-sidebar all already do. */
+    .palette-input-row {
+      padding-top: env(safe-area-inset-top);
+      padding-left: max(var(--space-4), env(safe-area-inset-left));
+      padding-right: max(var(--space-4), env(safe-area-inset-right));
+    }
+    .palette-list,
+    .palette-more {
+      padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
     }
     /* 16px stops iOS zooming the field; 52/44px are the touch rows. */
     .palette-input {
@@ -138,7 +151,11 @@
     .palette-item {
       min-height: calc(var(--spacing) * 11);
     }
+    /* The subtitle below is the row's only flexible item, and hiding it left
+       the ↵ glyph packed against the title with 284px of empty row after it.
+       The title takes the slack here instead. */
     .palette-item-title {
+      flex: 1;
       max-width: none;
     }
     .palette-item-sub {
