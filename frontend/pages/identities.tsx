@@ -729,6 +729,8 @@ export default function IdentitiesPage() {
           leading={canBulkRevoke ? 1 : 0}
           trailing={1}
           toolbar
+          toolbarHint
+          toolbarSelection={canBulkRevoke}
           summary
         />
       ) : identities.length === 0 ? (

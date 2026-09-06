@@ -439,6 +439,8 @@ export default function ParametersPage() {
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
           toolbar
+          toolbarHint
+          toolbarSelection={canBulkDelete}
           summary
         />
       ) : !hasNs ? (
@@ -451,6 +453,8 @@ export default function ParametersPage() {
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
           toolbar
+          toolbarHint
+          toolbarSelection={canBulkDelete}
           summary
         />
       ) : rows.length === 0 ? (

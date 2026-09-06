@@ -295,6 +295,8 @@ export default function SecretsPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           toolbar
+          toolbarHint
+          toolbarSelection={canBulkDelete}
           summary
         />
       ) : !hasNs ? (
@@ -306,6 +308,8 @@ export default function SecretsPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           toolbar
+          toolbarHint
+          toolbarSelection={canBulkDelete}
           summary
         />
       ) : secrets.length === 0 ? (

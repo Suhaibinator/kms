@@ -54,6 +54,22 @@ const COLUMNS: ReadonlyArray<SortColumn<Namespace>> = [
 
 const TABLE_HEADERS = headerLabels(COLUMNS);
 
+/** One definition for the loaded table and its skeleton: these widths are what
+ *  make the header row wrap to two lines, and a skeleton without them comes up
+ *  17.25px short. The last column is the actions gutter, which is content-sized
+ *  by `table.data td:has(> .navigable-row-end)` and wants no preference. */
+const NAMESPACE_COLGROUP = (
+  <colgroup>
+    <col className="namespace-col-env" />
+    <col />
+    <col className="namespace-col-methods" />
+    <col className="namespace-col-count" />
+    <col className="namespace-col-count" />
+    <col className="namespace-col-created" />
+    <col />
+  </colgroup>
+);
+
 function AuthMethodBadges({ methods }: { methods: AuthMethod[] }) {
   if (!methods || methods.length === 0) {
     return <Badge kind="danger">none</Badge>;
@@ -288,9 +304,9 @@ export default function NamespacesPage() {
       ) : loading && namespaces.length === 0 ? (
         // The loaded page is one .ns-group per application, each with a heading
         // block above its table; a bare table skeleton left that 51px out and
-        // the list jumped on arrival. `namespace-table` matters too: it carries
-        // the column widths and the header wrapping that make the loaded header
-        // row 17px taller than a default one.
+        // the list jumped on arrival. The class and the colgroup matter too:
+        // together they carry the column widths and the header wrapping that
+        // make the loaded header row 17.25px taller than a default one.
         <div className="ns-group">
           <div className="ns-group-title">
             <span className="ns-group-name">
@@ -304,6 +320,7 @@ export default function NamespacesPage() {
             headers={TABLE_HEADERS}
             trailing={1}
             tableClassName="namespace-table"
+            colgroup={NAMESPACE_COLGROUP}
             toolbar
             summary
           />
@@ -331,15 +348,7 @@ export default function NamespacesPage() {
                 <table className="data namespace-table">
                   {/* The whole list is loaded, so "of" is the real total. */}
                   <TableSummary shown={group.list.length} noun="environments" />
-                  <colgroup>
-                    <col className="namespace-col-env" />
-                    <col />
-                    <col className="namespace-col-methods" />
-                    <col className="namespace-col-count" />
-                    <col className="namespace-col-count" />
-                    <col className="namespace-col-created" />
-                    <col />
-                  </colgroup>
+                  {NAMESPACE_COLGROUP}
                   <thead>
                     <SortHeaderRow controller={sort} after={<th />} />
                   </thead>

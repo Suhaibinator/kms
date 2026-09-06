@@ -167,7 +167,14 @@ export default function AuditPage() {
   // rendering the list before that would fetch page 1 unfiltered for nothing.
   if (!ready)
     return (
-      <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} trailing={1} toolbar summary />
+      <TableSkeleton
+        headers={TABLE_HEADERS}
+        rows={lastRowCount}
+        trailing={1}
+        toolbar
+        toolbarHint
+        summary
+      />
     );
   return <AuditLog initial={values} />;
 }
@@ -420,7 +427,14 @@ function AuditLog({ initial }: { initial: QueryValues }) {
       </form>
 
       {loading ? (
-        <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} trailing={1} toolbar summary />
+        <TableSkeleton
+          headers={TABLE_HEADERS}
+          rows={lastRowCount}
+          trailing={1}
+          toolbar
+          toolbarHint
+          summary
+        />
       ) : events.length === 0 ? (
         <EmptyState
           icon={<Icon.audit size={20} />}
