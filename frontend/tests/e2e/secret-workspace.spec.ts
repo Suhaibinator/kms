@@ -165,16 +165,21 @@ test("below 640px the workspace toolbar scrolls with the body but keeps its blee
     const bodyBox = body.getBoundingClientRect();
     // Padding box, not border box: see the desktop test for the scrollbar gutter.
     const paddingRight = bodyBox.left + body.clientLeft + body.clientWidth;
+    const rows = Array.from(toolbar.children, (child) => child.getBoundingClientRect().height);
     return {
       position: getComputedStyle(toolbar).position,
       left: box.left - bodyBox.left,
       right: paddingRight - box.right,
       height: box.height,
+      content: rows.reduce((sum, height) => sum + height, 0),
     };
   });
   // Pinning 130px of a 667px dialog costs more than it buys on a phone.
   expect(geometry.position).toBe("static");
   expect(Math.abs(geometry.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
-  expect(geometry.height).toBeLessThan(140);
+  // The toolbar is exactly its rows plus 12px + 8px of padding and one 16px
+  // gap: no reserved band. An absolute cap would encode the font, and CI's
+  // Linux fallback face wraps the three action buttons onto a second row.
+  expect(geometry.height).toBeLessThanOrEqual(geometry.content + 36 + 1);
 });
