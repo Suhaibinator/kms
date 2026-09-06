@@ -539,7 +539,6 @@ export default function ParametersPage() {
                       {/* Delete is the only destructive row action; it sits
                           behind a menu so a stray click cannot reach it. */}
                       <ActionMenu
-                        label={`Actions for ${p.key}`}
                         trigger={
                           <Button
                             variant="ghost"

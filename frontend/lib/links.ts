@@ -107,6 +107,8 @@ export const links = {
     tab?: "schemas";
     /** Open one release's workspace, as `name@version` (e.g. `runtime@12`). */
     release?: string;
+    /** Which workspace tab to open on; only with `release`. */
+    section?: "compare";
   }): string => {
     const params: string[] = [];
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
@@ -114,6 +116,7 @@ export const links = {
     if (opts?.name) params.push(`name=${encodeURIComponent(opts.name)}`);
     if (opts?.tab) params.push(`tab=${opts.tab}`);
     if (opts?.release) params.push(`release=${encodeURIComponent(opts.release)}`);
+    if (opts?.section) params.push(`section=${opts.section}`);
     return params.length > 0 ? `/releases?${params.join("&")}` : "/releases";
   },
 };

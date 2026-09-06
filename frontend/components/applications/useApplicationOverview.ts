@@ -89,7 +89,10 @@ export function releaseMovements(prev: ApplicationOverview, next: ApplicationOve
 
 const changedToastId = (name: string) => `overview-changed:${name}`;
 
-export function useApplicationOverview(name: string): {
+export function useApplicationOverview(
+  name: string,
+  { paused = false }: { paused?: boolean } = {},
+): {
   /** Only ever the slot for `name`; null before the first response. */
   slot: OverviewSlot | null;
   loading: boolean;
@@ -110,6 +113,10 @@ export function useApplicationOverview(name: string): {
   const loadingRef = useRef(false);
   // Bumped when a reload starts; a check that began before it is discarded.
   const generationRef = useRef(0);
+  // While the operator is writing values (a write modal open, possibly mid-retry),
+  // their own writes must not come back as "changed elsewhere" under that modal.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   const reload = useCallback(async () => {
     if (!name) return;
@@ -170,7 +177,14 @@ export function useApplicationOverview(name: string): {
     let disposed = false;
     const check = async () => {
       const shown = shownRef.current;
-      if (disposed || document.hidden || loadingRef.current || controller || shown?.name !== name) {
+      if (
+        disposed ||
+        pausedRef.current ||
+        document.hidden ||
+        loadingRef.current ||
+        controller ||
+        shown?.name !== name
+      ) {
         return;
       }
       const generation = generationRef.current;

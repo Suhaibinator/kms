@@ -7,6 +7,7 @@ import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
 import { api, isAbortError, isConflict } from "@/lib/api";
 import { countNoun } from "@/lib/format";
+import { useFocusOnAppear } from "@/lib/forms";
 import type { ShipStepId } from "@/lib/glossary";
 import { useLatestRequest } from "@/lib/hooks";
 import { links } from "@/lib/links";
@@ -71,19 +72,6 @@ function newRequestId(): string {
  * row's Edit). The row head's Revert and Show diff come earlier in DOM order
  * and may be disabled, so the control is looked up before any button.
  */
-function rowControl(alias: string): HTMLElement | null {
-  const row = document.querySelector<HTMLElement>(
-    `[data-testid="ship-editor"] [data-alias="${CSS.escape(alias)}"]`,
-  );
-  if (!row) return null;
-  return (
-    row.querySelector<HTMLElement>('textarea, input:not([type="hidden"]), select') ??
-    row.querySelector<HTMLElement>(
-      'button:not([disabled]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])',
-    ) ??
-    row
-  );
-}
 
 /** "{n} aliases change ({m} secrets); runtime@3 → @4": the one line above Ship. */
 function confirmSummary(preview: ShipPreviewData): string {
@@ -145,12 +133,13 @@ export default function ShipModal({
   // The environment select is the first real control; the dialog opens on it
   // unless a prefilled row is already editable, in which case it opens there.
   const environmentSelectRef = useRef<HTMLElement | null>(null);
-  const initialFocus = useCallback(
-    () => (initialAlias ? rowControl(initialAlias) : null) ?? environmentSelectRef.current,
-    [initialAlias],
-  );
-  // Whether this open has handed focus to the prefilled row yet.
-  const focusedInitialRow = useRef(false);
+  const initialFocus = useCallback(() => environmentSelectRef.current, []);
+  // Every row's value control, by alias, so focus never has to scrape the DOM.
+  const controls = useRef(new Map<string, HTMLElement>());
+  const registerControl = useCallback((alias: string, node: HTMLElement | null) => {
+    if (node) controls.current.set(alias, node);
+    else controls.current.delete(alias);
+  }, []);
   const confirmId = useId();
 
   const env = useMemo(
@@ -204,7 +193,6 @@ export default function ShipModal({
       previewRequest.abort();
       return;
     }
-    focusedInitialRow.current = false;
     setPhase("compose");
     setActivation(null);
     setRolledBack(null);
@@ -257,18 +245,12 @@ export default function ShipModal({
   // focus over then, unless the operator has moved on meanwhile.
   const initialRowLoaded =
     initialAlias !== undefined && rows.some((row) => row.alias === initialAlias && row.loaded);
-  useEffect(() => {
-    if (!open || !initialAlias || !initialRowLoaded || focusedInitialRow.current) return;
-    focusedInitialRow.current = true;
-    const control = rowControl(initialAlias);
-    const active = document.activeElement;
-    const idle =
-      !active ||
-      active === document.body ||
-      active === environmentSelectRef.current ||
-      active.getAttribute("data-slot") === "dialog-content";
-    if (control && idle && !control.contains(active)) control.focus({ preventScroll: true });
-  }, [open, initialAlias, initialRowLoaded]);
+  const initialRowControl = useCallback(
+    () => (initialAlias ? (controls.current.get(initialAlias) ?? null) : null),
+    [initialAlias],
+  );
+  const restingOn = useMemo(() => [environmentSelectRef], []);
+  useFocusOnAppear(initialRowControl, open && initialRowLoaded, { unlessMoved: true, restingOn });
 
   const runPreview = useCallback(async () => {
     if (!ready) return;
@@ -407,7 +389,7 @@ export default function ShipModal({
     // later — so keep re-asserting the row focus until it sticks.
     let attempts = 0;
     const attempt = () => {
-      const control = rowControl(alias);
+      const control = controls.current.get(alias) ?? null;
       const row = control?.closest<HTMLElement>("[data-alias]") ?? null;
       if (control) {
         if (attempts === 0) row?.scrollIntoView?.({ block: "center" });
@@ -646,6 +628,7 @@ export default function ShipModal({
                 application={application}
                 environments={environments}
                 initialFocusRef={environmentSelectRef}
+                registerControl={registerControl}
                 schemaJson={schemaJson}
                 environment={environment}
                 env={env}

@@ -99,7 +99,6 @@ export function EnvironmentColumn({
           <StatusChip status={environment.status} production={environment.production} />
         </div>
         <ActionMenu
-          label={`More for ${ns.env}`}
           trigger={
             <Button type="button" variant="ghost" size="icon-sm" aria-label={`More for ${ns.env}`}>
               <MoreHorizontal size={16} />

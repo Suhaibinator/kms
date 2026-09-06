@@ -70,6 +70,8 @@ export interface ApplicationHomeProps {
   reload: () => Promise<void>;
   /** When the overview was loaded and whether it is known to be behind. */
   freshness?: OverviewFreshness;
+  /** True while a write modal is open, so the page can pause its background change check. */
+  onWritingChange?: (writing: boolean) => void;
   /** `?env=`: the pipeline column to focus and the default Ship environment. */
   env: string | null;
   /** `?ship=`: `1` opens the Ship modal, an alias also prefills a row. Each new value seeds once. */
@@ -114,7 +116,6 @@ function EnvironmentAction({
   }
   return (
     <ActionMenu
-      label={`${label} environment`}
       open={open}
       onOpenChange={onOpenChange}
       trigger={
@@ -167,6 +168,7 @@ export function ApplicationHome({
   loading,
   reload,
   freshness,
+  onWritingChange,
   env,
   ship,
   tab,
@@ -218,6 +220,11 @@ export function ApplicationHome({
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
   const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
+  const writing = writeRow !== null;
+  useEffect(() => {
+    onWritingChange?.(writing);
+    return () => onWritingChange?.(false);
+  }, [writing, onWritingChange]);
   const [writeSaving, setWriteSaving] = useState(false);
   const [lifecycleSaving, setLifecycleSaving] = useState(false);
 
@@ -599,7 +606,6 @@ export function ApplicationHome({
               onOpenChange={setRollbackMenuOpen}
             />
             <ActionMenu
-              label="More actions"
               items={moreItems}
               trigger={
                 <Button type="button" variant="outline" aria-label="More actions">

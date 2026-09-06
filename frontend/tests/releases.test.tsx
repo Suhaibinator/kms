@@ -357,6 +357,34 @@ describe("ReleasesPage", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
+  it("opens a deep-linked release on its Compare tab when the link asks for it", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@2",
+      section: "compare",
+    };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+
+    render(<ReleasesPage />);
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@2" });
+    expect(within(dialog).getByRole("tab", { name: "Compare" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // The default comparison is the version below: the rollback diff.
+    expect(within(dialog).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
+      "runtime@1",
+    );
+  });
+
   it("keeps the Rollout tab selected when an activation refreshes the list", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };
     mocks.listReleases

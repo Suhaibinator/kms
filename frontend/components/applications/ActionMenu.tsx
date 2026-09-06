@@ -65,21 +65,21 @@ function renderItems(items: ActionMenuItem[]): ReactNode {
 
 /**
  * A small dropdown of actions or links on Base UI's Menu. `trigger` is the
- * element the menu attaches to (usually a Button); `label` names the popup for
- * assistive tech. Pass `open`/`onOpenChange` to drive it from the URL. An item
- * with `children` opens a submenu (e.g. an action that needs an environment).
+ * element the menu attaches to (usually a Button) and also names the popup for
+ * assistive tech (Base UI points the popup's aria-labelledby at it), so give
+ * the trigger text or an aria-label. Pass `open`/`onOpenChange` to drive it
+ * from the URL. An item with `children` opens a submenu (e.g. an action that
+ * needs an environment).
  */
 export function ActionMenu({
   trigger,
   items,
-  label,
   open,
   onOpenChange,
   align = "end",
 }: {
   trigger: ReactElement;
   items: ActionMenuItem[];
-  label: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   align?: "start" | "end";
@@ -99,9 +99,7 @@ export function ActionMenu({
       <Menu.Trigger render={trigger} />
       <Menu.Portal>
         <Menu.Positioner align={align} sideOffset={4} className="isolate z-50">
-          <Menu.Popup className="menu-popup" aria-label={label}>
-            {renderItems(items)}
-          </Menu.Popup>
+          <Menu.Popup className="menu-popup">{renderItems(items)}</Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>

@@ -8,6 +8,7 @@ import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Badge, Button, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { assignRef } from "@/lib/forms";
 import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
 import type { Application, EnvironmentOverview, OverviewValue } from "@/lib/types";
 import {
@@ -42,6 +43,8 @@ export interface ShipEditorProps {
   onOpenSecret?: (env: string, key: string) => void;
   /** The Environment select's trigger — the step's first control, for the modal's `initialFocus`. */
   initialFocusRef?: Ref<HTMLElement>;
+  /** Each row's value control (or its expand button while folded), for focus management. */
+  registerControl?: (alias: string, node: HTMLElement | null) => void;
 }
 
 function firstLine(value: string): string {
@@ -59,6 +62,7 @@ function RowCard({
   onToggle,
   onChange,
   onRemove,
+  controlRef,
 }: {
   row: ShipRow;
   env: EnvironmentOverview | null;
@@ -69,6 +73,8 @@ function RowCard({
   onToggle: () => void;
   onChange: (patch: Partial<ShipRow>) => void;
   onRemove: () => void;
+  /** Receives the row's value control, or its expand button while folded. */
+  controlRef?: Ref<HTMLElement>;
 }) {
   const current = valueFor(env, row.alias);
   const error = shownRowError(row);
@@ -178,6 +184,7 @@ function RowCard({
             {row.value ? firstLine(row.value) : <span className="faint">(no value)</span>}
           </span>
           <button
+            ref={(node) => assignRef(controlRef, node)}
             type="button"
             className="ship-row-expand"
             aria-expanded={false}
@@ -213,6 +220,7 @@ function RowCard({
               disabled={disabled}
               aria-label={`${row.alias} value`}
               rows={6}
+              inputRef={controlRef}
               onChange={(value) => onChange({ value, reuseVersion: undefined, touched: true })}
             />
           </Field>
@@ -295,6 +303,7 @@ export function ShipEditor({
   onAddSecret,
   onOpenSecret,
   initialFocusRef,
+  registerControl,
 }: ShipEditorProps) {
   const envSelectId = useId();
   const pinsId = useId();
@@ -403,6 +412,7 @@ export function ShipEditor({
               }
               onChange={(patch) => onRowChange(row.alias, patch)}
               onRemove={() => onRemoveRow(row.alias)}
+              controlRef={(node) => registerControl?.(row.alias, node)}
             />
           ))}
         </ul>

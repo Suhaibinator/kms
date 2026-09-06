@@ -24,12 +24,15 @@ export function ReleaseWorkspace({
   activationFailure,
   onDismissFailure,
   resolveHref,
+  initialSection = "overview",
   onClose,
   onValidate,
   onActivate,
   onRollback,
 }: {
   summary: ReleaseSummary | null;
+  /** The tab a deep link asked for; the workspace returns to it for each new release identity. */
+  initialSection?: "overview" | "compare";
   releases: ReleaseSummary[];
   busyAction: string;
   activationFailure: ActivationFailure | null;
@@ -47,7 +50,7 @@ export function ReleaseWorkspace({
   // every list refresh, and resetting on that would bounce the user back to
   // Overview after each activation.
   const key = release ? releaseKey(release) : "";
-  const [section, setSection] = useState("overview");
+  const [section, setSection] = useState<string>(initialSection);
   // "" means "use the derived default" (the next-lower version, if loaded).
   const [compareKey, setCompareKey] = useState("");
 
@@ -63,9 +66,9 @@ export function ReleaseWorkspace({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset per release identity (`key`), not per summary object.
   useEffect(() => {
-    setSection("overview");
+    setSection(initialSection);
     setCompareKey("");
-  }, [key]);
+  }, [key, initialSection]);
 
   const defaultCompareKey = useMemo(() => {
     const previous = release

@@ -7,6 +7,7 @@ import { releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Field, Input, Spinner } from "@/components/ui";
 import { ApiError, api, isAbortError, isConflict } from "@/lib/api";
+import { useFocusOnAppear } from "@/lib/forms";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { OverviewActiveRelease, ReleaseValidationError } from "@/lib/types";
@@ -60,9 +61,7 @@ export default function RollbackDialog({
   // so it takes focus when it appears rather than when the dialog opens.
   const confirmRef = useRef<HTMLInputElement>(null);
   const confirmShown = production && check.kind === "valid" && outcome.kind !== "already";
-  useEffect(() => {
-    if (open && confirmShown) confirmRef.current?.focus();
-  }, [open, confirmShown]);
+  useFocusOnAppear(confirmRef, open && confirmShown);
 
   const validate = useCallback(
     async (candidate: Target | null, signal: AbortSignal) => {
@@ -165,12 +164,13 @@ export default function RollbackDialog({
 
   const previous = target?.previous_version ?? 0;
   const releasesHref = links.releases({ app: namespace.app, env: namespace.env, name });
-  // Opens the previous release's workspace; its Compare tab diffs it against the version before it.
+  // Opens the active release on its Compare tab, which defaults to the version below it: exactly the rollback diff.
   const compareHref = links.releases({
     app: namespace.app,
     env: namespace.env,
     name,
-    release: releaseKey({ name, version: previous }),
+    release: releaseKey({ name, version: target?.version ?? 0 }),
+    section: "compare",
   });
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
   // Rolling back a rollback is a re-activation; the title says which.

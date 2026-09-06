@@ -3,8 +3,8 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationHome } from "@/components/applications/ApplicationHome";
 import {
-  ApplicationList,
   type ApplicationArchiveFilter,
+  ApplicationList,
 } from "@/components/applications/ApplicationList";
 import CreateApplicationWizard from "@/components/applications/CreateApplicationWizard";
 import type { SetupAction } from "@/components/applications/contracts";
@@ -40,7 +40,8 @@ export default function ApplicationsPage() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [archiveFilter, setArchiveFilter] = useState<ApplicationArchiveFilter>("exclude");
   const paging = useCursorPagination(`applications:${archiveFilter}`);
-  const { slot, loading, reload, freshness } = useApplicationOverview(name);
+  const [writing, setWriting] = useState(false);
+  const { slot, loading, reload, freshness } = useApplicationOverview(name, { paused: writing });
 
   const loadApplications = useCallback(
     async (pageToken: string) => {
@@ -199,6 +200,7 @@ export default function ApplicationsPage() {
       loading={loading}
       reload={reload}
       freshness={freshness}
+      onWritingChange={setWriting}
       env={query.env}
       ship={query.ship}
       tab={query.tab}

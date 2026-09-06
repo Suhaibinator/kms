@@ -1,4 +1,12 @@
-import { type Ref, type RefObject, useCallback, useLayoutEffect, useRef, useState } from "react";
+import {
+  type Ref,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 /** Assigns `node` to a callback or object ref, if one was given. */
 export function assignRef<T>(ref: Ref<T> | undefined | null, node: T | null): void {
@@ -49,4 +57,43 @@ export function useFocusFirstInvalid<T extends HTMLElement = HTMLFormElement>():
     focusFirstInvalid(formRef.current);
   }, [tick]);
   return { formRef, requestFocus };
+}
+
+/**
+ * Focus a control the moment it appears (`shown` turns true) rather than when
+ * its dialog opened: a typed confirmation that renders after validation, a
+ * prefilled editor that renders after its value loads. Focus moves once per
+ * appearance. With `unlessMoved`, it stays put when the operator has already
+ * gone somewhere other than the dialog itself or one of `restingOn` (the
+ * dialog's own initial-focus control).
+ */
+export function useFocusOnAppear(
+  target: RefObject<HTMLElement | null> | (() => HTMLElement | null),
+  shown: boolean,
+  {
+    unlessMoved = false,
+    restingOn = [],
+  }: { unlessMoved?: boolean; restingOn?: ReadonlyArray<RefObject<HTMLElement | null>> } = {},
+): void {
+  const done = useRef(false);
+  useEffect(() => {
+    if (!shown) {
+      done.current = false;
+      return;
+    }
+    if (done.current) return;
+    done.current = true;
+    const node = typeof target === "function" ? target() : target.current;
+    if (!node) return;
+    if (unlessMoved) {
+      const active = document.activeElement;
+      const idle =
+        !active ||
+        active === document.body ||
+        active.getAttribute("data-slot") === "dialog-content" ||
+        restingOn.some((ref) => ref.current === active);
+      if (!idle || node.contains(active)) return;
+    }
+    node.focus({ preventScroll: true });
+  }, [shown, target, unlessMoved, restingOn]);
 }

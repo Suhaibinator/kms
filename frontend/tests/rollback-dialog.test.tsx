@@ -106,7 +106,8 @@ describe("RollbackDialog", () => {
         app: incident.application.name,
         env: "prod",
         name,
-        release: `${name}@${active.previous_version}`,
+        release: `${name}@${active.version}`,
+        section: "compare",
       }),
     );
   });

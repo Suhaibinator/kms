@@ -10,13 +10,13 @@ import { type ActivationFailure, ReleaseWorkspace } from "@/components/releases/
 import { SchemaRegistry } from "@/components/releases/SchemaRegistry";
 import { parseReleaseKey, releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver } from "@/components/releases/ViolationTable";
-import RollbackDialog from "@/components/ship/RollbackDialog";
 import {
   headerLabels,
   MobileListToolbar,
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
+import RollbackDialog from "@/components/ship/RollbackDialog";
 import {
   Badge,
   Button,
@@ -116,6 +116,8 @@ export default function ReleasesPage() {
   // A deep-linked release that is not in the loaded page, fetched on its own.
   const [linkedSummary, setLinkedSummary] = useState<ReleaseSummary | null>(null);
   const [deepLink, setDeepLink] = useState<{ name: string; version: number } | null>(null);
+  // The workspace tab a deep link asked for; cleared with the workspace.
+  const [linkedSection, setLinkedSection] = useState<"compare" | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingReleaseAction | null>(null);
   const [activationFailure, setActivationFailure] = useState<ActivationFailure | null>(null);
   // The request scope whose response is currently on screen; gates the empty
@@ -135,6 +137,7 @@ export default function ReleasesPage() {
   const queryEnv = queryValue(router.query.env);
   const queryName = queryValue(router.query.name);
   const queryRelease = queryValue(router.query.release);
+  const querySection = queryValue(router.query.section);
 
   // Seed from the URL exactly once. Every later change flows state → URL
   // through replaceQuery; re-reading the query here would clobber whatever the
@@ -150,8 +153,9 @@ export default function ReleasesPage() {
     if (linked && queryApp && queryEnv) {
       setDeepLink(linked);
       setSelectedReleaseKey(`${linked.name}@${linked.version}`);
+      if (querySection === "compare") setLinkedSection("compare");
     }
-  }, [queryApp, queryEnv, queryName, queryRelease, queryTab, router.isReady, seeded]);
+  }, [queryApp, queryEnv, queryName, queryRelease, querySection, queryTab, router.isReady, seeded]);
 
   function changeTab(value: string | number) {
     const next = value === "schemas" ? "schemas" : "releases";
@@ -161,15 +165,17 @@ export default function ReleasesPage() {
 
   function openWorkspace(key: string) {
     setActivationFailure(null);
+    setLinkedSection(null);
     setSelectedReleaseKey(key);
-    replaceQuery({ release: key });
+    replaceQuery({ release: key, section: "" });
   }
 
   function closeWorkspace() {
     setSelectedReleaseKey("");
     setLinkedSummary(null);
+    setLinkedSection(null);
     setActivationFailure(null);
-    replaceQuery({ release: "" });
+    replaceQuery({ release: "", section: "" });
   }
 
   function changeNamespace(next: NamespaceSelection) {
@@ -647,6 +653,7 @@ export default function ReleasesPage() {
 
       <ReleaseWorkspace
         summary={selectedSummary}
+        initialSection={linkedSection ?? "overview"}
         releases={releases}
         busyAction={busyAction}
         activationFailure={activationFailure}

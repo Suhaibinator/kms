@@ -225,4 +225,27 @@ describe("useApplicationOverview", () => {
     // Only the reload itself asked for the overview.
     expect(mocks.applicationOverview).toHaveBeenCalledTimes(2);
   });
+
+  it("does not check while paused, so an operator's own writes are not announced under their modal", async () => {
+    mocks.applicationOverview.mockResolvedValue(ready);
+    const { result, rerender } = renderHook(
+      ({ paused }: { paused: boolean }) => useApplicationOverview("gradethis", { paused }),
+      { initialProps: { paused: true } },
+    );
+    await waitFor(() => expect(result.current.slot?.status).toBe("success"));
+
+    mocks.applicationOverview.mockResolvedValue(shipped());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OVERVIEW_CHECK_MS);
+    });
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(1);
+    expect(mocks.toast.info).not.toHaveBeenCalled();
+
+    rerender({ paused: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OVERVIEW_CHECK_MS);
+    });
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mocks.toast.info).toHaveBeenCalled());
+  });
 });
