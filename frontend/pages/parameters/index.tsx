@@ -438,6 +438,8 @@ export default function ParametersPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
+          toolbar
+          summary
         />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
@@ -448,6 +450,8 @@ export default function ParametersPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
+          toolbar
+          summary
         />
       ) : rows.length === 0 ? (
         <EmptyState

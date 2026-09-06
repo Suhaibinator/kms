@@ -17,6 +17,7 @@ import {
   Field,
   Input,
   PageHeader,
+  Skeleton,
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
@@ -285,7 +286,28 @@ export default function NamespacesPage() {
           The namespace list is unavailable. Check the connection and try again.
         </EmptyState>
       ) : loading && namespaces.length === 0 ? (
-        <TableSkeleton headers={TABLE_HEADERS} trailing={1} />
+        // The loaded page is one .ns-group per application, each with a heading
+        // block above its table; a bare table skeleton left that 51px out and
+        // the list jumped on arrival. `namespace-table` matters too: it carries
+        // the column widths and the header wrapping that make the loaded header
+        // row 17px taller than a default one.
+        <div className="ns-group">
+          <div className="ns-group-title">
+            <span className="ns-group-name">
+              <Skeleton width="8ch" />
+            </span>
+            <span className="faint text-sm">
+              <Skeleton width="12ch" />
+            </span>
+          </div>
+          <TableSkeleton
+            headers={TABLE_HEADERS}
+            trailing={1}
+            tableClassName="namespace-table"
+            toolbar
+            summary
+          />
+        </div>
       ) : namespaces.length === 0 ? (
         <EmptyState
           icon={<Icon.namespace size={20} />}
@@ -316,7 +338,7 @@ export default function NamespacesPage() {
                     <col className="namespace-col-count" />
                     <col className="namespace-col-count" />
                     <col className="namespace-col-created" />
-                    <col className="namespace-col-actions" />
+                    <col />
                   </colgroup>
                   <thead>
                     <SortHeaderRow controller={sort} after={<th />} />
@@ -345,10 +367,14 @@ export default function NamespacesPage() {
                             <AuthMethodBadges methods={ns.allowed_auth_methods} />
                           </td>
                           <td data-label="Parameters">
-                            <Link href={links.parameters(ns)}>{ns.parameter_count}</Link>
+                            <Link className="cell-count" href={links.parameters(ns)}>
+                              {ns.parameter_count}
+                            </Link>
                           </td>
                           <td data-label="Secrets">
-                            <Link href={links.secrets(ns)}>{ns.secret_count}</Link>
+                            <Link className="cell-count" href={links.secrets(ns)}>
+                              {ns.secret_count}
+                            </Link>
                           </td>
                           <td className="nowrap" data-label="Created">
                             {formatUnixMs(ns.created_at_unix_ms)}

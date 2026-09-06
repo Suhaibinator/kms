@@ -99,6 +99,21 @@ describe("NamespacesPage", () => {
     expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
   });
 
+  it("reserves the group heading, the toolbar and the summary the loaded list has", () => {
+    mocks.namespaces.loading = true;
+    render(<NamespacesPage />);
+
+    // The loaded page is one .ns-group per application, with a heading block
+    // above its table, a mobile toolbar inside the card and a summary caption
+    // below it. A bare table skeleton left all three out.
+    expect(document.querySelector(".ns-group")).not.toBeNull();
+    expect(document.querySelector(".ns-group-title")).not.toBeNull();
+    expect(document.querySelector(".mobile-list-toolbar")).not.toBeNull();
+    expect(document.querySelector("caption.table-summary")).not.toBeNull();
+    // And the loaded table's own class, which carries its column widths.
+    expect(document.querySelector("table.data")).toHaveClass("namespace-table");
+  });
+
   it("reorders every environment table from a column header and records it in the URL", () => {
     mocks.namespaces.namespaces = [
       namespace("dev", { parameters: 9 }),

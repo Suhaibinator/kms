@@ -108,7 +108,11 @@ export function SelectRowCell({
   disabled?: boolean;
 }) {
   return (
-    <td className="select-cell" data-label="Select">
+    // No data-label: below 640px the card transform prints one from it, and a
+    // "SELECT" caption over a 16px checkbox made this the tallest field in the
+    // card (69.75px against 48px for a cell carrying real data). The toolbar's
+    // "Select all on this page" row above already says what the box is for.
+    <td className="select-cell">
       <Checkbox
         aria-label={label}
         checked={selection.has(id)}

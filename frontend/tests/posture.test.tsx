@@ -127,6 +127,37 @@ describe("security posture", () => {
     expect(screen.getByText(/Fixed 14d look-ahead/)).toBeVisible();
   });
 
+  it("reserves the loaded page's three cards while the snapshot loads", async () => {
+    // The skeleton used to be four stats and one table, against a loaded page
+    // of four stats, a window selector and three cards: 900px reserved for a
+    // 1372px page, so everything below the fold moved on arrival.
+    vi.mocked(api.posture).mockReturnValue(new Promise(() => {}));
+    render(<PosturePage />);
+
+    expect(document.querySelectorAll(".card")).toHaveLength(3);
+    expect(document.querySelectorAll(".stat")).toHaveLength(4);
+    expect(screen.getByText("Admin certificates")).toBeVisible();
+    expect(screen.getByText("Identity certificates expiring")).toBeVisible();
+    expect(screen.getByText("Secret versions expiring")).toBeVisible();
+    // The window selector's caption and its three buttons' worth of height.
+    expect(screen.getByText("Expiring within")).toBeVisible();
+    // Each card's own column list, not one table's repeated three times.
+    const headers = [...document.querySelectorAll("thead th")].map((th) => th.textContent);
+    expect(headers).toEqual([
+      "Identity",
+      "Status",
+      "Serial",
+      "Expires",
+      "Identity",
+      "Environment",
+      "Serial",
+      "Expires",
+      "Secret",
+      "Version",
+      "Expires",
+    ]);
+  });
+
   it("warns when the active key is older than a year", async () => {
     vi.mocked(api.posture).mockResolvedValue(
       posture({

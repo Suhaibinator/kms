@@ -181,6 +181,21 @@ describe("bulk delete on the parameters list", () => {
     expect(mocks.toast.success).not.toHaveBeenCalled();
   });
 
+  it("gives the select cell no card caption to print", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [parameter("alpha")],
+      next_page_token: "",
+    });
+    render(<ParametersPage />);
+    expect(await screen.findByText("alpha")).toBeVisible();
+    const cell = document.querySelector("td.select-cell");
+    expect(cell).not.toBeNull();
+    // Below 640px `td[data-label]::before` prints the label above the value, so
+    // a data-label here made a "SELECT" caption over a 16px checkbox the
+    // tallest field in the card (69.75px against 48px for a cell with data).
+    expect(cell).not.toHaveAttribute("data-label");
+  });
+
   it("drops the selection when the filter changes the list under it", async () => {
     vi.spyOn(api, "listParameters").mockResolvedValue({
       parameters: [parameter("alpha"), parameter("beta")],

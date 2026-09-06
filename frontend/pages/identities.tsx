@@ -1,6 +1,7 @@
-import { Check, Download, Eye, EyeOff } from "lucide-react";
+import { Check, Download, Eye, EyeOff, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ActionMenu } from "@/components/applications/ActionMenu";
 import {
   BulkActionBar,
   BulkDeleteDialog,
@@ -38,7 +39,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { bulkSummary, runBulk } from "@/lib/bulk";
-import { displayNamespace, formatUnixMs } from "@/lib/format";
+import { displayNamespace, formatRelative, formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import {
   useCursorPagination,
@@ -54,6 +55,7 @@ import {
 } from "@/lib/identity-methods";
 import type { SortColumn } from "@/lib/sort";
 import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
+import { useNow } from "@/lib/useNow";
 import {
   firstError,
   MAX_IDENTITY_NAME_LENGTH,
@@ -238,6 +240,7 @@ function TokenCredentialRoles({ compact = false }: { compact?: boolean }) {
 export default function IdentitiesPage() {
   const toast = useToast();
   const { identity: viewer } = useAuth();
+  const now = useNow();
   const sort = useSort<Identity>("/identities", COLUMNS);
   const {
     namespaces,
@@ -725,6 +728,8 @@ export default function IdentitiesPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkRevoke ? 1 : 0}
           trailing={1}
+          toolbar
+          summary
         />
       ) : identities.length === 0 ? (
         <EmptyState
@@ -774,7 +779,6 @@ export default function IdentitiesPage() {
                   namespacesError,
                 );
                 const tokenRotationReason = unavailableMethodReason("token", tokenAvailability);
-                const tokenReasonId = `token-rotation-${id.name}`;
                 return (
                   <tr
                     key={id.name}
@@ -825,6 +829,12 @@ export default function IdentitiesPage() {
                       {formatUnixMs(id.created_at_unix_ms)}
                     </td>
                     <td data-label="Actions">
+                      {/* One shape on every row. A token identity used to add a
+                          third button to the cluster, so the list rippled
+                          between 92.5px and 131px rows depending on whether the
+                          identity had a token; the secondary and destructive
+                          actions now sit behind the same kebab /parameters and
+                          /namespaces already use for theirs. */}
                       <div className="row-actions">
                         <Button
                           variant="outline"
@@ -834,40 +844,46 @@ export default function IdentitiesPage() {
                         >
                           Certificates
                         </Button>
-                        {id.has_token ? (
-                          <span
-                            className={
-                              tokenAvailability === "allowed"
-                                ? "row-action-group"
-                                : "row-action-group action-unavailable"
-                            }
-                          >
+                        <ActionMenu
+                          trigger={
                             <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={id.disabled || tokenAvailability !== "allowed"}
-                              aria-describedby={
-                                tokenAvailability === "allowed" ? undefined : tokenReasonId
-                              }
-                              onClick={() => setRotateTarget(id.name)}
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={id.disabled}
+                              aria-label={`More actions for ${id.name}`}
                             >
-                              Rotate token
+                              <MoreHorizontal size={15} aria-hidden />
                             </Button>
-                            {tokenAvailability !== "allowed" ? (
-                              <span id={tokenReasonId} className="action-unavailable-reason">
-                                Rotation unavailable: {tokenRotationReason}
-                              </span>
-                            ) : null}
-                          </span>
-                        ) : null}
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={id.disabled}
-                          onClick={() => setRevokeTarget(id.name)}
-                        >
-                          Revoke
-                        </Button>
+                          }
+                          items={[
+                            ...(id.has_token
+                              ? [
+                                  {
+                                    key: "rotate",
+                                    label:
+                                      tokenAvailability === "allowed" ? (
+                                        "Rotate token"
+                                      ) : (
+                                        <>
+                                          <span>Rotate token</span>
+                                          <span className="faint text-xs">
+                                            Rotation unavailable: {tokenRotationReason}
+                                          </span>
+                                        </>
+                                      ),
+                                    disabled: tokenAvailability !== "allowed",
+                                    onSelect: () => setRotateTarget(id.name),
+                                  },
+                                ]
+                              : []),
+                            {
+                              key: "revoke",
+                              label: "Revoke identity",
+                              onSelect: () => setRevokeTarget(id.name),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1227,6 +1243,11 @@ export default function IdentitiesPage() {
         // dialogs in DOM order) so the user can see which row they are revoking.
         open={certsTarget !== null}
         wide
+        // Deliberately not `wizard`. The issue form and the certificate list
+        // render together rather than swapping, so measured at 1280 the dialog
+        // is 587.83px empty and 594.67px with two certificates — never near the
+        // 560px floor `wizard` would add, while its `modal-footer-steps` class
+        // would put a two-row floor under a footer that only ever holds Close.
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
         onClose={() => setCertsSnapshot(null)}
         dismissible={!issueBusy}
@@ -1320,7 +1341,12 @@ export default function IdentitiesPage() {
                       <th>State</th>
                       <th>Expires</th>
                       <th>Issued</th>
-                      <th />
+                      {/* The cells carry `data-label="Actions"`, which the card
+                          layout shows; the desktop table needs the same name,
+                          unpainted. */}
+                      <th>
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1351,11 +1377,23 @@ export default function IdentitiesPage() {
                             <td data-label="State">
                               <Badge kind={status.kind}>{status.label}</Badge>
                             </td>
-                            <td data-label="Expires" className="nowrap">
-                              {formatUnixMs(cert.not_after_unix_ms)}
+                            {/* Relative, with the instant in `title`: two
+                                absolute timestamps were 412px of an 860px
+                                table inside a 678px dialog, which put the
+                                Revoke button beyond a sideways scroll. */}
+                            <td
+                              data-label="Expires"
+                              className="nowrap"
+                              title={formatUnixMs(cert.not_after_unix_ms)}
+                            >
+                              {formatRelative(cert.not_after_unix_ms, now)}
                             </td>
-                            <td data-label="Issued" className="nowrap">
-                              {formatUnixMs(cert.created_at_unix_ms)}
+                            <td
+                              data-label="Issued"
+                              className="nowrap"
+                              title={formatUnixMs(cert.created_at_unix_ms)}
+                            >
+                              {formatRelative(cert.created_at_unix_ms, now)}
                             </td>
                             <td data-label="Actions">
                               {revocable ? (
