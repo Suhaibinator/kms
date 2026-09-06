@@ -5,13 +5,14 @@ import { Badge, Field, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, PurgeCleanupPendingApiError, type ResourceRef } from "@/lib/api";
-import { displayPath } from "@/lib/format";
+import { countNoun, displayPath } from "@/lib/format";
 import { useFieldErrors, useLatestRequest } from "@/lib/hooks";
 import type { SecretBindingCohortResponse, SecretVersionSetResponse } from "@/lib/types";
 import { validateBindingKey } from "@/lib/validation";
+import { BINDING_ACTION_LABELS, type BindingActionKind } from "./binding-actions";
 
 export type BindingAction =
-  | { kind: "bind" | "unbind" | "rotate" | "purge"; version: number }
+  | { kind: BindingActionKind; version: number }
   | { kind: "purge-unbound" };
 
 export function BindingActionModal({
@@ -194,7 +195,7 @@ export function BindingActionModal({
         );
         if (!run.current) return;
         toast.success(
-          `Purged ${result.affected_versions.length} version${result.affected_versions.length === 1 ? "" : "s"}`,
+          `Purged ${result.affected_versions.length} ${countNoun(result.affected_versions.length, "versions")}`,
           "Affected versions are permanent tombstones.",
         );
       } else if (action.kind === "purge-unbound" && unboundPreview) {
@@ -206,7 +207,7 @@ export function BindingActionModal({
         );
         if (!run.current) return;
         toast.success(
-          `Purged ${result.affected_versions.length} unbound version${result.affected_versions.length === 1 ? "" : "s"}`,
+          `Purged ${result.affected_versions.length} unbound ${countNoun(result.affected_versions.length, "versions")}`,
           "Affected versions are permanent tombstones; release references and labels were preserved.",
         );
       }
@@ -472,18 +473,7 @@ export function BindingActionModal({
 }
 
 function bindingActionVerb(kind: BindingAction["kind"]): string {
-  switch (kind) {
-    case "bind":
-      return "Bind";
-    case "unbind":
-      return "Unbind";
-    case "rotate":
-      return "Rotate binding key";
-    case "purge":
-      return "Purge cohort";
-    case "purge-unbound":
-      return "Purge unbound versions";
-  }
+  return kind === "purge-unbound" ? "Purge unbound versions" : BINDING_ACTION_LABELS[kind];
 }
 
 function bindingActionTitle(action: BindingAction): string {

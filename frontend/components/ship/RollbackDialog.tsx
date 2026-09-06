@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { RollbackDialogProps } from "@/components/applications/contracts";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
+import { releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Field, Input, Spinner } from "@/components/ui";
 import { ApiError, api, isAbortError, isConflict } from "@/lib/api";
@@ -58,7 +59,6 @@ export default function RollbackDialog({
   // The typed confirmation renders only once the previous release validates,
   // so it takes focus when it appears rather than when the dialog opens.
   const confirmRef = useRef<HTMLInputElement>(null);
-  const initialFocus = useCallback(() => confirmRef.current, []);
   const confirmShown = production && check.kind === "valid" && outcome.kind !== "already";
   useEffect(() => {
     if (open && confirmShown) confirmRef.current?.focus();
@@ -170,7 +170,7 @@ export default function RollbackDialog({
     app: namespace.app,
     env: namespace.env,
     name,
-    release: `${name}@${previous}`,
+    release: releaseKey({ name, version: previous }),
   });
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
   // Rolling back a rollback is a re-activation; the title says which.
@@ -183,7 +183,6 @@ export default function RollbackDialog({
       title={title}
       onClose={busy ? () => undefined : onClose}
       dismissible={!busy}
-      initialFocus={initialFocus}
       footer={
         <>
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>

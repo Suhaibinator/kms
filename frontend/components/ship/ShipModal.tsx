@@ -6,6 +6,7 @@ import { entryHrefResolver, ViolationTable } from "@/components/releases/Violati
 import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
 import { api, isAbortError, isConflict } from "@/lib/api";
+import { countNoun } from "@/lib/format";
 import type { ShipStepId } from "@/lib/glossary";
 import { useLatestRequest } from "@/lib/hooks";
 import { links } from "@/lib/links";
@@ -89,7 +90,7 @@ function confirmSummary(preview: ShipPreviewData): string {
   const changed = preview.entries.filter(entryChanged);
   const secrets = changed.filter((entry) => entry.kind === "secret").length;
   const aliases = `${changed.length} ${changed.length === 1 ? "alias changes" : "aliases change"}`;
-  const secretNote = `${secrets} ${secrets === 1 ? "secret" : "secrets"}`;
+  const secretNote = `${secrets} ${countNoun(secrets, "secrets")}`;
   const activation =
     preview.base_version > 0
       ? `${preview.release_name}@${preview.base_version} → @${preview.base_version + 1}`
@@ -125,6 +126,7 @@ export default function ShipModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  const summary = useMemo(() => (preview ? confirmSummary(preview) : ""), [preview]);
   const [shipError, setShipError] = useState<string | null>(null);
   const [result, setResult] = useState<ShipResult | null>(null);
   const [conflict, setConflict] = useState<ShipConflict | null>(null);
@@ -678,7 +680,7 @@ export default function ShipModal({
                   className={cn("ship-confirm-summary", stale && "is-stale")}
                   data-testid="ship-confirm-summary"
                 >
-                  {confirmSummary(preview)}
+                  {summary}
                 </p>
               ) : null}
               {production ? (

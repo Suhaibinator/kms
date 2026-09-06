@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import type { CloneEnvironmentModalProps } from "@/components/applications/contracts";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { contractSecrets } from "@/components/ship/model";
 import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
@@ -143,7 +144,7 @@ export default function CloneEnvironmentModal({
     }
   }
 
-  const hasSecrets = application.contract.some((field) => field.kind === "secret");
+  const hasSecrets = contractSecrets(application).length > 0;
   const sourceOptions = environments.map((environment) => ({
     value: environment.namespace.env,
     label: environment.namespace.env,

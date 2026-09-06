@@ -8,7 +8,7 @@ import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Badge, Checkbox, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
-import { aliasesByKey, resourceId, valueForKey } from "@/lib/overview";
+import { resourceId, valueForKey } from "@/lib/overview";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { ApplicationConfigurationRow, EnvironmentOverview } from "@/lib/types";
@@ -60,14 +60,19 @@ function isIncomplete(
  */
 function aliasFor(
   row: ApplicationConfigurationRow,
-  resolved: ReadonlyArray<Map<string, string>>,
+  overview: readonly EnvironmentOverview[],
 ): string | undefined {
-  const id = resourceId(row.kind, row.key);
-  for (const aliases of resolved) {
-    const alias = aliases.get(id);
-    if (alias !== undefined) return alias === row.key ? undefined : alias;
+  for (const environment of overview) {
+    const value = valueForKey(environment, row.kind, row.key);
+    if (value) return value.alias === row.key ? undefined : value.alias;
   }
   return undefined;
+}
+
+interface MatrixRow {
+  row: ApplicationConfigurationRow;
+  id: string;
+  alias?: string;
 }
 
 export function ConfigurationMatrix({
@@ -90,31 +95,38 @@ export function ConfigurationMatrix({
     () => new Map((overview ?? []).map((environment) => [environment.namespace.env, environment])),
     [overview],
   );
-  const resolved = useMemo(
-    () => (overview ?? []).map((environment) => aliasesByKey(environment)),
-    [overview],
-  );
-  const aliases = useMemo(
-    () => new Map(rows.map((row) => [resourceId(row.kind, row.key), aliasFor(row, resolved)])),
-    [rows, resolved],
+  const matrixRows = useMemo<MatrixRow[]>(
+    () =>
+      rows.map((row) => ({
+        row,
+        id: resourceId(row.kind, row.key),
+        alias: aliasFor(row, overview ?? []),
+      })),
+    [rows, overview],
   );
 
   const needle = filter.trim().toLowerCase();
-  const visible = sort.apply(
-    rows.filter((row) => {
+  // Filter, sort and count missing cells in one pass; the footer describes the
+  // rows on screen, so it is derived from the same list they render from.
+  const { visible, missing } = useMemo(() => {
+    const kept = matrixRows.filter(({ row, alias }) => {
       if (incompleteOnly && !isIncomplete(row, environments)) return false;
       if (!needle) return true;
-      const alias = aliases.get(resourceId(row.kind, row.key));
       return (
         row.key.toLowerCase().includes(needle) || Boolean(alias?.toLowerCase().includes(needle))
       );
-    }),
-  );
-
-  // Counted over the rows on screen, so the footer describes the table above it.
-  const missing = environments.map(
-    (env) => visible.filter((row) => !row.environments[env.env]?.present).length,
-  );
+    });
+    const sorted = sort.apply(kept.map(({ row }) => row));
+    const byId = new Map(kept.map((entry) => [entry.id, entry]));
+    const visible = sorted.map((row) => byId.get(resourceId(row.kind, row.key)) as MatrixRow);
+    const missing = environments.map(() => 0);
+    for (const { row } of visible) {
+      environments.forEach((env, index) => {
+        if (!row.environments[env.env]?.present) missing[index] += 1;
+      });
+    }
+    return { visible, missing };
+  }, [matrixRows, needle, incompleteOnly, environments, sort.apply]);
   const anyMissing = missing.some((count) => count > 0);
 
   return (
@@ -162,10 +174,9 @@ export function ConfigurationMatrix({
             />
           </thead>
           <tbody>
-            {visible.map((row) => {
-              const alias = aliases.get(resourceId(row.kind, row.key));
+            {visible.map(({ row, id, alias }) => {
               return (
-                <tr key={resourceId(row.kind, row.key)}>
+                <tr key={id}>
                   <td className="mono matrix-key">
                     {row.key}
                     {alias ? (
@@ -204,17 +215,12 @@ export function ConfigurationMatrix({
                 </tr>
               );
             })}
-            {rows.length === 0 ? (
+            {visible.length === 0 ? (
               <tr>
                 <td colSpan={environments.length + 3} className="faint">
-                  No parameters or secrets have been created.
-                </td>
-              </tr>
-            ) : null}
-            {rows.length > 0 && visible.length === 0 ? (
-              <tr>
-                <td colSpan={environments.length + 3} className="faint">
-                  No rows match the filter.
+                  {rows.length === 0
+                    ? "No parameters or secrets have been created."
+                    : "No rows match the filter."}
                 </td>
               </tr>
             ) : null}
@@ -294,7 +300,7 @@ function MatrixCell({
           className="matrix-secret"
           aria-label={label}
         >
-          <span className="matrix-kind" role="img" aria-label="Secret">
+          <span className="kind-glyph" role="img" aria-label="Secret">
             <Icon.secret size={13} />
           </span>
           Secret v{cell.version}

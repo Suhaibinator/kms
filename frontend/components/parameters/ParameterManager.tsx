@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronDown } from "lucide-react";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { JsonDiff } from "@/components/JsonDiff";
@@ -63,12 +63,15 @@ interface LoadedVersion {
 export default function ParameterManager({
   resourceRef,
   surface = "page",
+  context,
   onClose,
   onChanged,
   onDeleted,
 }: {
   resourceRef?: ResourceRef;
   surface?: "page" | "workspace";
+  /** Workspace surface only: where the caller came from, rendered under the title. */
+  context?: ReactNode;
   onClose?: () => void;
   onChanged?: (ref: ResourceRef) => void;
   onDeleted?: (ref: ResourceRef) => void;
@@ -900,7 +903,16 @@ export default function ParameterManager({
             {refreshing ? <Spinner /> : null}
           </span>
         }
-        description={displayNamespace(ref)}
+        description={
+          context ? (
+            <span className="row-wrap">
+              {displayNamespace(ref)}
+              {context}
+            </span>
+          ) : (
+            displayNamespace(ref)
+          )
+        }
         onClose={() => onClose?.()}
         dismissible={!saving && !deleting}
       >

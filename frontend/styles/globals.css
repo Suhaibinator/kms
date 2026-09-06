@@ -2600,7 +2600,8 @@
     color: var(--text);
   }
   /* Lucide SVGs are display:block under preflight; the wrapper keeps them inline. */
-  .matrix-kind {
+  /* The kind glyph beside a secret (pipeline row, matrix cell); inline-flex so the SVG cannot wrap alone. */
+  .kind-glyph {
     display: inline-flex;
     align-items: center;
     color: var(--text-faint);

@@ -20,6 +20,7 @@ import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
+import { releaseKey } from "@/components/releases/utils";
 import { StatusChip } from "@/components/StatusChip";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import RollbackDialog from "@/components/ship/RollbackDialog";
@@ -38,13 +39,14 @@ import {
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
-import { aliasesByKey, resourceId, valueFor } from "@/lib/overview";
+import { valueFor, valueForKey } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
   Finding,
   HealthResponse,
+  ReleaseEntryKind,
   ShipResult,
 } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
@@ -282,7 +284,7 @@ export function ApplicationHome({
                 app: application.name,
                 env: environment,
                 name: release.name,
-                release: `${release.name}@${release.version}`,
+                release: releaseKey(release),
               }),
             ),
         },
@@ -436,12 +438,28 @@ export function ApplicationHome({
     (environment) => environment.namespace.env === rollbackEnv,
   );
   // The alias the open secret serves, read from the overview's resolved values.
-  const secretTargetAlias = secretTarget
-    ? environments
-        .filter((candidate) => candidate.namespace.env === secretTarget.env)
-        .map((candidate) => aliasesByKey(candidate).get(resourceId("secret", secretTarget.key)))
-        .find(Boolean)
-    : undefined;
+  /** The alias behind an opened resource plus a way back to its column, shown under the workspace title. */
+  function workspaceContext(target: ResourceRef, kind: ReleaseEntryKind) {
+    const alias = valueForKey(
+      environments.find((candidate) => candidate.namespace.env === target.env),
+      kind,
+      target.key,
+    )?.alias;
+    return (
+      <span className="row-wrap">
+        {alias ? <Ident kind="alias" value={alias} tooltip={false} /> : null}
+        <Ident
+          kind="app"
+          value={application.name}
+          tooltip={false}
+          href={links.application(application.name, {
+            env: target.env,
+            tab: tab === "matrix" ? "matrix" : undefined,
+          })}
+        />
+      </span>
+    );
+  }
 
   async function setArchived(next: boolean) {
     if (lifecycleSaving) return;
@@ -650,6 +668,7 @@ export function ApplicationHome({
                 onRollback: setRollbackEnv,
                 onConnect: setConnectEnv,
                 onImportDefaults: setDefaultsEnv,
+                onEditContract: () => setDefinition({ prefill: null }),
                 onFix,
               }}
             />
@@ -853,30 +872,14 @@ export function ApplicationHome({
       />
       <ParameterWorkspace
         parameterRef={parameterTarget}
+        context={parameterTarget ? workspaceContext(parameterTarget, "parameter") : undefined}
         onClose={() => setParameterTarget(null)}
         onChanged={() => void reload()}
         onDeleted={() => void reload()}
       />
       <SecretWorkspace
         secretRef={secretTarget}
-        context={
-          secretTarget ? (
-            <span className="row-wrap">
-              {secretTargetAlias ? (
-                <Ident kind="alias" value={secretTargetAlias} tooltip={false} />
-              ) : null}
-              <Ident
-                kind="app"
-                value={application.name}
-                tooltip={false}
-                href={links.application(application.name, {
-                  env: secretTarget.env,
-                  tab: tab === "matrix" ? "matrix" : undefined,
-                })}
-              />
-            </span>
-          ) : undefined
-        }
+        context={secretTarget ? workspaceContext(secretTarget, "secret") : undefined}
         onClose={() => setSecretTarget(null)}
         onChanged={() => void reload()}
         onDeleted={() => void reload()}

@@ -5,6 +5,7 @@ import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Button } from "@/components/ui/button";
+import { countNoun } from "@/lib/format";
 import { links } from "@/lib/links";
 import type { EnvironmentOverview, OverviewValue } from "@/lib/types";
 import { AddResourceButton } from "./AddResourceButton";
@@ -61,7 +62,7 @@ export function ValuesSection({
             return (
               <li className="pipeline-row" key={value.alias} data-alias={value.alias}>
                 {value.kind === "secret" ? (
-                  <span className="pipeline-row-kind" role="img" aria-label="Secret">
+                  <span className="kind-glyph" role="img" aria-label="Secret">
                     <Icon.secret size={13} />
                   </span>
                 ) : null}
@@ -124,12 +125,12 @@ export function ValuesSection({
       )}
       {otherKeys.parameters > 0 ? (
         <Link className="pipeline-other-keys text-sm" href={links.parameters(ns)}>
-          {otherKeys.parameters} other {otherKeys.parameters === 1 ? "key" : "keys"} → Parameters
+          {otherKeys.parameters} other {countNoun(otherKeys.parameters, "keys")} → Parameters
         </Link>
       ) : null}
       {otherKeys.secrets > 0 ? (
         <Link className="pipeline-other-keys text-sm" href={links.secrets(ns)}>
-          {otherKeys.secrets} other {otherKeys.secrets === 1 ? "secret" : "secrets"} → Secrets
+          {otherKeys.secrets} other {countNoun(otherKeys.secrets, "secrets")} → Secrets
         </Link>
       ) : null}
     </section>

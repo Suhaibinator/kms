@@ -34,6 +34,7 @@ const callbacks: EnvironmentCallbacks = {
   onRollback: vi.fn(),
   onConnect: vi.fn(),
   onImportDefaults: vi.fn(),
+  onEditContract: vi.fn(),
   onFix: vi.fn(),
 };
 
@@ -372,10 +373,7 @@ describe("EnvironmentPipeline", () => {
     const column = screen.getByRole("region", { name: "dev environment" });
     expect(within(column).getByText("The contract has no aliases.")).toBeVisible();
     fireEvent.click(within(column).getByRole("button", { name: "Edit contract" }));
-    expect(callbacks.onFix).toHaveBeenCalledWith(
-      "edit_contract",
-      expect.objectContaining({ code: "contract_empty", scope: { env: "dev" } }),
-    );
+    expect(callbacks.onEditContract).toHaveBeenCalledWith("dev");
   });
 
   it("says when and by whom the active release shipped, and links a newer inactive release", () => {

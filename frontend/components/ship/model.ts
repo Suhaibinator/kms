@@ -3,6 +3,7 @@
 // and the components stay presentational.
 
 import { canonicalParameterValue, valuesEquivalent } from "@/lib/json-text";
+import { valueForAlias } from "@/lib/overview";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type {
   Application,
@@ -57,7 +58,7 @@ export function contractSecrets(application: Application): Application["contract
 }
 
 export function valueFor(env: EnvironmentOverview | null, alias: string): OverviewValue | null {
-  return env?.values.find((value) => value.alias === alias) ?? null;
+  return valueForAlias(env, alias) ?? null;
 }
 
 /** Present secrets, in contract order: the release pins each by version, never by value. */

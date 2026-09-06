@@ -12,15 +12,24 @@ import type {
  * `values` and never assumes a key equals its alias.
  */
 
+/** The contract value for `alias` in one environment, or undefined. */
+export function valueForAlias(
+  environment: EnvironmentOverview | null | undefined,
+  alias: string,
+): OverviewValue | undefined {
+  return environment?.values.find((candidate) => candidate.alias === alias);
+}
+
 /** The contract value for `alias` in `env`, or undefined when either is unknown. */
 export function valueFor(
   environments: readonly EnvironmentOverview[],
   env: string,
   alias: string,
 ): OverviewValue | undefined {
-  return environments
-    .find((candidate) => candidate.namespace.env === env)
-    ?.values.find((candidate) => candidate.alias === alias);
+  return valueForAlias(
+    environments.find((candidate) => candidate.namespace.env === env),
+    alias,
+  );
 }
 
 /** The contract value that resolved to a physical resource in one environment, if any. */

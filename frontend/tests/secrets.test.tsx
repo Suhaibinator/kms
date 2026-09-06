@@ -1066,11 +1066,11 @@ describe("binding-key version actions", () => {
     );
     renderBoundDetail();
     fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
-    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    const dialog = screen.getByRole("dialog", { name: "Rotate key · v1" });
     fillBindingKey(dialog, "Current binding key", BINDING_KEY);
     fillBindingKey(dialog, "New binding key", `${BINDING_KEY}-next`);
     fillBindingKey(dialog, "Confirm new binding key", `${BINDING_KEY}-next`);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate key" }));
 
     await waitFor(() =>
       expect(mocks.toast.error).toHaveBeenCalledWith(
@@ -1102,7 +1102,7 @@ describe("binding-key version actions", () => {
     expect(within(card).getByRole("button", { name: "Unbind" })).toBeVisible();
     expect(within(card).queryByRole("button", { name: /Purge cohort/ })).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "Rotate key" }));
-    expect(screen.getByRole("dialog", { name: "Rotate binding key · v1" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Rotate key · v1" })).toBeVisible();
   });
 
   it("labels a bound version's state with the shared vocabulary", async () => {
@@ -1123,7 +1123,7 @@ describe("binding-key version actions", () => {
     });
     renderBoundDetail();
     fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
-    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    const dialog = screen.getByRole("dialog", { name: "Rotate key · v1" });
     const current = within(dialog).getByLabelText("Current binding key");
     const replacement = within(dialog).getByLabelText("New binding key");
     const confirmation = within(dialog).getByLabelText("Confirm new binding key");
@@ -1134,10 +1134,10 @@ describe("binding-key version actions", () => {
     expect(current).toHaveValue(BINDING_KEY);
     expect(confirmation).toHaveValue("");
     fireEvent.change(confirmation, { target: { value: "mismatch" } });
-    expect(within(dialog).getByRole("button", { name: "Rotate binding key" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Rotate key" })).toBeDisabled();
     expect(rotate).not.toHaveBeenCalled();
     fireEvent.change(confirmation, { target: { value: generatedKey } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate key" }));
 
     await waitFor(() =>
       expect(rotate).toHaveBeenCalledWith(
@@ -1149,9 +1149,7 @@ describe("binding-key version actions", () => {
       ),
     );
     expect(preview).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("dialog", { name: "Rotate binding key · v1" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Rotate key · v1" })).not.toBeInTheDocument();
   });
 
   it("keeps no-op rotation diagnostics sanitized after ordered server validation", async () => {
@@ -1160,7 +1158,7 @@ describe("binding-key version actions", () => {
       .mockRejectedValue(new ApiError("invalid_argument", SECRET_OPERATION_FAILED_MESSAGE, 400));
     renderBoundDetail();
     fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
-    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    const dialog = screen.getByRole("dialog", { name: "Rotate key · v1" });
     fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
       target: { value: BINDING_KEY },
     });
@@ -1170,7 +1168,7 @@ describe("binding-key version actions", () => {
     fireEvent.change(within(dialog).getByLabelText("Confirm new binding key"), {
       target: { value: BINDING_KEY },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate key" }));
 
     await waitFor(() =>
       expect(rotate).toHaveBeenCalledWith(
@@ -1187,7 +1185,7 @@ describe("binding-key version actions", () => {
           code: "invalid_argument",
           message: SECRET_OPERATION_FAILED_MESSAGE,
         }),
-        "Rotate binding key failed",
+        "Rotate key failed",
       ),
     );
   });

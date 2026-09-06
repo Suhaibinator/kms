@@ -29,13 +29,10 @@ export interface EnvironmentCallbacks {
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
   onImportDefaults?: (env: string) => void;
+  /** The empty-contract row's "Edit contract"; the contract is edited at the application. */
+  onEditContract?: (env: string) => void;
   /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
   onFix: (action: FixAction, finding: Finding) => void;
-}
-
-/** The finding an empty contract would raise; the column's "Edit contract" button uses its Fix path. */
-function contractEmptyFinding(env: string): Finding {
-  return { code: "contract_empty", severity: "blocking", scope: { env }, params: {} };
 }
 
 // Findings the column's own sections already show in a richer form (the drift
@@ -75,6 +72,7 @@ export function EnvironmentColumn({
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
   const findings = useMemo(() => columnFindings(environment), [environment]);
+  const otherKeys = useMemo(() => countOtherKeys(environment, rows), [environment, rows]);
   // `?env=` deep links land on the column: scroll it into view. Focus stays
   // where it is — the ring (.pipeline-column-focused) marks the target, and a
   // query-only navigation is not a request to move the keyboard cursor.
@@ -134,13 +132,13 @@ export function EnvironmentColumn({
       <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
-        otherKeys={countOtherKeys(environment, rows)}
+        otherKeys={otherKeys}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
         onOpenSecret={callbacks.onOpenSecret}
         onOpenParameter={callbacks.onOpenParameter}
         onShip={callbacks.onShip}
-        onEditContract={() => callbacks.onFix("edit_contract", contractEmptyFinding(ns.env))}
+        onEditContract={() => callbacks.onEditContract?.(ns.env)}
       />
       <ReleaseSection
         environment={environment}

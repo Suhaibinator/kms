@@ -1,6 +1,7 @@
 import { RotateCcw, Send } from "lucide-react";
 import Link from "next/link";
 import { Ident, ReleaseIdent } from "@/components/Ident";
+import { releaseKey } from "@/components/releases/utils";
 import { Button } from "@/components/ui/button";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
@@ -104,7 +105,7 @@ export function ReleaseSection({
                   app: ns.app,
                   env: ns.env,
                   name: active.name,
-                  release: `${active.name}@${latest}`,
+                  release: releaseKey({ name: active.name, version: latest }),
                 })}
               >
                 latest v{latest} not active

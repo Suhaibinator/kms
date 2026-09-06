@@ -7,11 +7,7 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { type BindingAction, BindingActionModal } from "@/components/secrets/BindingActionModal";
-import {
-  BINDING_ACTION_LABELS,
-  type BindingActionKind,
-  bindingActions,
-} from "@/components/secrets/binding-actions";
+import { BINDING_ACTION_LABELS, bindingActions } from "@/components/secrets/binding-actions";
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
@@ -527,7 +523,8 @@ export default function SecretManager({
               {currentVersionInfo ? (
                 <BindingActionButtons
                   version={currentVersionInfo}
-                  actions={bindingActions(currentVersionInfo, { isCurrent: true, canPurge: false })}
+                  isCurrent
+                  canPurge={false}
                   onAction={setBindingAction}
                 />
               ) : null}
@@ -980,7 +977,8 @@ function VersionRow({
           ) : null}
           <BindingActionButtons
             version={v}
-            actions={bindingActions(v, { isCurrent, canPurge })}
+            isCurrent={isCurrent}
+            canPurge={canPurge}
             onAction={onBindingAction}
           />
           {!destroyed ? (
@@ -1002,37 +1000,30 @@ function VersionRow({
 /** The Bind / Unbind / Rotate key / Purge cohort buttons for one version. */
 function BindingActionButtons({
   version,
-  actions,
+  isCurrent,
+  canPurge,
   onAction,
 }: {
   version: SecretVersion;
-  actions: BindingActionKind[];
+  isCurrent: boolean;
+  canPurge: boolean;
   onAction: (action: BindingAction) => void;
 }) {
   return (
     <>
-      {actions.map((kind) =>
-        kind === "purge" ? (
-          <Button
-            key={kind}
-            variant="destructive"
-            size="sm"
-            aria-label={`Purge cohort containing version ${version.version}`}
-            onClick={() => onAction({ kind, version: version.version })}
-          >
-            {BINDING_ACTION_LABELS[kind]}
-          </Button>
-        ) : (
-          <Button
-            key={kind}
-            variant="outline"
-            size="sm"
-            onClick={() => onAction({ kind, version: version.version })}
-          >
-            {BINDING_ACTION_LABELS[kind]}
-          </Button>
-        ),
-      )}
+      {bindingActions(version, { isCurrent, canPurge }).map((kind) => (
+        <Button
+          key={kind}
+          variant={kind === "purge" ? "destructive" : "outline"}
+          size="sm"
+          aria-label={
+            kind === "purge" ? `Purge cohort containing version ${version.version}` : undefined
+          }
+          onClick={() => onAction({ kind, version: version.version })}
+        >
+          {BINDING_ACTION_LABELS[kind]}
+        </Button>
+      ))}
     </>
   );
 }

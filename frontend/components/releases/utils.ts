@@ -7,7 +7,7 @@ import {
   validateReleaseName,
 } from "@/lib/validation";
 
-export function releaseKey(release: ConfigurationRelease): string {
+export function releaseKey(release: { name: string; version: number }): string {
   return `${release.name}@${release.version}`;
 }
 
