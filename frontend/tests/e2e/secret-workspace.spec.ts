@@ -110,10 +110,16 @@ for (const surface of [
       const body = popup.querySelector("[data-modal-body]") as HTMLElement;
       const style = getComputedStyle(toolbar);
       const box = toolbar.getBoundingClientRect();
+      const bodyBox = body.getBoundingClientRect();
+      // The body reserves a scrollbar gutter (`scrollbar-gutter: stable`). On
+      // platforms with classic scrollbars (Linux CI, Windows) that gutter is
+      // 15px of the border box that no content can occupy, so the bleed is
+      // measured against the padding box, which `clientWidth` gives without it.
+      const paddingRight = bodyBox.left + body.clientLeft + body.clientWidth;
       return {
         band: box.top - header.getBoundingClientRect().bottom,
-        left: box.left - body.getBoundingClientRect().left,
-        right: body.getBoundingClientRect().right - box.right,
+        left: box.left - bodyBox.left,
+        right: paddingRight - box.right,
         position: style.position,
         opaque: style.backgroundColor,
         rule: style.borderBottomWidth,
@@ -157,10 +163,12 @@ test("below 640px the workspace toolbar scrolls with the body but keeps its blee
     const body = popup.querySelector("[data-modal-body]") as HTMLElement;
     const box = toolbar.getBoundingClientRect();
     const bodyBox = body.getBoundingClientRect();
+    // Padding box, not border box: see the desktop test for the scrollbar gutter.
+    const paddingRight = bodyBox.left + body.clientLeft + body.clientWidth;
     return {
       position: getComputedStyle(toolbar).position,
       left: box.left - bodyBox.left,
-      right: bodyBox.right - box.right,
+      right: paddingRight - box.right,
       height: box.height,
     };
   });
