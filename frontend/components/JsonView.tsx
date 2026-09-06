@@ -67,13 +67,16 @@ export function JsonView({
   return (
     <div className={cn("json-view", className)} data-wrap={wrap ? "on" : "off"}>
       <div className="json-view-toolbar">
+        {/* One variant across the row. `CopyButton` is `outline` everywhere in
+            the console, so the three controls beside it match rather than
+            leaving one boxed button among three unboxed ones. */}
         <div className="json-view-tools">
           {tools}
           {tree.tree ? (
             <>
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 disabled={!tree.canExpand}
                 onClick={tree.expandAll}
@@ -82,7 +85,7 @@ export function JsonView({
               </Button>
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 disabled={!tree.canCollapse}
                 onClick={tree.collapseAll}
@@ -93,7 +96,7 @@ export function JsonView({
           ) : null}
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             aria-pressed={wrap}
             onClick={() => setWrap((current) => !current)}

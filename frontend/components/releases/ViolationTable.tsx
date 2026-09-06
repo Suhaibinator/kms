@@ -32,7 +32,13 @@ export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTab
             <th>Code</th>
             <th>Schema pointer</th>
             <th>Message</th>
-            {actionable ? <th /> : null}
+            {/* The cells carry `data-label="Actions"`, which the card layout
+                shows; the desktop table needs the same name, unpainted. */}
+            {actionable ? (
+              <th>
+                <span className="sr-only">Actions</span>
+              </th>
+            ) : null}
           </tr>
         </thead>
         <tbody>

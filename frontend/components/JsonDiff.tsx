@@ -75,6 +75,16 @@ export function JsonDiff({
       {identical ? null : (
         <div className="json-diff-scroll" style={maxHeight ? { maxHeight } : undefined}>
           <table className="json-diff-table">
+            {/* `table-layout: fixed` reads its widths from `<col>` or from the
+                first row's cells; the header row is two auto `colSpan={2}`
+                cells, so without this the two line-number gutters took half
+                the table. */}
+            <colgroup>
+              <col className="json-diff-col-num" />
+              <col />
+              <col className="json-diff-col-num" />
+              <col />
+            </colgroup>
             <thead>
               <tr>
                 <th colSpan={2} scope="colgroup">
