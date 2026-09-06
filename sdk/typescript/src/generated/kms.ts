@@ -1105,7 +1105,14 @@ export interface Subscriber {
   remoteAddr: string;
   connectedAtUnixMs: bigint;
   lastHeartbeatUnixMs: bigint;
+  /** namespace transport ACK only */
   lastAckedRevision: bigint;
+  /** set for release streams */
+  releaseName: string;
+  /** empty until the first validated lifecycle ACK */
+  releaseState: string;
+  releaseVersion: bigint;
+  releaseRevision: bigint;
 }
 
 export interface ListSubscribersRequest {
@@ -16374,6 +16381,10 @@ function createBaseSubscriber(): Subscriber {
     connectedAtUnixMs: 0n,
     lastHeartbeatUnixMs: 0n,
     lastAckedRevision: 0n,
+    releaseName: "",
+    releaseState: "",
+    releaseVersion: 0n,
+    releaseRevision: 0n,
   };
 }
 
@@ -16411,6 +16422,24 @@ export const Subscriber: MessageFns<Subscriber> = {
         throw new globalThis.Error("value provided for field message.lastAckedRevision of type uint64 too large");
       }
       writer.uint32(64).uint64(message.lastAckedRevision);
+    }
+    if (message.releaseName !== "") {
+      writer.uint32(74).string(message.releaseName);
+    }
+    if (message.releaseState !== "") {
+      writer.uint32(82).string(message.releaseState);
+    }
+    if (message.releaseVersion !== 0n) {
+      if (BigInt.asUintN(64, message.releaseVersion) !== message.releaseVersion) {
+        throw new globalThis.Error("value provided for field message.releaseVersion of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.releaseVersion);
+    }
+    if (message.releaseRevision !== 0n) {
+      if (BigInt.asUintN(64, message.releaseRevision) !== message.releaseRevision) {
+        throw new globalThis.Error("value provided for field message.releaseRevision of type uint64 too large");
+      }
+      writer.uint32(96).uint64(message.releaseRevision);
     }
     return writer;
   },
@@ -16492,6 +16521,38 @@ export const Subscriber: MessageFns<Subscriber> = {
             message.lastAckedRevision = reader.uint64() as bigint;
             continue;
           }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.releaseName = reader.string();
+            continue;
+          }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.releaseState = reader.string();
+            continue;
+          }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.releaseVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.releaseRevision = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -16540,6 +16601,26 @@ export const Subscriber: MessageFns<Subscriber> = {
         : isSet(object.last_acked_revision)
         ? BigInt(object.last_acked_revision)
         : 0n,
+      releaseName: isSet(object.releaseName)
+        ? globalThis.String(object.releaseName)
+        : isSet(object.release_name)
+        ? globalThis.String(object.release_name)
+        : "",
+      releaseState: isSet(object.releaseState)
+        ? globalThis.String(object.releaseState)
+        : isSet(object.release_state)
+        ? globalThis.String(object.release_state)
+        : "",
+      releaseVersion: isSet(object.releaseVersion)
+        ? BigInt(object.releaseVersion)
+        : isSet(object.release_version)
+        ? BigInt(object.release_version)
+        : 0n,
+      releaseRevision: isSet(object.releaseRevision)
+        ? BigInt(object.releaseRevision)
+        : isSet(object.release_revision)
+        ? BigInt(object.release_revision)
+        : 0n,
     };
   },
 
@@ -16569,6 +16650,18 @@ export const Subscriber: MessageFns<Subscriber> = {
     if (message.lastAckedRevision !== 0n) {
       obj.lastAckedRevision = message.lastAckedRevision.toString();
     }
+    if (message.releaseName !== "") {
+      obj.releaseName = message.releaseName;
+    }
+    if (message.releaseState !== "") {
+      obj.releaseState = message.releaseState;
+    }
+    if (message.releaseVersion !== 0n) {
+      obj.releaseVersion = message.releaseVersion.toString();
+    }
+    if (message.releaseRevision !== 0n) {
+      obj.releaseRevision = message.releaseRevision.toString();
+    }
     return obj;
   },
 
@@ -16590,6 +16683,14 @@ export const Subscriber: MessageFns<Subscriber> = {
       : 0n;
     message.lastAckedRevision = (object.lastAckedRevision !== undefined && object.lastAckedRevision !== null)
       ? BigInt(object.lastAckedRevision)
+      : 0n;
+    message.releaseName = object.releaseName ?? "";
+    message.releaseState = object.releaseState ?? "";
+    message.releaseVersion = (object.releaseVersion !== undefined && object.releaseVersion !== null)
+      ? BigInt(object.releaseVersion)
+      : 0n;
+    message.releaseRevision = (object.releaseRevision !== undefined && object.releaseRevision !== null)
+      ? BigInt(object.releaseRevision)
       : 0n;
     return message;
   },
@@ -18937,5 +19038,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 7674d4719b78fede3051a49a4b1de5a490375cb5e6f8c62ba91ba21aa825d8b6
+// source-sha256: 2774f306326e2bfcac8b89ddade1045819513ed4873047d7e51ba4ef93564a0d
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

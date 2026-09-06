@@ -262,3 +262,53 @@ func TestReleaseSubscriptionSlowConsumerCoalescesLatest(t *testing.T) {
 		t.Fatal("no coalesced release event")
 	}
 }
+
+func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
+	ctx := context.Background()
+	st, ns := releaseWatchStore(t)
+	rel := createWatchRelease(t, st, ns, "one")
+	active := activateWatchRelease(t, st, ns, rel.Version)
+	now := time.Now().UTC()
+	hub := NewHub(st, nil, Options{now: func() time.Time { return now }})
+	reg := releaseWatchRegistration(t, st, ns)
+	reg.ClientName, reg.InstanceID, reg.Identity, reg.RemoteAddr = "client", "instance", "identity", "127.0.0.1"
+	namespaceSub, err := hub.Subscribe(ctx, Registration{Namespaces: []domain.NamespaceRef{ns}, NamespaceIDs: map[domain.NamespaceRef]int64{ns: reg.NamespaceID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespaceSub.Close()
+	sub, err := hub.SubscribeRelease(ctx, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	rows := hub.Subscribers()
+	if len(rows) != 2 {
+		t.Fatalf("subscribers = %+v", rows)
+	}
+	var row domain.Subscriber
+	for _, r := range rows {
+		if r.ReleaseName != "" {
+			row = r
+		}
+	}
+	if row.ReleaseName != "runtime" || row.ClientName != reg.ClientName || row.InstanceID != reg.InstanceID || row.Identity != reg.Identity || row.RemoteAddr != reg.RemoteAddr || !row.ConnectedAt.Equal(now) || len(row.Namespaces) != 1 || row.Namespaces[0] != ns {
+		t.Fatalf("release row = %+v", row)
+	}
+	if row.ReleaseState != "" || row.LastAckedRevision != 0 || !row.LastHeartbeat.IsZero() {
+		t.Fatalf("registration fabricated progress: %+v", row)
+	}
+	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
+	for _, r := range hub.Subscribers() {
+		if r.ReleaseName != "" {
+			row = r
+		}
+	}
+	if row.ReleaseState != domain.ReleaseStateRejected || row.ReleaseVersion != rel.Version || row.ReleaseRevision != active.ActivationRevision || row.LastAckedRevision != 0 {
+		t.Fatalf("release lifecycle = %+v", row)
+	}
+	sub.Close()
+	if rows := hub.Subscribers(); len(rows) != 1 || rows[0].ReleaseName != "" {
+		t.Fatalf("closed release remains: %+v", rows)
+	}
+}

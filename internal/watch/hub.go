@@ -261,9 +261,16 @@ func (h *Hub) Subscribers() []domain.Subscriber {
 	for _, s := range h.subs {
 		subs = append(subs, s)
 	}
+	releases := make([]*ReleaseSubscription, 0, len(h.releaseSubs))
+	for _, s := range h.releaseSubs {
+		releases = append(releases, s)
+	}
 	h.mu.Unlock()
-	out := make([]domain.Subscriber, 0, len(subs))
+	out := make([]domain.Subscriber, 0, len(subs)+len(releases))
 	for _, s := range subs {
+		out = append(out, s.describe())
+	}
+	for _, s := range releases {
 		out = append(out, s.describe())
 	}
 	return out

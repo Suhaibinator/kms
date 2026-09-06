@@ -527,10 +527,14 @@ export interface PostureFilters {
 // --- Subscribers ---
 
 export interface Subscriber {
+  release_name?: string;
+  release_state?: string;
+  release_version?: number;
+  release_revision?: number;
   client_name: string;
   instance_id: string;
   identity: string;
-  // The namespaces this stream is subscribed to. A subscriber receives every
+  // For namespace streams, a subscriber receives every
   // change in each of these namespaces; there is no per-key filtering on the
   // wire (any narrower interest is applied client-side in the callback).
   namespaces: NamespaceRef[];

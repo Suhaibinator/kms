@@ -447,6 +447,10 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 // --- subscribers -----------------------------------------------------------
 
 type subscriberDTO struct {
+	ReleaseName         string            `json:"release_name,omitempty"`
+	ReleaseState        string            `json:"release_state,omitempty"`
+	ReleaseVersion      uint64            `json:"release_version,omitempty"`
+	ReleaseRevision     uint64            `json:"release_revision,omitempty"`
 	ClientName          string            `json:"client_name"`
 	InstanceID          string            `json:"instance_id"`
 	Identity            string            `json:"identity"`
@@ -463,6 +467,7 @@ func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
 		namespaces = append(namespaces, namespaceRefDTO{Env: ns.Env, App: ns.App})
 	}
 	return subscriberDTO{
+		ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,
 		Identity:            s.Identity,

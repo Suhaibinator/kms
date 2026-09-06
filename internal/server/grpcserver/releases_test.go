@@ -134,10 +134,18 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if event.GetSnapshot().GetRelease().GetVersion() != 1 || event.GetRevision() != active.GetActivationRevision() {
 		t.Fatalf("snapshot=%+v", event)
 	}
+	admin := kmsv1.NewAdminServiceClient(conn)
+	live, err := admin.ListSubscribers(adminCtx(), &kmsv1.ListSubscribersRequest{})
+	if err != nil || len(live.GetSubscribers()) != 1 {
+		t.Fatalf("live release subscribers = %+v, err=%v", live, err)
+	}
+	subscriber := live.GetSubscribers()[0]
+	if subscriber.GetReleaseName() != "runtime" || subscriber.GetClientName() != "api" || subscriber.GetInstanceId() != "replica-1" || subscriber.GetReleaseState() != "" || subscriber.GetLastAckedRevision() != 0 || subscriber.GetConnectedAtUnixMs() == 0 {
+		t.Fatalf("new release subscriber = %+v", subscriber)
+	}
 	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
 		t.Fatal(err)
 	}
-	admin := kmsv1.NewAdminServiceClient(conn)
 	deadline := time.Now().Add(time.Second)
 	for {
 		states, err := admin.ListReleaseSubscribers(adminCtx(), &kmsv1.ListReleaseSubscribersRequest{Namespace: pNS("prod", "app"), ReleaseName: "runtime"})
@@ -156,7 +164,17 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 			break
 		}
 		if acknowledged {
-			break
+			live, err := admin.ListSubscribers(adminCtx(), &kmsv1.ListSubscribersRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(live.GetSubscribers()) == 1 && live.GetSubscribers()[0].GetReleaseState() == domain.ReleaseStateReceived {
+				row := live.GetSubscribers()[0]
+				if row.GetReleaseVersion() != 1 || row.GetReleaseRevision() != active.GetActivationRevision() || row.GetLastAckedRevision() != 0 {
+					t.Fatalf("live lifecycle = %+v", row)
+				}
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("acknowledgement was not persisted")
