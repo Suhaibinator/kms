@@ -11,6 +11,10 @@ interface CopyButtonProps {
   /** `icon-sm` hides the label (it stays the accessible name) for rows too
    *  narrow to spend ~90px on a word every reader already knows. */
   size?: "sm" | "icon-sm";
+  /** A toolbar wears one variant. `ghost` is for the tool rows above a code
+   *  block, where the other buttons are unboxed and a lone outlined Copy reads
+   *  as a different kind of control. */
+  variant?: "outline" | "ghost";
   className?: string;
   disabled?: boolean;
 }
@@ -19,6 +23,7 @@ export default function CopyButton({
   value,
   label = "Copy",
   size = "sm",
+  variant = "outline",
   className,
   disabled,
 }: CopyButtonProps) {
@@ -70,7 +75,7 @@ export default function CopyButton({
   return (
     <Button
       type="button"
-      variant="outline"
+      variant={variant}
       size={size}
       className={className}
       disabled={disabled}
