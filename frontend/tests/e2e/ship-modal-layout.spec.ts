@@ -14,7 +14,7 @@ for (const width of [320, 390, 640, 768, 820, 1024, 1280, 1440]) {
     await page.goto("/applications?app=gradethis&env=prod");
     await page.getByRole("button", { name: "Edit & ship rate_limits in prod" }).click();
     const modal = page.getByTestId("ship-modal");
-    const dialog = page.getByRole("dialog", { name: /Quick change/ });
+    const dialog = page.getByRole("dialog", { name: /^Ship · / });
     await expect(modal).toBeVisible();
     await expect(modal.getByRole("textbox", { name: "rate_limits value" })).toBeVisible();
     // Expand the server preview after opening so this test isolates the dialog

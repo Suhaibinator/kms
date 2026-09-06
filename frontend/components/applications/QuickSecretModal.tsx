@@ -1,7 +1,7 @@
-import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
 import { Checkbox, Field, Input } from "@/components/ui";
@@ -64,6 +64,7 @@ export function QuickSecretModal({
   const seedOpen = seed !== null;
   const seedEnvironment = seed?.environment ?? "";
   const seedKey = seed?.key ?? "";
+  const seedContentType = seed?.contentType || "text/plain";
   const [environment, setEnvironment] = useState("");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
@@ -99,7 +100,7 @@ export function QuickSecretModal({
     setKey(seedKey);
     setValue("");
     setAlreadyBase64(false);
-    setContentType("text/plain");
+    setContentType(seedContentType);
     setMetadataJson("{}");
     setExpires("");
     setBindVersion(false);
@@ -112,7 +113,15 @@ export function QuickSecretModal({
       // unmounted while the write was in flight.
       formInstance.current += 1;
     };
-  }, [seedOpen, seedEnvironment, seedKey, identityBoundary, environments, errors.reset]);
+  }, [
+    seedOpen,
+    seedEnvironment,
+    seedKey,
+    seedContentType,
+    identityBoundary,
+    environments,
+    errors.reset,
+  ]);
 
   const environmentProblem = environment ? null : "Choose an environment.";
   const keyProblem = validateKey(key.trim());
@@ -155,7 +164,7 @@ export function QuickSecretModal({
     key !== seeded.key ||
     environment !== seeded.environment ||
     alreadyBase64 ||
-    contentType !== "text/plain" ||
+    contentType !== seedContentType ||
     !isEmptyJson(metadataJson) ||
     expires !== "" ||
     bindVersion ||

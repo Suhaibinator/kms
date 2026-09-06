@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
 import { findingCopy } from "@/lib/readiness";
-import type { ApplicationOverview, EnvironmentOverview, Finding } from "@/lib/types";
+import type { ApplicationOverview, EnvironmentOverview, Finding, ShipResult } from "@/lib/types";
 import ApplicationsPage from "@/pages/applications";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 import readyJson from "./fixtures/backend/overview-ready.json";
@@ -50,9 +50,9 @@ vi.mock("@/components/secrets/SecretWorkspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/secrets/SecretWorkspace")>();
   return {
     ...actual,
-    SecretWorkspace: (props: { secretRef: unknown }) => {
+    SecretWorkspace: (props: { secretRef: unknown; context?: React.ReactNode }) => {
       mocks.secretWorkspace(props);
-      return null;
+      return props.secretRef ? <div data-testid="secret-context">{props.context}</div> : null;
     },
   };
 });
@@ -246,7 +246,7 @@ describe("ApplicationsPage", () => {
     const columns = screen.getAllByRole("region", { name: /environment$/ });
     expect(columns.map((column) => column.getAttribute("data-env"))).toEqual(["dev", "prod"]);
     expect(columns[1]).toHaveClass("pipeline-column-prod");
-    expect(screen.getByRole("button", { name: "Quick change" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Ship" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Roll back" })).toBeEnabled();
     // Freshness sits in the header with a compact refresh beside it.
     expect(document.querySelector(".transport-badge")).toHaveTextContent(/^Polling/);
@@ -280,7 +280,7 @@ describe("ApplicationsPage", () => {
     mocks.unarchiveApplication.mockResolvedValue({ application: setup.application });
     rerender(<ApplicationsPage key="archived" />);
     expect(await screen.findByText(/archived and read-only/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Quick change" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ship" })).toBeDisabled();
     menu = await openMore();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Unarchive application" }));
     await waitFor(() =>
@@ -369,6 +369,13 @@ describe("ApplicationsPage", () => {
       expect.objectContaining({
         secretRef: { env: "prod", app: overview.application.name, key },
       }),
+    );
+    // The workspace says which alias it serves and links back to this page's column.
+    const context = screen.getByTestId("secret-context");
+    expect(within(context).getByText("db_password")).toHaveClass("ident-value");
+    expect(within(context).getByRole("link", { name: overview.application.name })).toHaveAttribute(
+      "href",
+      links.application(overview.application.name, { env: "prod" }),
     );
   });
 
@@ -469,12 +476,67 @@ describe("ApplicationsPage", () => {
     );
   });
 
-  it("Quick change opens the ship modal for the focused environment", async () => {
+  it("Ship opens the ship modal for the focused environment", async () => {
     mocks.query = { app: ready.application.name, env: "prod" };
     mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Quick change" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
     expect(await screen.findByRole("dialog", { name: "Ship" })).toHaveTextContent("prod:");
+  });
+
+  it("lands on the environment Ship closed in, and announces an activation with a release link", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    await screen.findByRole("dialog", { name: "Ship" });
+    const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
+    const active = env(ready, "prod").release.active;
+    if (!active) throw new Error("fixture has no active release in prod");
+    const release = { name: active.name, version: active.version + 1, digest: "d" };
+    const preview = {} as ShipResult["preview"];
+    props.onShipped({ status: "rejected", preview, parameters: [] }, "prod");
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    props.onShipped({ status: "activated", preview, parameters: [], release }, "prod");
+    expect(mocks.toast.success).toHaveBeenCalledWith(
+      `Shipped ${release.name}@${release.version} to prod`,
+      undefined,
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open release" }) }),
+    );
+    const [, , options] = mocks.toast.success.mock.calls[0] as [
+      string,
+      undefined,
+      { action: { onClick: () => void } },
+    ];
+    options.action.onClick();
+    expect(mocks.push).toHaveBeenCalledWith(
+      links.releases({
+        app: ready.application.name,
+        env: "prod",
+        name: release.name,
+        release: `${release.name}@${release.version}`,
+      }),
+    );
+    await waitFor(() => expect(mocks.applicationOverview).toHaveBeenCalledTimes(3));
+
+    props.onClose("prod");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Ship" })).toBeNull());
+    expect(mocks.replace).toHaveBeenCalledWith(
+      { pathname: "/applications", query: { app: ready.application.name, env: "prod" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
+
+  it("opens Import defaults for a column from its menu", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    await screen.findByRole("region", { name: "dev environment" });
+    fireEvent.click(screen.getByRole("button", { name: "More for dev" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Import defaults to dev")).toBeVisible();
   });
 
   it("opens the defaults importer for a selected application environment", async () => {
@@ -654,6 +716,54 @@ describe("ApplicationsPage", () => {
       key: secret.alias,
     });
     await waitFor(() => expect(mocks.applicationOverview).toHaveBeenCalledTimes(2));
+  });
+
+  it("seeds a quick-added secret with the resolved key and a sibling environment's content type", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    const resolvedKey = `${secret.alias}-rotated`;
+    secret.present = false;
+    secret.key = resolvedKey;
+    const sibling = env(overview, "dev").values.find((value) => value.alias === secret.alias);
+    if (!sibling) throw new Error("fixture has no sibling value for the alias");
+    sibling.content_type = "application/json";
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
+    const modal = screen.getByRole("dialog", { name: "New secret" });
+    expect(within(modal).getByLabelText("Secret key")).toHaveValue(resolvedKey);
+    expect(within(modal).getByRole("combobox", { name: "Content type" })).toHaveTextContent(
+      /json/i,
+    );
+  });
+
+  it("does not stack the secret workspace on a secret created for Ship", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    mocks.createSecret.mockResolvedValue({ version: 1, revision: 9 });
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    await screen.findByRole("dialog", { name: "Ship" });
+    const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
+    props.onAddSecret("prod", secret.alias);
+    const modal = await screen.findByRole("dialog", { name: "New secret" });
+    fireEvent.change(within(modal).getByLabelText("Secret value"), {
+      target: { value: "hunter2" },
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+    await waitFor(() => expect(mocks.createSecret).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New secret" })).toBeNull());
+    expect(screen.queryByTestId("secret-context")).toBeNull();
+    // Ship is still open underneath, waiting for the value.
+    expect(screen.getByRole("dialog", { name: "Ship" })).toBeVisible();
   });
 
   it("creates an advanced secret and transitions the modal to its workspace", async () => {

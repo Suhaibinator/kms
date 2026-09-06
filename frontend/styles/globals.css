@@ -2542,15 +2542,6 @@
     vertical-align: top;
   }
 
-  .application-matrix thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--bg-elev);
-  }
-  .application-matrix thead th.matrix-key {
-    z-index: 3;
-  }
   .matrix-alias {
     display: block;
     margin-top: var(--space-1);
@@ -2600,8 +2591,23 @@
     white-space: nowrap;
   }
 
-  .secret-cell {
+  /* "Secret v3" with the lock glyph; a link, but the whole line like the value link. */
+  .matrix-secret {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     white-space: nowrap;
+    color: var(--text);
+  }
+  /* Lucide SVGs are display:block under preflight; the wrapper keeps them inline. */
+  .matrix-kind {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-faint);
+  }
+  .matrix-filter {
+    flex: 0 1 280px;
+    min-width: 180px;
   }
 
   /* Tooltip trigger around a badge: inline-flex so the badge keeps its box. */

@@ -33,6 +33,11 @@ export interface EnvironmentCallbacks {
   onFix: (action: FixAction, finding: Finding) => void;
 }
 
+/** The finding an empty contract would raise; the column's "Edit contract" button uses its Fix path. */
+function contractEmptyFinding(env: string): Finding {
+  return { code: "contract_empty", severity: "blocking", scope: { env }, params: {} };
+}
+
 // Findings the column's own sections already show in a richer form (the drift
 // badge, the Add value button, the rejected-instance panel, …) or that are
 // chrome rather than problems. Everything else would otherwise be invisible
@@ -96,7 +101,7 @@ export function EnvironmentColumn({
           <StatusChip status={environment.status} production={environment.production} />
         </div>
         <ActionMenu
-          label={`${ns.env} links`}
+          label={`More for ${ns.env}`}
           trigger={
             <Button type="button" variant="ghost" size="icon-sm" aria-label={`More for ${ns.env}`}>
               <MoreHorizontal size={16} />
@@ -110,6 +115,16 @@ export function EnvironmentColumn({
               label: "Releases",
               href: links.releases({ app: ns.app, env: ns.env, name: application.release_name }),
             },
+            { key: "connect", label: "Connect SDK", onSelect: () => callbacks.onConnect(ns.env) },
+            ...(callbacks.onImportDefaults
+              ? [
+                  {
+                    key: "import-defaults",
+                    label: "Import defaults",
+                    onSelect: () => callbacks.onImportDefaults?.(ns.env),
+                  },
+                ]
+              : []),
           ]}
         />
       </header>
@@ -119,11 +134,13 @@ export function EnvironmentColumn({
       <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
-        otherKeys={countOtherKeys(environment, rows).parameters}
+        otherKeys={countOtherKeys(environment, rows)}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
         onOpenSecret={callbacks.onOpenSecret}
+        onOpenParameter={callbacks.onOpenParameter}
         onShip={callbacks.onShip}
+        onEditContract={() => callbacks.onFix("edit_contract", contractEmptyFinding(ns.env))}
       />
       <ReleaseSection
         environment={environment}

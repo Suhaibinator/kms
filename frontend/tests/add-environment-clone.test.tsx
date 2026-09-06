@@ -200,6 +200,33 @@ describe("CloneEnvironmentModal", () => {
     });
   });
 
+  it("describes what the copy does as the checkbox changes, and that secrets are never copied", () => {
+    render(
+      <CloneEnvironmentModal
+        application={ready.application}
+        environments={environments}
+        open
+        onClose={() => undefined}
+        onCreated={vi.fn()}
+      />,
+    );
+    const modal = screen.getByRole("dialog", { name: "Copy an environment" });
+    expect(within(modal).getByText(/Parameter values are copied/)).toBeVisible();
+    // The note is only worth showing when the contract has a secret to add.
+    const hasSecrets = ready.application.contract.some((field) => field.kind === "secret");
+    expect(within(modal).queryByTestId("clone-secrets-note") !== null).toBe(hasSecrets);
+    if (hasSecrets) {
+      expect(within(modal).getByTestId("clone-secrets-note")).toHaveTextContent(
+        "Secret values are never copied",
+      );
+    }
+    fireEvent.click(
+      within(modal).getByText("Copy parameter values").closest("label") as HTMLElement,
+    );
+    expect(within(modal).getByText(/Only the namespace is created/)).toBeVisible();
+    expect(within(modal).queryByText(/Parameter values are copied/)).toBeNull();
+  });
+
   it("reports a missing source on the source field and explains the disabled button", () => {
     render(
       <CloneEnvironmentModal

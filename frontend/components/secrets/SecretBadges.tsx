@@ -33,19 +33,3 @@ export function BindingKeyBadge({ version, className }: { version: number; class
     </Tooltip>
   );
 }
-
-/** The current version needs a local access token; replaces ad-hoc "yes/no" text. */
-export function AccessTokenBadge({ className }: { className?: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="badge-tip" />}>
-        <Badge kind="accent" className={className}>
-          access token
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent>
-        Clients need this version's access token to read it; the release never carries it.
-      </TooltipContent>
-    </Tooltip>
-  );
-}

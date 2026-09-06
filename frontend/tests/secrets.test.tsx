@@ -250,6 +250,29 @@ describe("secret list filter validation", () => {
   });
 });
 
+describe("secret list mode column", () => {
+  it("shows each secret's protection as a neutral classification", async () => {
+    const bound: SecretMetadata = {
+      ...SECRET,
+      key: "db-password",
+      bound: true,
+      versions: [{ ...SECRET.versions[0], bound: true }],
+    };
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listSecrets").mockResolvedValue({
+      secrets: [SECRET, bound],
+      next_page_token: "",
+    });
+    render(<SecretsPage />);
+    expect(await screen.findByText(bound.key)).toBeVisible();
+
+    const modeCells = [...document.querySelectorAll('table.data tbody td[data-label="Mode"]')];
+    expect(modeCells.map((cell) => cell.textContent)).toEqual(["master key only", "binding key"]);
+    // Protection is a classification, not a problem, so neither badge warns.
+    for (const cell of modeCells) expect(cell.querySelector(".text-warning")).toBeNull();
+  });
+});
+
 describe("secret workspace navigation", () => {
   it("opens an ordinary key activation in place and preserves the detail href", async () => {
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
@@ -896,6 +919,28 @@ describe("binding-key version actions", () => {
     });
   }
 
+  /** Resolves once the secret has loaded; the skeleton also paints a Metadata
+   *  card and a table, so waiting on those would be too early. */
+  async function loaded(): Promise<void> {
+    await screen.findByRole("button", { name: "New version" });
+  }
+
+  /** The Versions table. The metadata card offers the same current-version
+   *  actions, so row tests scope to the table. */
+  async function versionsTable(): Promise<HTMLElement> {
+    await loaded();
+    return screen.getByRole("table");
+  }
+
+  async function metadataCard(): Promise<HTMLElement> {
+    await loaded();
+    return screen.getByText("Metadata").closest(".card") as HTMLElement;
+  }
+
+  function fillBindingKey(dialog: HTMLElement, label: string, value: string): void {
+    fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+  }
+
   async function submitPurgeAfterPreview(): Promise<void> {
     fireEvent.click(
       await screen.findByRole("button", { name: "Purge cohort containing version 1" }),
@@ -926,12 +971,14 @@ describe("binding-key version actions", () => {
       });
       const preview = vi.spyOn(api, "previewSecretBindingCohort");
       const view = renderDetail(SECRET);
-      fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
+      fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Bind" }));
       let dialog = screen.getByRole("dialog", { name: "Bind · v1" });
       const key = within(dialog).getByLabelText("New binding key");
       if (generated) await generateBindingKey();
       else fireEvent.change(key, { target: { value: BINDING_KEY } });
       const bindingKey = (key as HTMLInputElement).value;
+      const confirmation = within(dialog).getByLabelText("Confirm new binding key");
+      fireEvent.change(confirmation, { target: { value: bindingKey } });
       fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
 
       await waitFor(() =>
@@ -943,6 +990,7 @@ describe("binding-key version actions", () => {
         ),
       );
       expect(key).toHaveValue("");
+      expect(confirmation).toHaveValue("");
       expect(preview).not.toHaveBeenCalled();
 
       // Re-render a bound row to exercise the inverse exact-version operation.
@@ -953,7 +1001,7 @@ describe("binding-key version actions", () => {
         revision: 11,
       });
       renderBoundDetail();
-      fireEvent.click(await screen.findByRole("button", { name: "Unbind" }));
+      fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Unbind" }));
       dialog = screen.getByRole("dialog", { name: "Unbind · v1" });
       fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
         target: { value: BINDING_KEY },
@@ -963,6 +1011,109 @@ describe("binding-key version actions", () => {
     },
   );
 
+  it("requires the new binding key to be confirmed before binding", async () => {
+    const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
+      current_version: 2,
+      previous_version: 1,
+      revision: 10,
+    });
+    renderDetail(SECRET);
+    fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Bind" }));
+    const dialog = screen.getByRole("dialog", { name: "Bind · v1" });
+    const submit = within(dialog).getByRole("button", { name: "Bind" });
+    fillBindingKey(dialog, "New binding key", BINDING_KEY);
+    expect(submit).toBeDisabled();
+
+    const confirmation = within(dialog).getByLabelText("Confirm new binding key");
+    fireEvent.change(confirmation, { target: { value: `${BINDING_KEY}x` } });
+    fireEvent.blur(confirmation);
+    expect(within(dialog).getByText("The new binding keys do not match.")).toBeVisible();
+    expect(submit).toBeDisabled();
+    fireEvent.submit(dialog.querySelector("form") as HTMLFormElement);
+    expect(bind).not.toHaveBeenCalled();
+
+    fireEvent.change(confirmation, { target: { value: BINDING_KEY } });
+    expect(within(dialog).queryByText("The new binding keys do not match.")).toBeNull();
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() => expect(bind).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the typed key in the form when a bind fails", async () => {
+    const bind = vi
+      .spyOn(api, "bindSecret")
+      .mockRejectedValue(new ApiError("permission_denied", SECRET_OPERATION_FAILED_MESSAGE, 403));
+    renderDetail(SECRET);
+    fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Bind" }));
+    const dialog = screen.getByRole("dialog", { name: "Bind · v1" });
+    fillBindingKey(dialog, "New binding key", BINDING_KEY);
+    fillBindingKey(dialog, "Confirm new binding key", BINDING_KEY);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
+
+    await waitFor(() => expect(bind).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.anything(), "Bind failed"),
+    );
+    expect(screen.getByRole("dialog", { name: "Bind · v1" })).toBeVisible();
+    expect(within(dialog).getByLabelText("New binding key")).toHaveValue(BINDING_KEY);
+    expect(within(dialog).getByLabelText("Confirm new binding key")).toHaveValue(BINDING_KEY);
+    expect(within(dialog).getByRole("button", { name: "Bind" })).toBeEnabled();
+  });
+
+  it("keeps the typed keys when the current version changed underneath a rotation", async () => {
+    vi.spyOn(api, "rotateSecretBindingKey").mockRejectedValue(
+      new ApiError("aborted", SECRET_OPERATION_FAILED_MESSAGE, 409),
+    );
+    renderBoundDetail();
+    fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
+    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    fillBindingKey(dialog, "Current binding key", BINDING_KEY);
+    fillBindingKey(dialog, "New binding key", `${BINDING_KEY}-next`);
+    fillBindingKey(dialog, "Confirm new binding key", `${BINDING_KEY}-next`);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "aborted" }),
+        "Current version changed — reload and try again",
+      ),
+    );
+    expect(within(dialog).getByLabelText("Current binding key")).toHaveValue(BINDING_KEY);
+    expect(within(dialog).getByLabelText("New binding key")).toHaveValue(`${BINDING_KEY}-next`);
+    expect(within(dialog).getByLabelText("Confirm new binding key")).toHaveValue(
+      `${BINDING_KEY}-next`,
+    );
+  });
+
+  it("offers the current version's binding actions from the metadata card", async () => {
+    const view = renderDetail(SECRET);
+    let card = await metadataCard();
+    expect(within(card).getByText("master key only")).toBeVisible();
+    expect(within(card).queryByRole("button", { name: "Rotate key" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Purge cohort/ })).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "Bind" }));
+    expect(screen.getByRole("dialog", { name: "Bind · v1" })).toBeVisible();
+    view.unmount();
+
+    renderBoundDetail();
+    card = await metadataCard();
+    expect(within(card).getByText("binding key")).toBeVisible();
+    expect(within(card).queryByRole("button", { name: "Bind" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Unbind" })).toBeVisible();
+    expect(within(card).queryByRole("button", { name: /Purge cohort/ })).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "Rotate key" }));
+    expect(screen.getByRole("dialog", { name: "Rotate binding key · v1" })).toBeVisible();
+  });
+
+  it("labels a bound version's state with the shared vocabulary", async () => {
+    renderBoundDetail();
+    const row = within(await versionsTable())
+      .getByText("v1")
+      .closest("tr") as HTMLElement;
+    expect(within(row).getByText("binding key")).toBeVisible();
+    expect(screen.queryByText(/^bound$/)).toBeNull();
+  });
+
   it("rotates only current into one new version with its current-version CAS", async () => {
     const preview = vi.spyOn(api, "previewSecretBindingCohort");
     const rotate = vi.spyOn(api, "rotateSecretBindingKey").mockResolvedValue({
@@ -971,7 +1122,7 @@ describe("binding-key version actions", () => {
       revision: 42,
     });
     renderBoundDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
+    fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
     const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
     const current = within(dialog).getByLabelText("Current binding key");
     const replacement = within(dialog).getByLabelText("New binding key");
@@ -1008,7 +1159,7 @@ describe("binding-key version actions", () => {
       .spyOn(api, "rotateSecretBindingKey")
       .mockRejectedValue(new ApiError("invalid_argument", SECRET_OPERATION_FAILED_MESSAGE, 400));
     renderBoundDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
+    fireEvent.click(within(await versionsTable()).getByRole("button", { name: "Rotate key" }));
     const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
     fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
       target: { value: BINDING_KEY },
@@ -1242,7 +1393,7 @@ describe("binding-key version actions", () => {
         { ...SECRET.versions[0], version: 2, bound: true, created_at_unix_ms: 2 },
       ],
     });
-    expect(await screen.findByRole("button", { name: "Rotate key" })).toBeVisible();
+    expect(within(await versionsTable()).getByRole("button", { name: "Rotate key" })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /Purge cohort containing version/ }),
     ).not.toBeInTheDocument();

@@ -9,6 +9,7 @@ import type {
   EnvironmentOverview,
   OverviewValue,
   ShipChange,
+  ShipPreviewEntry,
   ShipResult,
   SubscriberInstance,
 } from "@/lib/types";
@@ -57,6 +58,11 @@ export function contractSecrets(application: Application): Application["contract
 
 export function valueFor(env: EnvironmentOverview | null, alias: string): OverviewValue | null {
   return env?.values.find((value) => value.alias === alias) ?? null;
+}
+
+/** Present secrets, in contract order: the release pins each by version, never by value. */
+export function pinnedSecrets(env: EnvironmentOverview | null): OverviewValue[] {
+  return env?.values.filter((value) => value.kind === "secret" && value.present) ?? [];
 }
 
 /** Secret aliases with no readable resource in this environment: blocker rows. */
@@ -173,6 +179,18 @@ export function driftCandidates(
     }
   }
   return out;
+}
+
+/**
+ * Whether a previewed entry moves the release: a new write, an alias with
+ * nothing to pin, or a pin that lands on a different version than before.
+ */
+export function entryChanged(entry: ShipPreviewEntry): boolean {
+  return (
+    entry.change === "edited" ||
+    entry.change === "missing" ||
+    entry.from_version !== entry.to_version
+  );
 }
 
 /** The wire changes for the current rows and opt-ins. */

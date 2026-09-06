@@ -23,9 +23,13 @@ export function valueFor(
     ?.values.find((candidate) => candidate.alias === alias);
 }
 
-/** Resolved key per contract alias in one environment; the alias itself when unresolved. */
-export function keyForAlias(environment: EnvironmentOverview | undefined, alias: string): string {
-  return environment?.values.find((value) => value.alias === alias)?.key ?? alias;
+/** The contract value that resolved to a physical resource in one environment, if any. */
+export function valueForKey(
+  environment: EnvironmentOverview | undefined,
+  kind: ReleaseEntryKind | string,
+  key: string,
+): OverviewValue | undefined {
+  return environment?.values.find((value) => value.kind === kind && value.key === key);
 }
 
 /** `kind:key` → alias for every resolved value in one environment. */

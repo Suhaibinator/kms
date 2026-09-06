@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { RollbackDialogProps } from "@/components/applications/contracts";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
@@ -55,6 +55,14 @@ export default function RollbackDialog({
   const formId = useId();
   const production = isProductionEnvironment(namespace.env);
   const busy = outcome.kind === "busy";
+  // The typed confirmation renders only once the previous release validates,
+  // so it takes focus when it appears rather than when the dialog opens.
+  const confirmRef = useRef<HTMLInputElement>(null);
+  const initialFocus = useCallback(() => confirmRef.current, []);
+  const confirmShown = production && check.kind === "valid" && outcome.kind !== "already";
+  useEffect(() => {
+    if (open && confirmShown) confirmRef.current?.focus();
+  }, [open, confirmShown]);
 
   const validate = useCallback(
     async (candidate: Target | null, signal: AbortSignal) => {
@@ -157,14 +165,25 @@ export default function RollbackDialog({
 
   const previous = target?.previous_version ?? 0;
   const releasesHref = links.releases({ app: namespace.app, env: namespace.env, name });
+  // Opens the previous release's workspace; its Compare tab diffs it against the version before it.
+  const compareHref = links.releases({
+    app: namespace.app,
+    env: namespace.env,
+    name,
+    release: `${name}@${previous}`,
+  });
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
+  // Rolling back a rollback is a re-activation; the title says which.
+  const title =
+    active?.is_rolled_back && previous > 0 ? `Re-activate v${previous}?` : "Roll back release?";
 
   return (
     <Modal
       open={open}
-      title="Roll back release?"
+      title={title}
       onClose={busy ? () => undefined : onClose}
       dismissible={!busy}
+      initialFocus={initialFocus}
       footer={
         <>
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
@@ -203,7 +222,10 @@ export default function RollbackDialog({
               Re-activate <ReleaseIdent name={name} version={previous} /> in{" "}
               <Ident kind="env" value={namespace.env} /> in place of{" "}
               <ReleaseIdent name={name} version={target.version} />. Subscribers receive a new
-              activation revision; nothing is deleted.
+              activation revision; nothing is deleted.{" "}
+              <Link href={compareHref} className="ship-link">
+                See what changes (v{target.version} → v{previous})
+              </Link>
             </>
           ) : (
             <>
@@ -269,7 +291,7 @@ export default function RollbackDialog({
           </div>
         ) : null}
 
-        {production && check.kind === "valid" && outcome.kind !== "already" ? (
+        {confirmShown ? (
           <Field
             label={
               <>
@@ -279,6 +301,7 @@ export default function RollbackDialog({
             className="mt-4"
           >
             <Input
+              ref={confirmRef}
               className="font-mono"
               value={typed}
               autoComplete="off"

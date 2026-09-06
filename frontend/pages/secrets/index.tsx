@@ -17,9 +17,9 @@ import {
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
+import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import {
-  Badge,
   EmptyState,
   Field,
   Input,
@@ -370,13 +370,7 @@ export default function SecretsPage() {
                     </td>
                     <td data-label="Versions">{s.versions?.length ?? 0}</td>
                     <td data-label="Mode">
-                      <div className="row-wrap">
-                        {s.bound ? (
-                          <Badge kind="warning">binding key</Badge>
-                        ) : (
-                          <Badge kind="neutral">master key only</Badge>
-                        )}
-                      </div>
+                      <BindingModeBadge bound={s.bound} />
                     </td>
                     <td className="nowrap" data-label="Updated">
                       {formatUnixMs(s.updated_at_unix_ms)}

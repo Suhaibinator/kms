@@ -4,6 +4,7 @@ import type { ShipModalProps } from "@/components/applications/contracts";
 import { PREVIEW_DEBOUNCE_MS, SHIP_MODE_STORAGE_KEY } from "@/components/ship/model";
 import ShipModal from "@/components/ship/ShipModal";
 import { ApiError } from "@/lib/api";
+import { links } from "@/lib/links";
 import type {
   ApplicationOverview,
   EnvironmentOverview,
@@ -71,6 +72,17 @@ const base = preview.preview.base_version;
 const next = base + 1;
 const written = preview.preview.entries.find((entry) => entry.change === "edited")?.to_version ?? 0;
 const prodRateLimits = prod.values.find((value) => value.alias === "rate_limits");
+const previewEntries = preview.preview.entries;
+// Rows the preview folds away: nothing written, nothing missing, same pin as before.
+const unchangedEntries = previewEntries.filter(
+  (entry) =>
+    entry.change !== "edited" &&
+    entry.change !== "missing" &&
+    entry.from_version === entry.to_version,
+);
+const changedEntries = previewEntries.filter((entry) => !unchangedEntries.includes(entry));
+const secretAlias = app.contract.find((field) => field.kind === "secret")?.alias ?? "";
+const devSecret = dev.values.find((value) => value.alias === secretAlias);
 const conflictCurrent = conflict.error?.current_version ?? 0;
 const conflictWritten = conflict.parameters[0]?.version ?? 0;
 const conflictRelease = conflict.release?.version ?? 0;
@@ -338,10 +350,25 @@ describe("ShipModal", () => {
       "data-changed",
       "true",
     );
+    // Unchanged pins stay folded behind a toggle until asked for.
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(changedEntries.length);
+    expect(table.querySelector('tr[data-alias="database"]')).toBeNull();
+    const toggle = within(previewSection).getByRole("button", {
+      name: `Show ${unchangedEntries.length} unchanged`,
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(previewEntries.length);
     expect(table.querySelector('tr[data-alias="database"]')).toHaveAttribute(
       "data-changed",
       "false",
     );
+    fireEvent.click(
+      within(previewSection).getByRole("button", {
+        name: `Hide ${unchangedEntries.length} unchanged`,
+      }),
+    );
+    expect(table.querySelector('tr[data-alias="database"]')).toBeNull();
     expect(within(previewSection).getByTestId("ship-activation")).toHaveTextContent(
       `${releaseName}@${base} → @${next}`,
     );
@@ -365,7 +392,7 @@ describe("ShipModal", () => {
     });
 
     expect(await within(dialog()).findByTestId("ship-rollout")).toBeVisible();
-    expect(props.onShipped).toHaveBeenCalledWith(activated, expect.any(String));
+    expect(props.onShipped).toHaveBeenCalledWith(activated, "dev");
     expect(within(dialog()).getByTestId("ship-modal")).toHaveAttribute("data-phase", "rollout");
   });
 
@@ -477,7 +504,7 @@ describe("ShipModal", () => {
       "href",
       `/releases?app=${app.name}&env=dev&name=${releaseName}&release=${encodeURIComponent(`${releaseName}@${next}`)}`,
     );
-    expect(props.onShipped).toHaveBeenCalledWith(notActivated, expect.any(String));
+    expect(props.onShipped).toHaveBeenCalledWith(notActivated, "dev");
 
     fireEvent.click(within(panel).getByRole("button", { name: "Fix and retry" }));
     await settlePreview();
@@ -546,7 +573,7 @@ describe("ShipModal", () => {
     expect(panel).toHaveTextContent(`${releaseName}@${conflictRelease}`);
     expect(panel).toHaveTextContent("created, not activated");
     expect(within(panel).queryByRole("button", { name: /activate anyway/i })).toBeNull();
-    expect(props.onShipped).toHaveBeenCalledWith(conflict, expect.any(String));
+    expect(props.onShipped).toHaveBeenCalledWith(conflict, "prod");
 
     fireEvent.click(
       within(panel).getByRole("button", { name: `Re-preview against @${conflictCurrent}` }),
@@ -812,6 +839,8 @@ describe("ShipModal", () => {
     });
     expect(optIn).toHaveAttribute("aria-checked", "false");
     expect(drift).toHaveTextContent(`pinned v${prodRateLimits?.pinned_version}`);
+    // The opt-in names its kind: a secret is pinned by label, a parameter by value.
+    expect(within(drift).getByText(prodRateLimits?.kind ?? "")).toBeVisible();
     // Base UI toggles through the hidden input the label points at.
     fireEvent.click(within(drift).getByText("rate_limits").closest("label") as HTMLElement);
     expect(optIn).toHaveAttribute("aria-checked", "true");
@@ -824,6 +853,123 @@ describe("ShipModal", () => {
       { alias: "database", value: '{"host":"db"}', content_type: "json" },
       { alias: "rate_limits", label: "current" },
     ]);
+  });
+
+  it("is titled Ship and opens on the prefilled row's editor once its value loads", async () => {
+    renderModal();
+    expect(screen.getByRole("dialog", { name: `Ship · ${app.name}` })).toBeInTheDocument();
+    await editRateLimits();
+    await waitFor(() =>
+      expect(within(dialog()).getByTestId("ship-row-rate_limits")).toContainElement(
+        document.activeElement as HTMLElement,
+      ),
+    );
+  });
+
+  it("opens on the environment select when no row is prefilled", async () => {
+    renderModal({ initialAlias: undefined });
+    await waitFor(() => expect(within(dialog()).getByLabelText("Environment")).toHaveFocus());
+  });
+
+  it("lists the pinned secrets with their binding state and a Manage link", async () => {
+    const bound: EnvironmentOverview[] = incident.environments.map((env) =>
+      env.namespace.env === "dev"
+        ? {
+            ...env,
+            values: env.values.map((value) =>
+              value.alias === secretAlias ? { ...value, bound: true } : value,
+            ),
+          }
+        : env,
+    );
+    renderModal({ environments: bound });
+    const pins = within(dialog()).getByTestId("ship-secret-pins");
+    expect(within(dialog()).getByText("Secrets pinned in this release")).toBeVisible();
+    const pin = within(pins).getByTestId(`ship-secret-pin-${secretAlias}`);
+    expect(pin).toHaveTextContent(`pinned v${devSecret?.pinned_version}`);
+    expect(within(pin).getByText("binding key")).toBeVisible();
+    expect(within(pin).getByRole("link", { name: "Manage" })).toHaveAttribute(
+      "href",
+      links.secretDetail({ env: "dev", app: app.name, key: devSecret?.key ?? "" }),
+    );
+    // Secrets never become value rows, even when listed.
+    expect(within(dialog()).queryByRole("textbox", { name: `${secretAlias} value` })).toBeNull();
+  });
+
+  it("omits the binding badge for a master-key-only secret and says what a first release pins", async () => {
+    const unreleased: EnvironmentOverview[] = incident.environments.map((env) =>
+      env.namespace.env === "dev"
+        ? {
+            ...env,
+            release: { latest_version: 0, release_count: 0 },
+            values: env.values.map((value) => ({ ...value, pinned_version: undefined })),
+          }
+        : env,
+    );
+    renderModal({ environments: unreleased });
+    const pin = within(dialog()).getByTestId(`ship-secret-pin-${secretAlias}`);
+    expect(pin).toHaveTextContent(`will pin v${devSecret?.current_version}`);
+    expect(within(pin).queryByText("binding key")).toBeNull();
+  });
+
+  it("summarises what a ship changes above the Ship button", async () => {
+    renderModal();
+    expect(within(dialog()).queryByTestId("ship-confirm-summary")).toBeNull();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    const summary = within(dialog()).getByTestId("ship-confirm-summary");
+    const secrets = changedEntries.filter((entry) => entry.kind === "secret").length;
+    expect(summary).toHaveTextContent(
+      `${changedEntries.length} ${changedEntries.length === 1 ? "alias changes" : "aliases change"} (${secrets} ${secrets === 1 ? "secret" : "secrets"})`,
+    );
+    expect(summary).toHaveTextContent(`${releaseName}@${base} → @${next}`);
+  });
+
+  it("ships on Enter from the production confirmation, and only once the name matches", async () => {
+    renderModal({ initialEnvironment: "prod" });
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(dryRuns()).toHaveLength(1));
+    await waitFor(() =>
+      expect(within(dialog()).getByTestId("ship-preview")).toHaveAttribute("data-stale", "false"),
+    );
+    const confirm = within(dialog()).getByTestId("ship-confirm-env");
+    const form = confirm.closest("form") as HTMLFormElement;
+    expect(shipButton()).toHaveAttribute("type", "submit");
+    expect(shipButton()).toHaveAttribute("form", form.id);
+
+    fireEvent.change(confirm, { target: { value: "pro" } });
+    fireEvent.submit(form);
+    expect(realShips()).toHaveLength(0);
+
+    fireEvent.change(confirm, { target: { value: "prod" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(realShips()).toHaveLength(1));
+    expect(realShips()[0]).toMatchObject({ environment: "prod", expected_active_version: base });
+  });
+
+  it("jumps from a previewed parameter alias to its editor row", async () => {
+    Element.prototype.scrollIntoView ??= vi.fn();
+    renderModal();
+    await editRateLimits();
+    await settlePreview();
+    const previewSection = await within(dialog()).findByTestId("ship-preview");
+    await within(previewSection).findByText(`${releaseName}@${next}`);
+    fireEvent.click(
+      within(previewSection).getByRole("button", {
+        name: `Show ${unchangedEntries.length} unchanged`,
+      }),
+    );
+    const table = within(previewSection).getByRole("table");
+    // A secret has no editor row, so its alias stays plain text.
+    expect(within(table).queryByRole("button", { name: secretAlias })).toBeNull();
+    fireEvent.click(within(table).getByRole("button", { name: "database" }));
+    await waitFor(() =>
+      expect(within(dialog()).getByTestId("ship-row-database")).toContainElement(
+        document.activeElement as HTMLElement,
+      ),
+    );
   });
 
   it("defaults to express once a release has ever been active, and guided otherwise", async () => {

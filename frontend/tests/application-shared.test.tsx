@@ -3,11 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import { ResourceLink } from "@/components/applications/ResourceLink";
 import { isUnreleased, UnreleasedBadge } from "@/components/applications/ValueBadges";
-import {
-  AccessTokenBadge,
-  BindingKeyBadge,
-  BindingModeBadge,
-} from "@/components/secrets/SecretBadges";
+import { BindingKeyBadge, BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { links } from "@/lib/links";
 import { aliasesByKey, countOtherKeys, valueFor } from "@/lib/overview";
 import type { ApplicationConfigurationRow, ApplicationOverview, OverviewValue } from "@/lib/types";
@@ -29,17 +25,10 @@ describe("SecretBadges", () => {
     expect(screen.queryByText(/^bound$/)).toBeNull();
   });
 
-  it("wraps the binding-key and access-token badges in inline-flex tooltip triggers", () => {
-    const { container } = render(
-      <>
-        <BindingKeyBadge version={4} />
-        <AccessTokenBadge />
-      </>,
-    );
-    const triggers = container.querySelectorAll(".badge-tip");
-    expect(triggers).toHaveLength(2);
+  it("wraps the binding-key badge in an inline-flex tooltip trigger", () => {
+    const { container } = render(<BindingKeyBadge version={4} />);
+    expect(container.querySelectorAll(".badge-tip")).toHaveLength(1);
     expect(screen.getByText("binding key")).toBeVisible();
-    expect(screen.getByText("access token")).toBeVisible();
   });
 });
 

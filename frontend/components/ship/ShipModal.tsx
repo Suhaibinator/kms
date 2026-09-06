@@ -17,12 +17,14 @@ import type {
   ShipPreview as ShipPreviewData,
   ShipResult,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { ConflictPanel, type ShipConflict } from "./ConflictPanel";
 import {
   buildChanges,
   changesKey,
   defaultEnvironment,
   driftCandidates,
+  entryChanged,
   everActivated,
   initialRows,
   makeRow,
@@ -64,8 +66,40 @@ function newRequestId(): string {
 }
 
 /**
- * Quick change: edit values, dry-run a preview, ship with a CAS guard, watch
- * the rollout — one modal, guided or express.
+ * The value control of an editor row, else its first enabled button (a folded
+ * row's Edit). The row head's Revert and Show diff come earlier in DOM order
+ * and may be disabled, so the control is looked up before any button.
+ */
+function rowControl(alias: string): HTMLElement | null {
+  const row = document.querySelector<HTMLElement>(
+    `[data-testid="ship-editor"] [data-alias="${CSS.escape(alias)}"]`,
+  );
+  if (!row) return null;
+  return (
+    row.querySelector<HTMLElement>('textarea, input:not([type="hidden"]), select') ??
+    row.querySelector<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])',
+    ) ??
+    row
+  );
+}
+
+/** "{n} aliases change ({m} secrets); runtime@3 → @4": the one line above Ship. */
+function confirmSummary(preview: ShipPreviewData): string {
+  const changed = preview.entries.filter(entryChanged);
+  const secrets = changed.filter((entry) => entry.kind === "secret").length;
+  const aliases = `${changed.length} ${changed.length === 1 ? "alias changes" : "aliases change"}`;
+  const secretNote = `${secrets} ${secrets === 1 ? "secret" : "secrets"}`;
+  const activation =
+    preview.base_version > 0
+      ? `${preview.release_name}@${preview.base_version} → @${preview.base_version + 1}`
+      : `${preview.release_name}@1 is the first activation`;
+  return `${aliases} (${secretNote}); ${activation}`;
+}
+
+/**
+ * Ship: edit values, dry-run a preview, ship with a CAS guard, watch the
+ * rollout — one modal, guided or express.
  */
 export default function ShipModal({
   application,
@@ -104,9 +138,17 @@ export default function ShipModal({
   // What each row's editor started from, so the dirty guard only fires on a
   // real edit: the prefilled current value, or "" for a row with no value yet.
   const prefilled = useRef(new Map<string, string>());
-  // The environment select is the first real control; the dialog opens on it.
+  // The environment select is the first real control; the dialog opens on it
+  // unless a prefilled row is already editable, in which case it opens there.
   const environmentSelectRef = useRef<HTMLElement | null>(null);
+  const initialFocus = useCallback(
+    () => (initialAlias ? rowControl(initialAlias) : null) ?? environmentSelectRef.current,
+    [initialAlias],
+  );
+  // Whether this open has handed focus to the prefilled row yet.
+  const focusedInitialRow = useRef(false);
   const confirmId = useId();
+  const formId = `${confirmId}-form`;
 
   const env = useMemo(
     () => environments.find((candidate) => candidate.namespace.env === environment) ?? null,
@@ -159,6 +201,7 @@ export default function ShipModal({
       previewRequest.abort();
       return;
     }
+    focusedInitialRow.current = false;
     setPhase("compose");
     setActivation(null);
     setRolledBack(null);
@@ -205,6 +248,24 @@ export default function ShipModal({
         });
     }
   }, [open, environment, rows, application.name]);
+
+  // The prefilled row's editor appears only once its current value has
+  // loaded, after the dialog already opened on the environment select. Hand
+  // focus over then, unless the operator has moved on meanwhile.
+  const initialRowLoaded =
+    initialAlias !== undefined && rows.some((row) => row.alias === initialAlias && row.loaded);
+  useEffect(() => {
+    if (!open || !initialAlias || !initialRowLoaded || focusedInitialRow.current) return;
+    focusedInitialRow.current = true;
+    const control = rowControl(initialAlias);
+    const active = document.activeElement;
+    const idle =
+      !active ||
+      active === document.body ||
+      active === environmentSelectRef.current ||
+      active.getAttribute("data-slot") === "dialog-content";
+    if (control && idle && !control.contains(active)) control.focus({ preventScroll: true });
+  }, [open, initialAlias, initialRowLoaded]);
 
   const runPreview = useCallback(async () => {
     if (!ready) return;
@@ -343,19 +404,11 @@ export default function ShipModal({
     // later — so keep re-asserting the row focus until it sticks.
     let attempts = 0;
     const attempt = () => {
-      const row = document.querySelector<HTMLElement>(
-        `[data-testid="ship-editor"] [data-alias="${CSS.escape(alias)}"]`,
-      );
-      if (row) {
-        if (attempts === 0) row.scrollIntoView?.({ block: "center" });
-        // The value control first; the row head's buttons (Revert, Show diff)
-        // come earlier in DOM order and may be disabled.
-        const control =
-          row.querySelector<HTMLElement>('textarea, input:not([type="hidden"]), select') ??
-          row.querySelector<HTMLElement>(
-            'button:not([disabled]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])',
-          );
-        (control ?? row).focus?.({ preventScroll: true });
+      const control = rowControl(alias);
+      const row = control?.closest<HTMLElement>("[data-alias]") ?? null;
+      if (control) {
+        if (attempts === 0) row?.scrollIntoView?.({ block: "center" });
+        control.focus?.({ preventScroll: true });
       }
       attempts += 1;
       if (attempts < 6 && !row?.contains(document.activeElement)) {
@@ -493,7 +546,7 @@ export default function ShipModal({
       </span>
     ) : (
       <span className="ship-title">
-        Quick change · <Ident kind="app" value={application.name} />
+        Ship · <Ident kind="app" value={application.name} />
       </span>
     );
 
@@ -517,7 +570,7 @@ export default function ShipModal({
         title={title}
         onClose={handleClose}
         dismissible={phase !== "shipping"}
-        initialFocus={environmentSelectRef}
+        initialFocus={initialFocus}
         dirty={dirty}
         footer={(close) =>
           phase === "rollout" ? (
@@ -548,11 +601,11 @@ export default function ShipModal({
                 Cancel
               </Button>
               <Button
-                type="button"
+                form={formId}
+                type="submit"
                 variant={production ? "destructive-solid" : "default"}
                 disabled={!canShip}
                 loading={phase === "shipping"}
-                onClick={() => void ship()}
                 data-testid="ship-submit"
               >
                 Ship
@@ -585,7 +638,14 @@ export default function ShipModal({
           ) : null}
 
           {phase === "compose" || phase === "shipping" ? (
-            <>
+            <form
+              id={formId}
+              className="ship-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void ship();
+              }}
+            >
               <ShipEditor
                 application={application}
                 environments={environments}
@@ -618,6 +678,14 @@ export default function ShipModal({
                 resolveHref={resolveHref}
                 onEditAlias={onEditAlias}
               />
+              {preview ? (
+                <p
+                  className={cn("ship-confirm-summary", stale && "is-stale")}
+                  data-testid="ship-confirm-summary"
+                >
+                  {confirmSummary(preview)}
+                </p>
+              ) : null}
               {production ? (
                 <Field
                   label={
@@ -640,7 +708,7 @@ export default function ShipModal({
                   />
                 </Field>
               ) : null}
-            </>
+            </form>
           ) : null}
 
           {phase === "rejected" ? (

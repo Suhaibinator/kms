@@ -143,6 +143,7 @@ export default function CloneEnvironmentModal({
     }
   }
 
+  const hasSecrets = application.contract.some((field) => field.kind === "secret");
   const sourceOptions = environments.map((environment) => ({
     value: environment.namespace.env,
     label: environment.namespace.env,
@@ -249,8 +250,9 @@ export default function CloneEnvironmentModal({
             }}
           >
             <div className="info-panel mb-4 text-sm">
-              Parameter values are copied as new versions in the target; existing target keys are
-              kept. Secrets are listed as needing a value.
+              {copyValues
+                ? "Parameter values are copied as new versions in the target; existing target keys are kept."
+                : "Only the namespace is created; no values are copied."}
             </div>
             <div className="form-row">
               <Field label="Copy values from" error={shown("source", sourceProblem)}>
@@ -305,6 +307,12 @@ export default function CloneEnvironmentModal({
                 <span className="mono">{target.trim()}</span> is a production environment. You will
                 be asked to type its name.
               </div>
+            ) : null}
+            {hasSecrets ? (
+              <p className="faint text-sm mt-4 mb-0" data-testid="clone-secrets-note">
+                Secret values are never copied. Each secret alias needs a value in the new
+                environment before a release can ship.
+              </p>
             ) : null}
           </form>
         )}

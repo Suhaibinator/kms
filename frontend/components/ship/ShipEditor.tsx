@@ -1,14 +1,23 @@
 import { ChevronDown, GitCompareArrows, RotateCcw, Trash2 } from "lucide-react";
 import { type Ref, useId, useRef, useState } from "react";
 import { AddResourceButton } from "@/components/applications/AddResourceButton";
+import { ResourceLink } from "@/components/applications/ResourceLink";
 import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Badge, Button, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
-import type { Application, EnvironmentOverview } from "@/lib/types";
-import { addableAliases, rowChanged, type ShipRow, shownRowError, valueFor } from "./model";
+import type { Application, EnvironmentOverview, OverviewValue } from "@/lib/types";
+import {
+  addableAliases,
+  pinnedSecrets,
+  rowChanged,
+  type ShipRow,
+  shownRowError,
+  valueFor,
+} from "./model";
 
 /** Above this many rows the editor folds each one to a line until it is opened. */
 export const COLLAPSE_ROWS_ABOVE = 3;
@@ -225,6 +234,45 @@ function RowCard({
   );
 }
 
+/**
+ * One present secret and how the release will carry it: the pin the active
+ * release already holds, or the version a first release will pin. Secrets are
+ * never typed here, so the only action is Manage.
+ */
+function SecretPin({
+  value,
+  environment,
+  app,
+}: {
+  value: OverviewValue;
+  environment: string;
+  app: string;
+}) {
+  const pin =
+    value.pinned_version !== undefined
+      ? `pinned v${value.pinned_version}`
+      : `will pin v${value.current_version ?? "?"}`;
+  return (
+    <li className="ship-secret-pin" data-testid={`ship-secret-pin-${value.alias}`}>
+      <Ident kind="alias" value={value.alias} />
+      <span className="faint text-sm">{pin}</span>
+      {value.bound && value.current_version !== undefined ? (
+        <BindingKeyBadge version={value.current_version} />
+      ) : null}
+      <ResourceLink
+        kind="secret"
+        button
+        env={environment}
+        app={app}
+        keyName={value.key ?? value.alias}
+        className="ship-secret-pin-manage"
+      >
+        Manage
+      </ResourceLink>
+    </li>
+  );
+}
+
 /** The Change step: environment picker, blocker rows for missing secrets, one editor per parameter. */
 export function ShipEditor({
   application,
@@ -243,7 +291,9 @@ export function ShipEditor({
   initialFocusRef,
 }: ShipEditorProps) {
   const envSelectId = useId();
+  const pinsId = useId();
   const addable = addableAliases(application, rows);
+  const pins = pinnedSecrets(env);
   // With many rows each folds to a line until opened; a row with a problem or
   // an edit in progress stays open on its own.
   const collapsible = rows.length > COLLAPSE_ROWS_ABOVE;
@@ -305,6 +355,24 @@ export function ShipEditor({
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {pins.length > 0 ? (
+        <section className="ship-secret-pins-section" aria-labelledby={pinsId}>
+          <h4 id={pinsId} className="ship-subtitle">
+            Secrets pinned in this release
+          </h4>
+          <ul className="ship-secret-pins" data-testid="ship-secret-pins">
+            {pins.map((value) => (
+              <SecretPin
+                key={value.alias}
+                value={value}
+                environment={environment}
+                app={application.name}
+              />
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {rows.length === 0 ? (
