@@ -4,7 +4,7 @@ Declare :class:`SecretValue` / :class:`ParameterValue` as class attributes on a
 config object, then resolve them all with a single :meth:`Client.resolve` call::
 
     class AppConfig:
-        stripe_key = SecretValue("stripe-api-key", token="...")
+        stripe_key = SecretValue("stripe-api-key")
         rate_limit = ParameterValue("rate-limit")              # hot-reloads
         log_format = ParameterValue("log-format", static=True)  # boot-time only
 
@@ -183,19 +183,17 @@ class SecretValue(_DescriptorBase):
 
     Args:
         key: relative key (``"stripe-api-key"``) or absolute ``"/env/app/key"``.
-        token: optional per-secret access token.
-        bind_key: optional binding key, independent from the access token.
+        bind_key: optional key required to decrypt a bound version.
         env_var: optional environment variable that, when set and non-empty,
             overrides the store value (no namespace resolution is needed then).
         default: optional fallback (development only).
     """
 
-    def __init__(self, key: str = "", *, token: Optional[str] = None,
-                 bind_key: Optional[str] = None, env_var: Optional[str] = None,
+    def __init__(self, key: str = "", *, bind_key: Optional[str] = None,
+                 env_var: Optional[str] = None,
                  default: Optional[str] = None) -> None:
         super().__init__()
         self._key = key
-        self._token = token or ""
         self._bind_key = bind_key or ""
         self._env_var = env_var or ""
         self._default = default
@@ -231,7 +229,7 @@ class SecretValue(_DescriptorBase):
                 resolution_failed = False
                 try:
                     sec = client.get_secret(
-                        self._key, secret_token=self._token,
+                        self._key,
                         binding_key=self._bind_key, timeout=timeout,
                     )
                 except Exception as err:
@@ -273,7 +271,7 @@ class SecretValue(_DescriptorBase):
             resolution_failed = False
             try:
                 secret = await client.get_secret(
-                    self._key, secret_token=self._token,
+                    self._key,
                     binding_key=self._bind_key, timeout=timeout,
                 )
             except Exception as err:

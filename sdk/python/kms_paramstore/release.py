@@ -55,7 +55,6 @@ __all__ = [
     "ReleaseStartupError",
     "ReleaseStats",
     "ReleaseStatus",
-    "SecretTokenProvider",
     "RELEASE_REJECTION_CATEGORIES",
     "RELEASE_STATES",
     "run_typed_release",
@@ -66,7 +65,7 @@ _KIND_SECRET = "secret"
 RELEASE_STATES = ("received", "prepared", "applied", "rejected")
 RELEASE_REJECTION_CATEGORIES = (
     "resolution_failed",
-    "token_unavailable",
+    "binding_key_unavailable",
     "version_mismatch",
     "digest_mismatch",
     "prepare_failed",
@@ -112,10 +111,6 @@ class ReleaseDivergenceReporter(Protocol):
 
     def release_divergence(self) -> Tuple[bool, int]:
         """Report whether source defaults differ and the bounded field count."""
-
-
-SecretTokenResult = Union[str, Tuple[str, bool], None]
-SecretTokenProvider = Callable[[str, str], SecretTokenResult]
 
 
 class ReleaseLoaderError(errors.ParamStoreError):
@@ -286,7 +281,6 @@ class ReleaseLoaderConfig:
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
     reconcile_interval: float = 60.0
-    secret_token_provider: Optional[SecretTokenProvider] = None
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
     )
@@ -896,31 +890,16 @@ class ReleaseLoader:
         if exact.expires_at_unix_ms > 0 and exact.expires_at_unix_ms <= _now_ms():
             raise _CandidateFailure("resolution_failed")
 
-        secret_token = ""
-        if exact.has_access_token:
-            provider = self._config.secret_token_provider
-            if provider is None:
-                raise _CandidateFailure("token_unavailable")
-            check_cancelled()
-            try:
-                secret_token = _token_from_result(provider(entry.alias, entry.path))
-            except Exception:
-                check_cancelled()
-                raise _CandidateFailure("token_unavailable") from None
-            check_cancelled()
-            if not secret_token:
-                raise _CandidateFailure("token_unavailable")
         binding_key = ""
         if exact.bound:
             binding_key = self._binding_keys.get(entry.alias, "")
             if not isinstance(binding_key, str) or not binding_key:
-                raise _CandidateFailure("token_unavailable")
+                raise _CandidateFailure("binding_key_unavailable")
         check_cancelled()
         try:
             secret = self._client.get_secret(
                 entry.path,
                 version=entry.version,
-                secret_token=secret_token,
                 binding_key=binding_key,
                 timeout=self._config.request_timeout,
             )
@@ -1113,7 +1092,7 @@ class ReleaseLoader:
                 category
                 in {
                     "resolution_failed",
-                    "token_unavailable",
+                    "binding_key_unavailable",
                     "version_mismatch",
                     "digest_mismatch",
                 }
@@ -1258,15 +1237,6 @@ def _valid_sha256_hex(value: object) -> bool:
     except (TypeError, ValueError):
         return False
     return value.isascii() and len(decoded) == 32
-
-
-def _token_from_result(result: SecretTokenResult) -> str:
-    if isinstance(result, tuple):
-        if len(result) != 2:
-            return ""
-        token, ok = result
-        return token if isinstance(token, str) and ok is True else ""
-    return result if isinstance(result, str) else ""
 
 
 def _classified_rejection_category(exc: BaseException) -> str:

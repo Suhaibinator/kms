@@ -85,7 +85,6 @@ export const FIX_FOR: Record<FindingCode, FixAction | null> = {
   kind_mismatch: "open_resource",
   content_type_mismatch: "open_resource",
   secret_unreadable: "open_secret",
-  secret_token_required: "open_secret",
   no_active_release: "ship",
   unreleased_changes: "ship",
   alias_not_in_release: "ship",
@@ -153,8 +152,6 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
     `${alias(p)} is ${str(p, "content_type") ?? "one content type"} in the contract but the parameter is ${str(p, "found") ?? "another"}.`,
   secret_unreadable: (p) =>
     `The pinned version of secret ${alias(p)} is ${str(p, "state") ?? "not readable"}; clients cannot fetch it.`,
-  secret_token_required: (p) =>
-    `Secret ${alias(p)} is token-protected. Each client needs the local secret token to read it.`,
   no_active_release: () =>
     "No release is active in this environment. Clients receive nothing until one is shipped.",
   unreleased_changes: (p) => {

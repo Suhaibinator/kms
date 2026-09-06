@@ -193,14 +193,14 @@ func seedPostureFixtures(t *testing.T, e *testEnv) (secrets []string) {
 		secrets = append(secrets, cert["cert_pem"].(string), cert["key_pem"].(string))
 	}
 
-	// A bound, independently token-gated secret: its value, its binding key,
-	// ciphertext, and access token are all things the posture must never echo.
+	// A bound secret: its value, binding key, and ciphertext must never
+	// appear in posture responses.
 	value := "s3cr3t-database-password"
 	bindingKey := "posture-binding-key-0123456789-012345"
 	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
 		"env": "prod", "app": "payments", "key": "db/password",
-		"value_base64": base64.StdEncoding.EncodeToString([]byte(value)),
-		"binding_key":  bindingKey, "generate_access_token": true,
+		"value_base64":       base64.StdEncoding.EncodeToString([]byte(value)),
+		"binding_key":        bindingKey,
 		"expires_at_unix_ms": time.Now().Add(36 * time.Hour).UnixMilli(),
 	})
 	mustStatus(t, w, http.StatusOK)

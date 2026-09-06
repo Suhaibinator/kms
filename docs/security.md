@@ -177,8 +177,7 @@ without replacing an entry that appeared concurrently; `restore --force` is
 the explicit replacement exception.
 
 The same parent-chain rules apply to credential files the CLI *reads*:
-`--token-file`/`KMS_TOKEN_FILE` and `--secret-token-file`/
-`KMS_SECRET_TOKEN_FILE` accept only a regular, current-user-owned file with no
+`--token-file`/`KMS_TOKEN_FILE` accepts only a regular, current-user-owned file with no
 group or other access, and the opened inode is verified against the inspected
 directory entry so a swap between the checks and the read is detected rather
 than followed. The file is opened read-only and never modified, so a `0400`
@@ -229,12 +228,12 @@ process-local per-identity token bucket: burst 10, then 60 requests per hour.
 Together with the 1024-byte credential ceiling, this bounds both one request's
 key-derivation work and sustained probing by a delegated binding operator.
 
-`bound` and `has_access_token` are immutable while a version is live. Bind,
+`bound` is immutable while a version is live. Bind,
 unbind, and binding-key rotation clone the current version into one new
 high-water current version and leave the source unchanged as `previous`. The
 clone is fully decrypted and re-encrypted with a fresh DEK, nonce, ciphertext,
 version-bound AAD, active KEK, and binding salt where applicable. Its plaintext,
-content type, metadata, enabled/disabled state, expiry, and token requirement
+content type, metadata, enabled/disabled state, and expiry
 are preserved; creation identity and time are fresh. A required
 `expected_current_version` guard makes concurrent current changes abort without
 side effects.
@@ -264,49 +263,20 @@ all cryptographic and descriptive payload fields, retain only minimal
 tombstones and labels, do not auto-promote, and clear the current projection if
 current is purged.
 
-Access tokens remain completely independent. A version may be bound,
-token-gated, both, or neither. The access-token hash is never used as binding
-key material, and changing one credential does not rotate the other. A future
-protection-mode toggle must create another version. Access-token credential
-rotation may replace which token opens gated versions but may never remove a
-live version's `has_access_token` requirement. SDK read caches are
-parameter-only: secret plaintext is never cached.
+Each version is either bound or unbound. Changing encryption protection creates
+a new version; existing versions retain their binding requirements. Secret
+plaintext is never cached by SDK read caches.
 
 ## Token model
 
-Two kinds of bearer tokens, both high-entropy random values minted by the
+Identity bearer tokens are high-entropy random values minted by the
 server and stored **only as a SHA-256 hash** (`crypto.GenerateToken`,
 `crypto.TokenHash`) — the plaintext is shown to the caller exactly once at
 creation/rotation time and is not retrievable again:
 
-- **Identity tokens** (`identities.token_hash`, prefix `kms_`): the token
-  method of authenticating a client or admin identity — for an admin
-  identity the token is necessary but *not sufficient* (see
-  [below](#an-admin-token-alone-is-not-enough)). Sent as
-  `authorization: Bearer <token>` (gRPC metadata key `authorization`; HTTP
-  `Authorization` header). This is what `Service.Authenticate` looks up to
-  resolve a `domain.Identity`, and what establishes the caller's identity for
-  authorization and for the watch subscription registry. `token_hash` is now
-  **nullable**: a **cert-only** identity (one that authenticates by mTLS,
-  §[Proof of identity](#proof-of-identity-the-built-in-ca-and-mtls)) has no
-  token at all and stores `NULL`. As before, the stored material is a hash
-  only — the store never holds a usable credential, whether a token
-  (hash-only) or a certificate (public key only; the leaf private key is
-  returned once at issuance and never persisted).
-- **Per-secret access tokens** (`secrets.access_token_hash`, prefix
-  `kmss_`): optional, attached to an individual secret. Each immutable version
-  records whether the access-token gate applies. The public `PutSecret` client
-  APIs use the versioned `PutSecretV03` wire method; the legacy `PutSecret` RPC
-  is rejection-only because v0.2 encoded `client_bound` at field 5, where v0.3
-  encodes `binding_key`. This prevents stale clients from silently creating an
-  unbound version. The v0.3 write API accepts only the
-  boolean `generate_access_token`; when true, the server creates or rotates the
-  token and returns it exactly once. `GetSecret` for a gated version requires
-  the matching `GetSecretRequest.secret_token` (`tokenHashMatches`,
-  constant-time comparison via `hmac.Equal`). The admin `RevealSecret` path
-  retains its fully audited access-token bypass, but a bound version still
-  cannot be opened without its independent `binding_key`. The token hash is
-  never used to derive a binding key, and the two credentials may coexist.
+The public secret-write API is `PutSecretV03`. The legacy `PutSecret` RPC remains
+rejection-only because older clients encode incompatible binding fields. Bound
+reads require the corresponding `binding_key`, including administrator reveal.
 
 Authentication failures are generic at the HTTP and gRPC boundaries regardless
 of whether a presented token was malformed, unknown, or belonged to a disabled
@@ -651,13 +621,13 @@ parameter and secret RPCs and their existing authorization and cryptographic
 checks.
 
 Secret entries capture only the exact version's resource identity, content
-type, and non-sensitive metadata. Immutable per-live-version `bound` and
-`has_access_token` flags are absent from release rows and digests; the exact
-version pin implicitly pins those properties. Secret plaintext, token hashes, plaintext
-access tokens, and binding keys never enter releases, watch events, validation
+type, and non-sensitive metadata. The immutable live-version `bound` flag
+is absent from release rows and digests; the exact version pin implicitly pins
+that property. Secret plaintext, token hashes, and binding keys never enter
+releases, watch events, validation
 errors, diffs, acknowledgement diagnostics, logs, or metrics. Before a value
 fetch, a loader obtains exact live metadata, verifies its identity/version/
-state/expiry, then resolves access tokens and binding keys independently by
+state/expiry, then resolves binding keys independently by
 alias. Missing credentials or failed resolution reject the entire candidate;
 hot reload retains the last-known-good snapshot.
 
@@ -910,7 +880,7 @@ Redaction is enforced by type, not by call-site discipline:
   /api/v1/secrets/reveal`, which is explicitly audited per call.
 - The frontend never renders a secret value outside the explicit reveal
   flow. For a bound version, the confirmation dialog requires that version's
-  binding key. The administrator break-glass path bypasses access-token gating,
+  binding key. The administrator reveal path is audited,
   so the console does not solicit that token. The binding-key input is cleared
   as the request starts and is neither persisted nor included in UI
   notifications. The revealed value follows the same 30-second auto-forget

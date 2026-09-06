@@ -38,53 +38,37 @@ def test_get_secret_not_found(client):
         client.get_secret("nope")
 
 
-def test_secret_token_required_and_propagated(client):
-    # Create a secret that mints an access token.
-    res = client.put_secret("tok", b"v", generate_access_token=True)
-    assert res.access_token
-    # Without the token the server denies.
-    with pytest.raises(PermissionDeniedError):
-        client.get_secret("tok")
-    # With the token it succeeds (token travels in the exact request field).
-    got = client.get_secret("tok", secret_token=res.access_token)
-    assert got.value == b"v"
-
 
 def test_secret_metadata(client, server):
     client.put_secret("meta", b"v")
     info = client.get_secret_metadata("meta")
     assert info.key == "meta"
     assert info.path == "/prod/app/meta"
-    assert info.has_access_token is False
     assert info.bound is False
     assert info.versions[0].bound is False
-    assert info.versions[0].has_access_token is False
     assert len(info.versions) == 1
     exact = client._get_secret_metadata_version("meta", version=1)
     assert [version.version for version in exact.versions] == [1]
     assert server[1].secret_metadata_versions == [0, 1]
 
 
-def test_binding_key_is_independent_and_lifecycle_results_are_immutable(client):
+def test_binding_key_lifecycle_results_are_immutable(client):
     from dataclasses import FrozenInstanceError
 
     old_key = "o" * 32
     new_key = "n" * 32
     put = client.put_secret(
-        "bound", b"v1", binding_key=old_key, generate_access_token=True,
+        "bound", b"v1", binding_key=old_key,
     )
     with pytest.raises(PermissionDeniedError):
-        client.get_secret("bound", secret_token=put.access_token)
-    with pytest.raises(PermissionDeniedError):
-        client.get_secret("bound", binding_key=old_key)
+        client.get_secret("bound")
     fetched = client.get_secret(
-        "bound", secret_token=put.access_token, binding_key=old_key,
+        "bound", binding_key=old_key,
     )
     assert fetched.value == b"v1"
     assert fetched.bind_key == ""
     info = client.get_secret_metadata("bound")
     assert info.bound and info.versions[0].bound
-    assert info.versions[0].has_access_token
 
     rotated = client.rotate_secret_binding_key(
         "bound", expected_current_version=1, binding_key=old_key,
@@ -94,16 +78,16 @@ def test_binding_key_is_independent_and_lifecycle_results_are_immutable(client):
     with pytest.raises(FrozenInstanceError):
         rotated.revision = 0  # type: ignore[misc]
     assert client.get_secret(
-        "bound", secret_token=put.access_token, binding_key=new_key,
+        "bound", binding_key=new_key,
     ).value == b"v1"
 
     unbound = client.unbind_secret(
         "bound", expected_current_version=2, binding_key=new_key,
     )
     assert (unbound.current_version, unbound.previous_version) == (3, 2)
-    assert client.get_secret("bound", secret_token=put.access_token).value == b"v1"
+    assert client.get_secret("bound").value == b"v1"
     assert client.get_secret(
-        "bound", version=1, secret_token=put.access_token, binding_key=old_key,
+        "bound", version=1, binding_key=old_key,
     ).value == b"v1"
     old_preview = client.preview_secret_binding_cohort(
         "bound", anchor_version=1, binding_key=old_key,
@@ -141,33 +125,9 @@ def test_binding_key_is_independent_and_lifecycle_results_are_immutable(client):
         client.get_secret("bound", version=1, binding_key=old_key)
     with pytest.raises(FailedPreconditionError):
         client.get_secret(
-            "bound", version=1, secret_token=put.access_token, binding_key=old_key,
+            "bound", version=1, binding_key=old_key,
         )
 
-
-def test_unbound_purge_retains_secret_token_for_metadata_and_later_puts(client):
-    put = client.put_secret("token-purge", b"v1", generate_access_token=True)
-    preview = client.preview_secret_unbound_versions("token-purge")
-    purged = client.purge_secret_unbound_versions(
-        "token-purge",
-        expected_revision=preview.revision,
-        expected_affected_versions=preview.affected_versions,
-    )
-    assert purged.affected_versions == (1,)
-
-    tombstoned = client.get_secret_metadata("token-purge")
-    assert tombstoned.has_access_token is True
-    assert tombstoned.versions[0].state == "destroyed"
-    assert tombstoned.versions[0].has_access_token is False
-
-    replacement = client.put_secret("token-purge", b"v2")
-    assert replacement.access_token == ""
-    metadata = client.get_secret_metadata("token-purge")
-    assert metadata.has_access_token is True
-    assert metadata.versions[1].has_access_token is True
-    with pytest.raises(PermissionDeniedError):
-        client.get_secret("token-purge")
-    assert client.get_secret("token-purge", secret_token=put.access_token).value == b"v2"
 
 
 def test_delete_secret(client):

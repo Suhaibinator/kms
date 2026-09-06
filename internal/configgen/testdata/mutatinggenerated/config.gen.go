@@ -31,7 +31,6 @@ type Options struct {
 	Defaults func() *rootconfig.Config
 	// Callbacks observe mismatches, applied generations and rejections; configstore.SlogCallbacks is a ready-made implementation.
 	configstore.Callbacks
-	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
 	InstanceID           string
@@ -137,7 +136,6 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 		Release:              options.Release,
 		Contract:             generatedContract,
 		Callbacks:            options.Callbacks,
-		SecretTokenProvider:  options.SecretTokenProvider,
 		BindingKeys:          bindingKeys,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,

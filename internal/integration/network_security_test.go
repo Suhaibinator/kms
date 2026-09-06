@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
-	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -474,7 +473,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 }
 
-func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
+func TestLoopbackBindingKeysAreVersionExact(t *testing.T) {
 	e := newLoopbackTLSEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -489,41 +488,32 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 	ref := networkRef("prod", "secret-race", "bound")
 	created, err := secrets.PutSecretV03(rootCtx, &kmsv1.PutSecretRequest{
 		Ref: ref, Value: []byte("network-bound-value"), ContentType: "text/plain",
-		BindingKey: integrationBindingKeyA, GenerateAccessToken: true,
+		BindingKey: integrationBindingKeyA,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	if created.GetVersion() != 1 || created.GetAccessToken() == "" {
+	if created.GetVersion() != 1 {
 		t.Fatalf("PutSecret response = %+v", created)
 	}
 
-	// Secret credentials are explicit request fields. A legacy metadata header
-	// is ignored and cannot satisfy the independent access-token gate.
-	legacyCtx := grpcmetadata.AppendToOutgoingContext(rootCtx, "x-kms-secret-token", created.GetAccessToken())
-	if _, err := secrets.GetSecret(legacyCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, BindingKey: integrationBindingKeyA,
-	}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("legacy secret-token metadata read code = %v, want PermissionDenied", status.Code(err))
-	}
 	metadata, err := secrets.GetSecretMetadata(rootCtx, &kmsv1.GetSecretMetadataRequest{
 		Ref: ref,
 	})
 	if err != nil {
 		t.Fatalf("GetSecretMetadata: %v", err)
 	}
-	if !metadata.GetSecret().GetBound() || !metadata.GetSecret().GetHasAccessToken() ||
-		len(metadata.GetSecret().GetVersions()) != 1 || !metadata.GetSecret().GetVersions()[0].GetBound() ||
-		!metadata.GetSecret().GetVersions()[0].GetHasAccessToken() {
+	if !metadata.GetSecret().GetBound() ||
+		len(metadata.GetSecret().GetVersions()) != 1 || !metadata.GetSecret().GetVersions()[0].GetBound() {
 		t.Fatalf("bound/token metadata = %+v", metadata.GetSecret())
 	}
 	if _, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, SecretToken: created.GetAccessToken(),
+		Ref: ref,
 	}); status.Code(err) != codes.Internal || status.Convert(err).Message() != "internal error" {
 		t.Fatalf("token-only read = %v, want sanitized Internal", err)
 	}
 	read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyA,
+		Ref: ref, BindingKey: integrationBindingKeyA,
 	})
 	if err != nil || string(read.GetValue()) != "network-bound-value" {
 		t.Fatalf("read with both credentials = %q err=%v", read.GetValue(), err)
@@ -536,7 +526,7 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 		t.Fatalf("UnbindSecret = %+v err=%v", unbound, err)
 	}
 	if read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, SecretToken: created.GetAccessToken(),
+		Ref: ref,
 	}); err != nil || string(read.GetValue()) != "network-bound-value" {
 		t.Fatalf("unbound token-only read = %q err=%v", read.GetValue(), err)
 	}
@@ -559,12 +549,12 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 		t.Fatalf("RotateSecretBindingKey = %+v err=%v", rotated, err)
 	}
 	if _, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyB,
+		Ref: ref, BindingKey: integrationBindingKeyB,
 	}); status.Code(err) != codes.Internal {
 		t.Fatalf("old binding key read code = %v, want Internal", status.Code(err))
 	}
 	if read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
-		Ref: ref, SecretToken: created.GetAccessToken(), BindingKey: integrationBindingKeyC,
+		Ref: ref, BindingKey: integrationBindingKeyC,
 	}); err != nil || string(read.GetValue()) != "network-bound-value" {
 		t.Fatalf("rotated key read = %q err=%v", read.GetValue(), err)
 	}

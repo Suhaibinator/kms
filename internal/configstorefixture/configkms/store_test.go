@@ -119,13 +119,13 @@ func scriptResources(server *kmsclienttest.Server, data releaseData) {
 	server.SetParameterVersion(fixtureNamespace, runtimePath, data.runtimeDocument, "json", data.runtimeVersion)
 	server.SetSecretVersion(fixtureNamespace, data.passwordPath, data.passwordValue, "text/plain", data.passwordVersion)
 	server.SetSecretVersion(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenValue, "text/plain", data.runtimeTokenVersion)
-	server.SetSecretVersionMetadata(fixtureNamespace, data.passwordPath, data.passwordVersion, "enabled", data.passwordBound, false, 0)
-	server.SetSecretVersionMetadata(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "enabled", data.runtimeTokenBound, false, 0)
+	server.SetSecretVersionMetadata(fixtureNamespace, data.passwordPath, data.passwordVersion, "enabled", data.passwordBound, 0)
+	server.SetSecretVersionMetadata(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "enabled", data.runtimeTokenBound, 0)
 	if data.passwordBindingKey != "" {
-		server.SetSecretVersionCredentials(fixtureNamespace, data.passwordPath, data.passwordVersion, "", data.passwordBindingKey)
+		server.SetSecretVersionCredentials(fixtureNamespace, data.passwordPath, data.passwordVersion, data.passwordBindingKey)
 	}
 	if data.runtimeBindingKey != "" {
-		server.SetSecretVersionCredentials(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "", data.runtimeBindingKey)
+		server.SetSecretVersionCredentials(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, data.runtimeBindingKey)
 	}
 }
 
@@ -258,11 +258,8 @@ func TestGeneratedStartExtractsAndStripsDeclarationBindingKeys(t *testing.T) {
 	declaration.RuntimeToken.BindKey = kmsclient.NewBindingKey("runtime-token-binding-key")
 
 	fixture := startFixture(t, initial, func() *fixtureconfig.Config { return declaration }, func(configstore.DefaultMismatchReport) {})
-	passwordToken, passwordKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
-	runtimeToken, runtimeKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + runtimeTokenPath)
-	if passwordToken != "" || runtimeToken != "" {
-		t.Fatal("generated binding sent access tokens for binding-only versions")
-	}
+	passwordKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
+	runtimeKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + runtimeTokenPath)
 	if passwordKey != "database-password-binding-key" || runtimeKey != "runtime-token-binding-key" {
 		t.Fatalf("binding keys by alias = password:%q runtime:%q", passwordKey, runtimeKey)
 	}
@@ -296,8 +293,8 @@ func TestGeneratedStartRejectsMissingBindingKey(t *testing.T) {
 		Callbacks:  configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
 		InstanceID: "missing-binding-key",
 	})
-	if err == nil || !strings.Contains(err.Error(), kmsclient.ReleaseRejectTokenUnavailable) {
-		t.Fatalf("Start error = %v, want %s", err, kmsclient.ReleaseRejectTokenUnavailable)
+	if err == nil || !strings.Contains(err.Error(), kmsclient.ReleaseRejectBindingKeyUnavailable) {
+		t.Fatalf("Start error = %v, want %s", err, kmsclient.ReleaseRejectBindingKeyUnavailable)
 	}
 }
 
@@ -307,7 +304,7 @@ func TestMissingHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
 	candidate.passwordBound = true
 	activate(t, fixture, candidate)
 	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
-	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectTokenUnavailable {
+	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectBindingKeyUnavailable {
 		t.Fatalf("rejection category = %q", ack.GetRejectionCategory())
 	}
 	if got := fixture.store.Current().Release().Version(); got != 1 {
@@ -330,7 +327,7 @@ func TestWrongHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
 	if got := fixture.store.Current().Release().Version(); got != 1 {
 		t.Fatalf("wrong binding key displaced last-known-good release with version %d", got)
 	}
-	_, gotKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
+	gotKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
 	if gotKey != strings.Repeat("w", 32) {
 		t.Fatalf("wrong binding key was not sent for the exact alias: %q", gotKey)
 	}

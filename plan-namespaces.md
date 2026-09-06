@@ -165,7 +165,7 @@ CREATE TABLE secrets (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     namespace_id INTEGER NOT NULL REFERENCES namespaces(id),
     name         TEXT NOT NULL,
-    ...                                 -- client_bound, access_token_hash, etc. as today
+    ...                                 -- bound and encryption metadata
     UNIQUE (namespace_id, name)
 );
 -- secret_versions / secret_labels unchanged (FK to secrets.id).

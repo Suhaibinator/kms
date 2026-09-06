@@ -1013,7 +1013,7 @@ func validReleaseState(v string) bool {
 func validRejectCategory(v string) bool {
 	switch v {
 	case domain.ReleaseRejectResolutionFailed,
-		domain.ReleaseRejectTokenUnavailable,
+		domain.ReleaseRejectBindingKeyUnavailable,
 		domain.ReleaseRejectVersionMismatch,
 		domain.ReleaseRejectDigestMismatch,
 		domain.ReleaseRejectPrepareFailed,

@@ -104,24 +104,22 @@ func (s *parameterStub) PutParameter(ctx context.Context, _ *kmsv1.PutParameterR
 // secretStub answers the SecretService calls the convenience commands make.
 type secretStub struct {
 	kmsv1.UnimplementedSecretServiceServer
-	mu                  sync.Mutex
-	auth                []string
-	secretTokenMetadata []string
-	secrets             []*kmsv1.SecretMetadata
-	getReq              *kmsv1.GetSecretRequest
-	putReq              *kmsv1.PutSecretRequest
-	getResp             *kmsv1.GetSecretResponse
-	metadataResp        *kmsv1.GetSecretMetadataResponse
-	putResp             *kmsv1.PutSecretResponse
-	err                 error
-	getErr              error
-	readErr             error
+	mu           sync.Mutex
+	auth         []string
+	secrets      []*kmsv1.SecretMetadata
+	getReq       *kmsv1.GetSecretRequest
+	putReq       *kmsv1.PutSecretRequest
+	getResp      *kmsv1.GetSecretResponse
+	metadataResp *kmsv1.GetSecretMetadataResponse
+	putResp      *kmsv1.PutSecretResponse
+	err          error
+	getErr       error
+	readErr      error
 }
 
 func (s *secretStub) record(ctx context.Context) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	s.auth = append(s.auth, strings.Join(md.Get("authorization"), ","))
-	s.secretTokenMetadata = append(s.secretTokenMetadata, strings.Join(md.Get("x-kms-secret-token"), ","))
 }
 
 func (s *secretStub) ListSecrets(ctx context.Context, _ *kmsv1.ListSecretsRequest) (*kmsv1.ListSecretsResponse, error) {
@@ -379,20 +377,20 @@ func TestGetSecretUsesExactVersionMetadataAndBindingKeyEnvironment(t *testing.T)
 	secrets := &secretStub{
 		metadataResp: &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
 			Ref: ref("prod", "gradethis", "db-password"), Labels: map[string]uint64{"current": 7},
-			Versions: []*kmsv1.SecretVersionInfo{{Version: 6, State: "enabled"}, {Version: 7, State: "enabled", Bound: true, HasAccessToken: true}},
+			Versions: []*kmsv1.SecretVersionInfo{{Version: 6, State: "enabled"}, {Version: 7, State: "enabled", Bound: true}},
 		}},
 		getResp: &kmsv1.GetSecretResponse{Ref: ref("prod", "gradethis", "db-password"), Version: 7, Value: []byte("hunter2")},
 	}
 	c := newConvenienceCLI(t, &parameterStub{}, secrets)
 	c.lookupEnv = mapLookup(map[string]string{bindingKeyEnv: testOldBindingKey})
-	if code := c.Run([]string{"get-secret", "/prod/gradethis/db-password", "--secret-token", "access-token", "--insecure", "--token", "identity"}); code != exitOK {
+	if code := c.Run([]string{"get-secret", "/prod/gradethis/db-password", "--insecure", "--token", "identity"}); code != exitOK {
 		t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
 	}
 	if secrets.getReq.GetVersion() != 7 || secrets.getReq.GetLabel() != "" {
 		t.Fatalf("GetSecret selector = version %d label %q, want exact version 7", secrets.getReq.GetVersion(), secrets.getReq.GetLabel())
 	}
-	if secrets.getReq.GetBindingKey() != testOldBindingKey || secrets.getReq.GetSecretToken() != "access-token" {
-		t.Fatal("GetSecret did not carry both independent credentials")
+	if secrets.getReq.GetBindingKey() != testOldBindingKey {
+		t.Fatal("GetSecret did not carry the binding key")
 	}
 	if strings.Contains(c.stdout()+c.stderr(), testOldBindingKey) {
 		t.Fatal("get-secret output leaked the binding key")
@@ -454,40 +452,8 @@ func TestGetSecretRejectsMismatchedMetadataBeforeCredentialOrValueRead(t *testin
 
 // --- put-secret / put-parameter --------------------------------------------
 
-func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing.T) {
-	secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 4, Revision: 11, AccessToken: "kmss_generated"}}
-	c := newConvenienceCLI(t, &parameterStub{}, secrets)
-	c.Stdin = nil
-	valueFile := filepath.Join(t.TempDir(), "value")
-	if err := os.WriteFile(valueFile, []byte("s3cret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	code := c.Run([]string{"-o", "json", "put-secret", "/prod/gradethis/db-password",
-		"--value-file", valueFile, "--generate-token", "--insecure", "--token", "t"})
-	if code != 0 {
-		t.Fatalf("put-secret exit = %d, stderr=%s", code, c.stderr())
-	}
-	document := decodeJSONStdout(t, c)
-	assertJSONFields(t, document, "key", "version", "revision", "access_token")
-	if document["access_token"] != "kmss_generated" || document["key"] != "/prod/gradethis/db-password" {
-		t.Fatalf("document = %v", document)
-	}
-	if strings.Count(c.stdout(), "kmss_generated") != 1 {
-		t.Fatalf("access token appears more than once on stdout: %q", c.stdout())
-	}
-	if got := secrets.secretTokenMetadata; len(got) != 1 || got[0] != "" {
-		t.Fatalf("custom secret-token metadata = %v, want none", got)
-	}
-	// The one-time warning is security-relevant, so it is on stderr and is
-	// never routed through info.
-	if !strings.Contains(c.stderr(), "WARNING: the access token is shown once") {
-		t.Fatalf("stderr = %q", c.stderr())
-	}
-}
-
-// Without --generate-token there is no token, and the field is absent rather
-// than an empty string a script might mistake for a credential.
-func TestPutSecretJSONOmitsAnAbsentAccessToken(t *testing.T) {
+// Secret writes report only the stored version and revision.
+func TestPutSecretJSONReportsVersionAndRevision(t *testing.T) {
 	secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 4, Revision: 11}}
 	c := newConvenienceCLI(t, &parameterStub{}, secrets)
 	valueFile := filepath.Join(t.TempDir(), "value")
@@ -522,7 +488,7 @@ func TestPutSecretUsesOpaqueBindingKeyEnvironment(t *testing.T) {
 }
 
 func TestPutSecretRejectsRemovedProtectionFlags(t *testing.T) {
-	for _, flag := range []string{"--client-bound", "--secret-token"} {
+	for _, flag := range []string{"--client-bound", "--secret-token", "--generate-token", "--secret-token-file"} {
 		t.Run(flag, func(t *testing.T) {
 			secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 1}}
 			c := newConvenienceCLI(t, &parameterStub{}, secrets)

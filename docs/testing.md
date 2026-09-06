@@ -42,7 +42,7 @@ public internet. Each test owns and cleans up its state, which makes the same
 command suitable for laptops and hosted CI runners.
 
 `internal/integration/binding_key_test.go` is the end-to-end `0.3.x` binding
-gate. It covers independent credentials and live exact-version metadata,
+gate. It covers binding keys and live exact-version metadata,
 version-creating bind/unbind/rotation with current-version CAS, contiguous
 bound-cohort purge, full unbound-version preview/purge, release pin stability
 and invalidation, and secret-version high-water non-reuse through real

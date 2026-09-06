@@ -31,7 +31,7 @@ const (
 	execExitVar     = "KMS_TEST_EXIT"     // an injected parameter; the child's status
 	execHostVar     = "KMS_TEST_HOST"     // an injected parameter
 	execSecretVar   = "KMS_TEST_SECRET"   // an injected secret
-	execLeakVar     = "KMS_SECRET_TOKEN_LEAKED"
+	execLeakVar     = "KMS_BINDING_KEY"
 	execIdentityVar = "KMS_TOKEN"
 
 	execMarkerValue = "child-ready"
@@ -72,14 +72,14 @@ func execProcessTestEnv(endpoint string) []string {
 		execHelperEnv+"=1",
 		execEndpointEnv+"="+endpoint,
 		// Inherited by the child: the identity credential is the child's to
-		// reuse. The per-secret token beside it must not be.
+		// reuse. The binding key beside it must not be.
 		execIdentityVar+"=identity-token",
 		execLeakVar+"=must-not-reach-the-child",
 	)
 }
 
 // TestExecLaunchesARealProcess is the end-to-end check on every platform: the
-// values reach a real child, the per-secret token does not, and the child's
+// values reach a real child, the binding key does not, and the child's
 // exit status is what the caller sees.
 func TestExecLaunchesARealProcess(t *testing.T) {
 	t.Parallel()
@@ -112,8 +112,7 @@ func TestExecLaunchesARealProcess(t *testing.T) {
 				Ref: envTestRef("prod", "app", "kms-test/secret"), Version: 1, Value: []byte(execSecretValue),
 			},
 		},
-		getErr:       map[string]error{},
-		requireToken: map[string]string{},
+		getErr: map[string]error{},
 	}
 	endpoint := startTCPStubGRPC(t, func(s *grpc.Server) {
 		kmsv1.RegisterParameterServiceServer(s, params)
@@ -143,7 +142,7 @@ func TestExecLaunchesARealProcess(t *testing.T) {
 		execMarkerVar + "=" + execMarkerValue,
 		execHostVar + "=" + execHostValue,
 		execSecretVar + "=" + execSecretValue,
-		// The identity credential is inherited; the per-secret token is not.
+		// The identity credential is inherited; the binding key is not.
 		execIdentityVar + "=identity-token",
 		execLeakVar + "=<unset>",
 	} {

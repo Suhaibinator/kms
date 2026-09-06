@@ -56,11 +56,11 @@ source of truth for exact inference.
 |---|---|---|
 | `createClient`, `KmsClient` | Function `(KmsClientOptions) => KmsClient`; class constructor with the same options | Construct and own one process-shareable Node client. |
 | `KmsClientOptions`, `Logger` | Types | Configure endpoint, authentication/transport, namespace, parameter cache/deadlines, reconciliation, client identity, and bounded logging. Secret plaintext is never cached. |
-| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions`, `BindSecretOptions`, `PreviewSecretBindingCohortOptions`, `RotateSecretBindingKeyOptions`, `PurgeSecretBindingCohortOptions`, `PurgeSecretUnboundVersionsOptions`, `SecretBindingCohortGuardOptions` | Types | Per-operation cancellation/deadline, selectors, pagination, content metadata, independent credentials, current-version transition guards, and mandatory exact-preview guards for both purge operations. |
+| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions`, `BindSecretOptions`, `PreviewSecretBindingCohortOptions`, `RotateSecretBindingKeyOptions`, `PurgeSecretBindingCohortOptions`, `PurgeSecretUnboundVersionsOptions`, `SecretBindingCohortGuardOptions` | Types | Per-operation cancellation/deadline, selectors, pagination, content metadata, binding keys, current-version transition guards, and mandatory exact-preview guards for both purge operations. |
 | `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `SecretVersionTransitionResult`, `SecretBindingCohortResult`, `SecretVersionSetResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
 | `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
 | `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope/tracked-parameter counts, and optional lifecycle timestamps. |
-| `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, access-token lookup, defensive alias-keyed `bindingKeys`, and manifest validation. |
+| `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, defensive alias-keyed `bindingKeys`, and manifest validation. |
 
 `KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,
 `fallbackToDefaultsOnError`, `logger`, `closed`, `currentRevision`, and
@@ -76,7 +76,7 @@ method families are:
 | `getParameter(key, options?)`, `getParameterInfo(key, options?)` | `Promise<string>` or `Promise<Parameter>` for a current, exact-version, or labeled immutable parameter. |
 | `putParameter(key, value, options?)` | `Promise<PutResult>` and invalidates matching cached reads. |
 | `listParameters(namespace?, options?)`, `getParameterMetadata(key, options?)`, `deleteParameter(key, options?)` | Immutable page, non-plaintext metadata/history, or exact revision. |
-| `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; access tokens, binding keys, and bearer identity are independent. `putSecret` has no write-side secret token. |
+| `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; bearer identity authenticates the caller and bound versions require a binding key. |
 | `listSecrets(namespace?, options?)`, `getSecretMetadata(key, options?)`, `deleteSecret(key, options?)` | Immutable non-plaintext inventory/metadata or exact mutation revision. |
 | `setSecretEnabled(key, enabled, options?)`, `destroySecretVersion(key, version, options?)`, `promoteSecretVersion(key, version, options?)` | Authorized version-state mutations; promotion returns current/previous versions and revision as `bigint`. |
 | `bindSecret`, `unbindSecret`, `rotateSecretBindingKey`, `previewSecretBindingCohort`, `purgeSecretBindingCohort`, `previewSecretUnboundVersions`, `purgeSecretUnboundVersions` | Current-version transitions and purge lifecycle. Transitions require `expectedCurrentVersion` and return one new current/previous pair. Both purge operations require a paired positive, sorted-unique preview guard. All results are deeply frozen. Purge is irreversible and admin-only. |
@@ -136,7 +136,7 @@ method families are:
 | `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
 | `PreparedRelease`, `PrepareRelease`, `ReleaseDivergence` | Types | Candidate callback contract: synchronous infallible `commit` and at-most-once `abort`, each returning exactly `undefined`, plus cooperative `AbortSignal`. An optional `releaseDivergence()` puts a bounded divergence flag and field count on the applied acknowledgement only. |
 | `VERIFY_VERDICTS`, `VerifyVerdict`, `VerifyDefaultsEntry`, `VerifyReleaseDefaultsOptions`, `VerifyDefaultsVerdict`, `VerifyReleaseDefaultsResult` | Readonly value/types | Bounded verdict vocabulary (`match`, `differs`, `missing_in_release`, `unknown_alias`, `secret_alias`, `unsupported_content_type`), the value-free verify request, and the frozen validated result with `passed()`. |
-| `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry access tokens locally and reject a manifest before resource resolution. |
+| `ValidateReleaseManifest` | Callback types | Reject a manifest before resource resolution. |
 | `ReleaseManifest`, `ReleaseManifestInit`, `ReleaseSnapshot`, `ReleaseSnapshotInit` | Immutable classes/types | Unresolved identity/entries and fully resolved exact candidate; serialization and inspection omit values. |
 | `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, home-namespace resource, exact version, content, and parameter digest. Protection flags are not release fields. |
 | `ReleaseParameter`, `ReleaseSecret` | Immutable value classes | Exact candidate values; release-secret access returns copies and implicit rendering redacts. |
@@ -157,9 +157,8 @@ method families are:
 | `CallOptions` | Per-call `AbortSignal` and earlier absolute deadline. The default unary deadline is five seconds. |
 
 `KmsClientOptions.token` supplies bearer authentication.
-`GetOptions.secretToken` and `GetOptions.bindingKey` are placed only in a
-`GetSecret` request and are never used as caller identity or metadata. They are
-independent: an exact version may require either, both, or neither. The
+`GetOptions.bindingKey` supplies the key for a bound `GetSecret` request; it
+does not establish caller identity. The
 parameter read cache never stores secret plaintext, with or without a
 credential. Lazy namespace discovery
 is coalesced as client-owned work under the default RPC deadline; each caller's
@@ -174,7 +173,7 @@ generated protobuf symbols remain internal.
 | API | Contract |
 |---|---|
 | `getParameter`, `getSecret` | Resolve a relative or absolute key at `version` or `label`; return exact `bigint` metadata and a redacting `Secret`. |
-| `putParameter`, `putSecret` | Write an immutable version and return `bigint` version/revision fields. `putSecret` binds the new version only when `bindingKey` is non-empty; `generateAccessToken` is orthogonal. |
+| `putParameter`, `putSecret` | Write an immutable version and return `bigint` version/revision fields. `putSecret` binds the new version only when `bindingKey` is non-empty. |
 | `listParameters`, `listSecrets` | Return immutable `Page<T>` values with bounded pagination inputs. |
 | `getParameterMetadata`, `getSecretMetadata` | Return non-plaintext history, labels, state, and content metadata. |
 | `deleteParameter`, `deleteSecret`, `setSecretEnabled`, `destroySecretVersion`, `promoteSecretVersion` | Perform the corresponding authorized mutation and return exact revision/version values. |
@@ -187,10 +186,8 @@ generated protobuf symbols remain internal.
 | `ParameterValue` | Resolve the same precedence and subscribe by default. `static: true` opts out; `onChange` and `dispose` own callback lifecycle. |
 | `client.resolve(object)` / `resolveValues` | Find declarative values through own properties and arrays, detect cycles, and report failures together in `ResolutionError`. |
 
-`SecretInfo.bound` summarizes the version selected by `current`, while
-`SecretInfo.hasAccessToken` reports whether the secret currently has an access
-token hash. Every `SecretVersion` carries immutable-while-live `bound` and
-`hasAccessToken`; exact-version decisions use those fields.
+`SecretInfo.bound` summarizes the version selected by `current`. Use each
+`SecretVersion.bound` field for exact-version decisions.
 
 `parseNamespace`, `splitDisplayPath`, `resolveRef`, and display helpers expose
 the namespace/path rules without a network call. `CURRENT_VERSION` represents
@@ -216,12 +213,11 @@ secret read; an environment override or default performs no secret RPC.
 returned `commit()` and `abort()` must complete synchronously, return exactly
 `undefined`, and never throw; the declaration and runtime both reject Promise
 or thenable callbacks. `abort()` releases candidate-owned resources. A release
-containing protected secrets supplies a local `secretTokenProvider` for access
-tokens and defensive frozen null-prototype `bindingKeys` by alias for bound
-versions. Release entries contain neither flag, so the bounded worker fetches
+containing bound secrets supplies defensive frozen null-prototype `bindingKeys`
+by alias. Release entries contain no binding flag, so the bounded worker fetches
 exact live metadata, validates identity/version/state/expiry, and resolves the
-two credentials independently. Missing credentials reject the whole candidate
-as `token_unavailable`; failed reads reject it as `resolution_failed`. `stop()`
+binding key when required. Missing keys reject the whole candidate
+as `binding_key_unavailable`; failed reads reject it as `resolution_failed`. `stop()`
 requests cooperative shutdown; preparation work must observe its `AbortSignal`,
 and callers still await the `run()` promise before closing the client.
 
@@ -468,7 +464,7 @@ map to `not_found`, `permission_denied`, `unauthenticated`, and
 Unmapped transport status information is preserved without ever including
 caller-supplied secret bytes.
 
-RPCs that carry plaintext, access tokens, or binding keys use a secret-safe
+RPCs that carry plaintext, binding keys use a secret-safe
 mapper with fixed messages rather than reflecting hostile server detail.
 `PurgeCleanupPendingError` means the purge transaction committed but physical
 SQLite/WAL cleanup has not completed. Do not retry a bound-cohort purge with

@@ -43,8 +43,8 @@ func newExecFixture(t *testing.T, code int, err error) *execFixture {
 			"PATH=/usr/bin",
 			"HOME=/home/app",
 			"KMS_TOKEN=id-token",
-			"KMS_SECRET_TOKEN_STRIPE_KEY=" + envTestStripeToken,
-			"KMS_SECRET_TOKEN_FILE=/run/secrets/stripe",
+			"KMS_BINDING_KEY=binding-key",
+			"KMS_NEW_BINDING_KEY=replacement-key",
 			bindingKeyEnv + "=" + testOldBindingKey,
 			newBindingKeyEnv + "=" + testNewBindingKey,
 		}
@@ -203,7 +203,7 @@ func TestExecInjectsTheMergedEnvironment(t *testing.T) {
 	t.Parallel()
 	f := newExecFixture(t, 0, nil)
 	code := f.runExec(
-		[]string{"--secret-token", "stripe-key=" + envTestStripeToken},
+		[]string{},
 		"/usr/bin/app", "--serve", "--port=8080",
 	)
 	if code != 0 {
@@ -229,39 +229,6 @@ func TestExecInjectsTheMergedEnvironment(t *testing.T) {
 	}
 	if strings.Join(f.launched.env, "\x00") != strings.Join(wantEnv, "\x00") {
 		t.Fatalf("env = %q, want %q", f.launched.env, wantEnv)
-	}
-}
-
-// TestExecStripsSecretTokensFromTheChild states the rule on its own: the
-// identity token is inherited (the child may want to call the store itself),
-// the per-secret tokens are not.
-func TestExecStripsSecretTokensFromTheChild(t *testing.T) {
-	t.Parallel()
-	f := newExecFixture(t, 0, nil)
-	if code := f.runExec([]string{"--no-secrets"}, "/usr/bin/app"); code != 0 {
-		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
-	}
-	for _, entry := range f.launched.env {
-		if strings.HasPrefix(entry, secretTokenEnvPrefix) {
-			t.Fatalf("child environment carries %q", entry)
-		}
-		name, _, _ := strings.Cut(entry, "=")
-		if name == bindingKeyEnv || name == newBindingKeyEnv {
-			t.Fatalf("child environment carries binding credential %q", name)
-		}
-	}
-	var sawIdentity bool
-	for _, entry := range f.launched.env {
-		if entry == "KMS_TOKEN=id-token" {
-			sawIdentity = true
-		}
-	}
-	if !sawIdentity {
-		t.Fatalf("child environment lost KMS_TOKEN: %q", f.launched.env)
-	}
-	// The stripped names never reach stderr either, since they carry tokens.
-	if strings.Contains(f.stderr(), envTestStripeToken) {
-		t.Fatalf("stderr = %s", f.stderr())
 	}
 }
 
@@ -294,11 +261,13 @@ func TestExecIncompleteModeOmitsBoundSecretAndScrubsInheritedNames(t *testing.T)
 	f := newExecFixture(t, 0, nil)
 	f.secrets.list[0].Bound = true
 	f.secrets.list[0].Versions[0].Bound = true
+	f.secrets.list[0].Bound = true
+	f.secrets.list[0].Versions[0].Bound = true
 	baseEnvironment := f.environOverride
 	f.environOverride = func() []string {
 		return append(baseEnvironment(), "APP_SESSION_SECRET=stale-parent-default", "APP_SESSION_SECRET_B64=stale-parent-binary")
 	}
-	if code := f.runExec([]string{"--allow-incomplete-secrets", "--env-prefix", "APP_", "--secret-token", "stripe-key=" + envTestStripeToken, "--preserve-env", "--quiet"}, "/usr/bin/app"); code != exitOK {
+	if code := f.runExec([]string{"--allow-incomplete-secrets", "--env-prefix", "APP_", "--preserve-env", "--quiet"}, "/usr/bin/app"); code != exitOK {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	for _, entry := range f.launched.env {
@@ -331,20 +300,6 @@ func TestScrubBindingKeyEnvironmentRemovesOnlyExactCredentialNames(t *testing.T)
 	wantInsensitive := []string{"KMS_BINDING_KEY_SUFFIX=keep", "PATH=/bin"}
 	if got := scrubBindingKeyEnvironment(parent, true); !slices.Equal(got, wantInsensitive) {
 		t.Fatalf("case-insensitive scrub = %q, want %q", got, wantInsensitive)
-	}
-}
-
-func TestScrubChildCredentialEnvironmentAlsoRemovesInjectedTokenNames(t *testing.T) {
-	entries := []string{
-		"KMS_SECRET_TOKEN_API=token",
-		"KMS_SECRET_TOKEN_=token",
-		bindingKeyEnv + "=binding",
-		"KMS_SECRET_TOKENX=keep",
-		"APP=value",
-	}
-	want := []string{"KMS_SECRET_TOKENX=keep", "APP=value"}
-	if got := scrubChildCredentialEnvironment(entries, false); !slices.Equal(got, want) {
-		t.Fatalf("credential scrub = %q, want %q", got, want)
 	}
 }
 
@@ -434,6 +389,8 @@ func TestExecInjectedWinsUnlessPreserveEnv(t *testing.T) {
 func TestExecIncompleteModeReportsOmittedSecretsBeforeLaunching(t *testing.T) {
 	t.Parallel()
 	f := newExecFixture(t, 0, nil)
+	f.secrets.list[1].Bound = true
+	f.secrets.list[1].Versions[0].Bound = true
 	baseEnvironment := f.environOverride
 	f.environOverride = func() []string {
 		return append(baseEnvironment(), "STRIPE_KEY=stale-parent-secret", "STRIPE_KEY_B64=stale-parent-binary")
@@ -499,13 +456,13 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		want int
 	}{
 		{
-			name: "missing secret token by default",
-			set:  func(*envFixture) {},
+			name: "bound secret requires credentials",
+			set:  func(f *envFixture) { f.secrets.list[0].Bound = true; f.secrets.list[0].Versions[0].Bound = true },
 			want: exitError,
 		},
 		{
 			name: "bound secret by default",
-			args: []string{"--secret-token", "stripe-key=" + envTestStripeToken},
+			args: []string{},
 			set: func(f *envFixture) {
 				f.secrets.list[0].Bound = true
 				f.secrets.list[0].Versions[0].Bound = true
@@ -525,16 +482,19 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 			want: exitUsage,
 		},
 		{
-			name: "release secret missing token",
+			name: "release secret unavailable",
 			args: []string{"--release", "runtime"},
-			set:  func(f *envFixture) { f.installRelease() },
-			want: exitError,
+			set: func(f *envFixture) {
+				f.installRelease()
+				f.secrets.getErr["/prod/app/stripe-key"] = status.Error(codes.FailedPrecondition, "unavailable")
+			},
+			want: exitFailedPrecondition,
 		},
 		{
-			name: "a stray secret token",
+			name: "removed secret token flag",
 			args: []string{"--secret-token", "stipe-key=typo"},
 			set:  func(*envFixture) {},
-			want: exitError,
+			want: exitUsage,
 		},
 		{
 			name: "the server refuses the listing",
@@ -545,7 +505,7 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		},
 		{
 			name: "a pinned parameter digest does not verify",
-			args: []string{"--release", "runtime", "--secret-token", "billing-key=" + envTestStripeToken},
+			args: []string{"--release", "runtime"},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.params.get["/prod/app/db/host"].Value = "db.tampered"
@@ -554,7 +514,7 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		},
 		{
 			name: "a release manifest digest does not verify",
-			args: []string{"--release", "runtime", "--secret-token", "billing-key=" + envTestStripeToken},
+			args: []string{"--release", "runtime"},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.releases.release.MetadataJson = `{"tampered":true}`

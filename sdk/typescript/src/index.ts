@@ -102,10 +102,7 @@ export {
 export type { NamespaceRef, ResourceRef, VersionRef } from "./refs.js";
 
 export { ReleaseLoader, runTypedRelease } from "./releases/loader.js";
-export type {
-  SecretTokenProvider,
-  ValidateReleaseManifest,
-} from "./releases/loader.js";
+export type { ValidateReleaseManifest } from "./releases/loader.js";
 export {
   classifiedReleaseCategory,
   ClassifiedReleaseError,

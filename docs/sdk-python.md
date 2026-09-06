@@ -199,11 +199,11 @@ other = client.get_parameter("/staging/billing/rate")    # absolute, cross-names
 Both accept keyword-only options:
 
 - `get_parameter(key, *, version=0, label="", timeout=None)`
-- `get_secret(key, *, version=0, label="", secret_token="", binding_key="", timeout=None)`
+- `get_secret(key, *, version=0, label="", binding_key="", timeout=None)`
 
 `version` pins the read to a specific immutable version; `label` reads the
 version a label points at (server default is `"current"` when neither is
-given). `secret_token` and `binding_key` set independent operation-specific
+given). `binding_key` sets the operation-specific
 request fields. The exact version may require either, both, or neither.
 
 `get_secret` returns a `Secret` (`kms_paramstore/secret.py`): an immutable,
@@ -228,14 +228,12 @@ Writes (mainly for tooling, not typical application code):
 ```python
 result = client.put_parameter("rate-limit", "200", content_type="integer")
 
-result = client.put_secret("stripe-api-key", b"sk_live_...",
-                           generate_access_token=True)
-# result.access_token is set only when generate_access_token=True was
-# passed, and is never retrievable again after this call returns.
+result = client.put_secret("stripe-api-key", b"sk_live_...")
+# result contains the stored version and revision.
 ```
 
 - `put_parameter(key, value, *, content_type="", metadata_json="", timeout=None) -> PutResult`
-- `put_secret(key, value, *, content_type="", metadata_json="", binding_key="", generate_access_token=False, expires_at_unix_ms=0, timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). Non-empty `binding_key` creates a bound version; empty creates an unbound version regardless of history. `generate_access_token` is independent and there is no write-side `secret_token`.
+- `put_secret(key, value, *, content_type="", metadata_json="", binding_key="", expires_at_unix_ms=0, timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). Non-empty `binding_key` creates a bound version; empty creates an unbound version regardless of history.
 - `list_parameters(namespace=None, key_prefix="", *, page_size=0, page_token="") -> Page[Parameter]` — listing is namespace-scoped; `namespace` accepts an `"env/app"` string (or `None` for the client's own namespace) and `key_prefix` filters by relative-key prefix. Prefer `page.items` and `page.next_page_token`; two-value unpacking remains only as a v0.1 migration path.
 - `delete_parameter(key, *, timeout=None) -> int` (returns the revision)
 - `get_secret_metadata(key, *, timeout=None) -> SecretInfo` (metadata only, never plaintext)
@@ -289,10 +287,8 @@ tuples. `Parameter` and `SecretInfo` carry explicit `env`, `app`, and `key`
 fields, plus `namespace` (`"env/app"`) and `path` (`"/env/app/key"`) display
 properties.
 
-`SecretInfo.bound` summarizes the current-labeled version, while its top-level
-`has_access_token` reports whether the secret currently has an access-token
-hash. Every `SecretVersion` carries immutable-while-live `bound` and
-`has_access_token` flags; use those fields for an exact pin.
+`SecretInfo.bound` summarizes the current-labeled version. Each `SecretVersion`
+carries its own immutable-while-live `bound` flag; use it for an exact pin.
 
 ### Public client surface
 
@@ -343,7 +339,7 @@ except PermissionDeniedError:
 
 For ordinary RPCs, gRPC status codes outside this mapped set surface as a
 generic `ParamStoreError` carrying the status code name and message. Every RPC
-that carries secret plaintext, an access token, or a binding key instead maps
+that carries secret plaintext or a binding key instead maps
 from the structured status alone and uses fixed safe text; even a buggy or
 hostile peer cannot reflect credential material into an exception.
 
@@ -388,7 +384,6 @@ from kms_paramstore import Client, SecretValue, ParameterValue
 
 class AppConfig:
     stripe_key = SecretValue("stripe-api-key",
-                              token="<per-secret-token>",   # access token, if required
                               bind_key="<binding-key>")     # independent, if bound
     openai_key = SecretValue("openai-api-key",
                               env_var="OPENAI_API_KEY")      # env override still wins
@@ -546,7 +541,6 @@ loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
     reconcile_interval=60.0,       # default
     max_concurrent_fetches=16,     # default; maximum 256
-    secret_token_provider=lambda alias, path: local_tokens.get(alias),
     binding_keys={"db_password": os.environ["DB_PASSWORD_KMS_BIND_KEY"]},
     validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
@@ -580,15 +574,10 @@ reconnects unless one is supplied. Reconciliation defaults to 60 seconds,
 resolution concurrency to 16, reconnect backoff to 0.25–30 seconds, and RPC
 deadlines to the client's default unless `request_timeout` is set.
 
-For each exact secret pin the loader first fetches live metadata and verifies
-response identity, exact version, state, expiry, `bound`, and
-`has_access_token`. The token provider receives `(alias, absolute_path)` and
-may return a token string, `(token, bool)`, or `None`; it is called only for a
-version whose live metadata is access-token gated. `binding_keys` is a
-defensively copied, read-only alias map and is consulted only for a bound
-version. Credentials remain local and are sent independently only with the
-corresponding pinned read. Missing credentials reject the whole candidate as
-`token_unavailable`; wrong credentials/read failure are `resolution_failed`.
+For each exact secret pin the loader fetches live metadata and verifies resource
+identity, version, state, expiry, and `bound`. `binding_keys` is a defensively
+copied, read-only alias map used only for bound versions. Missing keys reject
+the candidate as `binding_key_unavailable`; failed reads use `resolution_failed`.
 
 `ReleaseSnapshot` is a frozen dataclass with namespace, release version,
 activation revision, schema version, deterministic digest, metadata,
@@ -629,7 +618,6 @@ from kms_paramstore import AsyncReleaseLoader, AsyncReleaseLoaderConfig
 
 loader = AsyncReleaseLoader(async_client, AsyncReleaseLoaderConfig(
     name="runtime",
-    secret_token_provider=async_token_provider,  # (alias, path, cancel)
     binding_keys={"db_password": db_password_binding_key},
     validate_manifest=async_manifest_validator,  # (cancel, manifest)
 ))

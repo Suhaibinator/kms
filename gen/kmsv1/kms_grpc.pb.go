@@ -1080,7 +1080,7 @@ const (
 //
 // Configuration releases are immutable namespace-scoped manifests. They
 // contain exact parameter/secret version references and non-sensitive
-// metadata only; values and secret access tokens are never embedded.
+// metadata only; values and binding keys are never embedded.
 type ConfigurationReleaseServiceClient interface {
 	CreateRelease(ctx context.Context, in *CreateReleaseRequest, opts ...grpc.CallOption) (*CreateReleaseResponse, error)
 	ValidateRelease(ctx context.Context, in *ValidateReleaseRequest, opts ...grpc.CallOption) (*ValidateReleaseResponse, error)
@@ -1197,7 +1197,7 @@ func (c *configurationReleaseServiceClient) VerifyReleaseDefaults(ctx context.Co
 //
 // Configuration releases are immutable namespace-scoped manifests. They
 // contain exact parameter/secret version references and non-sensitive
-// metadata only; values and secret access tokens are never embedded.
+// metadata only; values and binding keys are never embedded.
 type ConfigurationReleaseServiceServer interface {
 	CreateRelease(context.Context, *CreateReleaseRequest) (*CreateReleaseResponse, error)
 	ValidateRelease(context.Context, *ValidateReleaseRequest) (*ValidateReleaseResponse, error)

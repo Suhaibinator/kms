@@ -324,7 +324,6 @@ type SecretMetadata struct {
 	// bound summarizes the version selected by the current label. Callers that
 	// operate on an exact version must use SecretVersionInfo.bound instead.
 	Bound           bool                 `protobuf:"varint,3,opt,name=bound,proto3" json:"bound,omitempty"`
-	HasAccessToken  bool                 `protobuf:"varint,4,opt,name=has_access_token,json=hasAccessToken,proto3" json:"has_access_token,omitempty"`
 	MetadataJson    string               `protobuf:"bytes,5,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
 	CreatedAtUnixMs int64                `protobuf:"varint,6,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	UpdatedAtUnixMs int64                `protobuf:"varint,7,opt,name=updated_at_unix_ms,json=updatedAtUnixMs,proto3" json:"updated_at_unix_ms,omitempty"`
@@ -385,13 +384,6 @@ func (x *SecretMetadata) GetBound() bool {
 	return false
 }
 
-func (x *SecretMetadata) GetHasAccessToken() bool {
-	if x != nil {
-		return x.HasAccessToken
-	}
-	return false
-}
-
 func (x *SecretMetadata) GetMetadataJson() string {
 	if x != nil {
 		return x.MetadataJson
@@ -437,7 +429,6 @@ type SecretVersionInfo struct {
 	ExpiresAtUnixMs   int64                  `protobuf:"varint,6,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
 	MetadataJson      string                 `protobuf:"bytes,7,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
 	Bound             bool                   `protobuf:"varint,8,opt,name=bound,proto3" json:"bound,omitempty"`
-	HasAccessToken    bool                   `protobuf:"varint,9,opt,name=has_access_token,json=hasAccessToken,proto3" json:"has_access_token,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -524,13 +515,6 @@ func (x *SecretVersionInfo) GetMetadataJson() string {
 func (x *SecretVersionInfo) GetBound() bool {
 	if x != nil {
 		return x.Bound
-	}
-	return false
-}
-
-func (x *SecretVersionInfo) GetHasAccessToken() bool {
-	if x != nil {
-		return x.HasAccessToken
 	}
 	return false
 }
@@ -1111,8 +1095,6 @@ type GetSecretRequest struct {
 	Ref     *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	Version uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"` // 0 = use label
 	Label   string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`      // default "current"
-	// Per-secret access token, independent of the version's binding key.
-	SecretToken string `protobuf:"bytes,4,opt,name=secret_token,json=secretToken,proto3" json:"secret_token,omitempty"`
 	// Operator-owned key for opening a bound version. It is request-scoped and
 	// is never logged, hashed, fingerprinted, or persisted by KMS.
 	BindingKey    string `protobuf:"bytes,5,opt,name=binding_key,json=bindingKey,proto3" json:"binding_key,omitempty"`
@@ -1167,13 +1149,6 @@ func (x *GetSecretRequest) GetVersion() uint64 {
 func (x *GetSecretRequest) GetLabel() string {
 	if x != nil {
 		return x.Label
-	}
-	return ""
-}
-
-func (x *GetSecretRequest) GetSecretToken() string {
-	if x != nil {
-		return x.SecretToken
 	}
 	return ""
 }
@@ -1278,9 +1253,6 @@ type PutSecretRequest struct {
 	// A non-empty operator-owned key creates a bound version. It is request-
 	// scoped and is never logged, hashed, fingerprinted, or persisted by KMS.
 	BindingKey string `protobuf:"bytes,5,opt,name=binding_key,json=bindingKey,proto3" json:"binding_key,omitempty"`
-	// generate_access_token asks the server to mint a per-secret access token.
-	// The token is returned exactly once in the response.
-	GenerateAccessToken bool `protobuf:"varint,6,opt,name=generate_access_token,json=generateAccessToken,proto3" json:"generate_access_token,omitempty"`
 	// expires_at for the new version, 0 = never.
 	ExpiresAtUnixMs int64 `protobuf:"varint,7,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
 	unknownFields   protoimpl.UnknownFields
@@ -1352,13 +1324,6 @@ func (x *PutSecretRequest) GetBindingKey() string {
 	return ""
 }
 
-func (x *PutSecretRequest) GetGenerateAccessToken() bool {
-	if x != nil {
-		return x.GenerateAccessToken
-	}
-	return false
-}
-
 func (x *PutSecretRequest) GetExpiresAtUnixMs() int64 {
 	if x != nil {
 		return x.ExpiresAtUnixMs
@@ -1367,12 +1332,9 @@ func (x *PutSecretRequest) GetExpiresAtUnixMs() int64 {
 }
 
 type PutSecretResponse struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Version  uint64                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Revision uint64                 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
-	// access_token is set only when generate_access_token was true. It is never
-	// retrievable again.
-	AccessToken   string `protobuf:"bytes,3,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint64                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Revision      uint64                 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1419,13 +1381,6 @@ func (x *PutSecretResponse) GetRevision() uint64 {
 		return x.Revision
 	}
 	return 0
-}
-
-func (x *PutSecretResponse) GetAccessToken() string {
-	if x != nil {
-		return x.AccessToken
-	}
-	return ""
 }
 
 // ListSecrets is always namespace-scoped and returns metadata only, never
@@ -8732,7 +8687,7 @@ func (x *HealthResponse) GetDetailsJson() string {
 // generated parameter defaults against current values, carries forward exact
 // active secret pins when present, and resolves current only for new secret
 // aliases. Neither the request nor response exposes parameter values, secret
-// material, access tokens, or stored value digests. Execute requires the exact
+// material or stored value digests. Execute requires the exact
 // plan_digest returned by a preceding preview and never activates the release.
 type CreateApplicationReleaseRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -9062,12 +9017,11 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"created_by\x18\x04 \x01(\tR\tcreatedBy\x12+\n" +
 	"\x12created_at_unix_ms\x18\x05 \x01(\x03R\x0fcreatedAtUnixMs\x12#\n" +
-	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJson\"\xc7\x03\n" +
+	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJson\"\xb5\x03\n" +
 	"\x0eSecretMetadata\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x14\n" +
-	"\x05bound\x18\x03 \x01(\bR\x05bound\x12(\n" +
-	"\x10has_access_token\x18\x04 \x01(\bR\x0ehasAccessToken\x12#\n" +
+	"\x05bound\x18\x03 \x01(\bR\x05bound\x12#\n" +
 	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJson\x12+\n" +
 	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
 	"\x12updated_at_unix_ms\x18\a \x01(\x03R\x0fupdatedAtUnixMs\x12:\n" +
@@ -9075,7 +9029,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\bversions\x18\t \x03(\v2\x19.kms.v1.SecretVersionInfoR\bversions\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\xd2\x02\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01J\x04\b\x04\x10\x05R\x10has_access_token\"\xc0\x02\n" +
 	"\x11SecretVersionInfo\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1d\n" +
@@ -9085,8 +9039,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x14destroyed_at_unix_ms\x18\x05 \x01(\x03R\x11destroyedAtUnixMs\x12+\n" +
 	"\x12expires_at_unix_ms\x18\x06 \x01(\x03R\x0fexpiresAtUnixMs\x12#\n" +
 	"\rmetadata_json\x18\a \x01(\tR\fmetadataJson\x12\x14\n" +
-	"\x05bound\x18\b \x01(\bR\x05bound\x12(\n" +
-	"\x10has_access_token\x18\t \x01(\bR\x0ehasAccessToken\"l\n" +
+	"\x05bound\x18\b \x01(\bR\x05boundJ\x04\b\t\x10\n" +
+	"R\x10has_access_token\"l\n" +
 	"\x13GetParameterRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
@@ -9129,34 +9083,31 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\bversions\x18\a \x03(\v2\x1c.kms.v1.ParameterVersionInfoR\bversions\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\xad\x01\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\x9e\x01\n" +
 	"\x10GetSecretRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
-	"\x05label\x18\x03 \x01(\tR\x05label\x12!\n" +
-	"\fsecret_token\x18\x04 \x01(\tR\vsecretToken\x12\x1f\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\x12\x1f\n" +
 	"\vbinding_key\x18\x05 \x01(\tR\n" +
-	"bindingKey\"\xdf\x01\n" +
+	"bindingKeyJ\x04\b\x04\x10\x05R\fsecret_token\"\xdf\x01\n" +
 	"\x11GetSecretResponse\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
 	"\x05value\x18\x03 \x01(\fR\x05value\x12!\n" +
 	"\fcontent_type\x18\x04 \x01(\tR\vcontentType\x12#\n" +
 	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJson\x12+\n" +
-	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\"\x99\x02\n" +
+	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\"\x82\x02\n" +
 	"\x10PutSecretRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12!\n" +
 	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\x12#\n" +
 	"\rmetadata_json\x18\x04 \x01(\tR\fmetadataJson\x12\x1f\n" +
 	"\vbinding_key\x18\x05 \x01(\tR\n" +
-	"bindingKey\x122\n" +
-	"\x15generate_access_token\x18\x06 \x01(\bR\x13generateAccessToken\x12+\n" +
-	"\x12expires_at_unix_ms\x18\a \x01(\x03R\x0fexpiresAtUnixMs\"l\n" +
+	"bindingKey\x12+\n" +
+	"\x12expires_at_unix_ms\x18\a \x01(\x03R\x0fexpiresAtUnixMsJ\x04\b\x06\x10\aR\x15generate_access_token\"]\n" +
 	"\x11PutSecretResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\x04R\brevision\x12!\n" +
-	"\faccess_token\x18\x03 \x01(\tR\vaccessToken\"\xa3\x01\n" +
+	"\brevision\x18\x02 \x01(\x04R\brevisionJ\x04\b\x03\x10\x04R\faccess_token\"\xa3\x01\n" +
 	"\x12ListSecretsRequest\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x1d\n" +
 	"\n" +

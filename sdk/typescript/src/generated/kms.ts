@@ -76,7 +76,6 @@ export interface SecretMetadata {
    * operate on an exact version must use SecretVersionInfo.bound instead.
    */
   bound: boolean;
-  hasAccessToken: boolean;
   metadataJson: string;
   createdAtUnixMs: bigint;
   updatedAtUnixMs: bigint;
@@ -100,7 +99,6 @@ export interface SecretVersionInfo {
   expiresAtUnixMs: bigint;
   metadataJson: string;
   bound: boolean;
-  hasAccessToken: boolean;
 }
 
 export interface GetParameterRequest {
@@ -181,8 +179,6 @@ export interface GetSecretRequest {
   version: bigint;
   /** default "current" */
   label: string;
-  /** Per-secret access token, independent of the version's binding key. */
-  secretToken: string;
   /**
    * Operator-owned key for opening a bound version. It is request-scoped and
    * is never logged, hashed, fingerprinted, or persisted by KMS.
@@ -209,11 +205,6 @@ export interface PutSecretRequest {
    * scoped and is never logged, hashed, fingerprinted, or persisted by KMS.
    */
   bindingKey: string;
-  /**
-   * generate_access_token asks the server to mint a per-secret access token.
-   * The token is returned exactly once in the response.
-   */
-  generateAccessToken: boolean;
   /** expires_at for the new version, 0 = never. */
   expiresAtUnixMs: bigint;
 }
@@ -221,11 +212,6 @@ export interface PutSecretRequest {
 export interface PutSecretResponse {
   version: bigint;
   revision: bigint;
-  /**
-   * access_token is set only when generate_access_token was true. It is never
-   * retrievable again.
-   */
-  accessToken: string;
 }
 
 /**
@@ -1178,7 +1164,7 @@ export interface HealthResponse {
  * generated parameter defaults against current values, carries forward exact
  * active secret pins when present, and resolves current only for new secret
  * aliases. Neither the request nor response exposes parameter values, secret
- * material, access tokens, or stored value digests. Execute requires the exact
+ * material or stored value digests. Execute requires the exact
  * plan_digest returned by a preceding preview and never activates the release.
  */
 export interface CreateApplicationReleaseRequest {
@@ -1908,7 +1894,6 @@ function createBaseSecretMetadata(): SecretMetadata {
     ref: undefined,
     contentType: "",
     bound: false,
-    hasAccessToken: false,
     metadataJson: "",
     createdAtUnixMs: 0n,
     updatedAtUnixMs: 0n,
@@ -1927,9 +1912,6 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     }
     if (message.bound !== false) {
       writer.uint32(24).bool(message.bound);
-    }
-    if (message.hasAccessToken !== false) {
-      writer.uint32(32).bool(message.hasAccessToken);
     }
     if (message.metadataJson !== "") {
       writer.uint32(42).string(message.metadataJson);
@@ -1990,14 +1972,6 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
             }
 
             message.bound = reader.bool();
-            continue;
-          }
-          case 4: {
-            if (tag !== 32) {
-              break;
-            }
-
-            message.hasAccessToken = reader.bool();
             continue;
           }
           case 5: {
@@ -2064,11 +2038,6 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
         ? globalThis.String(object.content_type)
         : "",
       bound: isSet(object.bound) ? globalThis.Boolean(object.bound) : false,
-      hasAccessToken: isSet(object.hasAccessToken)
-        ? globalThis.Boolean(object.hasAccessToken)
-        : isSet(object.has_access_token)
-        ? globalThis.Boolean(object.has_access_token)
-        : false,
       metadataJson: isSet(object.metadataJson)
         ? globalThis.String(object.metadataJson)
         : isSet(object.metadata_json)
@@ -2115,9 +2084,6 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     if (message.bound !== false) {
       obj.bound = message.bound;
     }
-    if (message.hasAccessToken !== false) {
-      obj.hasAccessToken = message.hasAccessToken;
-    }
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
     }
@@ -2150,7 +2116,6 @@ export const SecretMetadata: MessageFns<SecretMetadata> = {
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
     message.contentType = object.contentType ?? "";
     message.bound = object.bound ?? false;
-    message.hasAccessToken = object.hasAccessToken ?? false;
     message.metadataJson = object.metadataJson ?? "";
     message.createdAtUnixMs = (object.createdAtUnixMs !== undefined && object.createdAtUnixMs !== null)
       ? BigInt(object.createdAtUnixMs)
@@ -2270,7 +2235,6 @@ function createBaseSecretVersionInfo(): SecretVersionInfo {
     expiresAtUnixMs: 0n,
     metadataJson: "",
     bound: false,
-    hasAccessToken: false,
   };
 }
 
@@ -2311,9 +2275,6 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
     }
     if (message.bound !== false) {
       writer.uint32(64).bool(message.bound);
-    }
-    if (message.hasAccessToken !== false) {
-      writer.uint32(72).bool(message.hasAccessToken);
     }
     return writer;
   },
@@ -2395,14 +2356,6 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
             message.bound = reader.bool();
             continue;
           }
-          case 9: {
-            if (tag !== 72) {
-              break;
-            }
-
-            message.hasAccessToken = reader.bool();
-            continue;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2445,11 +2398,6 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
         ? globalThis.String(object.metadata_json)
         : "",
       bound: isSet(object.bound) ? globalThis.Boolean(object.bound) : false,
-      hasAccessToken: isSet(object.hasAccessToken)
-        ? globalThis.Boolean(object.hasAccessToken)
-        : isSet(object.has_access_token)
-        ? globalThis.Boolean(object.has_access_token)
-        : false,
     };
   },
 
@@ -2479,9 +2427,6 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
     if (message.bound !== false) {
       obj.bound = message.bound;
     }
-    if (message.hasAccessToken !== false) {
-      obj.hasAccessToken = message.hasAccessToken;
-    }
     return obj;
   },
 
@@ -2504,7 +2449,6 @@ export const SecretVersionInfo: MessageFns<SecretVersionInfo> = {
       : 0n;
     message.metadataJson = object.metadataJson ?? "";
     message.bound = object.bound ?? false;
-    message.hasAccessToken = object.hasAccessToken ?? false;
     return message;
   },
 };
@@ -3644,7 +3588,7 @@ export const GetParameterMetadataResponse_LabelsEntry: MessageFns<GetParameterMe
 };
 
 function createBaseGetSecretRequest(): GetSecretRequest {
-  return { ref: undefined, version: 0n, label: "", secretToken: "", bindingKey: "" };
+  return { ref: undefined, version: 0n, label: "", bindingKey: "" };
 }
 
 export const GetSecretRequest: MessageFns<GetSecretRequest> = {
@@ -3660,9 +3604,6 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     }
     if (message.label !== "") {
       writer.uint32(26).string(message.label);
-    }
-    if (message.secretToken !== "") {
-      writer.uint32(34).string(message.secretToken);
     }
     if (message.bindingKey !== "") {
       writer.uint32(42).string(message.bindingKey);
@@ -3707,14 +3648,6 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
             message.label = reader.string();
             continue;
           }
-          case 4: {
-            if (tag !== 34) {
-              break;
-            }
-
-            message.secretToken = reader.string();
-            continue;
-          }
           case 5: {
             if (tag !== 42) {
               break;
@@ -3740,11 +3673,6 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
       ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
       version: isSet(object.version) ? BigInt(object.version) : 0n,
       label: isSet(object.label) ? globalThis.String(object.label) : "",
-      secretToken: isSet(object.secretToken)
-        ? globalThis.String(object.secretToken)
-        : isSet(object.secret_token)
-        ? globalThis.String(object.secret_token)
-        : "",
       bindingKey: isSet(object.bindingKey)
         ? globalThis.String(object.bindingKey)
         : isSet(object.binding_key)
@@ -3764,9 +3692,6 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     if (message.label !== "") {
       obj.label = message.label;
     }
-    if (message.secretToken !== "") {
-      obj.secretToken = message.secretToken;
-    }
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
     }
@@ -3781,7 +3706,6 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     message.label = object.label ?? "";
-    message.secretToken = object.secretToken ?? "";
     message.bindingKey = object.bindingKey ?? "";
     return message;
   },
@@ -3970,7 +3894,6 @@ function createBasePutSecretRequest(): PutSecretRequest {
     contentType: "",
     metadataJson: "",
     bindingKey: "",
-    generateAccessToken: false,
     expiresAtUnixMs: 0n,
   };
 }
@@ -3991,9 +3914,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     }
     if (message.bindingKey !== "") {
       writer.uint32(42).string(message.bindingKey);
-    }
-    if (message.generateAccessToken !== false) {
-      writer.uint32(48).bool(message.generateAccessToken);
     }
     if (message.expiresAtUnixMs !== 0n) {
       if (BigInt.asIntN(64, message.expiresAtUnixMs) !== message.expiresAtUnixMs) {
@@ -4057,14 +3977,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
             message.bindingKey = reader.string();
             continue;
           }
-          case 6: {
-            if (tag !== 48) {
-              break;
-            }
-
-            message.generateAccessToken = reader.bool();
-            continue;
-          }
           case 7: {
             if (tag !== 56) {
               break;
@@ -4104,11 +4016,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         : isSet(object.binding_key)
         ? globalThis.String(object.binding_key)
         : "",
-      generateAccessToken: isSet(object.generateAccessToken)
-        ? globalThis.Boolean(object.generateAccessToken)
-        : isSet(object.generate_access_token)
-        ? globalThis.Boolean(object.generate_access_token)
-        : false,
       expiresAtUnixMs: isSet(object.expiresAtUnixMs)
         ? BigInt(object.expiresAtUnixMs)
         : isSet(object.expires_at_unix_ms)
@@ -4134,9 +4041,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
     }
-    if (message.generateAccessToken !== false) {
-      obj.generateAccessToken = message.generateAccessToken;
-    }
     if (message.expiresAtUnixMs !== 0n) {
       obj.expiresAtUnixMs = message.expiresAtUnixMs.toString();
     }
@@ -4153,7 +4057,6 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     message.contentType = object.contentType ?? "";
     message.metadataJson = object.metadataJson ?? "";
     message.bindingKey = object.bindingKey ?? "";
-    message.generateAccessToken = object.generateAccessToken ?? false;
     message.expiresAtUnixMs = (object.expiresAtUnixMs !== undefined && object.expiresAtUnixMs !== null)
       ? BigInt(object.expiresAtUnixMs)
       : 0n;
@@ -4162,7 +4065,7 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
 };
 
 function createBasePutSecretResponse(): PutSecretResponse {
-  return { version: 0n, revision: 0n, accessToken: "" };
+  return { version: 0n, revision: 0n };
 }
 
 export const PutSecretResponse: MessageFns<PutSecretResponse> = {
@@ -4178,9 +4081,6 @@ export const PutSecretResponse: MessageFns<PutSecretResponse> = {
         throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.revision);
-    }
-    if (message.accessToken !== "") {
-      writer.uint32(26).string(message.accessToken);
     }
     return writer;
   },
@@ -4214,14 +4114,6 @@ export const PutSecretResponse: MessageFns<PutSecretResponse> = {
             message.revision = reader.uint64() as bigint;
             continue;
           }
-          case 3: {
-            if (tag !== 26) {
-              break;
-            }
-
-            message.accessToken = reader.string();
-            continue;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4238,11 +4130,6 @@ export const PutSecretResponse: MessageFns<PutSecretResponse> = {
     return {
       version: isSet(object.version) ? BigInt(object.version) : 0n,
       revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
-      accessToken: isSet(object.accessToken)
-        ? globalThis.String(object.accessToken)
-        : isSet(object.access_token)
-        ? globalThis.String(object.access_token)
-        : "",
     };
   },
 
@@ -4254,9 +4141,6 @@ export const PutSecretResponse: MessageFns<PutSecretResponse> = {
     if (message.revision !== 0n) {
       obj.revision = message.revision.toString();
     }
-    if (message.accessToken !== "") {
-      obj.accessToken = message.accessToken;
-    }
     return obj;
   },
 
@@ -4267,7 +4151,6 @@ export const PutSecretResponse: MessageFns<PutSecretResponse> = {
     const message = createBasePutSecretResponse();
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
-    message.accessToken = object.accessToken ?? "";
     return message;
   },
 };
@@ -18591,7 +18474,7 @@ export interface WatchServiceServer extends UntypedServiceImplementation {
 /**
  * Configuration releases are immutable namespace-scoped manifests. They
  * contain exact parameter/secret version references and non-sensitive
- * metadata only; values and secret access tokens are never embedded.
+ * metadata only; values and binding keys are never embedded.
  */
 export type ConfigurationReleaseServiceService = typeof ConfigurationReleaseServiceService;
 export const ConfigurationReleaseServiceService = {
@@ -19054,5 +18937,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 1de1b0ab2fa3fe630aab055b10615080ba27c735f901f41cd28761c4f984ce6e
+// source-sha256: 7674d4719b78fede3051a49a4b1de5a490375cb5e6f8c62ba91ba21aa825d8b6
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

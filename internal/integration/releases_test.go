@@ -42,13 +42,10 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	const secretV1Plaintext = "release-secret-v1-canary-e429"
 	secretV1, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
 		Ref: secretRef, Value: []byte(secretV1Plaintext), ContentType: "text/plain",
-		Metadata: `{"owner":"database"}`, GenerateToken: true,
+		Metadata: `{"owner":"database"}`,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret v1: %v", err)
-	}
-	if secretV1.AccessToken == "" {
-		t.Fatal("PutSecret v1 returned no access token")
 	}
 
 	releaseV1, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
@@ -62,7 +59,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConfigurationRelease v1: %v", err)
 	}
-	assertReleasePins(t, releaseV1, parameterV1, secretV1.Version, secretV1Plaintext, secretV1.AccessToken)
+	assertReleasePins(t, releaseV1, parameterV1, secretV1.Version, secretV1Plaintext)
 	validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV1.Version)
 	if err != nil {
 		t.Fatalf("ValidateConfigurationRelease v1: %v", err)
@@ -83,9 +80,6 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutSecret v2: %v", err)
 	}
-	if secretV2.AccessToken != "" {
-		t.Fatal("ordinary rotation unexpectedly minted a new access token")
-	}
 
 	// The application pins the schema, so invalid data is tested against that
 	// shared schema instead of creating an environment-specific schema version.
@@ -102,7 +96,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConfigurationRelease v2: %v", err)
 	}
-	assertReleasePins(t, releaseV2, parameterInvalid, secretV2.Version, secretV2Plaintext, secretV1.AccessToken)
+	assertReleasePins(t, releaseV2, parameterInvalid, secretV2.Version, secretV2Plaintext)
 	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version)
 	if err != nil {
 		t.Fatalf("ValidateConfigurationRelease v2: %v", err)
@@ -111,7 +105,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("ValidateConfigurationRelease v2 errors = %+v, want workers schema violation", validation)
 	}
 	validationText := fmt.Sprintf("%+v", validation)
-	for _, sensitive := range []string{secretV1Plaintext, secretV2Plaintext, secretV1.AccessToken} {
+	for _, sensitive := range []string{secretV1Plaintext, secretV2Plaintext} {
 		if strings.Contains(validationText, sensitive) {
 			t.Fatalf("release validation leaked sensitive value %q", sensitive)
 		}
@@ -272,7 +266,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	auditText := fmt.Sprintf("%+v", events)
 	releaseText := fmt.Sprintf("%+v%+v", releaseV1, releaseV2)
 	logText := h.logBuf.String()
-	for _, sensitive := range []string{secretV1Plaintext, secretV2Plaintext, secretV1.AccessToken} {
+	for _, sensitive := range []string{secretV1Plaintext, secretV2Plaintext} {
 		for surface, text := range map[string]string{"release": releaseText, "audit": auditText, "log": logText} {
 			if strings.Contains(text, sensitive) {
 				t.Fatalf("%s surface leaked sensitive value %q", surface, sensitive)

@@ -181,28 +181,26 @@ type ParameterVersionInfo struct {
 
 // Secret is secret-level metadata. It never carries plaintext.
 type Secret struct {
-	Ref            Ref
-	ContentType    string
-	Bound          bool
-	HasAccessToken bool
-	Metadata       string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	Labels         map[string]uint64
-	Versions       []SecretVersionInfo
+	Ref         Ref
+	ContentType string
+	Bound       bool
+	Metadata    string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Labels      map[string]uint64
+	Versions    []SecretVersionInfo
 }
 
 // SecretVersionInfo describes one secret version without key material.
 type SecretVersionInfo struct {
-	Version        uint64
-	State          string
-	Bound          bool
-	HasAccessToken bool
-	CreatedBy      string
-	CreatedAt      time.Time
-	DestroyedAt    time.Time // zero if not destroyed
-	ExpiresAt      time.Time // zero if no expiry
-	Metadata       string
+	Version     uint64
+	State       string
+	Bound       bool
+	CreatedBy   string
+	CreatedAt   time.Time
+	DestroyedAt time.Time // zero if not destroyed
+	ExpiresAt   time.Time // zero if no expiry
+	Metadata    string
 }
 
 // SecretValue is a decrypted secret returned to an authorized caller.

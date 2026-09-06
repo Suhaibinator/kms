@@ -90,7 +90,6 @@ describe("KmsClient release transport boundary", () => {
       }
       if (path.endsWith("/GetSecret")) {
         expect(options.metadata?.["x-kms-secret-token"]).toBeUndefined();
-        expect((_request as { secretToken?: string }).secretToken).toBe("release-token");
         return {
           ref: returnedRef,
           version: 9n,
@@ -106,7 +105,7 @@ describe("KmsClient release transport boundary", () => {
             ref: expectedRef,
             contentType: "text/plain",
             bound: false,
-            hasAccessToken: true,
+
             metadataJson: "",
             createdAtUnixMs: 1n,
             updatedAtUnixMs: 1n,
@@ -121,7 +120,6 @@ describe("KmsClient release transport boundary", () => {
                 expiresAtUnixMs: 0n,
                 metadataJson: "",
                 bound: false,
-                hasAccessToken: true,
               },
             ],
           },
@@ -132,7 +130,6 @@ describe("KmsClient release transport boundary", () => {
     const client = new KmsClient({ transport, namespace: "prod/api" });
     const loader = await client.createReleaseLoader({
       name: "runtime",
-      secretTokenProvider: () => "release-token",
     });
 
     const error = await loader

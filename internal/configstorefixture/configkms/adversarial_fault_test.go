@@ -23,7 +23,6 @@ type faultStartOptions struct {
 	reconcileInterval   time.Duration
 	onDefaultMismatch   func(configstore.DefaultMismatchReport)
 	onCandidateRejected func(configstore.CandidateRejectionReport)
-	secretTokenProvider kmsclient.SecretTokenProvider
 }
 
 // startFaultFixture enters through the generated public API so callback wiring,
@@ -50,7 +49,7 @@ func startFaultFixture(t *testing.T, initial releaseData, options faultStartOpti
 			OnDefaultMismatch:   options.onDefaultMismatch,
 			OnCandidateRejected: options.onCandidateRejected,
 		},
-		SecretTokenProvider:  options.secretTokenProvider,
+
 		ReconcileInterval:    options.reconcileInterval,
 		MaxConcurrentFetches: 4,
 		InstanceID:           "managed-fault-instance",
@@ -173,13 +172,8 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 	const secretCanary = "PREFETCH-MUST-NOT-READ-SECRET-CANARY"
 	reports := make(chan configstore.CandidateRejectionReport, 1)
 	var fetches atomic.Int64
-	var tokenLookups atomic.Int64
 	fixture := startFaultFixture(t, matchingRelease(1, 101), faultStartOptions{
 		onCandidateRejected: func(report configstore.CandidateRejectionReport) { reports <- report },
-		secretTokenProvider: func(string, string) (string, bool) {
-			tokenLookups.Add(1)
-			return "unused-token", true
-		},
 	})
 	fixture.server.SetGetParameterHook(func(string) { fetches.Add(1) })
 
@@ -188,8 +182,8 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 	bad.runtimeTokenValue = []byte(secretCanary)
 	bad.databaseContentType = "text/plain"
 	scriptResources(fixture.server, bad)
-	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.passwordPath, bad.passwordVersion, "enabled", false, true, 0)
-	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.runtimeTokenPath, bad.runtimeTokenVersion, "enabled", false, true, 0)
+	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.passwordPath, bad.passwordVersion, "enabled", false, 0)
+	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.runtimeTokenPath, bad.runtimeTokenVersion, "enabled", false, 0)
 	spec := releaseSpec(bad)
 	if _, err := fixture.server.ActivateConfigurationRelease(spec, bad.activationRevision); err != nil {
 		t.Fatal(err)
@@ -206,8 +200,8 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 		identity.SchemaVersion() != 1 || identity.Digest() == "" {
 		t.Fatalf("prefetch report = category:%s identity:%s paths:%#v", report.Category(), identity, report.Paths())
 	}
-	if fetches.Load() != 0 || tokenLookups.Load() != 0 {
-		t.Fatalf("contract rejection performed resource work: fetches=%d tokens=%d", fetches.Load(), tokenLookups.Load())
+	if fetches.Load() != 0 {
+		t.Fatalf("contract rejection performed resource work: fetches=%d", fetches.Load())
 	}
 	statusSnapshot := fixture.store.Status()
 	if statusSnapshot.Observed.Version() != 2 || statusSnapshot.Observed.Digest() != identity.Digest() || statusSnapshot.Applied.Version() != 1 {

@@ -99,27 +99,24 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	}
 
 	secrets := kmsv1.NewSecretServiceClient(env.adminConn)
-	putSecret := func(key, plaintext string) (uint64, string) {
+	putSecret := func(key, plaintext string) uint64 {
 		t.Helper()
 		response, putErr := secrets.PutSecretV03(authCtx, &kmsv1.PutSecretRequest{
 			Ref: networkRef("prod", "managed-config", key), Value: []byte(plaintext),
-			ContentType: "text/plain", GenerateAccessToken: true,
+			ContentType: "text/plain",
 		})
 		if putErr != nil {
 			t.Fatalf("put managed secret %s: %v", key, putErr)
 		}
-		if response.GetAccessToken() == "" {
-			t.Fatalf("managed secret %s returned no access token", key)
-		}
-		return response.GetVersion(), response.GetAccessToken()
+		return response.GetVersion()
 	}
 
 	pins := managedPins{
 		database: putParameter("groups/database", managedDatabaseDefault),
 		runtime:  putParameter("groups/runtime", managedRuntimeDefault),
 	}
-	passwordVersion, passwordToken := putSecret("secrets/database_password", "integration-password-canary")
-	runtimeTokenVersion, runtimeToken := putSecret("secrets/runtime_token", "integration-runtime-token-canary")
+	passwordVersion := putSecret("secrets/database_password", "integration-password-canary")
+	runtimeTokenVersion := putSecret("secrets/runtime_token", "integration-runtime-token-canary")
 	pins.password, pins.token = passwordVersion, runtimeTokenVersion
 
 	releases := kmsv1.NewConfigurationReleaseServiceClient(env.adminConn)
@@ -175,19 +172,14 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 		t.Fatalf("create managed SDK client: %v", err)
 	}
 	defer func() { _ = client.Close() }()
-	secretTokens := map[string]string{"database_password": passwordToken, "runtime_token": runtimeToken}
-	provider := func(alias, _ string) (string, bool) {
-		token, ok := secretTokens[alias]
-		return token, ok
-	}
 
 	storeCtx, stopStore := context.WithCancel(ctx)
 	defer stopStore()
 	reporter := &managedReporter{}
 	store, err := fixturekms.Start(storeCtx, client, fixturekms.Options{
 		Release: managedRelease, Defaults: fixtureconfig.Defaults,
-		Callbacks:           configstore.Callbacks{OnDefaultMismatch: reporter.report},
-		SecretTokenProvider: provider, ReconcileInterval: 25 * time.Millisecond, InstanceID: "managed-primary",
+		Callbacks:         configstore.Callbacks{OnDefaultMismatch: reporter.report},
+		ReconcileInterval: 25 * time.Millisecond, InstanceID: "managed-primary",
 	})
 	if err != nil {
 		t.Fatalf("start matching managed store: %v", err)
@@ -263,7 +255,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 			OnDefaultMismatch: restartReporter.report,
 			OnApplied:         func(report configstore.AppliedReport) { restartApplied <- report },
 		},
-		SecretTokenProvider: provider, ReconcileInterval: 25 * time.Millisecond, InstanceID: restartInstance,
+		ReconcileInterval: 25 * time.Millisecond, InstanceID: restartInstance,
 	})
 	if err != nil {
 		t.Fatalf("start fresh store onto divergent active release: %v", err)

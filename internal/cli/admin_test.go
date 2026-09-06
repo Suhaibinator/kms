@@ -56,11 +56,8 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 		t.Fatalf("import exit=%d stderr=%s", code, c3.stderr())
 	}
 	body := readFileString(t, report)
-	if !strings.Contains(body, "STRIPE_KEY -> /prod/gradethis/stripe-key -> kmss_") {
-		t.Fatalf("report missing token mapping: %s", body)
-	}
-	if !strings.Contains(body, "WARNING") {
-		t.Fatalf("report missing one-time token warning: %s", body)
+	if !strings.Contains(body, "STRIPE_KEY -> /prod/gradethis/stripe-key") {
+		t.Fatalf("report missing mapping: %s", body)
 	}
 
 	// Verify the imported secret decrypts to the original plaintext.

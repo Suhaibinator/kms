@@ -23,12 +23,6 @@ import (
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
-// secretTokenEnvPrefix names the environment variables exec and env consult
-// for per-secret tokens: KMS_SECRET_TOKEN_<NAME>, where NAME is the variable
-// the secret maps to (without --env-prefix or the _B64 suffix). These are
-// inputs to the CLI and never reach a child process.
-const secretTokenEnvPrefix = "KMS_SECRET_TOKEN_"
-
 // maxEnvTotalBytes caps the injected environment as a whole. Individual
 // entries are capped per platform (maxEnvEntryBytes) so a value that would
 // make the kernel refuse the exec is reported by name instead of as E2BIG.
@@ -39,15 +33,13 @@ const maxEnvTotalBytes = 2 << 20
 const listPageSize = 1000
 
 // envSelection is what exec and env share: which entries to inject, how to
-// name them, and where per-secret tokens come from.
+// name them.
 type envSelection struct {
 	prefix                 string
 	release                string
 	noSecrets              bool
 	envPrefix              string
 	allowIncompleteSecrets bool
-	tokens                 secretTokenList
-	tokenFiles             secretTokenList
 }
 
 // addEnvSelectionFlags registers the selection flags on fs.
@@ -56,54 +48,11 @@ func addEnvSelectionFlags(fs *flag.FlagSet, sel *envSelection) {
 	fs.StringVar(&sel.release, "release", "", "inject the entries of the active release `NAME` (exact versions, verified digests) instead of the namespace's current values")
 	fs.BoolVar(&sel.noSecrets, "no-secrets", false, "inject parameters only")
 	fs.StringVar(&sel.envPrefix, "env-prefix", "", "prepend this `prefix` to every variable name")
-	fs.BoolVar(&sel.allowIncompleteSecrets, "allow-incomplete-secrets", false, "namespace mode only: omit secrets that are bound or lack a required token, with a warning")
-	fs.Var(&sel.tokens, "secret-token", "per-secret access token as `KEY=TOKEN` (repeatable; visible in the process list, prefer --secret-token-file)")
-	fs.Var(&sel.tokenFiles, "secret-token-file", "read a per-secret access token from a private file, as `KEY=PATH` (repeatable)")
+	fs.BoolVar(&sel.allowIncompleteSecrets, "allow-incomplete-secrets", false, "namespace mode only: omit secrets that are bound, with a warning")
 }
-
-// secretTokenList is a repeatable KEY=VALUE flag. KEY names the secret: its
-// relative key, its /env/app/key path, or (in release mode) its alias. String
-// prints the keys only, so a token can never surface through flag help.
-type secretTokenList struct {
-	keys    []string
-	values  map[string]string
-	invalid string // fixed diagnostic only; never derived from raw flag input
-}
-
-func (l *secretTokenList) String() string { return strings.Join(l.keys, ",") }
-
-func (l *secretTokenList) Set(raw string) error {
-	key, value, ok := strings.Cut(raw, "=")
-	if !ok || key == "" || value == "" {
-		if l.invalid == "" {
-			l.invalid = "must use KEY=VALUE with non-empty KEY and VALUE"
-		}
-		return nil
-	}
-	if l.values == nil {
-		l.values = map[string]string{}
-	}
-	if _, dup := l.values[key]; dup {
-		if l.invalid == "" {
-			l.invalid = "names the same key more than once"
-		}
-		return nil
-	}
-	l.keys = append(l.keys, key)
-	l.values[key] = value
-	return nil
-}
-
-var _ flag.Value = (*secretTokenList)(nil)
 
 // validate checks the selection flags that do not need the server.
 func (sel *envSelection) validate() error {
-	if sel.tokens.invalid != "" {
-		return usageError("--secret-token " + sel.tokens.invalid)
-	}
-	if sel.tokenFiles.invalid != "" {
-		return usageError("--secret-token-file " + sel.tokenFiles.invalid)
-	}
 	if sel.prefix != "" && sel.release != "" {
 		return usageError("--prefix and --release are mutually exclusive: a release fixes its own entries")
 	}
@@ -126,11 +75,6 @@ func (sel *envSelection) validate() error {
 	if !envinject.ValidPrefix(sel.envPrefix) {
 		return usageError(fmt.Sprintf("invalid --env-prefix %q: must match [A-Za-z_][A-Za-z0-9_]*", sel.envPrefix))
 	}
-	for _, key := range sel.tokens.keys {
-		if _, dup := sel.tokenFiles.values[key]; dup {
-			return usageError(fmt.Sprintf("--secret-token and --secret-token-file both name %s", key))
-		}
-	}
 	return nil
 }
 
@@ -141,38 +85,7 @@ type secretItem struct {
 	version         uint64 // release mode only; 0 = label current
 	contentType     string // release mode only; "" = not recorded
 	bound           bool
-	needsToken      bool
 	protectionKnown bool // namespace listings include exact version metadata; release entries do not
-}
-
-// names lists every spelling a token flag may use for this secret. Release
-// pins are namespace-local, but keep the namespace check here so malformed
-// inputs never gain a surprising relative-key spelling.
-func (s secretItem) names(ns *kmsv1.NamespaceRef) []string {
-	out := []string{displayPath(s.ref)}
-	if s.alias != "" {
-		out = append(out, s.alias)
-	}
-	if r := s.ref.GetNamespace(); r.GetEnv() == ns.GetEnv() && r.GetApp() == ns.GetApp() {
-		out = append(out, s.ref.GetKey())
-	}
-	return out
-}
-
-// tokenEnvName is the KMS_SECRET_TOKEN_* variable that may carry this
-// secret's token: the mapped variable name, before any --env-prefix.
-func (s secretItem) tokenEnvName() (string, bool) {
-	var name string
-	var err error
-	if s.alias != "" {
-		name, err = envinject.MapAlias(s.alias)
-	} else {
-		name, err = envinject.MapKey(s.ref.GetKey())
-	}
-	if err != nil {
-		return "", false
-	}
-	return secretTokenEnvPrefix + name, true
 }
 
 // resolvedEnvironment is what resolveEnvironment produces for both commands.
@@ -191,7 +104,6 @@ type omittedSecret struct {
 
 type secretResolution struct {
 	secret secretItem
-	token  string
 }
 
 // resolveEnvironment fetches the selected entries and maps them to variables.
@@ -213,10 +125,6 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		return resolvedEnvironment{}, err
 	}
 
-	tokens, err := c.secretTokens(sel)
-	if err != nil {
-		return resolvedEnvironment{}, err
-	}
 	var out resolvedEnvironment
 	if !sel.noSecrets {
 		client := kmsv1.NewSecretServiceClient(conn)
@@ -238,12 +146,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 					return resolvedEnvironment{}, fmt.Errorf("secret %s metadata: %w", path, err)
 				}
 				s.bound = versionInfo.GetBound()
-				s.needsToken = !s.bound && versionInfo.GetHasAccessToken()
 				s.protectionKnown = true
-			}
-			token, err := tokens.lookup(s, ns, c)
-			if err != nil {
-				return resolvedEnvironment{}, err
 			}
 			if s.bound {
 				out.omitted = append(out.omitted, omittedSecret{
@@ -251,16 +154,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				})
 				continue
 			}
-			if s.needsToken && token == "" {
-				out.omitted = append(out.omitted, omittedSecret{
-					path: path, reason: "it requires a per-secret token and none was supplied", secret: s,
-				})
-				continue
-			}
-			plans = append(plans, secretResolution{secret: s, token: token})
-		}
-		if err := tokens.unused(); err != nil {
-			return resolvedEnvironment{}, err
+			plans = append(plans, secretResolution{secret: s})
 		}
 		if len(out.omitted) != 0 && !sel.allowIncompleteSecrets {
 			missing := out.omitted[0]
@@ -269,8 +163,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		for _, plan := range plans {
 			s := plan.secret
 			path := displayPath(s.ref)
-			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version, SecretToken: plan.token}
-			resp, err := client.GetSecret(cf.authCtx(ctx), req)
+			resp, err := client.GetSecret(cf.authCtx(ctx), &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version})
 			if err != nil {
 				return resolvedEnvironment{}, fmt.Errorf("secret %s: %w", path, redactSecretRPCError(err))
 			}
@@ -289,8 +182,6 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				Key: s.ref.GetKey(), Alias: s.alias, Value: resp.GetValue(), ContentType: resp.GetContentType(), Secret: true,
 			})
 		}
-	} else if err := tokens.unused(); err != nil {
-		return resolvedEnvironment{}, err
 	}
 
 	rules := envinject.Rules{
@@ -365,7 +256,6 @@ func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn,
 				version:         versionInfo.GetVersion(),
 				contentType:     s.GetContentType(),
 				bound:           versionInfo.GetBound(),
-				needsToken:      !versionInfo.GetBound() && versionInfo.GetHasAccessToken(),
 				protectionKnown: true,
 			})
 		}
@@ -501,84 +391,6 @@ func sameRef(a, b *kmsv1.ResourceRef) bool {
 
 func sameNamespace(a, b *kmsv1.NamespaceRef) bool {
 	return a != nil && b != nil && a.GetEnv() == b.GetEnv() && a.GetApp() == b.GetApp()
-}
-
-// secretTokenSource holds the per-secret tokens the flags supplied, keyed by
-// the spelling the operator used, and records which were consumed so a token
-// for a secret that does not exist (or needs none) is reported as the typo
-// it almost certainly is.
-type secretTokenSource struct {
-	byKey map[string]string
-	used  map[string]bool
-}
-
-// secretTokens loads the flag-supplied tokens; files are read now so a
-// missing or world-readable file fails before any RPC.
-func (c *CLI) secretTokens(sel *envSelection) (*secretTokenSource, error) {
-	src := &secretTokenSource{byKey: map[string]string{}, used: map[string]bool{}}
-	for key, tok := range sel.tokens.values {
-		src.byKey[key] = tok
-	}
-	for key, path := range sel.tokenFiles.values {
-		tok, err := readTokenFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("--secret-token-file %s: %w", key, err)
-		}
-		src.byKey[key] = tok
-	}
-	return src, nil
-}
-
-// lookup returns the token for s: a --secret-token or --secret-token-file
-// under any accepted spelling of the secret, then the KMS_SECRET_TOKEN_<NAME>
-// environment variable. Empty means none.
-//
-// The flags are checked before needsToken is consulted: a flag token that
-// names a secret needing none is a typo (or a stale script) landing on the
-// wrong secret. Two spellings of one secret are ambiguous even when they
-// agree, so they are refused rather than resolved by spelling order.
-// Environment tokens are ambient and may be leftovers, so they are only read
-// when needed.
-func (t *secretTokenSource) lookup(s secretItem, ns *kmsv1.NamespaceRef, c *CLI) (string, error) {
-	var matched []string
-	for _, name := range s.names(ns) {
-		if _, ok := t.byKey[name]; ok {
-			matched = append(matched, name)
-			t.used[name] = true
-		}
-	}
-	path := displayPath(s.ref)
-	switch {
-	case len(matched) > 1:
-		return "", fmt.Errorf("secret %s is named by more than one token flag (%s); supply it once", path, strings.Join(matched, ", "))
-	case len(matched) == 1 && !s.needsToken:
-		return "", fmt.Errorf("secret %s does not require a per-secret token; remove --secret-token/--secret-token-file %s", path, matched[0])
-	case len(matched) == 1:
-		return t.byKey[matched[0]], nil
-	case !s.needsToken:
-		return "", nil
-	}
-	if envName, ok := s.tokenEnvName(); ok {
-		if tok, ok := c.env(envName); ok && tok != "" {
-			return tok, nil
-		}
-	}
-	return "", nil
-}
-
-// unused reports flag-supplied tokens that matched no secret needing one.
-func (t *secretTokenSource) unused() error {
-	var stray []string
-	for key := range t.byKey {
-		if !t.used[key] {
-			stray = append(stray, key)
-		}
-	}
-	if len(stray) == 0 {
-		return nil
-	}
-	sort.Strings(stray)
-	return fmt.Errorf("--secret-token/--secret-token-file names %s, which is not a secret in the selection that requires a token", strings.Join(stray, ", "))
 }
 
 // printResolutionNotes reports non-fatal outcomes on stderr: secrets omitted

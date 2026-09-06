@@ -69,7 +69,6 @@ const (
 	FindingKindMismatch               = "kind_mismatch"
 	FindingContentTypeMismatch        = "content_type_mismatch"
 	FindingSecretUnreadable           = "secret_unreadable"
-	FindingSecretTokenRequired        = "secret_token_required"
 	FindingNoActiveRelease            = "no_active_release"
 	FindingUnreleasedChanges          = "unreleased_changes"
 	FindingAliasNotInRelease          = "alias_not_in_release"

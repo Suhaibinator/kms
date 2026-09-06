@@ -770,15 +770,12 @@ export function ApplicationHome({
               content_type: request.contentType,
               metadata_json: request.metadataJson,
               ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
-              generate_access_token: request.generateAccessToken,
               create_only: true,
               expires_at_unix_ms: request.expiresAtUnixMs,
             });
             toast.success(
               `Secret created (version ${response.version})`,
-              response.access_token
-                ? "Save the access token before continuing."
-                : `${application.name} · ${request.environment} · ${request.key}`,
+              `${application.name} · ${request.environment} · ${request.key}`,
             );
             return response;
           } catch (error) {

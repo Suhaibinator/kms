@@ -25,8 +25,6 @@ type SecretValue struct {
 	// Key is the secret key, relative to the client namespace (e.g.
 	// "stripe/api-key"), or an absolute "/env/app/key" display path.
 	Key string
-	// Token is the per-secret access token.
-	Token string
 	// BindKey is the independent operator-owned binding key.
 	BindKey BindingKey
 	// EnvVar is an optional environment variable that, when set and non-empty,
@@ -82,7 +80,7 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 	}
 
 	if v.Key != "" {
-		sec, err := client.GetSecret(ctx, v.Key, WithSecretToken(v.Token), WithBindingKeyValue(v.BindKey))
+		sec, err := client.GetSecret(ctx, v.Key, WithBindingKeyValue(v.BindKey))
 		if err == nil {
 			st.value = sec.StringValue()
 			st.initialized = true

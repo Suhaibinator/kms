@@ -28,7 +28,7 @@ const (
 	ReleaseStateRejected = "rejected"
 
 	ReleaseRejectResolutionFailed       = "resolution_failed"
-	ReleaseRejectTokenUnavailable       = "token_unavailable"
+	ReleaseRejectBindingKeyUnavailable  = "binding_key_unavailable"
 	ReleaseRejectVersionMismatch        = "version_mismatch"
 	ReleaseRejectDigestMismatch         = "digest_mismatch"
 	ReleaseRejectPrepareFailed          = "prepare_failed"
@@ -45,13 +45,8 @@ const (
 	defaultReleaseFetchConcurrency  = 16
 )
 
-// SecretTokenProvider supplies a locally held per-secret access token. It is
-// called only when the exact pinned version's live metadata requires one.
-type SecretTokenProvider func(alias, path string) (token string, ok bool)
-
 // ValidateReleaseManifestFunc validates unresolved release identity and entry
-// metadata. It runs before any pinned parameter or secret is fetched and before
-// SecretTokenProvider is called.
+// metadata before fetching any pinned resources.
 type ValidateReleaseManifestFunc func(context.Context, ReleaseManifest) error
 
 // ReleaseLoaderConfig configures a high-level configuration release loader.
@@ -61,15 +56,12 @@ type ReleaseLoaderConfig struct {
 	// ReconcileInterval controls fresh GetActiveRelease safety checks. It
 	// defaults to one minute.
 	ReconcileInterval time.Duration
-	// SecretTokenProvider supplies locally held credentials for protected
-	// secret entries. Tokens are sent only to the corresponding GetSecret RPC.
-	SecretTokenProvider SecretTokenProvider
 	// BindingKeys contains operator-owned binding keys indexed by release alias.
 	// It is defensively copied and never exposed through loader diagnostics.
 	BindingKeys map[string]BindingKey
 	// ValidateManifest optionally validates the immutable unresolved manifest.
 	// It runs after release identity, digest, and basic entry validation, but
-	// before any resource fetch or secret-token lookup.
+	// before any resource fetch.
 	ValidateManifest ValidateReleaseManifestFunc
 	// MaxConcurrentFetches bounds parallel pinned resource reads. Values <= 0
 	// use 16; values above 256 are rejected.
@@ -654,7 +646,7 @@ func releaseRejectionCategory(err error) (string, bool) {
 func validReleaseRejectionCategory(category string) bool {
 	switch category {
 	case ReleaseRejectResolutionFailed,
-		ReleaseRejectTokenUnavailable,
+		ReleaseRejectBindingKeyUnavailable,
 		ReleaseRejectVersionMismatch,
 		ReleaseRejectDigestMismatch,
 		ReleaseRejectPrepareFailed,
@@ -923,25 +915,14 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		if exact.ExpiresAtUnixMS > 0 && exact.ExpiresAtUnixMS <= time.Now().UnixMilli() {
 			return out, ReleaseRejectResolutionFailed, errors.New("secret version is unavailable")
 		}
-		token := ""
-		if exact.HasAccessToken {
-			if l.cfg.SecretTokenProvider == nil {
-				return out, ReleaseRejectTokenUnavailable, errors.New("secret token provider unavailable")
-			}
-			var ok bool
-			token, ok = callSecretTokenProvider(l.cfg.SecretTokenProvider, entry.GetAlias(), r.display())
-			if !ok || token == "" {
-				return out, ReleaseRejectTokenUnavailable, errors.New("secret token unavailable")
-			}
-		}
 		var bindingKey BindingKey
 		if exact.Bound {
 			bindingKey = l.cfg.BindingKeys[entry.GetAlias()]
 			if !bindingKey.IsSet() {
-				return out, ReleaseRejectTokenUnavailable, errors.New("secret binding key unavailable")
+				return out, ReleaseRejectBindingKeyUnavailable, errors.New("secret binding key unavailable")
 			}
 		}
-		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token), WithBindingKeyValue(bindingKey))
+		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithBindingKeyValue(bindingKey))
 		if err != nil {
 			if errors.Is(err, errSecretResponseIdentityMismatch) {
 				return out, ReleaseRejectVersionMismatch, err
@@ -963,15 +944,6 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 	default:
 		return out, ReleaseRejectResolutionFailed, errors.New("unknown release entry kind")
 	}
-}
-
-func callSecretTokenProvider(provider SecretTokenProvider, alias, path string) (token string, ok bool) {
-	defer func() {
-		if recover() != nil {
-			token, ok = "", false
-		}
-	}()
-	return provider(alias, path)
 }
 
 func sameResourceRef(a, b *kmsv1.ResourceRef) bool {

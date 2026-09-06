@@ -8,7 +8,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 |---|---|---|---|---|
 | Secure construction and close | `KmsClient`, `tlsFromFiles`, `mtlsFromFiles` | Fail-closed transport, TLS/mTLS, idempotent bounded cleanup | `sdk/typescript/tests/client.test.ts`, `transport.test.ts`, `tls-integration.test.ts` | complete |
 | Namespace discovery and display paths | `KmsClient.whoAmI`, ref helpers | Lazy retryable discovery, cached unbound result, interior key slashes | `sdk/typescript/tests/refs.test.ts`, `client.test.ts` | complete |
-| Reads/writes and credentials | `get/put/list/delete` methods | Bearer identity plus independent access-token/binding-key request fields, no write-side token, deadlines, exact `bigint` values, and positive protocol coverage | `sdk/typescript/tests/client.test.ts`, `sdk/typescript/tests/grpc-integration.test.ts` | complete |
+| Reads/writes and credentials | `get/put/list/delete` methods | Bearer identity plus binding-key request fields, deadlines, exact `bigint` values, and positive protocol coverage | `sdk/typescript/tests/client.test.ts`, `sdk/typescript/tests/grpc-integration.test.ts` | complete |
 | Typed errors | `KmsError` | Bounded status mapping without plaintext | `sdk/typescript/tests/errors.test.ts` | complete |
 | Secret redaction and copying | `Secret` | Explicit access only; string/JSON/inspect redaction; no shared buffers | `sdk/typescript/tests/secret.test.ts` | complete |
 | Parameter TTL cache / no secret cache | internal `ReadCache`, `KmsClient` | Bounded parameter cache and invalidation; secret plaintext never enters the cache regardless of credentials | `sdk/typescript/tests/cache.test.ts`, `client.test.ts` | complete |

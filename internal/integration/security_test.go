@@ -22,16 +22,12 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	const plaintext = "AT-REST-PLAINTEXT-CANARY-4d9e21"
 	ref := h.ensureNS(path)
 
-	// A per-secret access token is minted; an identity token is minted too.
-	res, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Ref: ref, Value: []byte(plaintext), GenerateToken: true,
+	// Write a secret and mint an identity token to check both storage paths.
+	_, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
+		Ref: ref, Value: []byte(plaintext),
 	})
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
-	}
-	accessToken := res.AccessToken
-	if accessToken == "" {
-		t.Fatal("expected an access token")
 	}
 	idRes, err := h.svc.CreateIdentity(ctx, h.admin, core.CreateIdentityInput{
 		Name: "diskscan", Kind: domain.IdentityKindClient,
@@ -43,7 +39,7 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	idToken := idRes.Token
 
 	// Read the secret so a decryption path also runs before we inspect logs.
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", accessToken, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", ""); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 
@@ -62,9 +58,6 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	if !bytes.Contains(disk, crypto.TokenHash(idToken)) {
 		t.Error("identity token hash not found on disk (expected it to be stored)")
 	}
-	if !bytes.Contains(disk, crypto.TokenHash(accessToken)) {
-		t.Error("secret access-token hash not found on disk (expected it to be stored)")
-	}
 
 	// The invariants: no plaintext, no raw tokens on disk.
 	if bytes.Contains(disk, []byte(plaintext)) {
@@ -73,13 +66,10 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	if bytes.Contains(disk, []byte(idToken)) {
 		t.Error("raw identity token found on disk (must store only the hash)")
 	}
-	if bytes.Contains(disk, []byte(accessToken)) {
-		t.Error("raw secret access token found on disk (must store only the hash)")
-	}
 
 	// §25.3.2 — nothing sensitive reached the logs.
 	logs := h.logBuf.String()
-	for _, secret := range []string{plaintext, idToken, accessToken} {
+	for _, secret := range []string{plaintext, idToken} {
 		if strings.Contains(logs, secret) {
 			t.Errorf("logs leaked sensitive value")
 		}
@@ -99,10 +89,10 @@ func TestDisabledSecretUnreadable(t *testing.T) {
 	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, false); err != nil {
 		t.Fatalf("DisableSecret: %v", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read disabled version err = %v, want ErrFailedPrecondition", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read disabled current err = %v, want ErrFailedPrecondition", err)
 	}
 
@@ -110,7 +100,7 @@ func TestDisabledSecretUnreadable(t *testing.T) {
 	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, true); err != nil {
 		t.Fatalf("re-enable: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); err != nil || string(got.Value) != "disabled-value" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", ""); err != nil || string(got.Value) != "disabled-value" {
 		t.Errorf("re-enabled read = %q err=%v, want disabled-value", got.Value, err)
 	}
 }
@@ -133,7 +123,7 @@ func TestDestroyedVersionUndecryptable(t *testing.T) {
 		t.Fatalf("DestroySecretVersion: %v", err)
 	}
 
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read destroyed version err = %v, want ErrFailedPrecondition", err)
 	}
 
@@ -151,7 +141,7 @@ func TestDestroyedVersionUndecryptable(t *testing.T) {
 	}
 
 	// The still-live version is unaffected.
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); err != nil || string(got.Value) != "v2-live" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", ""); err != nil || string(got.Value) != "v2-live" {
 		t.Errorf("live version = %q err=%v, want v2-live", got.Value, err)
 	}
 }
@@ -169,7 +159,7 @@ func TestCiphertextTamperingFails(t *testing.T) {
 	h.reopen(func(db *sql.DB) {
 		flipColumnByte(t, db, ref, 1, "ciphertext")
 	})
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Errorf("read tampered ciphertext err = %v, want ErrDecryptFailed", err)
 	}
 }
@@ -199,7 +189,7 @@ func TestStoredAADColumnIsAdvisory(t *testing.T) {
 			t.Fatalf("corrupt aad: %v", err)
 		}
 	})
-	got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", "")
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "")
 	if err != nil {
 		t.Fatalf("read after corrupting advisory aad column: %v (AAD must derive from identity, not the column)", err)
 	}

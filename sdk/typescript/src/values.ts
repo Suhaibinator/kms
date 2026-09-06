@@ -18,7 +18,6 @@ export interface ValueReadOptions extends VersionRef {
 }
 
 export interface SecretReadOptions extends ValueReadOptions {
-  readonly secretToken?: string;
   readonly bindingKey?: string;
 }
 
@@ -81,8 +80,6 @@ export interface ValueResolver {
 
 export interface SecretValueOptions {
   readonly key?: string;
-  /** Per-secret access token. */
-  readonly token?: string;
   /** Operator-owned binding key for this secret declaration. */
   readonly bindKey?: string;
   /** A non-empty environment value wins and avoids all store access. */
@@ -106,7 +103,6 @@ function secretOptions(
   const input = typeof keyOrOptions === "string" ? { ...options, key: keyOrOptions } : keyOrOptions;
   return {
     key: optionalSecretOption(input?.key, "key"),
-    token: optionalSecretOption(input?.token, "token"),
     bindKey: optionalSecretOption(input?.bindKey, "bindKey"),
     envVar: optionalSecretOption(input?.envVar, "envVar"),
     default: optionalSecretOption(input?.default, "default"),
@@ -166,7 +162,6 @@ function fallbackAllowed(client: ValueResolver, error: unknown): boolean {
 /** A declarative, store-backed secret that always redacts implicit rendering. */
 export class SecretValue {
   readonly #key: string;
-  readonly #token: string;
   readonly #bindKey: string;
   readonly #envVar: string;
   readonly #default: string;
@@ -179,7 +174,6 @@ export class SecretValue {
   ) {
     const normalized = secretOptions(keyOrOptions, options);
     this.#key = normalized.key;
-    this.#token = normalized.token;
     this.#bindKey = normalized.bindKey;
     this.#envVar = normalized.envVar;
     this.#default = normalized.default;
@@ -187,10 +181,6 @@ export class SecretValue {
 
   get key(): string {
     return this.#key;
-  }
-
-  get token(): string {
-    return this.#token;
   }
 
   get bindKey(): string {
@@ -246,7 +236,6 @@ export class SecretValue {
       try {
         const secret = await client.getSecret(this.#key, {
           ...readOptions(options),
-          ...(this.#token.length === 0 ? {} : { secretToken: this.#token }),
           ...(this.#bindKey.length === 0 ? {} : { bindingKey: this.#bindKey }),
         });
         if (!(secret instanceof Secret)) {

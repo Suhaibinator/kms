@@ -99,15 +99,14 @@ func (parameterLabelModel) TableName() string { return "parameter_labels" }
 
 // secretModel -> secrets.
 type secretModel struct {
-	ID              int64          `gorm:"column:id;primaryKey;autoIncrement"`
-	NamespaceID     int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_secret_ns_name,priority:1"`
-	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
-	Name            string         `gorm:"column:name;not null;uniqueIndex:idx_secret_ns_name,priority:2"`
-	AccessTokenHash []byte         `gorm:"column:access_token_hash"`
-	ContentType     string         `gorm:"column:content_type;not null;default:application/octet-stream"`
-	MetadataJSON    string         `gorm:"column:metadata_json;not null;default:{}"`
-	CreatedAt       string         `gorm:"column:created_at;not null"`
-	UpdatedAt       string         `gorm:"column:updated_at;not null"`
+	ID           int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	NamespaceID  int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_secret_ns_name,priority:1"`
+	Namespace    namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Name         string         `gorm:"column:name;not null;uniqueIndex:idx_secret_ns_name,priority:2"`
+	ContentType  string         `gorm:"column:content_type;not null;default:application/octet-stream"`
+	MetadataJSON string         `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedAt    string         `gorm:"column:created_at;not null"`
+	UpdatedAt    string         `gorm:"column:updated_at;not null"`
 }
 
 func (secretModel) TableName() string { return "secrets" }
@@ -132,7 +131,6 @@ type secretVersionModel struct {
 	VersionNumber  int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
 	ContentType    string      `gorm:"column:content_type;default:application/octet-stream"`
 	Bound          int64       `gorm:"column:bound;not null;default:0"`
-	HasAccessToken int64       `gorm:"column:has_access_token;not null;default:0"`
 	Ciphertext     []byte      `gorm:"column:ciphertext"`
 	EncryptedDEK   []byte      `gorm:"column:encrypted_dek"`
 	KEKID          string      `gorm:"column:kek_id"`
@@ -502,14 +500,13 @@ func toCAKeyRecord(m caKeyModel) CAKeyRecord {
 
 func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) SecretRecord {
 	return SecretRecord{
-		ID:              sec.ID,
-		Ref:             ref,
-		AccessTokenHash: sec.AccessTokenHash,
-		ContentType:     sec.ContentType,
-		Metadata:        sec.MetadataJSON,
-		CreatedAt:       parseTime(sec.CreatedAt),
-		UpdatedAt:       parseTime(sec.UpdatedAt),
-		Labels:          labels,
+		ID:          sec.ID,
+		Ref:         ref,
+		ContentType: sec.ContentType,
+		Metadata:    sec.MetadataJSON,
+		CreatedAt:   parseTime(sec.CreatedAt),
+		UpdatedAt:   parseTime(sec.UpdatedAt),
+		Labels:      labels,
 	}
 }
 
@@ -520,7 +517,6 @@ func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
 		Version:        uint64(v.VersionNumber),
 		ContentType:    v.ContentType,
 		Bound:          i2b(v.Bound),
-		HasAccessToken: i2b(v.HasAccessToken),
 		Ciphertext:     v.Ciphertext,
 		EncryptedDEK:   v.EncryptedDEK,
 		KEKID:          v.KEKID,

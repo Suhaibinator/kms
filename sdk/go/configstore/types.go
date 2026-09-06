@@ -59,7 +59,6 @@ type Options struct {
 	Release  string
 	Contract []ContractEntry
 	Callbacks
-	SecretTokenProvider kmsclient.SecretTokenProvider
 	// BindingKeys is an internal alias-keyed credential map assembled by
 	// generated stores from declaration-only Secret.BindKey fields.
 	BindingKeys          map[string]kmsclient.BindingKey

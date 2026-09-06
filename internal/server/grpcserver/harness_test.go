@@ -130,7 +130,7 @@ func serveBufconn(t *testing.T, svc *core.Service, hub *watch.Hub, cfg Config) (
 	return srv, lis
 }
 
-// authCtx returns a context carrying a bearer token (and optional secret token).
+// authCtx returns a context carrying a bearer token.
 func authCtx(token string) context.Context {
 	md := metadata.Pairs("authorization", "Bearer "+token)
 	return metadata.NewOutgoingContext(context.Background(), md)

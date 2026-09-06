@@ -184,7 +184,6 @@ func TestSecretValueYAMLRedaction(t *testing.T) {
 	)
 	secret := SecretValue{
 		Key:     "service/api-key",
-		Token:   token,
 		BindKey: NewBindingKey(bindKey),
 		Default: fallback,
 	}

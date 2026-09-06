@@ -517,13 +517,12 @@ func (s *server) handleSecretMetadata(w http.ResponseWriter, r *http.Request) {
 func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		ValueBase64         string `json:"value_base64"`
-		ContentType         string `json:"content_type"`
-		MetadataJSON        string `json:"metadata_json"`
-		BindingKey          string `json:"binding_key"`
-		GenerateAccessToken bool   `json:"generate_access_token"`
-		CreateOnly          bool   `json:"create_only"`
-		ExpiresAtUnixMS     int64  `json:"expires_at_unix_ms"`
+		ValueBase64     string `json:"value_base64"`
+		ContentType     string `json:"content_type"`
+		MetadataJSON    string `json:"metadata_json"`
+		BindingKey      string `json:"binding_key"`
+		CreateOnly      bool   `json:"create_only"`
+		ExpiresAtUnixMS int64  `json:"expires_at_unix_ms"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
@@ -535,14 +534,13 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.svc.PutSecret(r.Context(), principalFrom(r.Context()), core.PutSecretInput{
-		Ref:           body.ref(),
-		Value:         value,
-		ContentType:   body.ContentType,
-		Metadata:      body.MetadataJSON,
-		BindingKey:    body.BindingKey,
-		GenerateToken: body.GenerateAccessToken,
-		CreateOnly:    body.CreateOnly,
-		ExpiresAt:     body.ExpiresAtUnixMS,
+		Ref:         body.ref(),
+		Value:       value,
+		ContentType: body.ContentType,
+		Metadata:    body.MetadataJSON,
+		BindingKey:  body.BindingKey,
+		CreateOnly:  body.CreateOnly,
+		ExpiresAt:   body.ExpiresAtUnixMS,
 	})
 	crypto.Zero(value)
 	body.BindingKey = ""
@@ -551,9 +549,6 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"version": res.Version, "revision": res.Revision}
-	if res.AccessToken != "" {
-		resp["access_token"] = res.AccessToken
-	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

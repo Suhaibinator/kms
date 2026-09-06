@@ -4,18 +4,12 @@ import { type FakeSecret, handleFakeConsoleRequest, incidentState } from "./cons
 const keyA = "binding-key-a-0123456789-0123456789";
 const keyB = "binding-key-b-0123456789-0123456789";
 
-function version(
-  number: number,
-  bound: boolean,
-  bindingKey: string | undefined,
-  hasAccessToken: boolean,
-) {
+function version(number: number, bound: boolean, bindingKey: string | undefined) {
   return {
     version: number,
     state: "enabled" as const,
     bound,
     bindingKey,
-    hasAccessToken,
     valueBase64: `value-${number}`,
     metadataJson: "{}",
     expiresAtUnixMs: 0,
@@ -37,7 +31,7 @@ describe("console API fake binding fidelity", () => {
       currentVersion: 1,
       bound: true,
       bindingKey: keyA,
-      versions: [version(1, true, keyA, false)],
+      versions: [version(1, true, keyA)],
     });
     const request = {
       env: "prod",
@@ -66,17 +60,16 @@ describe("console API fake binding fidelity", () => {
     expect(state.namespaces.prod.secrets["rotate-order"].versionCount).toBe(1);
   });
 
-  it("retains the secret token credential when purging current but historical gated versions survive", () => {
+  it("preserves historical bound versions when purging the unbound current version", () => {
     const state = installSecret({
-      key: "purge-token",
+      key: "purge-current",
       versionCount: 2,
       currentVersion: 2,
       previousVersion: 1,
       bound: false,
-      hasAccessToken: true,
-      versions: [version(1, true, keyA, true), version(2, false, undefined, true)],
+      versions: [version(1, true, keyA), version(2, false, undefined)],
     });
-    const request = { env: "prod", app: "gradethis", key: "purge-token" };
+    const request = { env: "prod", app: "gradethis", key: "purge-current" };
     const preview = handleFakeConsoleRequest(
       state,
       "POST",
@@ -95,10 +88,9 @@ describe("console API fake binding fidelity", () => {
       expected_affected_versions: [2],
     });
     expect(purged.status).toBe(200);
-    const secret = state.namespaces.prod.secrets["purge-token"];
-    expect(secret.hasAccessToken).toBe(true);
-    expect(secret.versions?.[0]).toMatchObject({ state: "enabled", hasAccessToken: true });
-    expect(secret.versions?.[1]).toMatchObject({ state: "destroyed", hasAccessToken: false });
+    const secret = state.namespaces.prod.secrets["purge-current"];
+    expect(secret.versions?.[0]).toMatchObject({ state: "enabled", bound: true });
+    expect(secret.versions?.[1]).toMatchObject({ state: "destroyed", bound: false });
 
     const put = handleFakeConsoleRequest(state, "POST", "/secrets", {
       ...request,
@@ -106,8 +98,6 @@ describe("console API fake binding fidelity", () => {
       content_type: "text/plain",
     });
     expect(put).toMatchObject({ status: 200, body: { version: 3 } });
-    expect(secret.hasAccessToken).toBe(true);
-    expect(secret.versions?.[2]).toMatchObject({ state: "enabled", hasAccessToken: true });
   });
 
   it("requires an exact bound-cohort preview guard and aborts stale guards atomically", () => {
@@ -118,7 +108,7 @@ describe("console API fake binding fidelity", () => {
       previousVersion: 1,
       bound: true,
       bindingKey: keyA,
-      versions: [version(1, true, keyA, false), version(2, true, keyA, false)],
+      versions: [version(1, true, keyA), version(2, true, keyA)],
     });
     const request = {
       env: "prod",
@@ -154,25 +144,24 @@ describe("console API fake binding fidelity", () => {
     });
     expect(stale).toMatchObject({ status: 409, body: { error: { code: "aborted" } } });
     expect(state.namespaces.prod.secrets["purge-cas"].versions).toEqual([
-      version(1, true, keyA, false),
-      version(2, true, keyA, false),
+      version(1, true, keyA),
+      version(2, true, keyA),
     ]);
   });
 
-  it("keeps the persistent token state when transitioning an ungated current version", () => {
+  it("creates a bound version when binding the unbound current version", () => {
     const state = installSecret({
-      key: "transition-token",
+      key: "transition-binding",
       versionCount: 1,
       currentVersion: 1,
       bound: false,
-      hasAccessToken: true,
-      versions: [version(1, false, undefined, false)],
+      versions: [version(1, false, undefined)],
     });
 
     const result = handleFakeConsoleRequest(state, "POST", "/secrets/bind", {
       env: "prod",
       app: "gradethis",
-      key: "transition-token",
+      key: "transition-binding",
       expected_current_version: 1,
       binding_key: keyA,
     });
@@ -181,8 +170,7 @@ describe("console API fake binding fidelity", () => {
       status: 200,
       body: { current_version: 2, previous_version: 1 },
     });
-    const secret = state.namespaces.prod.secrets["transition-token"];
-    expect(secret.hasAccessToken).toBe(true);
-    expect(secret.versions?.[1]).toMatchObject({ bound: true, hasAccessToken: false });
+    const secret = state.namespaces.prod.secrets["transition-binding"];
+    expect(secret.versions?.[1]).toMatchObject({ bound: true });
   });
 });

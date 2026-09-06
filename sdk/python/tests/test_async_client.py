@@ -44,10 +44,10 @@ def test_async_client_core_surface_and_close():
             old_key, new_key = "o" * 32, "n" * 32
             bound = await client.put_secret(
                 "async/bound", b"value", binding_key=old_key,
-                generate_access_token=True,
+
             )
             assert (await client.get_secret(
-                "async/bound", secret_token=bound.access_token,
+                "async/bound",
                 binding_key=old_key,
             )).bind_key == ""
             rotated = await client.rotate_secret_binding_key(

@@ -244,7 +244,6 @@ func (s *SQLStore) TransitionSecretVersion(ctx context.Context, p SecretVersionT
 			VersionNumber:  int64(newVersion),
 			ContentType:    source.ContentType,
 			Bound:          b2i(targetBound),
-			HasAccessToken: source.HasAccessToken,
 			Ciphertext:     bytes.Clone(payload.Ciphertext),
 			EncryptedDEK:   bytes.Clone(payload.EncryptedDEK),
 			KEKID:          payload.KEKID,
@@ -554,7 +553,6 @@ func (s *SQLStore) purgeSecretVersions(ctx context.Context, ref domain.Ref, guar
 					Updates(map[string]any{
 						"content_type":     "",
 						"bound":            int64(0),
-						"has_access_token": int64(0),
 						"ciphertext":       nil,
 						"encrypted_dek":    nil,
 						"kek_id":           "",

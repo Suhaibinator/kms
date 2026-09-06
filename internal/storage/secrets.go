@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -106,20 +105,19 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			if exists != p.Expected.Exists {
 				return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
 			}
-			if exists && (sec.ID != p.Expected.ID || !bytes.Equal(sec.AccessTokenHash, p.Expected.AccessTokenHash)) {
+			if exists && sec.ID != p.Expected.ID {
 				return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
 			}
 		}
 		switch {
 		case errors.Is(e, gorm.ErrRecordNotFound):
 			sec = secretModel{
-				NamespaceID:     nsID,
-				Name:            p.Ref.Key,
-				AccessTokenHash: p.AccessTokenHash,
-				ContentType:     contentType,
-				MetadataJSON:    metadata,
-				CreatedAt:       now,
-				UpdatedAt:       now,
+				NamespaceID:  nsID,
+				Name:         p.Ref.Key,
+				ContentType:  contentType,
+				MetadataJSON: metadata,
+				CreatedAt:    now,
+				UpdatedAt:    now,
 			}
 			if err := tx.Omit(clause.Associations).Create(&sec).Error; err != nil {
 				return err
@@ -131,10 +129,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 				"content_type":  contentType,
 				"metadata_json": metadata,
 				"updated_at":    now,
-			}
-			// Keep the existing hash when the caller did not mint a new one.
-			if p.AccessTokenHash != nil {
-				upd["access_token_hash"] = p.AccessTokenHash
 			}
 			if err := tx.Model(&secretModel{}).Where("id = ?", sec.ID).Updates(upd).Error; err != nil {
 				return err
@@ -159,10 +153,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version space exhausted", p.Ref)
 		}
 		newVer := uint64(highWater.LastVersion + 1)
-		hasAccessToken := len(sec.AccessTokenHash) > 0
-		if p.AccessTokenHash != nil {
-			hasAccessToken = len(p.AccessTokenHash) > 0
-		}
 
 		payload, err := p.Encrypt(newVer)
 		if err != nil {
@@ -192,7 +182,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			VersionNumber:  int64(newVer),
 			ContentType:    contentType,
 			Bound:          b2i(p.Bound),
-			HasAccessToken: b2i(hasAccessToken),
 			Ciphertext:     payload.Ciphertext,
 			EncryptedDEK:   payload.EncryptedDEK,
 			KEKID:          payload.KEKID,
@@ -344,27 +333,25 @@ func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Se
 	vinfos := make([]domain.SecretVersionInfo, 0, len(vers))
 	for _, v := range vers {
 		vinfos = append(vinfos, domain.SecretVersionInfo{
-			Version:        uint64(v.VersionNumber),
-			Bound:          i2b(v.Bound),
-			HasAccessToken: i2b(v.HasAccessToken),
-			State:          v.State,
-			CreatedBy:      v.CreatedBy,
-			CreatedAt:      parseTime(v.CreatedAt),
-			DestroyedAt:    parseTimePtr(v.DestroyedAt),
-			ExpiresAt:      parseTimePtr(v.ExpiresAt),
-			Metadata:       v.MetadataJSON,
+			Version:     uint64(v.VersionNumber),
+			Bound:       i2b(v.Bound),
+			State:       v.State,
+			CreatedBy:   v.CreatedBy,
+			CreatedAt:   parseTime(v.CreatedAt),
+			DestroyedAt: parseTimePtr(v.DestroyedAt),
+			ExpiresAt:   parseTimePtr(v.ExpiresAt),
+			Metadata:    v.MetadataJSON,
 		})
 	}
 	return domain.Secret{
-		Ref:            domain.Ref{NS: ns, Key: sec.Name},
-		ContentType:    sec.ContentType,
-		Bound:          currentBound,
-		HasAccessToken: sec.AccessTokenHash != nil,
-		Metadata:       sec.MetadataJSON,
-		CreatedAt:      parseTime(sec.CreatedAt),
-		UpdatedAt:      parseTime(sec.UpdatedAt),
-		Labels:         labels,
-		Versions:       vinfos,
+		Ref:         domain.Ref{NS: ns, Key: sec.Name},
+		ContentType: sec.ContentType,
+		Bound:       currentBound,
+		Metadata:    sec.MetadataJSON,
+		CreatedAt:   parseTime(sec.CreatedAt),
+		UpdatedAt:   parseTime(sec.UpdatedAt),
+		Labels:      labels,
+		Versions:    vinfos,
 	}, nil
 }
 
@@ -397,7 +384,7 @@ func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, ver
 			return err
 		}
 		var sec secretModel
-		if err := tx.Select("id", "content_type", "metadata_json", "created_at", "updated_at", "access_token_hash").
+		if err := tx.Select("id", "content_type", "metadata_json", "created_at", "updated_at").
 			Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&sec).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
@@ -416,7 +403,7 @@ func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, ver
 			version = uint64(selected.VersionNumber)
 		}
 		var ver secretVersionModel
-		if err := tx.Select("version_number", "state", "created_by", "created_at", "destroyed_at", "expires_at", "metadata_json", "bound", "has_access_token").
+		if err := tx.Select("version_number", "state", "created_by", "created_at", "destroyed_at", "expires_at", "metadata_json", "bound").
 			Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&ver).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
@@ -427,11 +414,10 @@ func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, ver
 			Version: uint64(ver.VersionNumber), State: ver.State, CreatedBy: ver.CreatedBy,
 			CreatedAt: parseTime(ver.CreatedAt), DestroyedAt: parseTimePtr(ver.DestroyedAt),
 			ExpiresAt: parseTimePtr(ver.ExpiresAt), Metadata: ver.MetadataJSON,
-			Bound: i2b(ver.Bound), HasAccessToken: i2b(ver.HasAccessToken),
+			Bound: i2b(ver.Bound),
 		}
 		out = domain.Secret{
-			Ref: ref, ContentType: sec.ContentType, Bound: info.Bound,
-			HasAccessToken: sec.AccessTokenHash != nil, Metadata: sec.MetadataJSON,
+			Ref: ref, ContentType: sec.ContentType, Bound: info.Bound, Metadata: sec.MetadataJSON,
 			CreatedAt: parseTime(sec.CreatedAt), UpdatedAt: parseTime(sec.UpdatedAt),
 			Versions: []domain.SecretVersionInfo{info},
 		}
@@ -703,18 +689,4 @@ func (s *SQLStore) PromoteSecretVersion(ctx context.Context, ref domain.Ref, ver
 		return 0, 0, 0, err
 	}
 	return current, previous, revision, nil
-}
-
-// UpdateSecretAccessTokenHash replaces the per-secret token hash.
-func (s *SQLStore) UpdateSecretAccessTokenHash(ctx context.Context, ref domain.Ref, hash []byte) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, err := s.findSecret(tx, ref)
-		if err != nil {
-			return err
-		}
-		return tx.Model(&secretModel{}).Where("id = ?", sec.ID).Updates(map[string]any{
-			"access_token_hash": hash,
-			"updated_at":        fmtTime(time.Now()),
-		}).Error
-	})
 }

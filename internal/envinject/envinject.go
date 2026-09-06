@@ -32,11 +32,6 @@ import (
 // binarySuffix is appended to the variable name of a base64-encoded value.
 const binarySuffix = "_B64"
 
-// tokenEnvPrefix marks parent environment variables that carry a CLI
-// authentication token. They are inputs to the CLI itself and are always
-// stripped from a child's environment.
-const tokenEnvPrefix = "KMS_SECRET_TOKEN_"
-
 // Item is one store entry selected for injection.
 type Item struct {
 	Key         string // store key (namespace mode), e.g. "billing/stripe-key"; empty when Alias is set
@@ -305,9 +300,6 @@ func Merge(parent []string, vars []Var, preserveParent, caseInsensitive bool) (e
 			env = append(env, entry)
 			continue
 		}
-		if hasTokenPrefix(name, caseInsensitive) {
-			continue
-		}
 		key := fold(name)
 		if seen[key] {
 			continue // duplicate name in the parent; the first occurrence wins
@@ -329,14 +321,6 @@ func Merge(parent []string, vars []Var, preserveParent, caseInsensitive bool) (e
 	}
 	slices.Sort(shadowed)
 	return env, shadowed
-}
-
-// hasTokenPrefix reports whether a parent variable name carries a CLI token.
-func hasTokenPrefix(name string, caseInsensitive bool) bool {
-	if caseInsensitive {
-		return len(name) >= len(tokenEnvPrefix) && strings.EqualFold(name[:len(tokenEnvPrefix)], tokenEnvPrefix)
-	}
-	return strings.HasPrefix(name, tokenEnvPrefix)
 }
 
 // startsWithDigit reports whether name would be an illegal shell identifier

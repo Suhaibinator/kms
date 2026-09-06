@@ -43,7 +43,6 @@ export interface FakeSecret {
   bound: boolean;
   contentType?: string;
   metadataJson?: string;
-  hasAccessToken?: boolean;
   currentVersion?: number;
   previousVersion?: number;
   /** Current-version credential used only by the in-process fake. */
@@ -57,7 +56,6 @@ export interface FakeSecretVersion {
   bound: boolean;
   /** Per-version credential retained so historical cohorts remain distinct. */
   bindingKey?: string;
-  hasAccessToken: boolean;
   valueBase64: string;
   metadataJson: string;
   expiresAtUnixMs: number;
@@ -465,7 +463,6 @@ function applicationOverview(state: ConsoleState): ApplicationOverview {
                   content_type: "",
                   version: secret.versionCount,
                   bound: secret.bound,
-                  has_access_token: false,
                 }
               : { present: false, content_type: "", version: 0 },
         ];
@@ -764,7 +761,6 @@ function secretVersions(secret: FakeSecret): FakeSecretVersion[] {
       state: "enabled",
       bound: secret.bound,
       bindingKey: secret.bound ? secret.bindingKey : undefined,
-      hasAccessToken: secret.hasAccessToken ?? false,
       valueBase64: Buffer.from(`secret-${version}`).toString("base64"),
       metadataJson: secret.metadataJson ?? "{}",
       expiresAtUnixMs: 0,
@@ -783,7 +779,7 @@ function secretMetadata(ns: FakeNamespace, secret: FakeSecret) {
     key: secret.key,
     content_type: secret.contentType ?? "text/plain",
     bound: versions.find((version) => version.version === current)?.bound ?? secret.bound,
-    has_access_token: secret.hasAccessToken ?? false,
+
     metadata_json: secret.metadataJson ?? "{}",
     created_at_unix_ms: versions[0]?.createdAtUnixMs ?? 1,
     updated_at_unix_ms: versions.at(-1)?.createdAtUnixMs ?? 1,
@@ -795,7 +791,7 @@ function secretMetadata(ns: FakeNamespace, secret: FakeSecret) {
       version: version.version,
       state: version.state,
       bound: version.bound,
-      has_access_token: version.hasAccessToken,
+
       created_by: "admin",
       created_at_unix_ms: version.createdAtUnixMs,
       destroyed_at_unix_ms: version.state === "destroyed" ? now() : 0,
@@ -950,7 +946,6 @@ function handle(
       const version = secret.versionCount + 1;
       const bound = typeof b.binding_key === "string" && b.binding_key.length > 0;
       const bindingKey = bound ? String(b.binding_key) : undefined;
-      const generatesToken = b.generate_access_token === true;
       secret.previousVersion = secret.currentVersion || undefined;
       secret.currentVersion = version;
       secret.versionCount = version;
@@ -958,14 +953,11 @@ function handle(
       secret.bindingKey = bindingKey;
       secret.contentType = String(b.content_type ?? "text/plain");
       secret.metadataJson = String(b.metadata_json ?? "{}");
-      if (generatesToken) secret.hasAccessToken = true;
-      const hasAccessToken = secret.hasAccessToken ?? false;
       versions.push({
         version,
         state: "enabled",
         bound,
         bindingKey,
-        hasAccessToken,
         valueBase64: String(b.value_base64 ?? ""),
         metadataJson: secret.metadataJson,
         expiresAtUnixMs: Number(b.expires_at_unix_ms ?? 0),
@@ -976,7 +968,6 @@ function handle(
         body: {
           version,
           revision: bumpRevision(state),
-          ...(generatesToken ? { access_token: `kms_e2e_secret_token_v${version}` } : null),
         },
       };
     }
@@ -1167,7 +1158,6 @@ function handle(
           if (!affected.includes(candidate.version)) continue;
           candidate.state = "destroyed";
           candidate.bound = false;
-          candidate.hasAccessToken = false;
           candidate.valueBase64 = "";
           candidate.metadataJson = "";
           candidate.expiresAtUnixMs = 0;
@@ -1234,7 +1224,6 @@ function handle(
         if (!affected.includes(version.version)) continue;
         version.state = "destroyed";
         version.bound = false;
-        version.hasAccessToken = false;
         version.valueBase64 = "";
         version.metadataJson = "";
         version.expiresAtUnixMs = 0;

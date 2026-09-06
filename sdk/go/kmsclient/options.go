@@ -2,10 +2,9 @@ package kmsclient
 
 // getOptions is the resolved set of per-call read options.
 type getOptions struct {
-	version     uint64
-	label       string
-	secretToken string
-	bindingKey  BindingKey
+	version    uint64
+	label      string
+	bindingKey BindingKey
 }
 
 // GetOption customizes a single GetParameter / GetSecret call.
@@ -21,13 +20,6 @@ func WithVersion(n uint64) GetOption {
 // (e.g. "current", "previous"). Ignored if WithVersion is also supplied.
 func WithLabel(label string) GetOption {
 	return func(o *getOptions) { o.label = label }
-}
-
-// WithSecretToken supplies the per-secret access token in a GetSecret request.
-// GetParameter accepts this shared option for compatibility but never
-// transmits the token.
-func WithSecretToken(token string) GetOption {
-	return func(o *getOptions) { o.secretToken = token }
 }
 
 // WithBindingKey supplies the independent operator-owned binding key in a
@@ -81,11 +73,10 @@ func applyPutOptions(opts []PutOption) putOptions {
 
 // putSecretOptions is the resolved set of options for a secret write.
 type putSecretOptions struct {
-	contentType         string
-	metadataJSON        string
-	bindingKey          BindingKey
-	generateAccessToken bool
-	expiresAtUnixMS     int64
+	contentType     string
+	metadataJSON    string
+	bindingKey      BindingKey
+	expiresAtUnixMS int64
 }
 
 // PutSecretOption customizes a PutSecret call.
@@ -111,12 +102,6 @@ func WithPutBindingKey(key string) PutSecretOption {
 // The zero BindingKey creates an unbound version; the server validates keys.
 func WithPutBindingKeyValue(key BindingKey) PutSecretOption {
 	return func(o *putSecretOptions) { o.bindingKey = key }
-}
-
-// WithGenerateAccessToken asks the server to mint a per-secret access token,
-// returned exactly once in PutSecretResult.AccessToken.
-func WithGenerateAccessToken() PutSecretOption {
-	return func(o *putSecretOptions) { o.generateAccessToken = true }
 }
 
 // WithExpiresAt sets an expiry (unix milliseconds) for the new secret version;

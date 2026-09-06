@@ -36,8 +36,8 @@ func TestPutSecretRejectsV02ClientBoundWireRequest(t *testing.T) {
 	if decoded.GetBindingKey() != "" {
 		t.Fatalf("v0.2 client_bound decoded as binding_key %q, want empty", decoded.GetBindingKey())
 	}
-	if !decoded.GetGenerateAccessToken() {
-		t.Fatal("v0.2 generate_access_token did not survive decoding")
+	if len(decoded.ProtoReflect().GetUnknown()) == 0 {
+		t.Fatal("removed token field did not survive as unknown protobuf data")
 	}
 
 	response := new(kmsv1.PutSecretResponse)
@@ -120,4 +120,24 @@ func v02PutSecretRequest(t *testing.T, env, app, key string, value []byte, clien
 
 func setV02Field(message *dynamicpb.Message, name protoreflect.Name, value protoreflect.Value) {
 	message.Set(message.Descriptor().Fields().ByName(name), value)
+}
+
+func TestPutSecretV03RejectsRemovedTokenGeneration(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	request := &kmsv1.PutSecretRequest{Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "svc"}, Key: "stale-token"}, Value: []byte("value")}
+	// Field 6 was generate_access_token. Even an explicit false is rejected.
+	for _, value := range []byte{0, 1} {
+		request.ProtoReflect().SetUnknown([]byte{6 << 3, value})
+		_, err := kmsv1.NewSecretServiceClient(env.conn).PutSecretV03(adminCtx(), request)
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("old generation field = %v, want InvalidArgument", err)
+		}
+	}
+	env.store.mu.Lock()
+	_, wrote := env.store.secrets["/prod/svc/stale-token"]
+	env.store.mu.Unlock()
+	if wrote {
+		t.Fatal("obsolete token-generation request wrote a secret")
+	}
 }

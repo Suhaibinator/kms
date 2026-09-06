@@ -431,7 +431,7 @@ func TestResolveRejectsItemWithoutName(t *testing.T) {
 
 func TestMergeInjectedWins(t *testing.T) {
 	t.Parallel()
-	parent := []string{"PATH=/bin", "A=parent", "KMS_SECRET_TOKEN_PROD=tok", "HOME=/root"}
+	parent := []string{"PATH=/bin", "A=parent", "HOME=/root"}
 	vars := []Var{{Name: "B", Value: "new"}, {Name: "A", Value: "injected", Secret: true}}
 	env, shadowed := Merge(parent, vars, false, false)
 	want := []string{"PATH=/bin", "HOME=/root", "A=injected", "B=new"}
@@ -445,7 +445,7 @@ func TestMergeInjectedWins(t *testing.T) {
 
 func TestMergePreserveParent(t *testing.T) {
 	t.Parallel()
-	parent := []string{"PATH=/bin", "A=parent", "C=parent", "KMS_SECRET_TOKEN_PROD=tok"}
+	parent := []string{"PATH=/bin", "A=parent", "C=parent"}
 	vars := []Var{{Name: "C", Value: "injected"}, {Name: "B", Value: "new"}, {Name: "A", Value: "injected"}}
 	env, shadowed := Merge(parent, vars, true, false)
 	want := []string{"PATH=/bin", "A=parent", "C=parent", "B=new"}
@@ -454,31 +454,6 @@ func TestMergePreserveParent(t *testing.T) {
 	}
 	if !slices.Equal(shadowed, []string{"A", "C"}) {
 		t.Errorf("shadowed = %q, want [A C]", shadowed)
-	}
-}
-
-func TestMergeStripsTokenVariables(t *testing.T) {
-	t.Parallel()
-	parent := []string{
-		"KMS_SECRET_TOKEN_PROD=tok",
-		"KMS_SECRET_TOKEN_=tok",
-		"kms_secret_token_prod=tok",
-		"KMS_SECRET_TOKENX=keep",
-		"KMS_TOKEN=keep",
-	}
-	for _, preserve := range []bool{false, true} {
-		env, _ := Merge(parent, nil, preserve, false)
-		want := []string{"kms_secret_token_prod=tok", "KMS_SECRET_TOKENX=keep", "KMS_TOKEN=keep"}
-		if !slices.Equal(env, want) {
-			t.Errorf("preserveParent=%v: env = %q, want %q", preserve, env, want)
-		}
-	}
-	// Windows compares names without regard to case, so the lowercase spelling
-	// is a token variable too.
-	env, _ := Merge(parent, nil, false, true)
-	want := []string{"KMS_SECRET_TOKENX=keep", "KMS_TOKEN=keep"}
-	if !slices.Equal(env, want) {
-		t.Errorf("caseInsensitive: env = %q, want %q", env, want)
 	}
 }
 

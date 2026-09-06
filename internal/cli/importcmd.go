@@ -35,9 +35,8 @@ type importEntry struct {
 
 // importResult is one row of the mapping report.
 type importResult struct {
-	Key   string
-	Path  string
-	Token string // empty for dry-run
+	Key  string
+	Path string
 }
 
 func (c *CLI) cmdImport(args []string) int {
@@ -81,8 +80,7 @@ func (c *CLI) cmdImport(args []string) int {
 	// In JSON mode stdout carries the report as the result document, so the
 	// text report is written only when --report names a file. --report keeps
 	// its meaning in both modes: the file always receives the text mapping,
-	// tokens included — and then the JSON document does not, so each one-time
-	// token lands in exactly one place (the file the operator named for it).
+	// and stdout receives the JSON document.
 	writeText := !c.jsonOutput() || *report != ""
 	out, closeReport, err := c.reportWriter(*report)
 	if err != nil {
@@ -95,15 +93,15 @@ func (c *CLI) cmdImport(args []string) int {
 		}
 	}()
 
-	finish := func(results []importResult, withTokens bool) int {
+	finish := func(results []importResult, imported bool) int {
 		if writeText {
-			if err := writeImportReport(out, results, withTokens); err != nil {
-				return c.failErr(importReportPrefix(withTokens, "writing"), err)
+			if err := writeImportReport(out, results, imported); err != nil {
+				return c.failErr("writing import report", err)
 			}
 		}
 		reportClosed = true
 		if err := closeReport(); err != nil {
-			return c.failErr(importReportPrefix(withTokens, "closing"), err)
+			return c.failErr("closing import report", err)
 		}
 		return 0
 	}
@@ -152,47 +150,27 @@ func (c *CLI) cmdImport(args []string) int {
 
 	results := make([]importResult, 0, len(entries))
 	for _, e := range entries {
-		res, err := svc.PutSecret(ctx, pr, core.PutSecretInput{
-			Ref:           e.Ref,
-			Value:         []byte(e.Value),
-			ContentType:   "text/plain",
-			GenerateToken: true,
+		_, err := svc.PutSecret(ctx, pr, core.PutSecretInput{
+			Ref:         e.Ref,
+			Value:       []byte(e.Value),
+			ContentType: "text/plain",
 		})
 		if err != nil {
 			return c.failErr(fmt.Sprintf("importing %s -> %s", e.Key, e.Ref), err)
 		}
-		results = append(results, importResult{Key: e.Key, Path: e.Ref.String(), Token: res.AccessToken})
+		results = append(results, importResult{Key: e.Key, Path: e.Ref.String()})
 	}
 	if code := finish(results, true); code != 0 {
 		return code
 	}
 	c.info("Imported %d secrets into %s.", len(results), ns)
 	if c.jsonOutput() {
-		// The access tokens are unrecoverable, so the warning the text report
-		// carries is repeated on stderr where --quiet cannot reach it.
-		if *report != "" {
-			_, _ = fmt.Fprintf(c.Stderr, "WARNING: the access tokens were written once to %s and are not recoverable. Update app configs now.\n", *report)
-		} else {
-			_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access tokens are shown once and are not recoverable. Update app configs now.")
-		}
 		return c.printJSON(importJSON(ns, results, false, *report))
 	}
 	return 0
 }
 
-// importReportPrefix builds the error prefix for a report I/O failure, naming
-// the one-time tokens when the report carries them.
-func importReportPrefix(withTokens bool, verb string) string {
-	if withTokens {
-		return verb + " one-time import token report"
-	}
-	return verb + " import report"
-}
-
-// importReportJSON is the JSON form of the mapping report: what came from
-// where, and (for a real import) the one-time access token each new secret
-// received. A token appears exactly once: in this document, or — when
-// --report named a file — in that file, which report_file then names.
+// importReportJSON maps source keys to imported paths.
 type importReportJSON struct {
 	Namespace  namespaceRefJSON  `json:"namespace"`
 	DryRun     bool              `json:"dry_run"`
@@ -204,15 +182,11 @@ type importReportJSON struct {
 // importEntryJSON mirrors importResult: the field order and names are the same
 // so one converts to the other, and only the JSON tags are new.
 type importEntryJSON struct {
-	Key   string `json:"key"`  // the source key, verbatim
-	Path  string `json:"path"` // /env/app/key it maps to
-	Token string `json:"token,omitempty"`
+	Key  string `json:"key"`  // the source key, verbatim
+	Path string `json:"path"` // /env/app/key it maps to
 }
 
-// importJSON assembles the report document. A dry run reports what would
-// happen and mints no tokens, so imported stays 0 and no entry carries one.
-// When reportFile is set the tokens have already been written there, so the
-// entries omit them.
+// importJSON reports mappings and counts; dry runs report zero imported rows.
 func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool, reportFile string) importReportJSON {
 	document := importReportJSON{
 		Namespace:  namespaceRefJSON{Env: ns.Env, App: ns.App},
@@ -225,9 +199,6 @@ func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool, rep
 	}
 	for _, r := range results {
 		entry := importEntryJSON(r)
-		if reportFile != "" {
-			entry.Token = ""
-		}
 		document.Entries = append(document.Entries, entry)
 	}
 	return document
@@ -269,31 +240,17 @@ func (c *CLI) reportWriter(path string) (io.Writer, func() error, error) {
 	return f, f.Close, nil
 }
 
-// writeImportReport renders the mapping. When withTokens is set it includes the
-// per-secret access tokens and a one-time warning.
-func writeImportReport(w io.Writer, results []importResult, withTokens bool) error {
-	if withTokens {
-		if _, err := fmt.Fprintln(w, "# import mapping: old key -> new path -> access token"); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintln(w, "# import mapping (dry run): old key -> new path"); err != nil {
-			return err
-		}
+// writeImportReport renders source-to-destination mappings.
+func writeImportReport(w io.Writer, results []importResult, imported bool) error {
+	header := "# import mapping: old key -> new path"
+	if !imported {
+		header = "# import mapping (dry run): old key -> new path"
+	}
+	if _, err := fmt.Fprintln(w, header); err != nil {
+		return err
 	}
 	for _, r := range results {
-		if withTokens {
-			if _, err := fmt.Fprintf(w, "%s -> %s -> %s\n", r.Key, r.Path, r.Token); err != nil {
-				return err
-			}
-		} else {
-			if _, err := fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path); err != nil {
-				return err
-			}
-		}
-	}
-	if withTokens {
-		if _, err := fmt.Fprintln(w, "# WARNING: access tokens are shown once here and are not recoverable. Update app configs now."); err != nil {
+		if _, err := fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path); err != nil {
 			return err
 		}
 	}

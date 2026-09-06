@@ -374,7 +374,7 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	sec := f.secrets[key]
 	if p.Expected != nil {
 		exists := sec != nil
-		if exists != p.Expected.Exists || (exists && (sec.rec.ID != p.Expected.ID || !bytes.Equal(sec.rec.AccessTokenHash, p.Expected.AccessTokenHash))) {
+		if exists != p.Expected.Exists || (exists && (sec.rec.ID != p.Expected.ID)) {
 			return 0, 0, domain.Errorf(domain.ErrAborted, "secret changed concurrently")
 		}
 	}
@@ -401,13 +401,10 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	sec.rec.Metadata = p.Metadata
 	sec.rec.Bound = p.Bound
 	sec.rec.UpdatedAt = time.Now()
-	if p.AccessTokenHash != nil {
-		sec.rec.AccessTokenHash = bytes.Clone(p.AccessTokenHash)
-	}
 	sec.versions[version] = storage.SecretVersionRecord{
 		Version: version, ContentType: p.ContentType, Bound: p.Bound,
-		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
-		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
+
+		Ciphertext: payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
 		KEKID: payload.KEKID, WrapMode: payload.WrapMode, BindingKeySalt: payload.BindingKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: time.Now(), ExpiresAt: p.ExpiresAt,
@@ -562,7 +559,6 @@ func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 		rec := sec.versions[version]
 		rec.ContentType = ""
 		rec.Bound = false
-		rec.HasAccessToken = false
 		rec.Ciphertext = nil
 		rec.EncryptedDEK = nil
 		rec.KEKID = ""
@@ -638,7 +634,6 @@ func (f *fakeStore) PurgeSecretUnboundVersions(_ context.Context, ref domain.Ref
 		rec := sec.versions[version]
 		rec.ContentType = ""
 		rec.Bound = false
-		rec.HasAccessToken = false
 		rec.Ciphertext = nil
 		rec.EncryptedDEK = nil
 		rec.KEKID = ""
@@ -800,7 +795,7 @@ func (f *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Sec
 	versions := make([]domain.SecretVersionInfo, 0, len(sec.versions))
 	for _, rec := range sec.versions {
 		versions = append(versions, domain.SecretVersionInfo{
-			Version: rec.Version, State: rec.State, Bound: rec.Bound, HasAccessToken: rec.HasAccessToken,
+			Version: rec.Version, State: rec.State, Bound: rec.Bound,
 			CreatedBy: rec.CreatedBy, CreatedAt: rec.CreatedAt, DestroyedAt: rec.DestroyedAt,
 			ExpiresAt: rec.ExpiresAt, Metadata: rec.Metadata,
 		})
@@ -808,7 +803,7 @@ func (f *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Sec
 	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
 	return domain.Secret{
 		Ref: ref, ContentType: sec.rec.ContentType, Bound: sec.rec.Bound,
-		HasAccessToken: len(sec.rec.AccessTokenHash) > 0, Metadata: sec.rec.Metadata,
+		Metadata:  sec.rec.Metadata,
 		CreatedAt: sec.rec.CreatedAt, UpdatedAt: sec.rec.UpdatedAt,
 		Labels: sec.rec.Labels, Versions: versions,
 	}, nil
@@ -844,7 +839,7 @@ func (f *fakeStore) ListSecrets(_ context.Context, ns domain.NamespaceRef, keyPr
 		if sec.rec.Ref.NS == ns && keyHasPrefix(sec.rec.Ref.Key, keyPrefix) {
 			out = append(out, domain.Secret{
 				Ref: sec.rec.Ref, ContentType: sec.rec.ContentType, Bound: sec.rec.Bound,
-				HasAccessToken: len(sec.rec.AccessTokenHash) > 0, Metadata: sec.rec.Metadata,
+				Metadata:  sec.rec.Metadata,
 				CreatedAt: sec.rec.CreatedAt, UpdatedAt: sec.rec.UpdatedAt, Labels: sec.rec.Labels,
 			})
 		}
@@ -938,17 +933,6 @@ func (f *fakeStore) PromoteSecretVersion(_ context.Context, ref domain.Ref, vers
 	sec.rec.UpdatedAt = time.Now()
 	f.revision++
 	return version, prev, f.revision, nil
-}
-
-func (f *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, ref domain.Ref, hash []byte) error {
-	f.secretMu.Lock()
-	defer f.secretMu.Unlock()
-	sec := f.secrets[ref.String()]
-	if sec == nil {
-		return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
-	}
-	sec.rec.AccessTokenHash = hash
-	return nil
 }
 
 // --- identities ---

@@ -128,7 +128,6 @@ from kms_paramstore import Client, SecretValue, ParameterValue
 class AppConfig:
     stripe_key = SecretValue(
         "stripe-api-key",
-        token="<per-secret-access-token>",
         bind_key=os.environ["STRIPE_KMS_BINDING_KEY"],
     )
     openai_key = SecretValue("openai-api-key", env_var="OPENAI_API_KEY")
@@ -220,7 +219,6 @@ from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
 
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
-    secret_token_provider=lambda alias, path: local_tokens.get(alias),
     binding_keys={"openai_api_key": os.environ["OPENAI_KMS_BINDING_KEY"]},
     validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
@@ -231,20 +229,9 @@ def prepare(cancel, snapshot):
 loader.run(prepare)  # blocks; call loader.stop() from another thread to stop
 ```
 
-Snapshots are frozen/redacting and expose release version, activation
-revision, digest, schema pin, exact entries, parameters, and `Secret` values by
-stable alias. A prepared object's `commit()` must be infallible and normally
-performs an atomic reference swap; `abort()` releases stale or failed prepared
-work. Startup fails until one release applies. Later outages and rejections
-retain the last-known-good state. Manifest validation runs before resource
-fetches and credential lookup. Protection is live exact-version metadata, not a
-release-entry flag: access tokens come from `secret_token_provider`, while
-binding keys come from the defensive-copied alias map. Missing credentials
-reject the whole candidate as `token_unavailable`; wrong credentials reject it
-as `resolution_failed`. `ClassifiedReleaseError` propagates an allow-listed,
-value-free rejection category (including `restart_required`) without sending
-its local message. Applied acknowledgements can carry a bounded divergence
-count from a prepared object's optional `release_divergence()` method.
+For each exact secret pin, the loader validates live metadata and resolves a
+key from `binding_keys` only when the version is bound. Missing binding keys
+reject the candidate as `binding_key_unavailable`.
 
 `run_typed_release` provides an explicit no-reflection decode step. See
 [`../../docs/sdk-python.md`](../../docs/sdk-python.md#atomic-release-loading)

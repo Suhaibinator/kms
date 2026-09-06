@@ -147,7 +147,6 @@ export function acceptsPublicApi(
 ): readonly unknown[] {
   const declaration = { bindKey: "operator-owned-binding-key" } satisfies SecretOptions;
   const secret: Promise<Secret> = client.getSecret("secret", {
-    secretToken: "access-token",
     bindingKey: declaration.bindKey,
   });
   const bound: Promise<SecretVersionTransitionResult> = client.bindSecret("secret", {

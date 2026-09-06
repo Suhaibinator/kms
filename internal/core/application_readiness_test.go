@@ -273,7 +273,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 	t.Run("resource findings", func(t *testing.T) {
 		in := base("dev")
 		in.Secrets = map[string]secretCurrentState{"db_password": {State: domain.StateDisabled}}
-		in.Rows[1].Cells["dev"] = domain.ApplicationConfigurationCell{Present: true, ContentType: "text/plain", Version: 1, HasAccessToken: true}
+		in.Rows[1].Cells["dev"] = domain.ApplicationConfigurationCell{Present: true, ContentType: "text/plain", Version: 1}
 		in.Rows[2].Cells["dev"] = domain.ApplicationConfigurationCell{Present: true, ContentType: "string", Version: 1}
 		out := computeEnvironmentReadiness(in)
 		if out.Status != domain.EnvStatusIncomplete {
@@ -282,9 +282,6 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		f, ok := hasFinding(out.Findings, domain.FindingSecretUnreadable)
 		if !ok || f.Params["state"] != domain.StateDisabled {
 			t.Fatalf("secret_unreadable = %+v", f)
-		}
-		if _, ok := hasFinding(out.Findings, domain.FindingSecretTokenRequired); !ok {
-			t.Fatalf("missing secret_token_required: %v", findingCodes(out.Findings))
 		}
 		f, ok = hasFinding(out.Findings, domain.FindingContentTypeMismatch)
 		if !ok || f.Params["found"] != "string" || f.Params["content_type"] != "integer" {

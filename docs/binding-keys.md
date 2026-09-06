@@ -1,13 +1,8 @@
 # Binding keys and compromised-version purge
 
-Binding keys are an optional, operator-owned credential for individual secret
-versions. They solve a different problem from access tokens: an access token
-authorizes a read, while a binding key participates in decrypting the version's
-DEK. A version may require either credential, both, or neither. KMS is
-deliberately agnostic about which aliases use the same string; it never stores,
-hashes, fingerprints, or assigns an identity to a binding key. The only
-equality check is between the current and replacement values supplied together
-for one rotation request, which rejects an accidental no-op.
+Binding keys supply application-held key material required to decrypt bound
+secret versions. Normal identity authentication and authorization still apply.
+KMS never stores, hashes, or fingerprints binding keys.
 
 This is the `0.3.x` contract. It replaces the `0.2.x` client-bound token and
 per-alias token-file design. `0.3.x` requires a freshly initialized database;
@@ -31,7 +26,7 @@ with a no-echo prompt, and a newly entered key is confirmed twice. There is no
 binding-key file flag, file environment variable, directory convention, or
 server-side recovery copy. `parameter-store exec` removes the exact
 `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` variables, as well as the existing
-per-secret token variables, before starting the child.
+before starting the child.
 
 A binding key is not the mTLS client private key. `KMS_CLIENT_KEY_FILE` keeps
 its existing meaning as the filesystem path to that authentication key.
@@ -89,11 +84,9 @@ See the [Go SDK](sdk-go.md) for serializer support and request options.
 
 ## Reads, writes, and metadata
 
-`GetSecret` sends the access token and binding key independently. `PutSecret`
-creates a bound version when `binding_key` is non-empty and an unbound version
-when it is empty; protection is not inherited from the preceding version.
-`generate_access_token` independently creates or rotates the secret-level
-access token and returns it once. There is no write-side `secret_token`.
+`GetSecret` supplies a binding key for a bound version. `PutSecret` supplies a key
+to create a bound version, or omits it to create an unbound version. It returns
+only the version and revision.
 
 The compact `0.3.x` protobuf fields are:
 
@@ -102,7 +95,8 @@ message GetSecretRequest {
   ResourceRef ref = 1;
   uint64 version = 2;
   string label = 3;
-  string secret_token = 4;
+  reserved 4;
+  reserved "secret_token";
   string binding_key = 5;
 }
 
@@ -112,7 +106,8 @@ message PutSecretRequest {
   string content_type = 3;
   string metadata_json = 4;
   string binding_key = 5;
-  bool generate_access_token = 6;
+  reserved 6;
+  reserved "generate_access_token";
   int64 expires_at_unix_ms = 7;
 }
 ```
@@ -120,17 +115,16 @@ message PutSecretRequest {
 The HTTP equivalents are `POST /api/v1/secrets/reveal` with
 `env`, `app`, `key`, `version` or `label`, and `binding_key`;
 and `POST /api/v1/secrets` with `env`, `app`, `key`, `value_base64`,
-`content_type`, `metadata_json`, `binding_key`, `generate_access_token`, and
+`content_type`, `metadata_json`, `binding_key`, and
 `expires_at_unix_ms`. Credentials belong only in these request bodies, never
-in a URL or custom header. The admin-only reveal path bypasses the access-token
-gate and rejects `secret_token` as an unknown field; it still requires the
-binding key for a bound version. Normal data-plane `GetSecret` enforces both
-independent requirements.
+in a URL or custom header. The admin-only reveal path also requires the
+binding key for a bound version. Normal data-plane `GetSecret` enforces identity authorization
+and requires the exact version's binding key when bound.
 
 `SecretMetadata.bound` describes the version selected by `current`. Every
-`SecretVersionInfo` has its own live `bound` and `has_access_token` flags;
-exact-version readers must use those fields rather than the current summary.
-Destroyed purge tombstones report both flags as false.
+`SecretVersionInfo` has its own live `bound` flag;
+exact-version readers must use that field rather than the current summary.
+Destroyed purge tombstones report `bound` as false.
 
 Secret plaintext is never cached by the Go, Python, or TypeScript SDK. Watches
 carry metadata-only notifications, and a consumer explicitly refetches when it
@@ -138,7 +132,7 @@ needs plaintext.
 
 ## Bind, unbind, rotate, and purge
 
-`bound` and `has_access_token` are immutable properties of every live secret
+`bound` is an immutable property of every live secret
 version. Binding, unbinding, and binding-key rotation therefore clone only the
 version labeled `current` into one new high-water version. KMS fully decrypts
 and re-encrypts the value with fresh ciphertext, DEK, nonce, version-bound AAD,
@@ -167,7 +161,7 @@ identical replacement. A stale current guard aborts without creating a version,
 moving a label, advancing the revision, or writing an allow audit.
 
 Each transition preserves plaintext, content type, metadata, enabled/disabled
-state, expiry, and the source version's access-token requirement. It records a
+state, and expiry. It records a
 fresh creation time and actor. Rotation creates exactly one new current version;
 it neither modifies nor clones the historical cohort. Those versions continue
 to require the old binding key.
@@ -290,16 +284,15 @@ itself.
 
 Release entries contain only alias, kind, home-namespace resource reference,
 exact version, content type, metadata, and a parameter digest. They never carry
-`bound` or `has_access_token`, and those fields do not enter the release digest.
-Because a non-destroyed version's protection flags cannot change, an exact
+`bound`, and this field does not enter the release digest.
+Because a non-destroyed version's binding flag cannot change, an exact
 version pin nevertheless pins its protection mode implicitly. Both parameter
 and secret pins must belong to the release's own `(env, app)` namespace.
 
 Before fetching an exact secret pin, release loaders fetch live metadata and
 verify the response identity, version, enabled/destroyed state, expiry, and the
-exact version's two protection flags. They resolve access tokens and binding
-keys independently, per alias. A missing required credential rejects the whole
-candidate as `token_unavailable`; a wrong credential or failed resolution is
+exact version's binding flag. They resolve binding keys per alias. A missing required credential rejects the whole
+candidate as `binding_key_unavailable`; a wrong credential or failed resolution is
 `resolution_failed`. Startup fails until one complete snapshot applies. During
 hot reload, a rejected candidate never partially replaces the last-known-good
 snapshot.
@@ -311,10 +304,7 @@ bound cohort or unbound versions if policy requires erasure. The new release
 has a different digest because its exact version pin differs; the digest format
 itself is unchanged.
 
-Any future protection-mode toggle must likewise create a new version. Rotating
-the per-secret access-token credential may replace the credential accepted by
-an already gated version, but it may never clear that version's
-`has_access_token` requirement.
+Any future protection-mode toggle must likewise create a new version.
 
 Bulk `env` and `exec` deliberately do not consume binding keys or call
 `GetSecret` for bound versions. Secret-inclusive bulk resolution fails closed

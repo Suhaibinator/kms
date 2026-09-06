@@ -12,7 +12,7 @@ validation for the application's release, and set:
 - `KMS_CLIENT_CERT_FILE`
 - `KMS_CLIENT_KEY_FILE`
 - `KMS_CA_FILE`
-- optionally `KMS_PASSWORD_PEPPER_TOKEN` for a token-protected release secret
+- `KMS_PASSWORD_PEPPER_BINDING_KEY` for the bound release secret
 
 The deployment must use the Node runtime. Static export and Edge deployments
 cannot host the KMS transport or bidirectional release watch. Production code

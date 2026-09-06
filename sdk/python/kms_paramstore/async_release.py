@@ -43,16 +43,11 @@ from .release import (
     _grpc_code_name,
     _now_ms,
     _release_digest,
-    _token_from_result,
     _validate_release_timing,
     _valid_sha256_hex,
 )
 from .secret import Secret
 
-AsyncTokenResult = Union[str, Tuple[str, bool], None]
-AsyncSecretTokenProvider = Callable[
-    [str, str, asyncio.Event], Union[AsyncTokenResult, Awaitable[AsyncTokenResult]]
-]
 AsyncManifestValidator = Callable[
     [asyncio.Event, ReleaseManifest], Union[None, Awaitable[None]]
 ]
@@ -65,7 +60,6 @@ class AsyncReleaseLoaderConfig:
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
     reconcile_interval: float = 60.0
-    secret_token_provider: Optional[AsyncSecretTokenProvider] = None
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
     )
@@ -565,31 +559,15 @@ class AsyncReleaseLoader:
         if exact.expires_at_unix_ms > 0 and exact.expires_at_unix_ms <= int(time.time() * 1000):
             raise _CandidateFailure("resolution_failed")
 
-        token = ""
-        if exact.has_access_token:
-            provider = self._config.secret_token_provider
-            if provider is None:
-                raise _CandidateFailure("token_unavailable")
-            try:
-                result = provider(entry.alias, entry.path, cancel)
-                token_result = await result if inspect.isawaitable(result) else result
-                token = _token_from_result(token_result)
-            except Exception:
-                raise _CandidateFailure(
-                    "superseded" if cancel.is_set() else "token_unavailable"
-                ) from None
-            if not token:
-                raise _CandidateFailure("token_unavailable")
         binding_key = ""
         if exact.bound:
             binding_key = self._binding_keys.get(entry.alias, "")
             if not isinstance(binding_key, str) or not binding_key:
-                raise _CandidateFailure("token_unavailable")
+                raise _CandidateFailure("binding_key_unavailable")
         try:
             secret = await self._client.get_secret(
                 entry.path,
                 version=entry.version,
-                secret_token=token,
                 binding_key=binding_key,
                 timeout=self._config.request_timeout,
             )
@@ -815,7 +793,7 @@ class AsyncReleaseLoader:
         self._rejection_counts[category] += 1
         if category in {
             "resolution_failed",
-            "token_unavailable",
+            "binding_key_unavailable",
             "version_mismatch",
             "digest_mismatch",
         }:
@@ -892,6 +870,5 @@ __all__ = [
     "AsyncManifestValidator",
     "AsyncReleaseLoader",
     "AsyncReleaseLoaderConfig",
-    "AsyncSecretTokenProvider",
     "run_typed_release_async",
 ]

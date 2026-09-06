@@ -114,10 +114,9 @@ func Start(
 	}
 	validateManifest := manifestValidator(options.Contract)
 	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
-		Name:                options.Release,
-		ReconcileInterval:   options.ReconcileInterval,
-		SecretTokenProvider: options.SecretTokenProvider,
-		BindingKeys:         bindingKeys,
+		Name:              options.Release,
+		ReconcileInterval: options.ReconcileInterval,
+		BindingKeys:       bindingKeys,
 		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
 			identity := releaseIdentityFromManifest(manifest)
 			manager.mu.Lock()

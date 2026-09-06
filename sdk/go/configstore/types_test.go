@@ -51,7 +51,6 @@ func TestOptionsAndManagerFormattingRedactBindingKeys(t *testing.T) {
 	const canary = "configstore-binding-key-format-canary"
 	options := Options{
 		Release: "runtime", BindingKeys: map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
-		SecretTokenProvider: func(string, string) (string, bool) { return canary, true },
 	}
 	manager := unitManager(options, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, nil

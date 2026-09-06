@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 from kms_paramstore import Client
 from kms_paramstore._gen import kms_pb2
-from kms_paramstore.errors import PermissionDeniedError
 from tests.conftest import NS, NS_APP, NS_ENV
 from tests.helpers import wait_until
 
@@ -86,22 +83,15 @@ def test_secret_reads_do_not_depend_on_snapshot_cache_invalidation(server):
         c.close()
 
 
-def test_token_gated_secret_bypasses_cache(server):
+def test_secret_bypasses_cache(server):
     addr, store = server
     c = _client(addr, ttl=30)
     try:
-        res = c.put_secret("c/gated", b"one", generate_access_token=True)
-        token = res.access_token
-        assert token
-        assert c.get_secret("c/gated", secret_token=token).value == b"one"
-        # The token read must not have populated the cache: a token-less read
-        # has to reach the server's token gate and be rejected there.
-        with pytest.raises(PermissionDeniedError):
-            c.get_secret("c/gated")
-        # Nor may a token read be served from cache: it sees server-side changes
-        # immediately.
+        c.put_secret("c/gated", b"one")
+        assert c.get_secret("c/gated").value == b"one"
+        # Secret reads see server-side changes immediately.
         store.secrets[(NS_ENV, NS_APP, "c/gated")]["versions"].append((b"two", "application/octet-stream"))
-        assert c.get_secret("c/gated", secret_token=token).value == b"two"
+        assert c.get_secret("c/gated").value == b"two"
     finally:
         c.close()
 

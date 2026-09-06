@@ -144,10 +144,8 @@ class _AsyncClient:
         self._channel = object()
         self._client_name = "async-tests"
         self._param_stub = _AsyncParameterStub()
-        self.tokens: List[str] = []
         self.binding_keys: List[str] = []
         self.bound = False
-        self.has_access_token = True
         self.state = "enabled"
         self.destroyed_at_unix_ms = 0
         self.expires_at_unix_ms = 0
@@ -168,15 +166,11 @@ class _AsyncClient:
         *,
         version=0,
         label="",
-        secret_token="",
         binding_key="",
         timeout=None,
     ):
         del label, timeout
-        self.tokens.append(secret_token)
         self.binding_keys.append(binding_key)
-        if self.has_access_token and secret_token != "token":
-            raise RuntimeError("credential unavailable")
         if self.bound and binding_key != "async-binding-key":
             raise RuntimeError("credential unavailable")
         env, app, resource_key = key[1:].split("/", 2)
@@ -195,13 +189,13 @@ class _AsyncClient:
         env, app, resource_key = key[1:].split("/", 2)
         return kms_paramstore.models.SecretInfo(
             env=env, app=app, key=resource_key, content_type="string",
-            bound=self.bound, has_access_token=self.has_access_token,
+            bound=self.bound,
             versions=tuple(
                 kms_paramstore.models.SecretVersion(
                     version=version, state=self.state, bound=self.bound,
                     destroyed_at_unix_ms=self.destroyed_at_unix_ms,
                     expires_at_unix_ms=self.expires_at_unix_ms,
-                    has_access_token=self.has_access_token,
+
                 ) for version in range(1, 10)
             ),
         )
@@ -244,7 +238,6 @@ def _loader(monkeypatch, initial, **config):
         "reconcile_interval": 10.0,
         "reconnect_initial": 0.01,
         "reconnect_max": 0.02,
-        "secret_token_provider": lambda _alias, _path, _cancel: ("token", True),
     }
     settings.update(config)
     loader = AsyncReleaseLoader(
@@ -282,7 +275,6 @@ def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
         assert prepared.commits == 1
         assert prepared.aborts == 0
         assert order[0] == "manifest"
-        assert client.tokens == ["token"]
         assert client.metadata_versions == [1]
         applied = [a for a in stub.acknowledgements if a.state == "applied"][-1]
         assert applied.applied_divergent
@@ -304,14 +296,13 @@ def test_async_bound_loader_resolves_independent_credentials_and_missing_key_rej
         await _wait_for(lambda: prepared.commits == 1)
         loader.stop()
         await task
-        assert client.tokens == ["token"]
         assert client.binding_keys == ["async-binding-key"]
 
         missing, _stub, missing_client = _loader(monkeypatch, _release(1, 10))
         missing_client.bound = True
         with pytest.raises(ReleaseCandidateError) as caught:
             await missing.run(lambda _cancel, _snapshot: _Prepared())
-        assert caught.value.category == "token_unavailable"
+        assert caught.value.category == "binding_key_unavailable"
         assert missing_client.binding_keys == []
 
     asyncio.run(scenario())
@@ -324,7 +315,6 @@ def test_async_loader_rejects_enabled_version_with_destroyed_timestamp(monkeypat
         with pytest.raises(ReleaseCandidateError) as caught:
             await loader.run(lambda _cancel, _snapshot: _Prepared())
         assert caught.value.category == "resolution_failed"
-        assert client.tokens == []
         assert client.binding_keys == []
 
     asyncio.run(scenario())
@@ -399,7 +389,6 @@ def test_async_classified_failure_is_redacted_and_fetch_free(monkeypatch):
             await loader.run(lambda _cancel, _snapshot: _Prepared())
         assert caught.value.category == "restart_required"
         assert sensitive not in str(caught.value)
-        assert not client.tokens
         rejected = [a for a in stub.acknowledgements if a.state == "rejected"]
         assert rejected[-1].rejection_category == "restart_required"
         assert rejected[-1].diagnostic == ""

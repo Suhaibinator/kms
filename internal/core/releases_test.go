@@ -266,11 +266,10 @@ func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T
 		t.Fatalf("release v1 secret pin = %+v", entry)
 	}
 
-	// A later immutable secret version may use a different content type and be
-	// the first version protected by a per-secret access token.
+	// A later immutable secret version may use a different content type.
 	if _, _, err := st.CreateSecretVersion(ctx, storage.CreateSecretParams{
 		Ref: ref, ContentType: "application/json", Metadata: "{}", CreatedBy: "admin",
-		AccessTokenHash: []byte("new-token-hash"), Encrypt: encrypt,
+		Encrypt: encrypt,
 	}); err != nil {
 		t.Fatal(err)
 	}

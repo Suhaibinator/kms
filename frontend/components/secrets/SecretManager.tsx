@@ -534,7 +534,6 @@ export default function SecretManager({
               </Badge>
             ),
           ],
-          ["Access token", secret.has_access_token ? "yes" : "no"],
           ["Current version", typeof current === "number" ? `v${current}` : "—"],
           ["Created", formatUnixMs(secret.created_at_unix_ms)],
           ["Updated", formatUnixMs(secret.updated_at_unix_ms)],
@@ -921,7 +920,6 @@ function VersionRow({
         <div className="row-wrap">
           <SecretStateBadge state={v.state} />
           {v.bound ? <Badge kind="warning">bound</Badge> : null}
-          {v.has_access_token ? <Badge kind="accent">access token</Badge> : null}
         </div>
       </td>
       <td>{v.created_by || <span className="faint">—</span>}</td>
@@ -1040,10 +1038,7 @@ function NewVersionModal({
   const [expires, setExpires] = useState("");
   const [bindVersion, setBindVersion] = useState(currentVersionBound);
   const [bindingKey, setBindingKey] = useState("");
-  const [generateToken, setGenerateToken] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(currentVersionBound);
-  const [confirmTokenRotation, setConfirmTokenRotation] = useState(false);
-  const [mintedToken, setMintedToken] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const errors = useFieldErrors<"value" | "metadata" | "expires" | "bindingKey">();
   const { reset: resetErrors } = errors;
@@ -1061,16 +1056,11 @@ function NewVersionModal({
       setExpires("");
       setBindVersion(currentVersionBound);
       setBindingKey("");
-      setGenerateToken(false);
       setAdvancedOpen(currentVersionBound);
-      setConfirmTokenRotation(false);
-      setMintedToken(null);
       resetErrors();
     } else {
       setValue("");
       setBindingKey("");
-      setMintedToken(null);
-      setConfirmTokenRotation(false);
     }
     setSaving(false);
     return () => {
@@ -1107,7 +1097,6 @@ function NewVersionModal({
     bindingKey !== "" ||
     !isEmptyJson(metadataJson) ||
     expires !== "" ||
-    generateToken ||
     contentType !== (secret.content_type || "text/plain");
   const nextVersion = Math.max(0, ...secret.versions.map((v) => v.version)) + 1;
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
@@ -1121,10 +1110,6 @@ function NewVersionModal({
     if (valueError || metadataError || expiresError || bindingKeyError) {
       if (metadataError || expiresError || bindingKeyError) setAdvancedOpen(true);
       requestFocus();
-      return;
-    }
-    if (generateToken && secret.has_access_token) {
-      setConfirmTokenRotation(true);
       return;
     }
     void save();
@@ -1145,22 +1130,13 @@ function NewVersionModal({
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
         ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
-        generate_access_token: generateToken,
         expires_at_unix_ms: datetimeLocalToUnixMs(expires) ?? 0,
       });
       if (formInstance.current !== submittedForm) return;
       // Clear the plaintext from the field immediately.
       setValue("");
-      if (res.access_token) {
-        setMintedToken(res.access_token);
-        toast.success(
-          `Created version ${res.version}`,
-          secret.has_access_token ? "Save the replacement access token." : "Save the access token.",
-        );
-      } else {
-        toast.success(`Created version ${res.version}`, "New version is now current.");
-        onSaved();
-      }
+      toast.success(`Created version ${res.version}`, "New version is now current.");
+      onSaved();
     } catch (err) {
       if (formInstance.current !== submittedForm) return;
       toast.error(err, "Failed to create version");
@@ -1169,208 +1145,136 @@ function NewVersionModal({
     }
   }
 
-  function finishTokenReveal() {
-    setMintedToken(null);
-    onSaved();
-  }
-
   return (
-    <>
-      <Modal
-        open={open}
-        wide
-        title={mintedToken ? "Save this access token now" : "New secret version"}
-        description={
-          mintedToken ? undefined : `Saving creates v${nextVersion} and makes it current.`
-        }
-        onClose={mintedToken ? () => undefined : onClose}
-        dismissible={!saving && mintedToken === null}
-        dirty={dirty && mintedToken === null}
-        initialFocus={mintedToken ? undefined : valueRef}
-        footer={
-          mintedToken ? (
-            <Button onClick={finishTokenReveal}>I&apos;ve saved it — continue</Button>
-          ) : (
-            (close) => (
-              <>
-                <Button variant="outline" onClick={close} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button onClick={submit} loading={saving} disabled={blocked}>
-                  {generateToken && secret.has_access_token
-                    ? "Create version & rotate token"
-                    : "Save new version"}
-                </Button>
-              </>
-            )
-          )
-        }
-      >
-        {mintedToken ? (
-          <>
-            <div className="danger-panel mb-4">
-              <strong>
-                {secret.has_access_token
-                  ? "The previous token no longer works."
-                  : "This token will never be shown again."}
-              </strong>{" "}
-              This token controls every version that requires token protection.
-            </div>
-            <div className="token-reveal">{mintedToken}</div>
-            <div className="row-wrap mt-4">
-              <CopyButton label="Copy token" value={() => mintedToken} />
-            </div>
-          </>
-        ) : (
-          <form ref={formRef} onSubmit={submit}>
-            <Field
-              label="Value"
-              hint={
-                <>
-                  Stored encrypted.{" "}
-                  {typeof currentVersion === "number" ? (
-                    <span className="mono" data-testid="version-transition">
-                      v{currentVersion} → v{nextVersion}
-                    </span>
-                  ) : (
-                    <span className="mono" data-testid="version-transition">
-                      v{nextVersion}
-                    </span>
-                  )}{" "}
-                  becomes current.
-                  {alreadyBase64 ? " Sent as-is: standard base64, decoded by the server." : ""}
-                </>
-              }
-              error={shownValueError}
-            >
-              <SecretValueField
-                value={value}
-                onChange={setValue}
-                base64={alreadyBase64}
-                onBase64Change={setAlreadyBase64}
-                inputRef={valueRef}
-                onBlur={() => errors.touch("value")}
+    <Modal
+      open={open}
+      wide
+      title="New secret version"
+      description={`Saving creates v${nextVersion} and makes it current.`}
+      onClose={onClose}
+      dismissible={!saving}
+      dirty={dirty}
+      initialFocus={valueRef}
+      footer={(close) => (
+        <>
+          <Button variant="outline" onClick={close} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={submit} loading={saving} disabled={blocked}>
+            Save new version
+          </Button>
+        </>
+      )}
+    >
+      <form ref={formRef} onSubmit={submit}>
+        <Field
+          label="Value"
+          hint={
+            <>
+              Stored encrypted.{" "}
+              {typeof currentVersion === "number" ? (
+                <span className="mono" data-testid="version-transition">
+                  v{currentVersion} → v{nextVersion}
+                </span>
+              ) : (
+                <span className="mono" data-testid="version-transition">
+                  v{nextVersion}
+                </span>
+              )}{" "}
+              becomes current.
+              {alreadyBase64 ? " Sent as-is: standard base64, decoded by the server." : ""}
+            </>
+          }
+          error={shownValueError}
+        >
+          <SecretValueField
+            value={value}
+            onChange={setValue}
+            base64={alreadyBase64}
+            onBase64Change={setAlreadyBase64}
+            inputRef={valueRef}
+            onBlur={() => errors.touch("value")}
+          />
+        </Field>
+        <Field label="Content type" className="value-type-field">
+          <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
+        </Field>
+        <details
+          className="advanced-panel advanced-panel-modal"
+          open={advancedOpen}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open || advancedHasError)}
+        >
+          <summary>Advanced options</summary>
+          <div className="advanced-panel-content">
+            <Field label="Expires at" hint="Optional." error={shownExpiresError}>
+              <Input
+                type="datetime-local"
+                min={expiresMin}
+                value={expires}
+                onChange={(event) => setExpires(event.target.value)}
+                onBlur={() => {
+                  errors.touch("expires");
+                  if (expiresError) setAdvancedOpen(true);
+                }}
               />
             </Field>
-            <Field label="Content type" className="value-type-field">
-              <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
+            <Field label="Metadata JSON" error={shownMetadataError}>
+              <JsonEditor
+                toolbar="minimal"
+                rows={3}
+                maxHeight="30vh"
+                value={metadataJson}
+                onChange={setMetadataJson}
+                onBlur={() => {
+                  errors.touch("metadata");
+                  if (metadataError) setAdvancedOpen(true);
+                }}
+                onSubmit={() => void submit()}
+              />
             </Field>
-            <details
-              className="advanced-panel advanced-panel-modal"
-              open={advancedOpen}
-              onToggle={(event) => setAdvancedOpen(event.currentTarget.open || advancedHasError)}
-            >
-              <summary>Advanced options</summary>
-              <div className="advanced-panel-content">
-                <Field label="Expires at" hint="Optional." error={shownExpiresError}>
-                  <Input
-                    type="datetime-local"
-                    min={expiresMin}
-                    value={expires}
-                    onChange={(event) => setExpires(event.target.value)}
-                    onBlur={() => {
-                      errors.touch("expires");
-                      if (expiresError) setAdvancedOpen(true);
-                    }}
-                  />
-                </Field>
-                <Field label="Metadata JSON" error={shownMetadataError}>
-                  <JsonEditor
-                    toolbar="minimal"
-                    rows={3}
-                    maxHeight="30vh"
-                    value={metadataJson}
-                    onChange={setMetadataJson}
-                    onBlur={() => {
-                      errors.touch("metadata");
-                      if (metadataError) setAdvancedOpen(true);
-                    }}
-                    onSubmit={() => void submit()}
-                  />
-                </Field>
-                <div className="checkbox-row">
-                  <Checkbox
-                    id="bind-new-version"
-                    checked={bindVersion}
-                    onCheckedChange={(checked) => {
-                      setBindVersion(checked);
-                      if (!checked) setBindingKey("");
-                    }}
-                  />
-                  <label htmlFor="bind-new-version">
-                    <strong>Bind only this new version</strong>
-                    <div className="faint text-sm">
-                      {currentVersionBound
-                        ? "The current version is bound, so protection is selected here too. Enter its binding key below, or clear this option to create an unbound version."
-                        : "Requires a binding key to decrypt only this new version."}
-                    </div>
-                  </label>
+            <div className="checkbox-row">
+              <Checkbox
+                id="bind-new-version"
+                checked={bindVersion}
+                onCheckedChange={(checked) => {
+                  setBindVersion(checked);
+                  if (!checked) setBindingKey("");
+                }}
+              />
+              <label htmlFor="bind-new-version">
+                <strong>Bind only this new version</strong>
+                <div className="faint text-sm">
+                  {currentVersionBound
+                    ? "The current version is bound, so protection is selected here too. Enter its binding key below, or clear this option to create an unbound version."
+                    : "Requires a binding key to decrypt only this new version."}
                 </div>
-                {bindVersion ? (
-                  <Field
-                    label="Binding key"
-                    hint="At least 32 UTF-8 bytes. Used only for this write and never retained by KMS."
-                    error={shownBindingKeyError}
-                  >
-                    <Input
-                      className="font-mono"
-                      type="password"
-                      value={bindingKey}
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => setBindingKey(event.target.value)}
-                      onBlur={() => {
-                        errors.touch("bindingKey");
-                        if (bindingKeyError) setAdvancedOpen(true);
-                      }}
-                      placeholder="application binding key"
-                    />
-                  </Field>
-                ) : null}
-                <div className="checkbox-row">
-                  <Checkbox
-                    id="token-new-version"
-                    checked={generateToken}
-                    onCheckedChange={setGenerateToken}
-                  />
-                  <label htmlFor="token-new-version">
-                    <strong>
-                      {secret.has_access_token ? "Rotate access token" : "Generate access token"}
-                    </strong>
-                    <div className="faint text-sm">The new token is shown once after creation.</div>
-                  </label>
-                </div>
-                {generateToken && secret.has_access_token ? (
-                  <div className="warn-panel">
-                    The existing token will immediately stop working for every token-protected
-                    version of this secret.
-                  </div>
-                ) : null}
-              </div>
-            </details>
-          </form>
-        )}
-      </Modal>
-      <ConfirmDialog
-        open={confirmTokenRotation}
-        title="Rotate access token?"
-        danger
-        message={
-          <>
-            Creating v{nextVersion} will replace the access token for{" "}
-            <span className="mono">{displayPath(secret)}</span>. Clients using the current token
-            will fail until they receive the replacement.
-          </>
-        }
-        confirmLabel="Create version & rotate token"
-        busy={saving}
-        onConfirm={() => {
-          setConfirmTokenRotation(false);
-          void save();
-        }}
-        onCancel={() => setConfirmTokenRotation(false)}
-      />
-    </>
+              </label>
+            </div>
+            {bindVersion ? (
+              <Field
+                label="Binding key"
+                hint="At least 32 UTF-8 bytes. Used only for this write and never retained by KMS."
+                error={shownBindingKeyError}
+              >
+                <Input
+                  className="font-mono"
+                  type="password"
+                  value={bindingKey}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setBindingKey(event.target.value)}
+                  onBlur={() => {
+                    errors.touch("bindingKey");
+                    if (bindingKeyError) setAdvancedOpen(true);
+                  }}
+                  placeholder="application binding key"
+                />
+              </Field>
+            ) : null}
+          </div>
+        </details>
+      </form>
+    </Modal>
   );
 }
 

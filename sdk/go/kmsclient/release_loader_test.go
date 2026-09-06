@@ -31,17 +31,13 @@ type releaseLoaderServer struct {
 	active                 *kmsv1.GetActiveReleaseResponse
 	parameters             map[string]*kmsv1.Parameter
 	secrets                map[string]*kmsv1.GetSecretResponse
-	secretToken            string
 	bindingKey             string
 	secretBound            bool
-	secretHasToken         bool
 	secretSummaryBound     bool
-	secretSummaryHasToken  bool
 	secretState            string
 	secretDestroyedAt      int64
 	secretExpiry           int64
 	secretMetadataOverride *kmsv1.SecretMetadata
-	expectedToken          string
 	expectedBindKey        string
 	parameterFetches       int
 	metadataFetches        int
@@ -56,14 +52,13 @@ type releaseLoaderServer struct {
 
 func newReleaseLoaderServer() *releaseLoaderServer {
 	return &releaseLoaderServer{
-		parameters:     make(map[string]*kmsv1.Parameter),
-		secrets:        make(map[string]*kmsv1.GetSecretResponse),
-		watchEvents:    make(chan *kmsv1.WatchReleaseEvent, 16),
-		watchKills:     make(chan struct{}, 4),
-		watchRegs:      make(chan *kmsv1.ReleaseWatchRegistration, 4),
-		acks:           make(chan *kmsv1.ReleaseAcknowledgement, 32),
-		secretHasToken: true,
-		secretState:    "enabled",
+		parameters:  make(map[string]*kmsv1.Parameter),
+		secrets:     make(map[string]*kmsv1.GetSecretResponse),
+		watchEvents: make(chan *kmsv1.WatchReleaseEvent, 16),
+		watchKills:  make(chan struct{}, 4),
+		watchRegs:   make(chan *kmsv1.ReleaseWatchRegistration, 4),
+		acks:        make(chan *kmsv1.ReleaseAcknowledgement, 32),
+		secretState: "enabled",
 	}
 }
 
@@ -86,11 +81,7 @@ func (s *releaseLoaderServer) GetSecret(ctx context.Context, req *kmsv1.GetSecre
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.secretFetches++
-	s.secretToken = req.GetSecretToken()
 	s.bindingKey = req.GetBindingKey()
-	if s.expectedToken != "" && req.GetSecretToken() != s.expectedToken {
-		return nil, status.Error(7, "credential rejected")
-	}
 	if s.expectedBindKey != "" && req.GetBindingKey() != s.expectedBindKey {
 		return nil, status.Error(7, "credential rejected")
 	}
@@ -129,16 +120,16 @@ func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.Ge
 	}
 	return &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
 		Ref: secret.GetRef(), ContentType: secret.GetContentType(), Bound: s.secretSummaryBound,
-		HasAccessToken: s.secretSummaryHasToken, Labels: map[string]uint64{"current": secret.GetVersion()},
+		Labels: map[string]uint64{"current": secret.GetVersion()},
 		Versions: []*kmsv1.SecretVersionInfo{{
 			Version: secret.GetVersion(), State: s.secretState, ExpiresAtUnixMs: s.secretExpiry,
-			DestroyedAtUnixMs: s.secretDestroyedAt, Bound: s.secretBound, HasAccessToken: s.secretHasToken,
+			DestroyedAtUnixMs: s.secretDestroyedAt, Bound: s.secretBound,
 		}},
 	}}, nil
 }
 
 func TestReleaseLoaderExactMetadataRequestAvoidsFullHistoryMessageLimit(t *testing.T) {
-	server, candidate := newExactProtectionResolution(t, false, false)
+	server, candidate := newExactProtectionResolution(t, false)
 	versions := make([]*kmsv1.SecretVersionInfo, 0, 5000)
 	for version := uint64(1); version <= 5000; version++ {
 		versions = append(versions, &kmsv1.SecretVersionInfo{
@@ -455,12 +446,6 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
-		SecretTokenProvider: func(alias, path string) (string, bool) {
-			if alias != "password" || path != "/prod/app/password" {
-				t.Fatalf("unexpected token request for %s %s", alias, path)
-			}
-			return "local-token", true
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -501,11 +486,7 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 		t.Fatalf("commit/abort = %d/%d", prepared.commits.Load(), prepared.aborts.Load())
 	}
 	server.mu.Lock()
-	token := server.secretToken
 	server.mu.Unlock()
-	if token != "local-token" {
-		t.Fatalf("secret token = %q", token)
-	}
 	if !eventually(t, 2*time.Second, func() bool {
 		status := loader.Status()
 		return status.AppliedVersion == 7 && status.AppliedRevision == 42
@@ -561,11 +542,10 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	}
 }
 
-func newExactProtectionResolution(t *testing.T, bound, hasToken bool) (*releaseLoaderServer, releaseCandidate) {
+func newExactProtectionResolution(t *testing.T, bound bool) (*releaseLoaderServer, releaseCandidate) {
 	t.Helper()
 	server := newReleaseLoaderServer()
 	server.secretBound = bound
-	server.secretHasToken = hasToken
 	release := testRelease(7, `{"enabled":true}`)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("very-secret"), ContentType: "text/plain"}
@@ -573,19 +553,13 @@ func newExactProtectionResolution(t *testing.T, bound, hasToken bool) (*releaseL
 }
 
 func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
-	server, candidate := newExactProtectionResolution(t, true, true)
-	server.expectedToken = "access-token"
+	server, candidate := newExactProtectionResolution(t, true)
 	server.expectedBindKey = "binding-key"
 	client := newReleaseTestClient(t, server)
 	bindingKeys := map[string]BindingKey{"password": NewBindingKey("binding-key"), "unused": NewBindingKey("never-sent")}
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
-		SecretTokenProvider: func(alias, path string) (string, bool) {
-			if alias != "password" || path != "/prod/app/password" {
-				t.Fatalf("provider arguments = %q %q", alias, path)
-			}
-			return "access-token", true
-		},
+
 		BindingKeys: bindingKeys,
 	})
 	if err != nil {
@@ -603,22 +577,22 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 		t.Fatalf("resolved secret = %v, present=%t, BindKey=%q", secret, ok, secret.BindKey)
 	}
 	server.mu.Lock()
-	token, key := server.secretToken, server.bindingKey
+	key := server.bindingKey
 	metadataFetches, metadataVersion, secretFetches := server.metadataFetches, server.metadataVersion, server.secretFetches
 	server.mu.Unlock()
-	if token != "access-token" || key != "binding-key" || metadataFetches != 1 || metadataVersion != 7 || secretFetches != 1 {
-		t.Fatalf("credentials/fetches = token:%q key:%q metadata:%d version:%d secret:%d", token, key, metadataFetches, metadataVersion, secretFetches)
+	if key != "binding-key" || metadataFetches != 1 || metadataVersion != 7 || secretFetches != 1 {
+		t.Fatalf("credentials/fetches = key:%q metadata:%d version:%d secret:%d", key, metadataFetches, metadataVersion, secretFetches)
 	}
 }
 
 func TestReleaseLoaderConfigurationAndLoaderFormattingRedactBindingKeys(t *testing.T) {
 	const canary = "binding-key-format-canary"
-	server, _ := newExactProtectionResolution(t, false, false)
+	server, _ := newExactProtectionResolution(t, false)
 	client := newReleaseTestClient(t, server)
 	cfg := ReleaseLoaderConfig{
 		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
-		SecretTokenProvider: func(string, string) (string, bool) { return canary, true },
-		ValidateManifest:    func(context.Context, ReleaseManifest) error { return nil },
+
+		ValidateManifest: func(context.Context, ReleaseManifest) error { return nil },
 	}
 	loader, err := NewReleaseLoader(client, cfg)
 	if err != nil {
@@ -647,28 +621,23 @@ func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
 	tests := []struct {
 		name       string
 		bound      bool
-		hasToken   bool
-		provider   SecretTokenProvider
 		bindingKey string
 		expectKey  string
 		want       string
 	}{
-		{name: "missing access token", hasToken: true, want: ReleaseRejectTokenUnavailable},
-		{name: "provider returns empty", hasToken: true, provider: func(string, string) (string, bool) { return "", true }, want: ReleaseRejectTokenUnavailable},
-		{name: "provider panic", hasToken: true, provider: func(string, string) (string, bool) { panic("credential material") }, want: ReleaseRejectTokenUnavailable},
-		{name: "missing binding key", bound: true, want: ReleaseRejectTokenUnavailable},
+		{name: "missing binding key", bound: true, want: ReleaseRejectBindingKeyUnavailable},
 		{name: "wrong binding key", bound: true, bindingKey: "wrong-binding-key", expectKey: "right-binding-key", want: ReleaseRejectResolutionFailed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server, candidate := newExactProtectionResolution(t, test.bound, test.hasToken)
+			server, candidate := newExactProtectionResolution(t, test.bound)
 			server.expectedBindKey = test.expectKey
 			client := newReleaseTestClient(t, server)
 			keys := map[string]BindingKey{}
 			if test.bindingKey != "" {
 				keys["password"] = NewBindingKey(test.bindingKey)
 			}
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: test.provider, BindingKeys: keys})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", BindingKeys: keys})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -694,7 +663,7 @@ func TestReleaseLoaderRequiresExactContentTypeEvenForEmptyPin(t *testing.T) {
 		{name: "secret", entry: 1, want: ReleaseRejectVersionMismatch},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server, candidate := newExactProtectionResolution(t, false, false)
+			server, candidate := newExactProtectionResolution(t, false)
 			candidate.release.Entries[test.entry].ContentType = ""
 			candidate.release.Digest, _ = deterministicReleaseDigest(candidate.release)
 			client := newReleaseTestClient(t, server)
@@ -723,7 +692,7 @@ func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *test
 		{name: "expired", state: "enabled", expiry: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server, candidate := newExactProtectionResolution(t, true, true)
+			server, candidate := newExactProtectionResolution(t, true)
 			server.secretState = test.state
 			server.secretDestroyedAt = test.destroyedAt
 			server.secretExpiry = test.expiry
@@ -731,7 +700,6 @@ func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *test
 			client := newReleaseTestClient(t, server)
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 				Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
-				SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -751,7 +719,7 @@ func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *test
 }
 
 func TestReleaseLoaderRejectsForeignEntryBeforeAnyCallback(t *testing.T) {
-	server, candidate := newExactProtectionResolution(t, true, true)
+	server, candidate := newExactProtectionResolution(t, true)
 	secretEntry := candidate.release.Entries[1]
 	secretEntry.Ref = &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "other"}, Key: "password"}
 	candidate.release.Digest, _ = deterministicReleaseDigest(candidate.release)
@@ -759,8 +727,7 @@ func TestReleaseLoaderRejectsForeignEntryBeforeAnyCallback(t *testing.T) {
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
-		ValidateManifest:    func(context.Context, ReleaseManifest) error { validatorCalls.Add(1); return nil },
-		SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
+		ValidateManifest: func(context.Context, ReleaseManifest) error { validatorCalls.Add(1); return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -803,8 +770,7 @@ func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *tes
 	}
 
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name:                "runtime",
-		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+		Name: "runtime",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1003,9 +969,8 @@ func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) 
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name:                "runtime",
-		ReconcileInterval:   100 * time.Millisecond,
-		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+		Name:              "runtime",
+		ReconcileInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1128,7 +1093,6 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 
 	client := newReleaseTestClient(t, server)
 	var validated atomic.Bool
-	var tokenLookups atomic.Int32
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
 		ValidateManifest: func(ctx context.Context, manifest ReleaseManifest) error {
@@ -1159,18 +1123,11 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 			server.mu.Lock()
 			parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
 			server.mu.Unlock()
-			if parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 {
-				t.Errorf("resolution ran before validation: parameter=%d secret=%d token=%d", parameterFetches, secretFetches, tokenLookups.Load())
+			if parameterFetches != 0 || secretFetches != 0 {
+				t.Errorf("resolution ran before validation: parameter=%d secret=%d", parameterFetches, secretFetches)
 			}
 			validated.Store(true)
 			return nil
-		},
-		SecretTokenProvider: func(string, string) (string, bool) {
-			if !validated.Load() {
-				t.Error("secret token provider ran before manifest validation")
-			}
-			tokenLookups.Add(1)
-			return "token", true
 		},
 	})
 	if err != nil {
@@ -1192,8 +1149,8 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 	server.mu.Lock()
 	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
 	server.mu.Unlock()
-	if !validated.Load() || parameterFetches != 1 || secretFetches != 1 || tokenLookups.Load() != 1 {
-		t.Fatalf("validation/resolution counts = validated:%t parameter:%d secret:%d token:%d", validated.Load(), parameterFetches, secretFetches, tokenLookups.Load())
+	if !validated.Load() || parameterFetches != 1 || secretFetches != 1 {
+		t.Fatalf("validation/resolution counts = validated:%t parameter:%d secret:%d", validated.Load(), parameterFetches, secretFetches)
 	}
 	cancel()
 	if err := <-runErr; err != context.Canceled {
@@ -1209,16 +1166,11 @@ func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 	server.setActive(release, 44)
 	client := newReleaseTestClient(t, server)
 	var validatorCalled atomic.Bool
-	var tokenLookups atomic.Int32
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
 		ValidateManifest: func(context.Context, ReleaseManifest) error {
 			validatorCalled.Store(true)
 			return nil
-		},
-		SecretTokenProvider: func(string, string) (string, bool) {
-			tokenLookups.Add(1)
-			return "token", true
 		},
 	})
 	if err != nil {
@@ -1234,8 +1186,8 @@ func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 	server.mu.Lock()
 	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
 	server.mu.Unlock()
-	if validatorCalled.Load() || parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 {
-		t.Fatalf("invalid entries reached validation/resolution: validator=%t parameter=%d secret=%d token=%d", validatorCalled.Load(), parameterFetches, secretFetches, tokenLookups.Load())
+	if validatorCalled.Load() || parameterFetches != 0 || secretFetches != 0 {
+		t.Fatalf("invalid entries reached validation/resolution: validator=%t parameter=%d secret=%d", validatorCalled.Load(), parameterFetches, secretFetches)
 	}
 }
 
@@ -1248,16 +1200,11 @@ func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause
 		category: ReleaseRejectConfigContractMismatch,
 		detail:   "contract mismatch with sensitive local detail",
 	}
-	var tokenLookups atomic.Int32
 	var prepareCalled atomic.Bool
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
 		Name: "runtime",
 		ValidateManifest: func(context.Context, ReleaseManifest) error {
 			return classified
-		},
-		SecretTokenProvider: func(string, string) (string, bool) {
-			tokenLookups.Add(1)
-			return "token", true
 		},
 	})
 	if err != nil {
@@ -1283,8 +1230,8 @@ func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause
 	server.mu.Lock()
 	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
 	server.mu.Unlock()
-	if parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 || prepareCalled.Load() {
-		t.Fatalf("rejected manifest triggered resolution/preparation: parameter=%d secret=%d token=%d prepare=%t", parameterFetches, secretFetches, tokenLookups.Load(), prepareCalled.Load())
+	if parameterFetches != 0 || secretFetches != 0 || prepareCalled.Load() {
+		t.Fatalf("rejected manifest triggered resolution/preparation: parameter=%d secret=%d prepare=%t", parameterFetches, secretFetches, prepareCalled.Load())
 	}
 	if status := loader.Status(); status.LastFailureCategory != ReleaseRejectConfigContractMismatch {
 		t.Fatalf("status = %+v", status)
@@ -1322,8 +1269,7 @@ func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
 			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 10, Value: []byte("secret"), ContentType: "text/plain"}
 			client := newReleaseTestClient(t, server)
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-				Name:                "runtime",
-				SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+				Name: "runtime",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1357,7 +1303,7 @@ func TestReleaseLoaderAbortsSupersededPreparedCandidateExactlyOnce(t *testing.T)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: func(string, string) (string, bool) { return "token", true }})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1420,7 +1366,7 @@ func TestReleaseLoaderBoundsNonCooperativePreparationAndKeepsLatest(t *testing.T
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: func(string, string) (string, bool) { return "token", true }})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1507,7 +1453,7 @@ func TestReleaseLoaderFailsStartupOnDigestMismatch(t *testing.T) {
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "tampered", ContentType: "json", Version: 3}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 3, Value: []byte("secret"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: func(string, string) (string, bool) { return "token", true }})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1570,7 +1516,7 @@ func TestReleaseLoaderRejectsReturnedResourceReferenceMismatch(t *testing.T) {
 			server.parameters["settings"] = &kmsv1.Parameter{Ref: parameterRef, Value: "settings-value", ContentType: "json", Version: 4}
 			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: secretRef, Version: 4, Value: []byte("secret"), ContentType: "text/plain"}
 			client := newReleaseTestClient(t, server)
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: func(string, string) (string, bool) { return "token", true }})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1691,8 +1637,7 @@ func newDivergenceTestLoader(t *testing.T, version uint64, revision uint64) (*re
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: version, Value: []byte("secret"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name:                "runtime",
-		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+		Name: "runtime",
 	})
 	if err != nil {
 		t.Fatal(err)

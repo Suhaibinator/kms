@@ -169,13 +169,13 @@ func TestPutAndGetSecretRedactHostileRemoteDetails(t *testing.T) {
 		secrets := &secretStub{
 			metadataResp: &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
 				Ref: ref("prod", "app", "key"), Labels: map[string]uint64{"current": 7},
-				Versions: []*kmsv1.SecretVersionInfo{{Version: 7, State: "enabled", Bound: true, HasAccessToken: true}},
+				Versions: []*kmsv1.SecretVersionInfo{{Version: 7, State: "enabled", Bound: true}},
 			}},
 			readErr: remoteErr,
 		}
 		c := newConvenienceCLI(t, &parameterStub{}, secrets)
 		c.lookupEnv = mapLookup(map[string]string{bindingKeyEnv: testOldBindingKey})
-		if code := c.Run([]string{"get-secret", "/prod/app/key", "--secret-token", reflectedAccessToken, "--insecure"}); code != exitPermissionDenied {
+		if code := c.Run([]string{"get-secret", "/prod/app/key", "--insecure"}); code != exitPermissionDenied {
 			t.Fatalf("exit = %d, want %d; stderr=%s", code, exitPermissionDenied, c.stderr())
 		}
 		assertSecretCanariesRedacted(t, c.stdout()+c.stderr())
@@ -189,9 +189,9 @@ func TestBulkSecretReadsRedactHostileRemoteDetails(t *testing.T) {
 			f.secrets.getErr["/prod/app/stripe-key"] = hostileSecretRPCError(codes.PermissionDenied)
 			var code int
 			if command == "env" {
-				code = f.run("--secret-token", "stripe-key="+reflectedAccessToken)
+				code = f.run()
 			} else {
-				code = f.runExec([]string{"--secret-token", "stripe-key=" + reflectedAccessToken}, "must-not-launch")
+				code = f.runExec([]string{}, "must-not-launch")
 				if f.launched.called {
 					t.Fatal("exec launched after a secret resolution failure")
 				}

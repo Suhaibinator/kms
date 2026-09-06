@@ -34,20 +34,13 @@ type connFlags struct {
 	c    *CLI
 	once sync.Once
 
-	endpoint        string
-	token           string
-	tokenFile       string
-	secretToken     string
-	secretTokenFile string
-	// secretTokenFlags records that addSecretTokenFlags ran, which is what
-	// makes KMS_SECRET_TOKEN_FILE apply: a per-secret token belongs only on
-	// the RPCs of the two commands that read or update a token-gated secret,
-	// never on every call a shell with the variable exported happens to make.
-	secretTokenFlags bool
-	ca               string
-	cert             string
-	key              string
-	insecure         bool
+	endpoint  string
+	token     string
+	tokenFile string
+	ca        string
+	cert      string
+	key       string
+	insecure  bool
 	// finalizeErr is the error finalize produced, replayed by later callers
 	// (sync.Once runs the body only once).
 	finalizeErr error
@@ -76,7 +69,6 @@ func (cf *connFlags) envFallbacks() []connEnvFallback {
 		{&cf.endpoint, "KMS_ENDPOINT", true},
 		{&cf.token, "KMS_TOKEN", true},
 		{&cf.tokenFile, "KMS_TOKEN_FILE", true},
-		{&cf.secretTokenFile, "KMS_SECRET_TOKEN_FILE", cf.secretTokenFlags},
 		{&cf.ca, "KMS_CA_FILE", true},
 		{&cf.cert, "KMS_CLIENT_CERT_FILE", true},
 		{&cf.key, "KMS_CLIENT_KEY_FILE", true},
@@ -99,14 +91,6 @@ func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 	fs.StringVar(&cf.cert, "cert", "", "client certificate `file` for mTLS (env KMS_CLIENT_CERT_FILE)")
 	fs.StringVar(&cf.key, "key", "", "client private key `file` for mTLS (env KMS_CLIENT_KEY_FILE)")
 	return cf
-}
-
-// addSecretTokenFlags registers the per-secret token flags for commands that
-// read or update token-gated secrets.
-func addSecretTokenFlags(fs *flag.FlagSet, cf *connFlags, usage string) {
-	cf.secretTokenFlags = true
-	fs.StringVar(&cf.secretToken, "secret-token", "", usage+" (visible in the process list, prefer --secret-token-file)")
-	fs.StringVar(&cf.secretTokenFile, "secret-token-file", "", "read the per-secret token from this private `file` (env KMS_SECRET_TOKEN_FILE)")
 }
 
 // finalize resolves each connection setting to flag, then environment, then
@@ -136,10 +120,6 @@ func (cf *connFlags) finalize() error {
 			cf.finalizeErr = usageError("--token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually exclusive")
 			return
 		}
-		if cf.secretToken != "" && cf.secretTokenFile != "" {
-			cf.finalizeErr = usageError("--secret-token and --secret-token-file (or KMS_SECRET_TOKEN_FILE) are mutually exclusive")
-			return
-		}
 		if cf.tokenFile != "" {
 			tok, err := readTokenFile(cf.tokenFile)
 			if err != nil {
@@ -147,14 +127,6 @@ func (cf *connFlags) finalize() error {
 				return
 			}
 			cf.token = tok
-		}
-		if cf.secretTokenFile != "" {
-			tok, err := readTokenFile(cf.secretTokenFile)
-			if err != nil {
-				cf.finalizeErr = fmt.Errorf("--secret-token-file: %w", err)
-				return
-			}
-			cf.secretToken = tok
 		}
 	})
 	return cf.finalizeErr
@@ -329,7 +301,6 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	fs := c.newFlags("put-secret")
 	cf := addConnFlags(c, fs)
 	valueFile := fs.String("value-file", "", "read the secret value from this `file` (default: stdin)")
-	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
 	contentType := fs.String("content-type", "text/plain", "secret content `type`")
 	c.setUsage(fs, "put-secret /env/app/key [flags]",
 		"Store a secret value read from --value-file or standard input. KMS_BINDING_KEY binds the new version when set.", false)
@@ -368,11 +339,10 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	defer cancel()
 
 	resp, err := kmsv1.NewSecretServiceClient(conn).PutSecretV03(cf.authCtx(ctx), &kmsv1.PutSecretRequest{
-		Ref:                 protoRef(ref),
-		Value:               value,
-		ContentType:         *contentType,
-		BindingKey:          bindingKey,
-		GenerateAccessToken: *genToken,
+		Ref:         protoRef(ref),
+		Value:       value,
+		ContentType: *contentType,
+		BindingKey:  bindingKey,
 	})
 	if err != nil {
 		return c.failSecretRPC("put-secret", err)
@@ -380,37 +350,23 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if c.jsonOutput() {
 		// The one-time warning is security-relevant, so it goes to stderr
 		// unsilenced while the token itself appears once inside the document.
-		if resp.AccessToken != "" {
-			_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access token is shown once; store it now.")
-		}
 		return c.printJSON(putSecretJSON{
-			Key:         ref.String(),
-			Version:     resp.Version,
-			Revision:    resp.Revision,
-			AccessToken: resp.AccessToken,
+			Key:      ref.String(),
+			Version:  resp.Version,
+			Revision: resp.Revision,
 		})
 	}
 	if _, err := fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision); err != nil {
 		return c.fail("writing secret result: %v", err)
 	}
-	if resp.AccessToken != "" {
-		if _, err := fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken); err != nil {
-			return c.fail("writing one-time secret access token: %v", err)
-		}
-		if _, err := fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now."); err != nil {
-			return c.fail("writing one-time secret access token warning: %v", err)
-		}
-	}
 	return 0
 }
 
-// putSecretJSON is the JSON form of a stored secret version. access_token is
-// present only when --generate-token minted one, and only ever here.
+// putSecretJSON reports the stored version and revision.
 type putSecretJSON struct {
-	Key         string `json:"key"`
-	Version     uint64 `json:"version"`
-	Revision    uint64 `json:"revision"`
-	AccessToken string `json:"access_token,omitempty"`
+	Key      string `json:"key"`
+	Version  uint64 `json:"version"`
+	Revision uint64 `json:"revision"`
 }
 
 // --- get-secret ------------------------------------------------------------
@@ -422,7 +378,6 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	out := fs.String("out", "", "write the secret to this `file` instead of stdout")
 	version := fs.Uint64("version", 0, "specific `version` (0 = current label)")
 	label := fs.String("label", "", "version `label` (default: current)")
-	addSecretTokenFlags(fs, cf, "per-secret access `token`")
 	c.setUsage(fs, "get-secret /env/app/key [flags]",
 		"Fetch a secret; writing it to a terminal requires --show or --out FILE.", false)
 	if !c.parseFlags(fs, args) {
@@ -478,10 +433,9 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	readCtx, cancelRead := callContext()
 	defer cancelRead()
 	resp, err := client.GetSecret(cf.authCtx(readCtx), &kmsv1.GetSecretRequest{
-		Ref:         protoRef(ref),
-		Version:     selected.GetVersion(),
-		SecretToken: cf.secretToken,
-		BindingKey:  bindingKey,
+		Ref:        protoRef(ref),
+		Version:    selected.GetVersion(),
+		BindingKey: bindingKey,
 	})
 	if err != nil {
 		return c.failSecretRPC("get-secret", err)

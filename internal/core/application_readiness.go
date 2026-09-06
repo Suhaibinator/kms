@@ -166,9 +166,6 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 					add(finding(domain.FindingSecretUnreadable, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "state": state.State}))
 				}
 			}
-			if cell.HasAccessToken {
-				add(finding(domain.FindingSecretTokenRequired, domain.FindingInfo, aliasScope(field.Alias), map[string]any{"alias": field.Alias}))
-			}
 		}
 		out.Values = append(out.Values, value)
 	}

@@ -85,7 +85,7 @@ describe("SecretValue", () => {
     client.secrets.set("secret/key", new Secret("from-store"));
     const value = new SecretValue("secret/key", {
       envVar: "SDK_TEST_SECRET",
-      token: "access-token-must-not-render",
+
       bindKey: "binding-key-must-not-render",
       default: "default-must-not-render",
     });
@@ -120,7 +120,7 @@ describe("SecretValue", () => {
   it("fetches the store and forwards independent credentials and cancellation options", async () => {
     const client = new FakeResolver();
     client.secrets.set("secret/key", new Secret("from-store", { version: 7n }));
-    const value = new SecretValue({ key: "secret/key", token: "token", bindKey: "binding-key" });
+    const value = new SecretValue({ key: "secret/key", bindKey: "binding-key" });
     const controller = new AbortController();
 
     const deadline = new Date(Date.now() + 1_000);
@@ -134,7 +134,7 @@ describe("SecretValue", () => {
       options: {
         signal: controller.signal,
         deadline,
-        secretToken: "token",
+
         bindingKey: "binding-key",
       },
     });
@@ -160,7 +160,7 @@ describe("SecretValue", () => {
     const token = "resolver-reflected-access-token-canary";
     const client = new FakeResolver();
     client.secretError = new Error(`${bindingKey}|${token}`);
-    const value = new SecretValue("secret/key", { bindKey: bindingKey, token });
+    const value = new SecretValue("secret/key", { bindKey: bindingKey });
 
     const error = await value.init(client).catch((reason: unknown) => reason);
     expect(error).toMatchObject({ code: "unknown" });

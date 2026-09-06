@@ -151,7 +151,6 @@ export interface ApplicationConfigurationCell {
   content_type: string;
   version: number;
   bound?: boolean;
-  has_access_token?: boolean;
 }
 
 export interface ApplicationConfigurationRow {
@@ -244,7 +243,6 @@ export interface SecretVersion {
   version: number;
   state: SecretVersionState;
   bound: boolean;
-  has_access_token: boolean;
   created_by: string;
   created_at_unix_ms: number;
   destroyed_at_unix_ms: number;
@@ -258,7 +256,6 @@ export interface SecretMetadata {
   key: string;
   content_type: string;
   bound: boolean;
-  has_access_token: boolean;
   metadata_json: string;
   created_at_unix_ms: number;
   updated_at_unix_ms: number;
@@ -279,7 +276,6 @@ export interface CreateSecretRequest {
   content_type: string;
   metadata_json: string;
   binding_key?: string;
-  generate_access_token: boolean;
   create_only?: boolean;
   expires_at_unix_ms: number;
 }
@@ -287,7 +283,6 @@ export interface CreateSecretRequest {
 export interface CreateSecretResponse {
   version: number;
   revision: number;
-  access_token?: string;
 }
 
 export interface RevealSecretResponse {
@@ -731,7 +726,6 @@ export type FindingCode =
   | "kind_mismatch"
   | "content_type_mismatch"
   | "secret_unreadable"
-  | "secret_token_required"
   | "no_active_release"
   | "unreleased_changes"
   | "alias_not_in_release"

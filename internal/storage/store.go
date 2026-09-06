@@ -23,9 +23,9 @@ import (
 	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
-// schemaVersion is the greenfield 0.3.x baseline. This build intentionally has
-// no executable migration path from any 0.2.x schema.
-const schemaVersion = 1
+// schemaVersion 2 removes unused per-secret access-token columns.
+// Only the exact token-free version-1 baseline can be upgraded.
+const schemaVersion = 2
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -203,7 +203,7 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	if initialize {
 		err = initializeBaseline(db)
 	} else {
-		err = verifyBaselineDB(db)
+		err = upgradeSecretTokenSchema(db)
 	}
 	if err == nil {
 		// Recover from a crash after a logically committed purge but before its
@@ -268,7 +268,7 @@ func inspectBaselinePath(path string) (bool, error) {
 		return false, fmt.Errorf("access database %q: %w", path, err)
 	}
 	defer func() { _ = sqlDB.Close() }()
-	return inspectBaselineDB(db)
+	return inspectSupportedBaselineDB(db)
 }
 
 type baselineSchemaObject struct {
@@ -311,6 +311,10 @@ func materializeBaseline(tx *gorm.DB) error {
 }
 
 func referenceBaselineSchema() ([]baselineSchemaObject, error) {
+	return referenceSchema(false)
+}
+
+func referenceSchema(legacy bool) ([]baselineSchemaObject, error) {
 	// Shared in-memory databases are keyed by name. A timestamp is not unique
 	// enough here: Windows clocks can return the same value to concurrent calls,
 	// making otherwise independent verifiers race over one schema_migrations
@@ -332,7 +336,18 @@ func referenceBaselineSchema() ([]baselineSchemaObject, error) {
 	if err := db.Transaction(materializeBaseline); err != nil {
 		return nil, fmt.Errorf("materialize baseline verifier: %w", err)
 	}
-	return readBaselineSchema(db)
+	schema, err := readBaselineSchema(db)
+	if legacy {
+		for i := range schema {
+			switch schema[i].Name {
+			case "secrets":
+				schema[i].SQL = strings.Replace(schema[i].SQL, "`content_type`", "`access_token_hash` blob,`content_type`", 1)
+			case "secret_versions":
+				schema[i].SQL = strings.Replace(schema[i].SQL, "`ciphertext`", "`has_access_token` integer NOT NULL DEFAULT 0,`ciphertext`", 1)
+			}
+		}
+	}
+	return schema, err
 }
 
 func inspectBaselineDB(db *gorm.DB) (bool, error) {
