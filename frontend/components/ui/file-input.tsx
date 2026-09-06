@@ -74,10 +74,12 @@ export function FileInput({
     // biome-ignore lint/a11y/noStaticElementInteractions: the drop target only augments the button and input inside it.
     <div
       className={cn(
-        // py-1, not py-2: the zone holds a 30px `sm` button, so 8px of padding
-        // plus two borders made it 48px in a column of 38px controls.
-        "flex min-h-(--control-h) flex-wrap items-center gap-3 rounded-md border border-dashed border-input px-3 py-1 transition-colors",
-        dragging && !disabled && "border-ring bg-muted ring-3 ring-ring/40",
+        // py-0 and a min-height: the zone's height is --control-h, the same as
+        // every other control in the column, and its `sm` button is centred
+        // inside it. Deriving the height from the button instead made the zone
+        // 40px at desktop and 54px at the mobile touch floor.
+        "flex min-h-(--control-h) flex-wrap items-center gap-3 rounded-md border border-dashed border-input px-3 py-0 transition-colors",
+        dragging && !disabled && "border-ring bg-muted ring-3 ring-(--ring-glow)",
         disabled && "opacity-50",
         className,
       )}

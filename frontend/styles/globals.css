@@ -21,7 +21,8 @@
 
 /* Layout rules of the system (from the Sep 2026 layout audit; every one of
    these was a shipped defect once):
-   1. A scroller must not push: `overflow-*: auto` ships with `min-width: 0`
+   1. A scroller must not push: `overflow-*: auto` ships with `position: relative`
+      (so absolutely positioned descendants stay inside the clip), `min-width: 0`
       and, when it is a block rather than a flex/grid item, `contain: inline-size`.
    2. A grid or flex container that can hold a table, a mono string or a code
       block declares `> * { min-width: 0 }` where it is defined, not in a
@@ -49,6 +50,10 @@
   --surface-hover: #e8ecf2;
   --border: #dde2ea;
   --border-strong: #c4cdd9;
+  /* One border token per job: --border separates rows inside a card and may be
+     quiet, but the edge of a *control* identifies it and WCAG 1.4.11 asks 3:1.
+     Measured: 3.36 on --bg, 3.64 on --surface, 3.39 on --surface-2. */
+  --border-control: #7c8798;
 
   --text: #171d27;
   --text-muted: #55617a;
@@ -62,14 +67,18 @@
   --accent-soft: rgba(47, 95, 214, 0.1);
   --accent-border: rgba(47, 95, 214, 0.35);
 
-  --success: #1e7f3c;
+  /* Every semantic ink is read on its own -soft wash as often as on the plain
+     ground (badges, chips, panels), and the wash lifts the ground's luminance.
+     These are tuned against the composited pair, not against white — the guard
+     in tests/visual-tokens.test.ts holds them there. */
+  --success: #186a32;
   --success-soft: rgba(30, 127, 60, 0.12);
-  --warning: #8f6512;
+  --warning: #7a5610;
   --warning-soft: rgba(196, 140, 26, 0.16);
-  --danger: #c62f2a;
+  --danger: #bd2a25;
   --danger-hover: #ad231f;
   --danger-soft: rgba(198, 47, 42, 0.1);
-  --info: #1d7ea3;
+  --info: #146880;
 
   /* Foreground text on the tinted panels, and on a solid destructive button. */
   --warning-fg: #5d4200;
@@ -116,7 +125,7 @@
      guard test checks parity. */
   --ident-app: #2450c2;
   --ident-app-soft: rgba(47, 95, 214, 0.12);
-  --ident-env: #0f766e;
+  --ident-env: #0e6c64;
   --ident-env-soft: rgba(15, 118, 110, 0.12);
   --ident-ns: #475569;
   --ident-ns-soft: rgba(71, 85, 105, 0.12);
@@ -124,9 +133,9 @@
   --ident-alias-soft: rgba(109, 40, 217, 0.12);
   --ident-key: #55617a;
   --ident-key-soft: rgba(85, 97, 122, 0.12);
-  --ident-release: #1e7f3c;
+  --ident-release: #186a32;
   --ident-release-soft: rgba(30, 127, 60, 0.12);
-  --ident-schema: #8f6512;
+  --ident-schema: #7a5610;
   --ident-schema-soft: rgba(196, 140, 26, 0.16);
   --ident-version: #55617a;
   --ident-version-soft: rgba(85, 97, 122, 0.12);
@@ -169,8 +178,13 @@
   --muted-foreground: var(--text-muted);
   --accent-foreground: var(--text);
   --destructive: var(--danger);
-  --input: var(--border-strong);
+  --input: var(--border-control);
   --ring: var(--primary);
+  /* One glow for every shadcn focus ring. The per-component alphas it replaces
+     (/35, /40, /50) measured 1.69-2.18 against a 3:1 floor; 70% of --ring
+     measures 3.14 light / 3.36 dark. Derived here, so .dark re-derives it from
+     the dark --ring on the same element. */
+  --ring-glow: color-mix(in oklab, var(--ring) 70%, transparent);
   --chart-1: var(--primary);
   --chart-2: var(--info);
   --chart-3: var(--success);
@@ -189,12 +203,16 @@
   --sidebar-ring: var(--ring);
 
   /* Syntax colours for JSON viewers and editors (components/JsonHighlight.tsx).
-     Aliases of the identifier palette, so .dark needs no copies. */
+     Mostly aliases of the identifier palette. The two literals below are the
+     exception: code is read on --bg-elev with a diff row's tint over it, a
+     darker ground than any chip lands on, where the chip inks measured 4.38 and
+     4.51 plain and 3.79 / 3.90 inside a diff row. Light only — .dark restores
+     the aliases, whose dark values already clear the floor there. */
   --syntax-key: var(--ident-app);
-  --syntax-string: var(--ident-release);
-  --syntax-number: var(--ident-schema);
+  --syntax-string: #146c31;
+  --syntax-number: #7a5510;
   --syntax-literal: var(--ident-alias);
-  --syntax-punct: var(--text-faint);
+  --syntax-punct: var(--text-muted);
   --syntax-error: var(--danger);
   --syntax-error-soft: var(--danger-soft);
   --syntax-line-no: var(--text-faint);
@@ -212,6 +230,8 @@
   --surface-hover: #1f2733;
   --border: #232a36;
   --border-strong: #313b4a;
+  /* 3.78 on --bg, 3.41 on --surface, 3.16 on --surface-2. */
+  --border-control: #606f85;
   --text: #e6edf3;
   --text-muted: #9aa7b6;
   --text-faint: #8491a1;
@@ -226,8 +246,11 @@
   --success-soft: rgba(63, 185, 80, 0.14);
   --warning: #e3b341;
   --warning-soft: rgba(227, 179, 65, 0.14);
-  --danger: #f85149;
-  --danger-hover: #ff6b62;
+  /* #f85149 measured 4.09 on --surface and 3.79 on --surface-2 under the badge's
+     own destructive wash; this lifts both over 4.5. */
+  --danger: #ff7b73;
+  /* Kept lighter than --danger, the direction a hover moves in this theme. */
+  --danger-hover: #ff938c;
   --danger-soft: rgba(248, 81, 73, 0.14);
   --info: #58b3d6;
   --warning-fg: #f0d489;
@@ -250,7 +273,7 @@
   --ident-alias-soft: rgba(167, 139, 250, 0.16);
   --ident-key: #9aa7b6;
   --ident-key-soft: rgba(154, 167, 182, 0.14);
-  --ident-release: #3fb950;
+  --ident-release: #56c96a;
   --ident-release-soft: rgba(63, 185, 80, 0.14);
   --ident-schema: #e3b341;
   --ident-schema-soft: rgba(227, 179, 65, 0.14);
@@ -262,6 +285,11 @@
   --ident-identity-soft: rgba(129, 140, 248, 0.16);
   --ident-instance: #9aa7b6;
   --ident-instance-soft: rgba(154, 167, 182, 0.14);
+
+  /* :root pins these two to light-only literals (see the note there); dark code
+     is read on a dark --bg-elev, where the chip inks already clear the floor. */
+  --syntax-string: var(--ident-release);
+  --syntax-number: var(--ident-schema);
 }
 
 @layer base {
@@ -320,10 +348,13 @@
     color: var(--primary);
     text-decoration: none;
   }
-  /* lucide renders an inline <svg>, which sits on the text baseline and leaves a
-     descender-sized gap under it. Inside a flex container (Button, .row) this
-     never shows; inside a text run it does. */
+  /* Preflight makes every <svg> `display: block`, and a block box inside an
+     inline <a> splits the link into two line boxes — which is how "Manage →"
+     came to render its arrow on a line of its own. `display: inline` puts the
+     glyph back in the text run; `vertical-align` then has something to act on
+     (on a block box it was inert, and the rule read as if it worked). */
   a:not([data-slot="button"]) svg {
+    display: inline;
     vertical-align: -0.15em;
   }
   a:not([data-slot="button"]):hover {
@@ -394,8 +425,10 @@
     color: var(--brand-mark-foreground);
     font-size: 14px;
   }
+  /* The only literal colour outside the two token blocks was this one, and it
+     was --brand-mark-foreground at 22% written out by hand. */
   .logo {
-    box-shadow: inset 0 0 0 1px rgba(228, 180, 95, 0.22);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-mark-foreground) 22%, transparent);
   }
   .logo svg {
     display: block;
@@ -613,7 +646,11 @@
     min-height: 35px;
     margin-top: var(--space-1);
   }
+  /* One line of the sub-caption, always: StatSkeleton's 9px placeholder sits in
+     this box, and without the floor the card grew 14-17px on arrival and pushed
+     the whole dashboard down under the cursor. */
   .stat .stat-sub {
+    min-height: 1.5em;
     font-size: 12px;
     color: var(--text-faint);
     margin-top: var(--space-1);
@@ -625,11 +662,22 @@
     margin-bottom: var(--space-4);
   }
   /* Gap-based containers own their spacing; the legacy block-flow margin
-     would otherwise stack on top of the gap. */
+     would otherwise stack on top of the gap. One list, not a reset scattered
+     beside each container's own rule: a new gap container is then added in one
+     place, which is what the six duplicates folded in here kept forgetting. */
   .stack > .field,
+  .form-row > .field,
+  .schema-form > .field,
   .rollback-dialog > .field,
   .advanced-panel-content > .field,
   .schema-form-fields > .field,
+  .value-disclosure-body .field,
+  .namespace-picker-row .field,
+  .release-builder-entry .field,
+  .release-builder-basics .field,
+  .filters .field,
+  .release-context-bar .field,
+  .application-list-toolbar .field,
   .rule-row .field {
     margin-bottom: 0;
   }
@@ -657,15 +705,19 @@
      same reason .field-label does: SchemaForm and the policy editor stack both
      systems in one form, and 12px/--text-faint read as a different kind of text
      beside 12.5px/--muted-foreground. */
+  /* No margin-top: every container that renders one of these is a gap grid
+     (<Field>'s gap-1, .schema-form-boolean's --space-1, .schema-form-group's
+     --space-2), so the margin stacked on the gap and put a hint 4px, 8px or
+     12px under its control depending on which one rendered it. */
   .field-hint {
     font-size: var(--text-sm);
     color: var(--muted-foreground);
-    margin-top: var(--space-1);
+    margin-top: 0;
   }
   .field-error {
     font-size: var(--text-sm);
     color: var(--danger);
-    margin-top: var(--space-1);
+    margin-top: 0;
   }
   .checkbox-row {
     display: flex;
@@ -992,13 +1044,16 @@
     letter-spacing: inherit;
     word-spacing: inherit;
     tab-size: inherit;
-    color: var(--text);
     background: transparent;
     min-width: 0;
   }
   .json-editor-highlight {
     pointer-events: none;
     overflow: visible;
+    /* Only the highlight layer paints text: the input below sets `transparent`
+       and shows its caret through. Declaring the colour on the shared rule
+       above left a dead `color` the input immediately cancelled. */
+    color: var(--text);
   }
   .json-editor-input {
     display: block;
@@ -1053,7 +1108,7 @@
   .json-editor-keys {
     font-family: var(--mono);
   }
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     /* 16px stops iOS from zooming the page on focus; both layers inherit it. */
     .json-editor-body {
       font-size: 16px;
@@ -1100,8 +1155,10 @@
   .rule-row > .rule-remove {
     margin-top: var(--label-offset);
   }
-  /* A label used as a row/heading caption, not stacked above its control. Tailwind's
-     m-0 cannot do this: it is layered and loses to the unlayered .field-label rule. */
+  /* A label used as a row/heading caption, not stacked above its control. A
+     `m-0` utility on the element would also work — .field-label is layered, so
+     it does not outrank one — but the caption is a property of the row, and
+     every caller would otherwise have to remember the class. */
   .between > .field-label,
   .row-wrap > .field-label {
     margin: 0;
@@ -1135,6 +1192,21 @@
       14px 100% no-repeat,
       var(--surface);
     background-attachment: local, local, scroll, scroll;
+  }
+  /* Layout rule 1, for every other scroller in the app. `.table-wrap` above got
+     these three in the Sep 2026 pass and none of its siblings did: each is a
+     block (or, for .schema-code, a `flex: 1 1 auto` item with no min-width: 0)
+     that still reports its content's min-content width upward. */
+  .json-editor-body,
+  .json-block,
+  .json-diff-scroll,
+  .schema-code,
+  .connect-code,
+  .integration-code,
+  .credential-pem {
+    position: relative;
+    min-width: 0;
+    contain: inline-size;
   }
   /* ---------- Dialog structure (components/Modal.tsx, ui/dialog.tsx) ----------
      The popup is a grid; its rows would otherwise keep their min-content
@@ -1258,15 +1330,20 @@
   table.data th.mono {
     font-family: var(--mono);
     font-size: 12.5px;
-    /* Keys, serials and digests are unbreakable tokens; without this a
-       single cell forces the whole table sideways. */
-    overflow-wrap: anywhere;
   }
-  /* table.data already sets tabular-nums. Apply per table, to every numeric
-     column at once — right-aligning one column of five reads as a mistake. */
-  table.data td.num,
-  table.data th.num {
-    text-align: right;
+  /* The wrap scrolls: .table-wrap has been a real scroller since the Sep 2026
+     pass, so a wide table no longer widens its ancestors. Breaking mid-token
+     only lowers the column's min-content width to one character, which is then
+     the column the automatic layout crushes — `db_password` rendered as
+     `db_pa`/`sswor`/`d` in a 73px column. The ≤640px card block, which has no
+     sideways scroll to fall back on, restores `anywhere`.
+
+     `:where()` on the table so this is a default, not a decree: a table inside a
+     dialog that must not scroll sideways (ship.css's Quick Change preview) can
+     opt its own columns back into breaking with an ordinary rule. */
+  :where(table.data) td.mono,
+  :where(table.data) th.mono {
+    overflow-wrap: normal;
   }
   /* Automatic layout, deliberately: a fixed-layout table ignores content
      minimums entirely, so between ~769px and ~1000px the uppercase headers
@@ -1286,12 +1363,6 @@
   .namespace-table .namespace-col-created {
     width: 190px;
   }
-  /* Edit (61) + gap (8) + icon-sm menu (30) + row gap (8) + chevron (18) +
-     cell padding (32) = 157px of content; the old 154px overflowed on any
-     font-metric variance. */
-  .namespace-table .namespace-col-actions {
-    width: 180px;
-  }
   .namespace-table td[data-label="Description"] {
     overflow-wrap: anywhere;
   }
@@ -1301,17 +1372,38 @@
   .namespace-table th .sort-button {
     white-space: normal;
   }
+  /* Same argument as td.mono above: the path is the column's primary
+     identifier, and the scroller — not a mid-word break — absorbs the width. */
   .cell-path {
     font-family: var(--mono);
     font-size: 12.5px;
     color: var(--text);
-    overflow-wrap: anywhere;
+    overflow-wrap: normal;
   }
   .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
     justify-content: flex-end;
+  }
+  /* The actions column is content-sized, not a share of the leftovers. Under
+     automatic table layout it otherwise lands between one button and all of
+     them, and `flex-wrap: wrap` turns a 5px shortfall into a second line on
+     *every* row of the table (identities measured 130.5px rows at 1280).
+     `width: 1%` asks for the cell's min-content width; nowrap makes that
+     min-content the buttons on one line. Where the table then exceeds its
+     wrapper it scrolls, which is the designed affordance. Paired with the
+     ≤640px card block, where the cell is a block and both are inert. */
+  @media (min-width: 640px) {
+    table.data td:has(> .row-actions),
+    table.data td:has(> .navigable-row-end) {
+      width: 1%;
+    }
+    /* Qualified by the cell, not bare: `.row-wrap` is a later rule of the same
+       specificity and /releases puts both classes on one element. */
+    table.data td > .row-actions {
+      flex-wrap: nowrap;
+    }
   }
   /* A wrapper around a row action is itself a flex item of .row-actions, and
      unlike the buttons (which carry shrink-0) it would be the one shrinkable
@@ -1402,7 +1494,10 @@
   table.data td.select-cell,
   table.data th.select-cell {
     width: 1%;
-    padding-right: 0;
+    /* Not 0: the checkbox's `after:-inset-x-3` hit area is 40px wide inside a
+       32px cell, so with no right padding the first 12px of the next column's
+       text toggled the checkbox. */
+    padding-right: var(--space-2);
   }
   .bulk-bar {
     position: sticky;
@@ -1488,7 +1583,7 @@
   /* DialogFooter stacks with `flex-col-reverse`, so DOM order is painted bottom
      to top. Every caller writes the note first; without this it lands under the
      button it explains. The last-ordered item is the topmost one here. */
-  @media (max-width: 640px) {
+  @media (width < 640px) {
     .footer-note {
       order: 99;
     }
@@ -1502,8 +1597,14 @@
   .faint {
     color: var(--text-faint);
   }
+  /* Keys, serials, digests and fingerprints are unbreakable tokens wherever
+     they appear in flow, not only in a table cell: a 71-character SHA-256 in a
+     confirmation dialog ran 51.7px past the panel and stopped mid-hex. Inside
+     a table the cell rules above take it back to `normal`, because there the
+     scroller absorbs the width instead. */
   .mono {
     font-family: var(--mono);
+    overflow-wrap: anywhere;
   }
   .nowrap {
     white-space: nowrap;
@@ -1516,6 +1617,7 @@
   }
   .row-wrap {
     display: flex;
+    min-width: 0;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
@@ -1526,6 +1628,15 @@
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
+  }
+  /* Layout rule 2: both of these hold chips, mono strings and button clusters.
+     Without it a child keeps its max-content width — `.between`'s heading took
+     890px of a 979px row and pushed the page actions onto a second line, at the
+     left edge, at every viewport — and the ≤768px patch that used to supply it
+     only fixed the phone. */
+  .row-wrap > *,
+  .between > * {
+    min-width: 0;
   }
   .stack {
     display: flex;
@@ -1906,9 +2017,6 @@
   .value-disclosure-body {
     min-width: 0;
   }
-  .value-disclosure-body .field {
-    margin-bottom: 0;
-  }
   /* Secret value field (components/secrets/SecretValueField.tsx). The mask is
      a text-security rule so the control stays a multi-line textbox; browsers
      without it simply show the text, and the toggle label says which. */
@@ -1996,12 +2104,10 @@
     align-items: flex-start;
     margin-bottom: var(--space-4);
   }
-  .filters .field {
-    margin-bottom: 0;
-  }
+  /* No `width`: fieldVariants ships `w-full`, a utility, so a width here is
+     dead. The flex-basis is what sizes the column. */
   .filters > .field {
     flex: 0 1 220px;
-    width: 220px;
     min-width: 0;
   }
   .filter-grow {
@@ -2033,12 +2139,9 @@
     flex-wrap: wrap;
     margin-bottom: var(--space-4);
   }
-  .release-context-bar .field {
-    margin-bottom: 0;
-  }
+  /* Same as .filters: `w-full` from fieldVariants wins over any width here. */
   .release-context-bar > .field {
     flex: 0 1 220px;
-    width: 220px;
     min-width: 0;
   }
   .release-context-bar .filters {
@@ -2098,9 +2201,7 @@
   .release-workspace-tabs [role="tablist"] {
     margin-bottom: -1px;
   }
-  .section-toolbar h2,
-  .release-builder-entry .field,
-  .release-builder-basics .field {
+  .section-toolbar h2 {
     margin-bottom: 0;
   }
   .schema-filters > .field {
@@ -2238,11 +2339,12 @@
     }
   }
 
-  @media (max-width: 640px) {
-    .release-status-strip,
-    .release-builder-basics,
-    .release-builder-entry,
-    .release-overview-grid {
+  @media (width < 640px) {
+    /* The three release-builder grids used to be listed here too. They are
+       already one column from the ≤768px block near the bottom of this file,
+       which is emitted later in the same layer and won every tie — three dead
+       declarations. */
+    .release-status-strip {
       grid-template-columns: 1fr;
     }
     .release-status-strip > [data-slot="button"] {
@@ -2323,14 +2425,16 @@
   .skeleton-row td {
     padding: var(--space-3) var(--space-4);
     /* Match the tallest common real row — one carrying `sm` action buttons — so
-       the table does not resize when data arrives. Tables with taller rows pass
-       TableSkeleton an explicit rowHeight instead. */
-    height: calc(var(--space-3) * 2 + var(--control-h-sm));
+       the table does not resize when data arrives. A row is at least as tall as
+       its tallest cell, so an inline height on the <tr> could only ever make
+       rows taller than this: TableSkeleton's rowHeight has to come through the
+       cell, which is what --skeleton-row-h is for. min-, not height, per rule 3. */
+    min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + var(--control-h-sm)));
   }
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     /* The touch floor lifts sm buttons to 44px, so real rows grow with them. */
     .skeleton-row td {
-      height: calc(var(--space-3) * 2 + 44px);
+      min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + 44px));
     }
   }
 
@@ -2572,9 +2676,6 @@
   .advanced-panel-modal {
     margin-top: var(--space-2);
   }
-  .advanced-panel-modal .field:last-child {
-    margin-bottom: 0;
-  }
   /* The modal body's own padding is the bottom gutter; a trailing field must not
      add a second one. Deliberately not generalised to a bare .field:last-child —
      page forms rely on that margin before .form-actions. */
@@ -2639,9 +2740,6 @@
   .wizard-intro {
     color: var(--text-muted);
     margin-bottom: var(--space-4);
-  }
-  .namespace-picker-row .field {
-    margin-bottom: 0;
   }
   .wizard-selection-summary {
     display: grid;
@@ -2749,18 +2847,6 @@
 
   /* namespace management hub: application-grouped environment tables */
 
-  .application-contract {
-    display: grid;
-    grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) minmax(280px, 2fr);
-    gap: 20px;
-    align-items: start;
-  }
-
-  .application-contract > div {
-    display: grid;
-    gap: 6px;
-  }
-
   .application-matrix {
     overflow-x: auto;
   }
@@ -2836,7 +2922,7 @@
   .application-matrix table:not(:has(tfoot)) tbody tr:last-child .matrix-key {
     box-shadow: 1px 0 0 var(--border);
   }
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     /* Stays sticky — scrolling values away from their key leaves nothing to
        attach them to — but gives back most of its width on a phone. */
     .application-matrix .matrix-key {
@@ -2888,13 +2974,6 @@
     display: inline-flex;
   }
 
-  .quick-secret-advanced {
-    margin-top: var(--space-3);
-    padding-top: var(--space-3);
-    color: var(--text-muted);
-    border-top: 1px solid var(--border);
-  }
-
   /* Bleeds into the modal body's padding on both axes and restores it on
      both: the tab list sits on the rule, the buttons keep clearance above and
      below it. Sticky so the actions stay reachable while the body scrolls. */
@@ -2932,7 +3011,7 @@
     margin-bottom: 0;
   }
 
-  @media (max-width: 640px) {
+  @media (width < 640px) {
     .secret-workspace-toolbar {
       align-items: stretch;
       flex-direction: column;
@@ -2952,12 +3031,6 @@
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 8px;
     margin-top: 8px;
-  }
-
-  @media (max-width: 768px) {
-    .application-contract {
-      grid-template-columns: 1fr;
-    }
   }
 
   .ns-group {
@@ -3006,9 +3079,15 @@
     outline: none;
     user-select: none;
   }
+  /* A tint alone cannot say "focused": --surface-hover on --surface measures
+     1.19:1 light / 1.16:1 dark, and it is also the mouse-hover state, so with
+     the pointer over the menu a keyboard user could not tell which item was
+     selected. The inset ring is the indicator; .menu-popup clips at its radius,
+     so it is drawn inside rather than as an outline. */
   .menu-item[data-highlighted],
   .menu-item:focus-visible {
-    background: var(--surface-hover);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-border);
     color: var(--text);
     text-decoration: none;
   }
@@ -3038,13 +3117,16 @@
     white-space: nowrap;
     vertical-align: middle;
   }
+  /* No opacity: compositing the prefix over an already-tinted chip cost ~40% of
+     the remaining contrast and put 8 of 9 chip kinds under 4.5:1 (the light
+     RELEASE prefix measured 2.86:1). 11px uppercase against the value's 12px
+     mono is enough hierarchy on its own. */
   .ident-kind {
     font-family: var(--sans);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    opacity: 0.75;
   }
   .ident-value {
     /* min-width lets the flex item shrink so the ellipsis can fire; the
@@ -3179,15 +3261,16 @@
   .status-empty {
     --status-color: var(--text-faint);
   }
-  .status-chip.status-prod {
-    border-color: var(--warning);
-  }
   /* The halo separates the dot from the ground it sits on, so it has to be
      that ground. Containers that are not the page ground declare --dot-halo
      (.fleet-card, .fleet-env:hover); on the page itself — the dashboard's
      ghost filter buttons — no halo is the correct halo. */
   .status-dot {
     display: inline-block;
+    /* A direct flex child of .fleet-env-link, whose min-content width is 0: the
+       default shrink squashed the dot to a 4.72 x 10 ellipse whenever the
+       environment name beside it was long enough to truncate. */
+    flex: 0 0 auto;
     width: 10px;
     height: 10px;
     border-radius: 999px;
@@ -3205,7 +3288,9 @@
   .kbd {
     display: inline-flex;
     align-items: center;
-    height: 18px;
+    /* min-, not height (rule 3): a longer label or the mobile type floor would
+       otherwise be clipped by the box. */
+    min-height: 18px;
     padding: 0 var(--space-1);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
@@ -3356,7 +3441,7 @@
 
   /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
 
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     .app-shell {
       flex-direction: column;
     }
@@ -3544,7 +3629,7 @@
 
   /* ---------- <= 640px: card-style tables for the highest-traffic lists ---------- */
 
-  @media (max-width: 640px) {
+  @media (width < 640px) {
     .table-wrap.card-table thead {
       display: none;
     }
@@ -3640,7 +3725,7 @@
 
   /* ---------- <= 480px: tighter spacing ---------- */
 
-  @media (max-width: 480px) {
+  @media (width < 480px) {
     .page-title {
       font-size: 19px;
     }
@@ -3697,8 +3782,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 24px;
+    min-width: 28px;
+    /* A control height, not a literal (rule 4); the mobile floor takes it to
+       44px, which a <label> wrapping a radio was previously never given. */
+    min-height: var(--control-h-sm);
     border: 0;
     border-radius: 4px;
     background: transparent;
@@ -3709,14 +3796,18 @@
     color: var(--text);
     background: var(--surface-hover);
   }
+  /* The checked marker carries ink, not only a tint: --surface-hover on the
+     switch's own --surface measures 1.19:1 light / 1.16:1 dark, so which theme
+     was selected was unreadable. The primary-coloured glyph does the
+     identifying and the accent ring bounds it. */
   .theme-switch-option:has(input:checked) {
-    color: var(--text);
-    background: var(--surface-hover);
-    box-shadow: inset 0 0 0 1px var(--border-strong);
+    color: var(--primary);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-border);
   }
   .theme-switch-option:has(input:focus-visible) {
     outline: 2px solid var(--primary);
-    outline-offset: 1px;
+    outline-offset: 2px;
   }
   .sidebar-theme {
     display: flex;
@@ -3806,20 +3897,20 @@
     display: none;
   }
 
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     .filters > .field,
     .filters > .filter-grow,
     .release-context-bar > .field,
     .release-context-bar > .filter-grow {
       flex: 0 0 auto;
     }
+    /* `.row-wrap > *` and `.between > *` used to be listed here; both are now
+       min-width: 0 at every width, where the two recipes are defined. */
     .page-header > *,
     .page-actions,
     .field,
     .card,
-    .table-wrap,
-    .row-wrap > *,
-    .between > * {
+    .table-wrap {
       min-width: 0;
       max-width: 100%;
     }
@@ -3842,14 +3933,39 @@
       flex-wrap: wrap;
       bottom: max(12px, env(safe-area-inset-bottom));
     }
-    /* [data-close-button] is sonner's toast dismiss bubble, which ships 20×20. */
-    [data-slot="button"][data-size]:not([data-size="xs"]):not([data-size="icon-xs"]),
+    /* sonner's dismiss bubble ships 20x20 and is pinned to the toast's corner
+       with translate(-35%, -35%), so growing the box moves it with it — at 44px
+       the circle started 14.4px outside the toast and covered its status icon.
+       Grow the hit area instead, which is what the floor was ever after. */
+    [data-close-button] {
+      position: relative;
+    }
+    [data-close-button]::after {
+      content: "";
+      position: absolute;
+      inset: 50% auto auto 50%;
+      width: 44px;
+      height: 44px;
+      transform: translate(-50%, -50%);
+    }
+    /* Keyed on [data-size], not [data-slot="button"]: a Base UI `render={<Button/>}`
+       trigger keeps the primitive's own slot (the nav drawer's is
+       data-slot="sheet-trigger"), so every rule hung on the button slot missed
+       it and it had to hand-code its own 44px. The two smallest sizes are
+       deliberately exempt — they are icon affordances inside dense rows. The
+       hand-written buttons below carry no data-slot at all. */
+    [data-size]:not([data-size="xs"]):not([data-size="icon-xs"]):is(button, a),
     [data-slot="dialog-close"],
     [data-slot="sheet-close"],
-    [data-close-button],
     [role="tab"],
     .sort-button,
     .nav-search,
+    .theme-switch-option,
+    .schema-form-toggle-button,
+    .value-segment-button,
+    .json-diff-fold-button,
+    .value-disclosure-toggle,
+    .schema-form-group-toggle,
     [role="menuitem"],
     [role="option"],
     summary {
@@ -3864,6 +3980,26 @@
       font-size: 16px;
       min-height: 44px;
       max-width: 100%;
+    }
+    /* The 44px target is reserved in the column, not on the 16px ink: the
+       checkbox's hit area is an absolutely positioned ::after and costs no
+       layout, so the cell has to be the thing that makes room for it. */
+    table.data td.select-cell,
+    table.data th.select-cell {
+      width: 44px;
+    }
+    /* A single-line label centres on its checkbox; a label that stacks a title
+       over a hint keeps the box beside its first line, which is what
+       .checkbox-row's flex-start is for. */
+    .checkbox-row:not(:has(label > *)) {
+      align-items: center;
+    }
+    /* The drop zone itself is the 44px target, so its `sm` button must not push
+       it past that: the floor above took the button to 44px and the zone to
+       54px, in a column of 44px controls. Four attributes so it outranks that
+       floor's (0,3,1) outright rather than on source order. */
+    [data-slot="file-input"] [data-slot="button"][data-size][data-variant] {
+      min-height: 34px;
     }
     [role="tablist"] {
       max-width: 100%;
@@ -3895,7 +4031,7 @@
     }
   }
 
-  @media (max-width: 640px) {
+  @media (width < 640px) {
     .mobile-list-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -3903,7 +4039,10 @@
       padding: 12px;
       border-bottom: 1px solid var(--border);
     }
-    .mobile-list-toolbar > label {
+    /* The class as well as the element: TableSkeleton reserves this row with
+       non-labelable placeholders, which must take the same box. */
+    .mobile-list-toolbar > label,
+    .mobile-list-toolbar > .mobile-sort-field {
       display: flex;
       flex: 1 1 120px;
       min-width: 0;
@@ -3957,6 +4096,22 @@
     .table-wrap.card-table td.select-cell {
       width: auto;
     }
+    /* The card transform stacks the cells, so the row-sized height above would
+       apply once per column: seven columns made a 500px skeleton card against a
+       414px loaded one. A card cell is the label line the loaded cell prints
+       from data-label (10.5px at 0.06em tracking, measured 15px, plus its 3px
+       margin) over one line of value, inside the same 6px top padding. */
+    .table-wrap.card-table .skeleton-row td {
+      height: auto;
+      min-height: calc(15px + 3px + 1lh);
+      padding-top: 6px;
+    }
+    .table-wrap.card-table .skeleton-row td::before {
+      content: "";
+      display: block;
+      height: 15px;
+      margin-bottom: 3px;
+    }
     /* The summary wears a border-top and an elevated ground: it is the list's
        footer. `display: block` used to discard `caption-side: bottom` and strand
        it above the first card; flex order puts it back at the bottom. */
@@ -3968,7 +4123,7 @@
 
 /* These overrides belong to utilities: Modal's footprint is authored there. */
 @layer utilities {
-  @media (max-width: 768px) {
+  @media (width < 768px) {
     [data-slot="dialog-content"][data-mobile-fullscreen] {
       /* Reset Tailwind offsets even when the CSS compiler folds translate into transform. */
       --tw-translate-x: 0px;
@@ -4008,10 +4163,11 @@
     [data-slot="select-trigger"] {
       font-size: 16px;
     }
-    /* Preserve the 16px checkbox chrome while reserving a 44px touch area. */
-    [data-slot="checkbox"] {
-      margin: 14px;
-    }
+    /* The 44px touch area is this pseudo-element and nothing else: it is
+       absolutely positioned, so it costs no layout. The `margin: 14px` that
+       used to sit beside it bought no extra hit area and moved the 16px box —
+       14px below its own label under `align-items: flex-start`, 14px into the
+       form's content column, and 28px of pure width onto every select column. */
     [data-slot="checkbox"]::after {
       inset: -14px;
     }
@@ -4023,11 +4179,25 @@
       height: auto;
       white-space: normal;
     }
-    [data-slot="button"] {
+    /* `overflow-wrap: anywhere` on .page and [data-modal-body] is for mono
+       identifiers and inherits into everything, including chrome. With
+       white-space: normal above it dropped a tab's min-content width to one
+       character and rendered "Overview" as "Overvie"/"w". */
+    [role="tab"],
+    [data-slot="button"],
+    [data-slot="tabs-list"] {
+      overflow-wrap: normal;
+      word-break: normal;
+    }
+    /* Only the three text sizes: `xs` and `icon-xs` have no replacement height,
+       so `height: auto` left a 24px xs button 33.33px tall and an icon-xs button
+       a non-square 24x30. Every icon size is square by construction. */
+    [data-slot="button"][data-size="default"],
+    [data-slot="button"][data-size="sm"],
+    [data-slot="button"][data-size="lg"] {
       white-space: normal;
       height: auto;
-      padding-top: 8px;
-      padding-bottom: 8px;
+      padding-block: var(--space-2);
     }
   }
 }

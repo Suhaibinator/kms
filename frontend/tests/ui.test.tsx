@@ -144,4 +144,26 @@ describe("TableSkeleton", () => {
     const { container } = render(<TableSkeleton headers={["A"]} rows={3} />);
     expect(container.querySelectorAll(".skeleton-row")).toHaveLength(3);
   });
+
+  // A skeleton renders the loaded layout's structure, not an approximation:
+  // the loaded list always has the mobile toolbar, the summary caption and its
+  // own table class, and each one it omits is a jump on arrival.
+  it("reserves the loaded list's toolbar, summary caption and table class", () => {
+    const { container } = render(
+      <TableSkeleton headers={["A"]} rows={1} tableClassName="namespace-table" toolbar summary />,
+    );
+    const table = container.querySelector("table");
+    expect(table).toHaveClass("data", "namespace-table");
+    expect(container.querySelectorAll("fieldset.mobile-list-toolbar")).toHaveLength(1);
+    // Two sort controls, matching MobileListToolbar's own.
+    expect(container.querySelectorAll(".mobile-sort-field")).toHaveLength(2);
+    expect(table?.querySelector("caption.table-summary")).not.toBeNull();
+  });
+
+  it("omits all three unless asked", () => {
+    const { container } = render(<TableSkeleton headers={["A"]} rows={1} />);
+    expect(container.querySelector("table")).toHaveClass("data");
+    expect(container.querySelector(".mobile-list-toolbar")).toBeNull();
+    expect(container.querySelector("caption")).toBeNull();
+  });
 });

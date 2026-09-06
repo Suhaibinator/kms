@@ -72,7 +72,9 @@ for (const width of [320, 390, 640, 768, 820, 1024, 1280, 1440]) {
     }
     const bounds = await dialog.boundingBox();
     if (!bounds) throw new Error("Missing dialog bounds");
-    if (width > 768) expect(bounds.width).toBeGreaterThan(720);
+    // The mobile-fullscreen block is `width < 768px`, matching Tailwind's `md`,
+    // so 768 is the first width that gets the centred desktop dialog.
+    if (width >= 768) expect(bounds.width).toBeGreaterThan(720);
     else expect(bounds.width).toBeCloseTo(width, 0);
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);

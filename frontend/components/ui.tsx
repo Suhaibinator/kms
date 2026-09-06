@@ -1,6 +1,13 @@
 import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
 import Head from "next/head";
-import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
+import {
+  type CSSProperties,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+  useId,
+} from "react";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { Badge as ShadcnBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -132,6 +139,9 @@ export function TableSkeleton({
   rowHeight,
   leading = 0,
   trailing = 0,
+  tableClassName,
+  toolbar = false,
+  summary = false,
 }: {
   headers: string[];
   rows?: number;
@@ -143,6 +153,15 @@ export function TableSkeleton({
    *  matches and nothing shifts on arrival. */
   leading?: number;
   trailing?: number;
+  /** The loaded table's own class (`namespace-table`), which carries its
+   *  column widths and header wrapping. Without it the skeleton's header row
+   *  is 17px shorter than the one that replaces it. */
+  tableClassName?: string;
+  /** Reserve the `MobileListToolbar` the loaded list renders below 640px;
+   *  without it the list jumps down by up to 198px on arrival. */
+  toolbar?: boolean;
+  /** Reserve the `TableSummary` caption the loaded list renders (34px). */
+  summary?: boolean;
 }) {
   const pad = (count: number, tag: "th" | "td", prefix: string) =>
     Array.from({ length: count }, (_, i) =>
@@ -155,7 +174,22 @@ export function TableSkeleton({
   return (
     <div className="table-wrap card-table" aria-busy="true">
       <span className="sr-only">Loading…</span>
-      <table className="data">
+      {/* The loaded toolbar's two sort controls, as empty boxes: the fieldset's
+          own gap and padding then give it the loaded height. */}
+      {toolbar ? (
+        <fieldset className="mobile-list-toolbar" aria-hidden>
+          <span className="mobile-sort-field">
+            <Skeleton width="45%" height="1.5em" />
+            <Skeleton height={44} />
+          </span>
+          <span className="mobile-sort-field">
+            <Skeleton width="45%" height="1.5em" />
+            <Skeleton height={44} />
+          </span>
+        </fieldset>
+      ) : null}
+      <table className={cn("data", tableClassName)}>
+        {summary ? <caption className="table-summary">&nbsp;</caption> : null}
         <thead>
           <tr>
             {pad(leading, "th", "l")}
@@ -170,7 +204,18 @@ export function TableSkeleton({
             <tr
               key={r}
               className="skeleton-row"
-              style={rowHeight === undefined ? undefined : { height: rowHeight }}
+              // Through the cell, not the <tr>: a row is at least as tall as
+              // its tallest cell, so an inline height on the row could only
+              // ever make it taller than `.skeleton-row td` — which is why
+              // rowHeight={44} produced a 54px row.
+              style={
+                rowHeight === undefined
+                  ? undefined
+                  : ({
+                      "--skeleton-row-h":
+                        typeof rowHeight === "number" ? `${rowHeight}px` : rowHeight,
+                    } as CSSProperties)
+              }
             >
               {pad(leading, "td", "l")}
               {headers.map((h, c) => (
@@ -280,8 +325,11 @@ export function Field({
   );
 
   return !isLabelableControl && !htmlFor ? (
+    // gap-1, like the labelled branch below: the two flavours land in one form
+    // (every SchemaForm list field is a fieldset) and gap-2 put their controls
+    // 3.56px apart from each other's.
     <FieldSet
-      className={cn(error ? "field field-invalid gap-2" : "field gap-2", className)}
+      className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       aria-describedby={describedBy}
       data-invalid={error ? true : undefined}
     >

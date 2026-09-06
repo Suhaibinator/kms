@@ -8,14 +8,18 @@ describe("StatusChip", () => {
     const chip = screen.getByText("Degraded");
     expect(chip).toHaveClass("status-chip");
     expect(chip).toHaveClass("status-degraded");
-    expect(chip).not.toHaveClass("status-prod");
+    expect(chip).not.toHaveClass("border-(--warning)");
     expect(chip).toHaveAttribute("data-slot", "badge");
   });
 
+  // The marker is a utility, not a class the stylesheet styles: Badge's own
+  // recipe carries `border-transparent`, and @layer components can never beat a
+  // utility, so the `.status-chip.status-prod` rule this replaces never painted.
   it("marks production and names it for assistive tech", () => {
     render(<StatusChip status="ready" production />);
     const chip = screen.getByText("Ready");
-    expect(chip).toHaveClass("status-prod");
+    expect(chip).toHaveClass("border-(--warning)");
+    expect(chip).not.toHaveClass("border-transparent");
     expect(chip).toHaveAttribute("title", "Ready (production)");
   });
 
