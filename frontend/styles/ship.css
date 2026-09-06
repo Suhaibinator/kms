@@ -358,7 +358,7 @@
   /* Below the card-table breakpoint the row is a block and `td:first-child` is
      just the Alias field, so the marker covered 18% of the card and floated
      14px inside its left edge. Mark the card itself instead. */
-  @media (width < 640px) {
+  @variant max-sm {
     .ship-entries tr.ship-entry-changed td:first-child {
       box-shadow: none;
     }
@@ -559,7 +559,7 @@
      reset all ran to 768, which left a 128px band where a phone sheet held
      desktop-width fields. `width < 768px` matches Tailwind's `md`, so the
      sheet and its contents switch together. */
-  @media (width < 768px) {
+  @variant max-md {
     .ship-env-row {
       flex-direction: column;
       align-items: stretch;

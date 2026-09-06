@@ -125,7 +125,7 @@
     gap: var(--space-1);
   }
 
-  @media (width < 768px) {
+  @variant max-md {
     .palette {
       height: 100%;
       max-height: none;

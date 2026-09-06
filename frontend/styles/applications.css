@@ -477,7 +477,7 @@
     margin-bottom: var(--space-4);
   }
 
-  @media (width < 768px) {
+  @variant max-md {
     /* .page-actions is flex-shrink: 0, so six actions keep their ~800px
        max-content width and overflow the viewport; at full row width the
        buttons wrap onto as many lines as they need instead. */

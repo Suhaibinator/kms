@@ -549,7 +549,19 @@
     display: flex;
     flex-direction: column;
   }
+  /* The query container for every "does this grid fit N columns" rule in the
+     console. Three of them used to name a viewport width and carry a comment
+     doing the arithmetic by hand — `viewport − 236px sidebar − 64px page
+     gutters` — which is this box's inline size written the long way round.
+     Querying the box directly means the thresholds stay true if the sidebar
+     width, the gutters or the 1200px cap ever move.
+
+     `container-type: inline-size` also makes .page a containing block for
+     fixed-position descendants. Nothing inside it is fixed: the dialogs,
+     sheets, popovers and toasts that are all portal to <body>. */
   .page {
+    container-type: inline-size;
+    container-name: page;
     padding: var(--space-6) var(--space-7) var(--space-10);
     max-width: 1200px;
     width: 100%;
@@ -624,10 +636,10 @@
   }
   /* Cap the stat row at three columns. auto-fit alone fits five across at the
      1200px page width, which strands a lone sixth card on its own row. The
-     breakpoint measures the viewport but the grid is laid out in
-     `viewport − 236px sidebar − 64px page gutters`, so it has to clear
-     3 × 240px + 2 × 16px + 300px to keep the tracks at their intended width. */
-  @media (min-width: 1052px) {
+     threshold is the grid's own content requirement, 3 × 240px + 2 × 16px of
+     gap, asked of the box that lays it out. It was `min-width: 1052px`, that
+     same 752px plus the 236px sidebar and the page's 64px of gutters. */
+  @container page (width >= 752px) {
     .card-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -1176,13 +1188,13 @@
   .json-editor-keys {
     font-family: var(--mono);
   }
-  @media (width < 768px) {
+  @variant max-md {
     /* 16px stops iOS from zooming the page on focus; both layers inherit it. */
     .json-editor-body {
       font-size: var(--text-touch);
     }
   }
-  @media (width < 640px) {
+  @variant max-sm {
     /* All three clauses wrap to two lines in a 343px row, and the status slot
        reserves one — so focusing the editor grew everything below it by 16px.
        The full text is still in the editor's `sr-only` hint. */
@@ -1512,7 +1524,7 @@
   /* The same floor the touch block gives every button and control. Kept here
      rather than in that block because the surface is a pseudo-element: it is
      the ::after that grows, not a min-height on the link. */
-  @media (width < 768px) {
+  @variant max-md {
     .cell-count::after {
       width: max(var(--control-h-touch), 100%);
       height: var(--control-h-touch);
@@ -1532,7 +1544,7 @@
      min-content the buttons on one line. Where the table then exceeds its
      wrapper it scrolls, which is the designed affordance. Paired with the
      ≤640px card block, where the cell is a block and both are inert. */
-  @media (min-width: 640px) {
+  @variant sm {
     table.data td:has(> .row-actions),
     table.data td:has(> .navigable-row-end) {
       width: 1%;
@@ -1735,7 +1747,7 @@
     line-height: 1.4;
     color: var(--text-muted);
   }
-  @media (min-width: 640px) {
+  @variant sm {
     .footer-note {
       margin-right: auto;
     }
@@ -1746,7 +1758,7 @@
      the `flex-col-reverse` this replaced, DOM order painted bottom to top and
      `order: 99` was what put the note on top, so under grid the same intent is
      the negative order. */
-  @media (width < 640px) {
+  @variant max-sm {
     .footer-note {
       grid-column: 1 / -1;
       order: -1;
@@ -1835,7 +1847,7 @@
     overflow: auto;
     margin: 0;
   }
-  @media (width < 768px) {
+  @variant max-md {
     /* The editable twin goes to 16px on a phone to stop iOS zooming on focus,
        which left the same document rendering at two sizes on the same screen
        depending only on whether it was editable. 14px closes most of that
@@ -2231,7 +2243,7 @@
      the file: both of these are corrections to expressions three rules above,
      and splitting them from what they correct is how the second one went
      unnoticed. Neither has a competing rule, so source order is free. */
-  @media (width < 768px) {
+  @variant max-md {
     /* Both controls are on the 44px floor here, so the derived offset — half
        the 38/30 difference — is 4px of nothing, and hung the toggle 4px below
        the input it belongs to. */
@@ -2462,7 +2474,7 @@
   /* Both offsets clear a label that is only beside these cells while the entry
      is a row. Once it stacks there is nothing to clear and the offset reads as
      a 33px hole between two 12px gaps. */
-  @media (width < 768px) {
+  @variant max-md {
     .release-builder-entry > .release-builder-current,
     .release-builder-entry > [data-slot="button"] {
       margin-top: 0;
@@ -2550,7 +2562,12 @@
     overflow-wrap: anywhere;
   }
 
-  @media (max-width: 1000px) {
+  /* The same 752px the card grid uses, and for the same reason: this is the
+     page-content width at which a three-across row of cards stops holding its
+     tracks. It was `max-width: 1000px`, a viewport number 52px off the card
+     grid's, so between the two the two strips changed shape at widths nobody
+     had a reason for. One threshold, asked of the box that lays both out. */
+  @container page (width < 752px) {
     .release-status-strip {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -2564,7 +2581,7 @@
     }
   }
 
-  @media (width < 640px) {
+  @variant max-sm {
     /* The three release-builder grids used to be listed here too. They are
        already one column from the ≤768px block near the bottom of this file,
        which is emitted later in the same layer and won every tie — three dead
@@ -2669,7 +2686,7 @@
        cell, which is what --skeleton-row-h is for. min-, not height, per rule 3. */
     min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + var(--control-h-sm)));
   }
-  @media (width < 768px) {
+  @variant max-md {
     /* The touch floor lifts sm buttons to 44px, so real rows grow with them. */
     .skeleton-row td {
       min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + var(--control-h-touch)));
@@ -3182,7 +3199,7 @@
       1px 0 0 var(--border-strong),
       6px 0 6px -6px var(--scroll-shadow);
   }
-  @media (width < 768px) {
+  @variant max-md {
     /* Stays sticky — scrolling values away from their key leaves nothing to
        attach them to — but gives back most of its width on a phone. */
     .application-matrix .matrix-key {
@@ -3291,7 +3308,7 @@
     margin-bottom: 0;
   }
 
-  @media (width < 640px) {
+  @variant max-sm {
     /* Stacked, this toolbar is 130px of a 667px dialog. Pinning that much of a
        phone screen costs more than it buys, so it scrolls away with the
        content; the bleed and the rule stay. */
@@ -3528,7 +3545,7 @@
      whole 769-1023 band — the truncation started only at 768. Three crumbs
      here, two below 768 (the block near the bottom of this file, whose rule
      stacks on top of this one). Same visually-hidden recipe as there. */
-  @media (width < 1024px) {
+  @variant max-lg {
     .crumb:not(:nth-last-child(-n + 3)) {
       position: absolute;
       width: 1px;
@@ -3782,7 +3799,7 @@
   /* Below the 65px sticky top bar. sonner's own mobile block stops at 600px, so
      the variable has to answer for the whole range in which the bar exists —
      which is also below a mobile full-screen dialog's ~62px header band. */
-  @media (width < 768px) {
+  @variant max-md {
     body {
       --toast-offset-top: calc(65px + var(--space-3));
     }
@@ -3790,7 +3807,7 @@
   /* Below an open dialog's header band. Every popup is capped at
      `100dvh - var(--space-4) * 2`, so the tallest one — the workspace modals
      this was reported on — starts 16px down and its header is 70px tall. */
-  @media (width >= 768px) {
+  @variant md {
     body:has([data-slot="dialog-content"]) {
       --toast-offset-top: calc(var(--space-4) + 70px + var(--space-3));
     }
@@ -3798,7 +3815,7 @@
 
   /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
 
-  @media (width < 768px) {
+  @variant max-md {
     .app-shell {
       flex-direction: column;
     }
@@ -4024,7 +4041,7 @@
 
   /* ---------- <= 640px: card-style tables for the highest-traffic lists ---------- */
 
-  @media (width < 640px) {
+  @variant max-sm {
     .table-wrap.card-table thead {
       display: none;
     }
@@ -4136,6 +4153,9 @@
 
   /* ---------- <= 480px: tighter spacing ---------- */
 
+  /* The one width in the console with no --breakpoint-* token behind it, and
+     deliberately so: naming it would publish an `xs:` variant nothing uses.
+     It is a single step below `sm` for the narrowest phones, used once. */
   @media (width < 480px) {
     .page-title {
       font-size: var(--text-lg);
@@ -4177,7 +4197,15 @@
      them as real custom properties means --control-h and --label-offset above can
      derive from them. Do not add --text-sm--line-height / --text-xs--line-height:
      leaving those at Tailwind's defaults reproduces today's computed line-heights
-     exactly. */
+     exactly.
+
+     The corollary, which has cost a measurement twice: a bare `text-sm` utility
+     is NOT interchangeable with `font-size: var(--text-sm)`. It carries
+     Tailwind's own line-height for that step (1.4286, so 17.86px) while a rule
+     here leaves the element on the page's inherited 1.5 (18.75px) — 0.89px a
+     line, and it does not announce itself. Where an element inherits the page
+     line-height and only its size should change, the utility is
+     `text-(length:--text-sm)`. */
   /* ---------- Theme switch ---------- */
   .theme-switch {
     margin: 0;
@@ -4252,8 +4280,22 @@
    CardTitle, FieldLegend, and the Dialog/Sheet/AlertDialog titles), so
    --text-base is pinned at 14px, the root font size those components already
    resolved 1rem to. --text-2xs/-md/-touch are ours; --text-lg had no users. */
+/* The three breakpoints this file actually uses, named so a hand-written
+   query and a `md:` utility can never mean different widths. These are the
+   Tailwind defaults restated in px: `rem` in a media query resolves against
+   the initial 16px, not this document's 14px root, so 48rem and 768px are the
+   same number here — pinning them in px only removes the double conversion.
+
+   Every hand-written query below reads them through Tailwind's own `@variant`
+   (`@variant max-md { … }` compiles to `@media (width < 768px)`), so a query
+   and the matching utility cannot disagree. `@media (width < theme(--breakpoint-md))`
+   would compile identically but biome's noUnknownFunction rejects `theme()`
+   in a CSS file, and @variant needs no rule turned off to say the same thing. */
 @theme {
   --spacing: 4px;
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
   --text-2xs: 10.5px; /* uppercase micro-labels */
   --text-xs: 11.5px; /* was 10.5px — below the 11px floor the rest of the chrome keeps */
   --text-sm: 12.5px; /* exactly what the legacy `.text-sm` rule produces */
@@ -4323,7 +4365,7 @@
     display: none;
   }
 
-  @media (width < 768px) {
+  @variant max-md {
     .filters > .field,
     .filters > .filter-grow,
     .release-context-bar > .field,
@@ -4492,7 +4534,7 @@
     }
   }
 
-  @media (width < 640px) {
+  @variant max-sm {
     .mobile-list-toolbar {
       /* One height for the select and for the chevron optically centred on it,
          so the two cannot drift apart. 44px is the touch floor the block above
@@ -4630,7 +4672,7 @@
      alone on the last row", and a leading `<p class="footer-note">` would
      otherwise flip it. A button alone spans both columns rather than sitting
      half-width beside a hole. */
-  @media (width < 640px) {
+  @variant max-sm {
     [data-slot="dialog-footer"] {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4647,7 +4689,7 @@
     }
   }
 
-  @media (width < 768px) {
+  @variant max-md {
     [data-slot="dialog-content"][data-mobile-fullscreen] {
       /* Reset Tailwind offsets even when the CSS compiler folds translate into transform. */
       --tw-translate-x: 0px;

@@ -239,24 +239,24 @@
 
   /* The strip holds exactly six cards, so only a column count that divides six
      avoids a ragged last row: auto-fit gave four at 1024 (4 + 2) and five at
-     1280 (5 + 1, one short card alone on its own line). The queries measure the
-     viewport but the grid is laid out in `viewport − 236px sidebar − 64px page
-     gutters`, so each has to clear that 300px; 170px is the width the widest
-     label ("CURRENT REVISION", ~125px) needs inside the card's 32px of
-     padding. */
+     1280 (5 + 1, one short card alone on its own line). Each threshold is the
+     row's own content requirement asked of `.page`, the box that lays it out;
+     170px is the width the widest label ("CURRENT REVISION", ~125px) needs
+     inside the card's 32px of padding. They used to be viewport numbers with
+     `+ 300` written into the comment for the sidebar and the page gutters. */
   .stat-strip {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
   }
-  /* 3 × 170 + 2 × 12 + 300 */
-  @media (min-width: 834px) {
+  /* 3 × 170 + 2 × 12 */
+  @container page (width >= 534px) {
     .stat-strip {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
-  /* 6 × 170 + 5 × 12 + 300 */
-  @media (min-width: 1380px) {
+  /* 6 × 170 + 5 × 12 */
+  @container page (width >= 1080px) {
     .stat-strip {
       grid-template-columns: repeat(6, minmax(0, 1fr));
     }
@@ -576,7 +576,7 @@
 
   /* ---------- Responsive ---------- */
 
-  @media (width < 768px) {
+  @variant max-md {
     /* min() so a 320px phone gets one card rather than an overflowing row:
        a bare minmax(150px, …) track never shrinks below its floor. Both counts
        auto-fit reaches here (one and two) divide six. */
