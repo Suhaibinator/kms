@@ -18,10 +18,10 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		message string
 		fields  []wireField
 	}{
-		{"SecretMetadata", fields("ref", "content_type", "bound", "has_access_token", "metadata_json", "created_at_unix_ms", "updated_at_unix_ms", "labels", "versions")},
-		{"SecretVersionInfo", fields("version", "state", "created_by", "created_at_unix_ms", "destroyed_at_unix_ms", "expires_at_unix_ms", "metadata_json", "bound", "has_access_token")},
-		{"GetSecretRequest", fields("ref", "version", "label", "secret_token", "binding_key")},
-		{"PutSecretRequest", fields("ref", "value", "content_type", "metadata_json", "binding_key", "generate_access_token", "expires_at_unix_ms")},
+		{"SecretMetadata", fields("ref", "content_type", "bound", "", "metadata_json", "created_at_unix_ms", "updated_at_unix_ms", "labels", "versions")},
+		{"SecretVersionInfo", fields("version", "state", "created_by", "created_at_unix_ms", "destroyed_at_unix_ms", "expires_at_unix_ms", "metadata_json", "bound", "")},
+		{"GetSecretRequest", fields("ref", "version", "label", "", "binding_key")},
+		{"PutSecretRequest", fields("ref", "value", "content_type", "metadata_json", "binding_key", "", "expires_at_unix_ms")},
 		{"BindSecretRequest", fields("ref", "expected_current_version", "binding_key")},
 		{"UnbindSecretRequest", fields("ref", "expected_current_version", "binding_key")},
 		{"SecretVersionTransitionResponse", fields("current_version", "previous_version", "revision")},
@@ -58,9 +58,6 @@ func TestV03WireFieldLayouts(t *testing.T) {
 					t.Errorf("field %d = %s:%d, want %s:%d", index, got.Name(), got.Number(), want.name, want.number)
 				}
 			}
-			if descriptor.ReservedNames().Len() != 0 || descriptor.ReservedRanges().Len() != 0 {
-				t.Error("clean 0.3 contract unexpectedly retains reserved names or numbers")
-			}
 		})
 	}
 
@@ -75,7 +72,7 @@ func TestV03WireFieldLayouts(t *testing.T) {
 	}
 }
 
-func TestV03AllMessagesAreDenseAndUnreserved(t *testing.T) {
+func TestWireNumbersRemainDenseIncludingReservedSlots(t *testing.T) {
 	t.Parallel()
 
 	assertDenseUnreservedMessages(t, File_kms_v1_kms_proto.Messages())
@@ -86,15 +83,20 @@ func assertDenseUnreservedMessages(t *testing.T, messages protoreflect.MessageDe
 	for index := 0; index < messages.Len(); index++ {
 		descriptor := messages.Get(index)
 		t.Run(string(descriptor.FullName()), func(t *testing.T) {
-			if descriptor.ReservedNames().Len() != 0 || descriptor.ReservedRanges().Len() != 0 {
-				t.Errorf("reserved names/ranges = %d/%d, want 0/0", descriptor.ReservedNames().Len(), descriptor.ReservedRanges().Len())
-			}
 
-			seen := make([]bool, descriptor.Fields().Len()+1)
+			limit := descriptor.Fields().Len() + descriptor.ReservedRanges().Len()
+			seen := make([]bool, limit+1)
+			for i := 0; i < descriptor.ReservedRanges().Len(); i++ {
+				r := descriptor.ReservedRanges().Get(i)
+				if r[1] != r[0]+1 || r[0] < 1 || int(r[0]) > limit {
+					t.Fatal("unexpected reserved range")
+				}
+				seen[int(r[0])] = true
+			}
 			for fieldIndex := 0; fieldIndex < descriptor.Fields().Len(); fieldIndex++ {
 				field := descriptor.Fields().Get(fieldIndex)
 				number := int(field.Number())
-				if number < 1 || number > descriptor.Fields().Len() {
+				if number < 1 || number > limit {
 					t.Errorf("field %s has number %d outside dense range 1..%d", field.Name(), number, descriptor.Fields().Len())
 					continue
 				}
@@ -148,9 +150,30 @@ func TestV03SecretBindingRPCLayouts(t *testing.T) {
 }
 
 func fields(names ...protoreflect.Name) []wireField {
-	result := make([]wireField, len(names))
+	out := make([]wireField, 0, len(names))
 	for index, name := range names {
-		result[index] = wireField{name: name, number: protoreflect.FieldNumber(index + 1)}
+		if name == "" {
+			continue
+		}
+		out = append(out, wireField{name: name, number: protoreflect.FieldNumber(index + 1)})
 	}
-	return result
+	return out
+}
+
+func TestRemovedSecretTokenFieldsAreReserved(t *testing.T) {
+	for _, retired := range []struct {
+		message, name protoreflect.Name
+		number        protoreflect.FieldNumber
+	}{
+		{"SecretMetadata", "has_access_token", 4},
+		{"SecretVersionInfo", "has_access_token", 9},
+		{"GetSecretRequest", "secret_token", 4},
+		{"PutSecretRequest", "generate_access_token", 6},
+		{"PutSecretResponse", "access_token", 3},
+	} {
+		descriptor := File_kms_v1_kms_proto.Messages().ByName(retired.message)
+		if descriptor.Fields().ByName(retired.name) != nil || descriptor.Fields().ByNumber(retired.number) != nil || !descriptor.ReservedNames().Has(retired.name) || !descriptor.ReservedRanges().Has(retired.number) {
+			t.Errorf("%s.%s (%d) must remain removed and reserved", retired.message, retired.name, retired.number)
+		}
+	}
 }

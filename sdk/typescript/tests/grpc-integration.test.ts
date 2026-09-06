@@ -128,7 +128,6 @@ describe("protocol-faithful gRPC integration", () => {
 
     const getSecret: handleUnaryCall<GetSecretRequest, GetSecretResponse> = (call, callback) => {
       expect(call.metadata.get("x-kms-secret-token")).toEqual([]);
-      expect(call.request.secretToken).toBe("secret-token");
       callback(null, {
         ref: call.request.ref,
         version: 2n,
@@ -198,9 +197,7 @@ describe("protocol-faithful gRPC integration", () => {
         namespace: "prod/api",
         authMethod: "token",
       });
-      await expect(
-        client.getParameter("settings", { secretToken: "parameter-token" }),
-      ).resolves.toBe("initial");
+      await expect(client.getParameter("settings", {})).resolves.toBe("initial");
       await expect(client.putParameter("settings", "updated")).resolves.toEqual({
         version: 8n,
         revision: 9_007_199_254_740_993n,
@@ -209,9 +206,9 @@ describe("protocol-faithful gRPC integration", () => {
         items: [{ key: "settings", value: "updated", version: 8n }],
         nextPageToken: "",
       });
-      await expect(
-        client.getSecret("password", { secretToken: "secret-token" }).then((value) => value.text()),
-      ).resolves.toBe("secret-value");
+      await expect(client.getSecret("password", {}).then((value) => value.text())).resolves.toBe(
+        "secret-value",
+      );
 
       const events: WatchEvent[] = [];
       stopWatch = await client.watch((event) => events.push(event));
@@ -280,7 +277,6 @@ describe("protocol-faithful gRPC integration", () => {
     const observedMetadata: Array<{
       readonly rpc: string;
       readonly authorization: readonly unknown[];
-      readonly secretToken: readonly unknown[];
     }> = [];
     const observeMetadata = (
       rpc: string,
@@ -289,7 +285,6 @@ describe("protocol-faithful gRPC integration", () => {
       observedMetadata.push({
         rpc,
         authorization: call.metadata.get("authorization"),
-        secretToken: call.metadata.get("x-kms-secret-token"),
       });
     };
 
@@ -357,7 +352,6 @@ describe("protocol-faithful gRPC integration", () => {
       callback(null, {
         version: firstExactInteger + 15n,
         revision: firstExactInteger + 16n,
-        accessToken: "one-time-access-token",
       });
     };
     const deleteSecret: handleUnaryCall<DeleteSecretRequest, DeleteSecretResponse> = (
@@ -450,13 +444,12 @@ describe("protocol-faithful gRPC integration", () => {
         contentType: "application/octet-stream",
         metadataJson: '{"rotation":"integration"}',
         bindingKey: "put-binding-key",
-        generateAccessToken: true,
+
         expiresAtUnixMs: firstExactInteger + 100n,
       });
       expect(putResult).toEqual({
         version: firstExactInteger + 15n,
         revision: firstExactInteger + 16n,
-        accessToken: "one-time-access-token",
       });
       expect(Object.isFrozen(putResult)).toBe(true);
       expect(plaintext).toEqual(Uint8Array.from([0, 1, 254, 255]));
@@ -474,7 +467,7 @@ describe("protocol-faithful gRPC integration", () => {
             key: "password",
             contentType: "application/octet-stream",
             bound: true,
-            hasAccessToken: true,
+
             metadataJson: '{"classification":"metadata-only"}',
             createdAtUnixMs: firstExactInteger + 10n,
             updatedAtUnixMs: firstExactInteger + 11n,
@@ -491,7 +484,6 @@ describe("protocol-faithful gRPC integration", () => {
                 expiresAtUnixMs: firstExactInteger + 12n,
                 metadataJson: '{"source":"loopback"}',
                 bound: true,
-                hasAccessToken: true,
               },
             ],
           },
@@ -559,7 +551,7 @@ describe("protocol-faithful gRPC integration", () => {
           contentType: "application/octet-stream",
           metadataJson: '{"rotation":"integration"}',
           bindingKey: "put-binding-key",
-          generateAccessToken: true,
+
           expiresAtUnixMs: firstExactInteger + 100n,
         },
       ]);
@@ -582,52 +574,42 @@ describe("protocol-faithful gRPC integration", () => {
         {
           rpc: "getParameterMetadata",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "deleteParameter",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "putSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "listSecrets",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "getSecretMetadata",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "deleteSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "disableSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "disableSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "destroySecretVersion",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
         {
           rpc: "promoteSecretVersion",
           authorization: ["Bearer integration-token"],
-          secretToken: [],
         },
       ]);
     } finally {
@@ -710,7 +692,7 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
     ref: { namespace, key },
     contentType: "application/octet-stream",
     bound: true,
-    hasAccessToken: true,
+
     metadataJson: '{"classification":"metadata-only"}',
     createdAtUnixMs: version,
     updatedAtUnixMs: version + 1n,
@@ -725,7 +707,6 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
         expiresAtUnixMs: version + 2n,
         metadataJson: '{"source":"loopback"}',
         bound: true,
-        hasAccessToken: true,
       },
     ],
   };

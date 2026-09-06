@@ -144,7 +144,6 @@ func toProtoSecretMetadata(s domain.Secret) *kmsv1.SecretMetadata {
 		Ref:             refToProto(s.Ref),
 		ContentType:     s.ContentType,
 		Bound:           s.Bound,
-		HasAccessToken:  s.HasAccessToken,
 		MetadataJson:    s.Metadata,
 		CreatedAtUnixMs: unixMS(s.CreatedAt),
 		UpdatedAtUnixMs: unixMS(s.UpdatedAt),
@@ -163,7 +162,6 @@ func toProtoSecretVersionInfo(v domain.SecretVersionInfo) *kmsv1.SecretVersionIn
 		ExpiresAtUnixMs:   unixMS(v.ExpiresAt),
 		MetadataJson:      v.Metadata,
 		Bound:             v.Bound,
-		HasAccessToken:    v.HasAccessToken,
 	}
 }
 

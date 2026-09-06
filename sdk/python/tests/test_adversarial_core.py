@@ -85,21 +85,6 @@ def test_transport_configuration_rejects_ambiguity_and_nonfinite_timing():
     assert not hasattr(kms_paramstore, "TLSConfig")
 
 
-def test_sync_parameter_secret_token_bypasses_cache():
-    server, address, store = start_server(whoami_namespace=NS)
-    client = Client(address, namespace=NS, insecure=True, cache_ttl=60)
-    try:
-        client.put_parameter("gated/parameter", "one")
-        assert client.get_parameter("gated/parameter") == "one"
-        store.put_param("prod", "app", "gated/parameter", value="two")
-        assert client.get_parameter("gated/parameter") == "one"
-        assert client.get_parameter("gated/parameter", secret_token="share") == "two"
-        assert client.get_parameter_info("gated/parameter", secret_token="share").value == "two"
-        assert client.get_parameter("gated/parameter") == "one"
-    finally:
-        client.close()
-        server.stop(grace=0).wait(timeout=5)
-
 
 def test_sync_snapshot_and_unknown_delete_invalidate_cache():
     client = Client(channel=mock.MagicMock(), namespace=NS, cache_ttl=60)
@@ -357,7 +342,7 @@ def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
     client = Client(channel=mock.MagicMock(), namespace=NS)
     client._secret_stub = _RejectingSecretStub(details)
     calls = (
-        lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+        lambda: client.get_secret("key", binding_key=binding_key),
         lambda: client.put_secret("key", plaintext, binding_key=binding_key),
         lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
         lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
@@ -421,7 +406,7 @@ def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
         client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
         client._secret_stub = _AsyncRejectingSecretStub(details)
         calls = (
-            lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+            lambda: client.get_secret("key", binding_key=binding_key),
             lambda: client.put_secret("key", plaintext, binding_key=binding_key),
             lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
             lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
@@ -485,7 +470,7 @@ def test_all_sync_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions():
     client = Client(channel=mock.MagicMock(), namespace=NS)
     client._secret_stub = _RejectingArbitrarySecretStub(details)
     calls = (
-        lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+        lambda: client.get_secret("key", binding_key=binding_key),
         lambda: client.put_secret("key", plaintext, binding_key=binding_key),
         lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
         lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
@@ -533,7 +518,7 @@ def test_all_async_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions()
         client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
         client._secret_stub = _AsyncRejectingArbitrarySecretStub(details)
         calls = (
-            lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+            lambda: client.get_secret("key", binding_key=binding_key),
             lambda: client.put_secret("key", plaintext, binding_key=binding_key),
             lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
             lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
@@ -876,7 +861,7 @@ def test_async_resolve_hot_reload_token_bypass_and_callback_close():
 
         # A protected parameter read bypasses the tokenless cache.
         store.put_param("prod", "app", "async/config", value="three")
-        assert await client.get_parameter("async/config", secret_token="share") == "three"
+        assert await client.get_parameter("async/config", ) == "three"
 
         callback_closed = asyncio.Event()
 

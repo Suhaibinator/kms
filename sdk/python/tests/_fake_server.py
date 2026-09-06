@@ -240,8 +240,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
             if sec["states"][version - 1] != "enabled":
                 context.abort(grpc.StatusCode.FAILED_PRECONDITION, "version is not enabled")
-            if sec["has_tokens"][version - 1] and request.secret_token != sec["token"]:
-                context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
             binding_key = sec["binding_keys"][version - 1]
             if binding_key and request.binding_key != binding_key:
                 context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret credential unavailable")
@@ -254,25 +252,18 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
             sec = self.store.secrets.get(rk)
-            token = ""
             if sec is None:
-                token = "tok-" + "_".join(rk) if request.generate_access_token else ""
                 sec = {
                     "value": request.value, "content_type": request.content_type or "application/octet-stream",
-                    "token": token, "versions": [], "states": [],
-                    "binding_keys": [], "has_tokens": [], "expires": [],
+                    "versions": [], "states": [],
+                    "binding_keys": [], "expires": [],
                     "metadata": [], "current_version": 0, "previous_version": 0,
                     "promoted": False,
                 }
                 self.store.secrets[rk] = sec
-            else:
-                if request.generate_access_token:
-                    token = "tok2-" + "_".join(rk)
-                    sec["token"] = token
             sec["versions"].append((request.value, request.content_type or sec["content_type"]))
             sec["states"].append("enabled")
             sec["binding_keys"].append(request.binding_key)
-            sec["has_tokens"].append(bool(sec["token"]))
             sec["expires"].append(request.expires_at_unix_ms)
             sec["metadata"].append(request.metadata_json or "{}")
             version = len(sec["versions"])
@@ -285,7 +276,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             secret_change=kms_pb2.SecretMetadataChange(ref=_proto_ref(rk), change_type="put", version=version),
             revision=rev,
         ), rk)
-        return kms_pb2.PutSecretResponse(version=version, revision=rev, access_token=token)
+        return kms_pb2.PutSecretResponse(version=version, revision=rev)
 
     def GetSecretMetadata(self, request, context):
         rk = _rk_from_ref(request.ref)
@@ -300,7 +291,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 expires_at_unix_ms=sec["expires"][i],
                 metadata_json=sec["metadata"][i],
                 bound=bool(sec["binding_keys"][i]),
-                has_access_token=sec["has_tokens"][i],
             ) for i in range(len(sec["versions"]))]
             if request.version:
                 versions = [version for version in versions if version.version == request.version]
@@ -310,7 +300,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             meta = kms_pb2.SecretMetadata(
                 ref=_proto_ref(rk), content_type=sec["content_type"],
                 bound=versions[0].bound if request.version else bool(sec["binding_keys"][current]),
-                has_access_token=bool(sec["token"]),
                 metadata_json=sec["metadata"][current],
                 labels={} if request.version else {
                     "current": sec["current_version"],
@@ -338,7 +327,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 items.append(kms_pb2.SecretMetadata(
                     ref=_proto_ref(rk), content_type=sec["content_type"],
                     bound=bool(sec["binding_keys"][current]),
-                    has_access_token=bool(sec["token"]),
                     metadata_json=sec["metadata"][current],
                     labels={"current": sec["current_version"]},
                     versions=[
@@ -347,7 +335,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                             expires_at_unix_ms=sec["expires"][i],
                             metadata_json=sec["metadata"][i],
                             bound=bool(sec["binding_keys"][i]),
-                            has_access_token=sec["has_tokens"][i],
                         )
                         for i, state in enumerate(sec["states"])
                     ],
@@ -493,7 +480,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 sec["versions"][item] = (b"", "")
                 sec["states"][item] = "destroyed"
                 sec["binding_keys"][item] = ""
-                sec["has_tokens"][item] = False
                 sec["expires"][item] = 0
                 sec["metadata"][item] = ""
             if sec["current_version"] in versions:
@@ -545,7 +531,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 sec["versions"][item] = (b"", "")
                 sec["states"][item] = "destroyed"
                 sec["binding_keys"][item] = ""
-                sec["has_tokens"][item] = False
                 sec["expires"][item] = 0
                 sec["metadata"][item] = ""
             if sec["current_version"] in versions:
@@ -562,7 +547,6 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
         sec["versions"].append(sec["versions"][index])
         sec["states"].append(sec["states"][index])
         sec["binding_keys"].append(binding_key)
-        sec["has_tokens"].append(sec["has_tokens"][index])
         sec["expires"].append(sec["expires"][index])
         sec["metadata"].append(sec["metadata"][index])
         current = len(sec["versions"])
@@ -577,15 +561,12 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
         count = len(sec["versions"])
         sec.setdefault("states", [])
         sec.setdefault("binding_keys", [])
-        sec.setdefault("has_tokens", [])
         sec.setdefault("expires", [])
         sec.setdefault("metadata", [])
         while len(sec["states"]) < count:
             sec["states"].append("enabled")
         while len(sec["binding_keys"]) < count:
             sec["binding_keys"].append("")
-        while len(sec["has_tokens"]) < count:
-            sec["has_tokens"].append(bool(sec.get("token")))
         while len(sec["expires"]) < count:
             sec["expires"].append(0)
         while len(sec["metadata"]) < count:

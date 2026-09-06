@@ -115,7 +115,6 @@ class SecretVersion:
     expires_at_unix_ms: int = 0
     metadata_json: str = "{}"
     bound: bool = False
-    has_access_token: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,7 +126,6 @@ class SecretInfo:
     key: str
     content_type: str
     bound: bool
-    has_access_token: bool
     metadata_json: str = "{}"
     created_at_unix_ms: int = 0
     updated_at_unix_ms: int = 0
@@ -157,7 +155,6 @@ class PutResult:
 class PutSecretResult:
     version: int
     revision: int
-    access_token: str = ""  # set only when a token was minted; never retrievable again
 
 
 @dataclass(frozen=True)
@@ -306,7 +303,6 @@ def _secret_info_from_proto(s) -> SecretInfo:
         key=ref.key,
         content_type=s.content_type,
         bound=s.bound,
-        has_access_token=s.has_access_token,
         metadata_json=s.metadata_json,
         created_at_unix_ms=s.created_at_unix_ms,
         updated_at_unix_ms=s.updated_at_unix_ms,
@@ -321,7 +317,6 @@ def _secret_info_from_proto(s) -> SecretInfo:
                 expires_at_unix_ms=v.expires_at_unix_ms,
                 metadata_json=v.metadata_json,
                 bound=v.bound,
-                has_access_token=v.has_access_token,
             )
             for v in s.versions
         ),

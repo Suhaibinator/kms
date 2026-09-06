@@ -76,10 +76,7 @@ client, err := kmsclient.NewClient(kmsclient.Config{
 })
 ```
 
-If a release contains access-token-protected secrets, also set
-`configkms.Options.SecretTokenProvider` from the application's secure bootstrap
-credentials. The generated store, typed snapshots, and view access are
-otherwise unchanged.
+Bound secret versions require an application-held binding key.
 
 For a bound secret, put its key in the source declaration rather than a start
 option:
@@ -97,10 +94,8 @@ oauthDefaults := struct {
 ```
 
 The generated store extracts the key into a private alias-keyed loader map and
-strips it from retained defaults and published snapshots. Access tokens and
-binding keys are independent, and secret plaintext is never cached. This
-example's current fake release uses unbound secrets, so it needs neither
-credential.
+strips it from retained defaults and published snapshots. Secret plaintext is
+never cached. This example uses unbound secrets and needs no binding key.
 
 The in-process fake exercises the client, release loader, generated decoder,
 and publication policy. It deliberately does **not** exercise TLS, auth,

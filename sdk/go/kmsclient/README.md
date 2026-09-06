@@ -78,7 +78,6 @@ Read options:
 client.GetParameter(ctx, key, kmsclient.WithVersion(3))
 client.GetSecret(ctx, key, kmsclient.WithLabel("previous"))
 client.GetSecret(ctx, key,
-    kmsclient.WithSecretToken(tok),   // when access-token protected
     kmsclient.WithBindingKey(bindKey), // when bound; independent of the token
 )
 ```
@@ -196,10 +195,7 @@ together rather than through independent key callbacks:
 ```go
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
     Name: "runtime",
-    SecretTokenProvider: func(alias, path string) (string, bool) {
-        token, ok := localTokens[alias]
-        return token, ok
-    },
+
     BindingKeys: map[string]kmsclient.BindingKey{"openai_api_key": kmsclient.NewBindingKey(openAIBindingKey)},
 })
 if err != nil { return err }

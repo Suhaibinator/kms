@@ -237,36 +237,32 @@ class AsyncClient:
         return WhoAmI(response.name, response.kind, namespace, response.auth_method)
 
     async def get_parameter(
-        self, key: str, *, version: int = 0, label: str = "", secret_token: str = "",
-        timeout: Optional[float] = None
+        self, key: str, *, version: int = 0, label: str = "", timeout: Optional[float] = None
     ) -> str:
         version, label = _normalize_selector(version, label)
         ref = await self._resolve_ref(key)
-        if not secret_token:
-            cached = self._cache.get_param(str(ref), version, label)
-            if cached is not None:
-                return cached
+        cached = self._cache.get_param(str(ref), version, label)
+        if cached is not None:
+            return cached
         return (await self._fetch_parameter_info(
-            ref, version=version, label=label, secret_token=secret_token, timeout=timeout
+            ref, version=version, label=label, timeout=timeout
         )).value
 
     async def get_parameter_info(
-        self, key: str, *, version: int = 0, label: str = "", secret_token: str = "",
-        timeout: Optional[float] = None
+        self, key: str, *, version: int = 0, label: str = "", timeout: Optional[float] = None
     ) -> Parameter:
         version, label = _normalize_selector(version, label)
         return await self._fetch_parameter_info(
             await self._resolve_ref(key), version=version, label=label,
-            secret_token=secret_token, timeout=timeout
+            timeout=timeout
         )
 
     async def _fetch_parameter_info(
-        self, ref: Ref, *, version: int = 0, label: str = "", secret_token: str = "",
-        timeout: Optional[float] = None,
+        self, ref: Ref, *, version: int = 0, label: str = "", timeout: Optional[float] = None,
     ) -> Parameter:
         self._assert_open()
         version, label = _normalize_selector(version, label)
-        generation = None if secret_token else self._cache.begin_parameter_read(str(ref))
+        generation = self._cache.begin_parameter_read(str(ref))
         try:
             try:
                 response = await self._param_stub.GetParameter(
@@ -281,8 +277,7 @@ class AsyncClient:
             _assert_read_identity(
                 "parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version
             )
-            if not secret_token:
-                self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
+            self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
             return parameter
         finally:
             self._cache.end_read(generation)
@@ -393,8 +388,7 @@ class AsyncClient:
         return apply_result(response, expected_execute=execute)
 
     async def get_secret(
-        self, key: str, *, version: int = 0, label: str = "", secret_token: str = "",
-        binding_key: str = "",
+        self, key: str, *, version: int = 0, label: str = "", binding_key: str = "",
         timeout: Optional[float] = None,
     ) -> Secret:
         version, label = _normalize_selector(version, label)
@@ -405,7 +399,7 @@ class AsyncClient:
             response = await self._secret_stub.GetSecret(
                 kms_pb2.GetSecretRequest(
                     ref=to_proto_ref(ref), version=version, label=label,
-                    secret_token=secret_token, binding_key=binding_key,
+                    binding_key=binding_key,
                 ),
                 metadata=self._auth_metadata(), timeout=call_timeout,
             )
@@ -435,7 +429,7 @@ class AsyncClient:
     async def put_secret(
         self, key: str, value: "bytes | bytearray | str", *, content_type: str = "",
         metadata_json: str = "", binding_key: str = "",
-        generate_access_token: bool = False, expires_at_unix_ms: int = 0,
+        expires_at_unix_ms: int = 0,
         timeout: Optional[float] = None,
     ) -> PutSecretResult:
         if not isinstance(value, (bytes, bytearray, str)):
@@ -451,7 +445,6 @@ class AsyncClient:
                 kms_pb2.PutSecretRequest(
                     ref=to_proto_ref(ref), value=plaintext, content_type=content_type,
                     metadata_json=metadata_json, binding_key=binding_key,
-                    generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
                 ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
@@ -460,7 +453,7 @@ class AsyncClient:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return PutSecretResult(response.version, response.revision, response.access_token)
+        return PutSecretResult(response.version, response.revision)
 
     async def list_secrets(
         self, namespace: "Optional[str | NamespaceRef]" = None, key_prefix: str = "", *,

@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -168,38 +167,6 @@ func TestAuthorizationMetadata(t *testing.T) {
 	}
 }
 
-func TestParameterNeverForwardsSecretToken(t *testing.T) {
-	c, srv := newTestClient(t, Config{})
-	srv.SetParameter(testNS, "p", "v")
-	ctx := metadata.AppendToOutgoingContext(context.Background(), "x-kms-secret-token", "legacy-must-not-leave")
-	if _, err := c.GetParameter(ctx, "p", WithSecretToken("must-not-leave")); err != nil {
-		t.Fatalf("GetParameter: %v", err)
-	}
-	if got := srv.LastMetadata("GetParameter").Get("x-kms-secret-token"); len(got) != 0 {
-		t.Fatalf("parameter secret-token metadata = %v, want none", got)
-	}
-}
-
-func TestWithSecretTokenRequestField(t *testing.T) {
-	c, srv := newTestClient(t, Config{Token: "identity-token"})
-	srv.SetSecret(testNS, "bound", []byte("v"))
-
-	_, err := c.GetSecret(context.Background(), "bound", WithSecretToken("per-secret-token"))
-	if err != nil {
-		t.Fatalf("GetSecret: %v", err)
-	}
-	md := srv.LastMetadata("GetSecret")
-	if got := md.Get("x-kms-secret-token"); len(got) != 0 {
-		t.Errorf("x-kms-secret-token metadata = %v, want none", got)
-	}
-	if got := srv.LastSecretToken("GetSecret"); got != "per-secret-token" {
-		t.Errorf("GetSecret secret_token = %q, want per-secret-token", got)
-	}
-	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer identity-token" {
-		t.Errorf("authorization metadata = %v", got)
-	}
-}
-
 func TestErrorMapping(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
 
@@ -287,19 +254,16 @@ func TestSecretCredentialsAlwaysReachServer(t *testing.T) {
 	srv.SetSecret(testNS, "bound", []byte("v1"))
 
 	// A later read without the token must reach the server and its live check.
-	if _, err := c.GetSecret(context.Background(), "bound", WithSecretToken("tok")); err != nil {
+	if _, err := c.GetSecret(context.Background(), "bound"); err != nil {
 		t.Fatalf("GetSecret with token: %v", err)
 	}
 	if _, err := c.GetSecret(context.Background(), "bound"); err != nil {
 		t.Fatalf("GetSecret without token: %v", err)
 	}
-	if got := srv.LastSecretToken("GetSecret"); got != "" {
-		t.Errorf("token-less read did not reach server; last RPC secret token = %q, want empty", got)
-	}
 
 	// A later credentialed read sees the server's current value.
 	srv.SetSecret(testNS, "bound", []byte("v2"))
-	s, err := c.GetSecret(context.Background(), "bound", WithSecretToken("tok"))
+	s, err := c.GetSecret(context.Background(), "bound")
 	if err != nil {
 		t.Fatalf("GetSecret with token after prime: %v", err)
 	}
@@ -314,7 +278,7 @@ func TestSecretNeverUsesCacheAfterLiveProtectionChange(t *testing.T) {
 	if _, err := c.GetSecret(context.Background(), "live-protection"); err != nil {
 		t.Fatal(err)
 	}
-	// Model another client binding or token-gating the same version: the next
+	// Model another client binding the same version: the next
 	// read must reach KMS and observe its credential rejection.
 	srv.SetSecretError(testNS, "live-protection", status.Error(codes.PermissionDenied, "credential required"))
 	if _, err := c.GetSecret(context.Background(), "live-protection"); !errors.Is(err, ErrPermissionDenied) {
@@ -350,15 +314,12 @@ func TestPutParameterAndSecret(t *testing.T) {
 	}
 
 	bindingKey := strings.Repeat("k", 32)
-	sres, err := c.PutSecret(ctx, "new-secret", []byte("shh"), WithGenerateAccessToken(), WithPutBindingKey(bindingKey))
+	_, err = c.PutSecret(ctx, "new-secret", []byte("shh"), WithPutBindingKey(bindingKey))
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	if sres.AccessToken == "" {
-		t.Errorf("expected minted access token")
-	}
 	calls := srv.PutSecretCalls()
-	if len(calls) != 1 || calls[0].BindingKey != bindingKey || !calls[0].GenerateAccessToken {
+	if len(calls) != 1 || calls[0].BindingKey != bindingKey {
 		t.Errorf("PutSecret call not recorded with flags: %+v", calls)
 	}
 	if calls[0].Namespace != testNS || calls[0].Key != "new-secret" {
@@ -368,14 +329,14 @@ func TestPutParameterAndSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !metadata.Bound || !metadata.HasAccessToken || len(metadata.Versions) != 1 ||
-		!metadata.Versions[0].Bound || !metadata.Versions[0].HasAccessToken {
+	if !metadata.Bound || len(metadata.Versions) != 1 ||
+		!metadata.Versions[0].Bound {
 		t.Fatalf("PutSecret live metadata = %+v", metadata)
 	}
 	if _, err := c.GetSecret(ctx, "new-secret"); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("uncredentialed bound read error = %v", err)
 	}
-	secret, err := c.GetSecret(ctx, "new-secret", WithSecretToken(sres.AccessToken), WithBindingKey(bindingKey))
+	secret, err := c.GetSecret(ctx, "new-secret", WithBindingKey(bindingKey))
 	if err != nil || secret.StringValue() != "shh" {
 		t.Fatalf("credentialed bound read = %v, %v", secret, err)
 	}

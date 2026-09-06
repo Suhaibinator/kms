@@ -5,6 +5,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
@@ -21,7 +22,7 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 	if err != nil {
 		return nil, err
 	}
-	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel(), req.GetSecretToken(), req.GetBindingKey())
+	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel(), req.GetBindingKey())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -40,27 +41,42 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 }
 
 func (h *secretServer) PutSecretV03(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+	// Field 6 used to request token protection. Protobuf preserves removed
+	// fields as unknown bytes; reject it so stale writers cannot silently lose
+	// protection they explicitly requested.
+	for unknown := req.ProtoReflect().GetUnknown(); len(unknown) > 0; {
+		number, kind, n := protowire.ConsumeTag(unknown)
+		if n < 0 {
+			return nil, status.Error(codes.InvalidArgument, "invalid secret request")
+		}
+		unknown = unknown[n:]
+		n = protowire.ConsumeFieldValue(number, kind, unknown)
+		if n < 0 {
+			return nil, status.Error(codes.InvalidArgument, "invalid secret request")
+		}
+		if number == 6 {
+			return nil, status.Error(codes.InvalidArgument, "per-secret access tokens are no longer supported; update the client")
+		}
+		unknown = unknown[n:]
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
 	res, err := h.s.svc.PutSecret(ctx, pr, core.PutSecretInput{
-		Ref:           refFromProto(req.GetRef()),
-		Value:         req.GetValue(),
-		ContentType:   req.GetContentType(),
-		Metadata:      req.GetMetadataJson(),
-		BindingKey:    req.GetBindingKey(),
-		GenerateToken: req.GetGenerateAccessToken(),
-		ExpiresAt:     req.GetExpiresAtUnixMs(),
+		Ref:         refFromProto(req.GetRef()),
+		Value:       req.GetValue(),
+		ContentType: req.GetContentType(),
+		Metadata:    req.GetMetadataJson(),
+		BindingKey:  req.GetBindingKey(),
+		ExpiresAt:   req.GetExpiresAtUnixMs(),
 	})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	// access_token is populated only when a token was minted.
 	return &kmsv1.PutSecretResponse{
-		Version:     res.Version,
-		Revision:    res.Revision,
-		AccessToken: res.AccessToken,
+		Version:  res.Version,
+		Revision: res.Revision,
 	}, nil
 }
 

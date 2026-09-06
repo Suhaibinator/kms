@@ -731,7 +731,6 @@ func cloneSecretLabels(labels map[string]uint64) map[string]uint64 {
 }
 
 func cloneMemSecretRecord(record storage.SecretRecord) storage.SecretRecord {
-	record.AccessTokenHash = bytes.Clone(record.AccessTokenHash)
 	record.Labels = cloneSecretLabels(record.Labels)
 	return record
 }
@@ -769,7 +768,7 @@ func (m *memStore) CreateSecretVersion(_ context.Context, params storage.CreateS
 		if params.Expected.Exists != exists {
 			return 0, 0, domain.Errorf(domain.ErrAborted, "secret changed concurrently")
 		}
-		if exists && (params.Expected.ID != row.record.ID || !bytes.Equal(params.Expected.AccessTokenHash, row.record.AccessTokenHash)) {
+		if exists && (params.Expected.ID != row.record.ID) {
 			return 0, 0, domain.Errorf(domain.ErrAborted, "secret changed concurrently")
 		}
 	}
@@ -793,17 +792,14 @@ func (m *memStore) CreateSecretVersion(_ context.Context, params storage.CreateS
 		}
 		m.secrets[params.Ref.String()] = row
 	}
-	if params.AccessTokenHash != nil {
-		row.record.AccessTokenHash = bytes.Clone(params.AccessTokenHash)
-	}
 	row.next = version
 	row.versions[version] = storage.SecretVersionRecord{
-		ID:             int64(version),
-		SecretID:       row.record.ID,
-		Version:        version,
-		ContentType:    params.ContentType,
-		Bound:          params.Bound,
-		HasAccessToken: len(row.record.AccessTokenHash) != 0,
+		ID:          int64(version),
+		SecretID:    row.record.ID,
+		Version:     version,
+		ContentType: params.ContentType,
+		Bound:       params.Bound,
+
 		Ciphertext:     bytes.Clone(payload.Ciphertext),
 		EncryptedDEK:   bytes.Clone(payload.EncryptedDEK),
 		KEKID:          payload.KEKID,
@@ -888,7 +884,7 @@ func (m *memStore) secretInfoLocked(row *secretRow) domain.Secret {
 	}
 	info := domain.Secret{
 		Ref: row.record.Ref, ContentType: row.record.ContentType, Bound: currentBound,
-		HasAccessToken: len(row.record.AccessTokenHash) != 0, Metadata: row.record.Metadata,
+		Metadata:  row.record.Metadata,
 		CreatedAt: row.record.CreatedAt, UpdatedAt: row.record.UpdatedAt,
 		Labels: cloneSecretLabels(row.record.Labels),
 	}
@@ -899,7 +895,7 @@ func (m *memStore) secretInfoLocked(row *secretRow) domain.Secret {
 		}
 		info.Versions = append(info.Versions, domain.SecretVersionInfo{
 			Version: record.Version, State: record.State, Bound: record.Bound,
-			HasAccessToken: record.HasAccessToken, CreatedBy: record.CreatedBy,
+			CreatedBy: record.CreatedBy,
 			CreatedAt: record.CreatedAt, DestroyedAt: record.DestroyedAt,
 			ExpiresAt: record.ExpiresAt, Metadata: record.Metadata,
 		})
@@ -1191,7 +1187,6 @@ func (m *memStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, a
 	for _, version := range affected {
 		record := row.versions[version]
 		record.ContentType, record.Metadata, record.KEKID, record.WrapMode, record.Algorithm, record.AAD = "", "", "", "", "", ""
-		record.Bound, record.HasAccessToken = false, false
 		record.Ciphertext, record.EncryptedDEK, record.BindingKeySalt, record.Nonce = nil, nil, nil, nil
 		record.ExpiresAt = time.Time{}
 		record.State, record.DestroyedAt = domain.StateDestroyed, now
@@ -1262,7 +1257,6 @@ func (m *memStore) PurgeSecretUnboundVersions(_ context.Context, ref domain.Ref,
 	for _, version := range affected {
 		record := row.versions[version]
 		record.ContentType, record.Metadata, record.KEKID, record.WrapMode, record.Algorithm, record.AAD = "", "", "", "", "", ""
-		record.Bound, record.HasAccessToken = false, false
 		record.Ciphertext, record.EncryptedDEK, record.BindingKeySalt, record.Nonce = nil, nil, nil, nil
 		record.ExpiresAt, record.State, record.DestroyedAt = time.Time{}, domain.StateDestroyed, now
 		row.versions[version] = record
@@ -1285,15 +1279,4 @@ func (m *memStore) setPurgeResultErr(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.purgeResultErr = err
-}
-
-func (m *memStore) UpdateSecretAccessTokenHash(_ context.Context, ref domain.Ref, hash []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row := m.secrets[ref.String()]
-	if row == nil {
-		return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
-	}
-	row.record.AccessTokenHash = bytes.Clone(hash)
-	return nil
 }

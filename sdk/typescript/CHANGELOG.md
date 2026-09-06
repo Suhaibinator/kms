@@ -8,6 +8,14 @@ a minor release may contain documented breaking changes.
 
 ### Changed
 
+- **Breaking:** remove per-secret access tokens from reads, writes, metadata,
+  declarative values, and release loaders. Remove `secretToken`,
+  `generateAccessToken`, and `secretTokenProvider` options; writes return only
+  version and revision. Authenticate with the client identity and supply
+  `bindingKey` / `bindingKeys` for bound versions. Missing release binding keys
+  now report `binding_key_unavailable`. See the
+  [database and SDK upgrade guide](https://github.com/Suhaibinator/kms/blob/main/docs/secret-token-removal.md).
+
 - **Breaking (0.3.0):** operator-owned binding keys replace legacy per-version
   key shares. Secret reads and writes accept `bindingKey`; bind, unbind, and key
   rotation create guarded new current versions, while administrators can purge

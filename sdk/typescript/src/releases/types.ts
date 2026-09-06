@@ -7,7 +7,7 @@ export type ReleaseState = (typeof RELEASE_STATES)[number];
 
 export const RELEASE_REJECTION_CATEGORIES = [
   "resolution_failed",
-  "token_unavailable",
+  "binding_key_unavailable",
   "version_mismatch",
   "digest_mismatch",
   "prepare_failed",

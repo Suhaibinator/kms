@@ -6,13 +6,12 @@ import "time"
 // one environment in the application dashboard. SecretValue is never present;
 // Value is populated only for parameters.
 type ApplicationConfigurationCell struct {
-	Environment    string
-	Present        bool
-	Value          string
-	ContentType    string
-	Version        uint64
-	Bound          bool
-	HasAccessToken bool
+	Environment string
+	Present     bool
+	Value       string
+	ContentType string
+	Version     uint64
+	Bound       bool
 }
 
 // ApplicationConfigurationRow compares one physical configuration key across

@@ -394,10 +394,7 @@ store, err := configkms.Start(ctx, client, configkms.Options{
     Release:   "runtime",
     Defaults:  appconfig.Defaults,
     Callbacks: configstore.SlogCallbacks(sink, configstore.SlogOptions{Component: "kms"}),
-    SecretTokenProvider: func(alias, path string) (string, bool) {
-        token, ok := bootstrapSecretTokens[alias]
-        return token, ok
-    },
+
 })
 if err != nil {
     return err
@@ -406,7 +403,6 @@ logger := buildLogger(store.Current()) // the logger usually depends on config
 sink.Set(logger)                       // replays the buffered startup records
 ```
 
-`SecretTokenProvider` supplies only the independent access-token credential.
 Binding keys do not use a callback or generated `Options` field: put them in
 the corresponding `kmsclient.Secret{BindKey: ...}` declarations returned by
 `Defaults`. The generated store owns extraction and removal so callers cannot
@@ -415,8 +411,8 @@ across aliases; each declaration may use any operator-chosen key.
 
 Before fetching a pinned secret, the underlying loader fresh-reads exact live
 metadata and verifies resource identity, version, enabled/destroyed state,
-expiry, and the version's independent bound/token flags. A missing required
-access token or binding key rejects the entire candidate; startup fails fast,
+expiry, and the version's independent binding flag. A missing required
+binding key rejects the entire candidate; startup fails fast,
 while a hot-reload rejection keeps the prior snapshot. Secret plaintext is
 never cached.
 
@@ -923,7 +919,7 @@ sent to the server:
 | Category | Operator response |
 |---|---|
 | `resolution_failed` | Revalidate that every exact pin exists, is readable, and is authorized for the application identity. |
-| `token_unavailable` | Provision the exact version's missing access token through `SecretTokenProvider` or binding key through its `kmsclient.Secret.BindKey` declaration; neither belongs in the release. |
+| `binding_key_unavailable` | Provide the exact version's binding key through its `kmsclient.Secret.BindKey` declaration; the key does not belong in the release. |
 | `version_mismatch` / `digest_mismatch` | Treat the pin or returned resource as inconsistent; validate again and investigate the server or storage before activating another release. |
 | `config_contract_mismatch` | Compare aliases, kinds, and literal `json` content types with the generated contract. This check happens before resource fetches. |
 | `config_decode_failed` | Publish a new complete group document fixing missing, unknown, duplicate, mistyped, out-of-range, or noncanonical values. |
@@ -953,7 +949,7 @@ create one new current version and leave the source unchanged; a new release
 must explicitly pin that version. Historical binding-key cohorts are retained
 for compromised-key preview and purge. A `reload=hot` secret pin can apply in-process; a
 `reload=restart` secret pin is rejected by running replicas and adopted on the
-intended restart or rollout. Secret plaintext, access tokens, and binding keys never enter parameter
+intended restart or rollout. Secret plaintext and binding keys never enter parameter
 JSON, defaults, generated schema/contract, drift reports, status, metrics, or
 acknowledgements.
 

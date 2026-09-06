@@ -288,7 +288,7 @@ func (r *Keyring) SetActive(k *KEK) {
 }
 
 // TokenHash returns the SHA-256 digest used to store and look up bearer
-// tokens and per-secret access tokens. Tokens are high-entropy random values,
+// identity tokens. Tokens are high-entropy random values,
 // so an unsalted hash is an appropriate verifier — and it must be
 // deterministic to serve as a lookup key.
 func TokenHash(token string) []byte {
@@ -297,7 +297,7 @@ func TokenHash(token string) []byte {
 }
 
 // GenerateToken mints a high-entropy bearer token with the given prefix
-// (e.g. "kms" or "kmss" for secret tokens) and returns the token plus its
+// (e.g. "kms" for identity tokens) and returns the token plus its
 // storage hash. The plaintext token is shown once and never persisted.
 func GenerateToken(prefix string) (token string, hash []byte, err error) {
 	b, err := randomBytes(32)

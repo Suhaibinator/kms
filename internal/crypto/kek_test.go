@@ -326,9 +326,9 @@ func TestGenerateToken(t *testing.T) {
 	if tok == tok2 {
 		t.Fatal("GenerateToken produced duplicate tokens")
 	}
-	// Prefix is honored for secret tokens too.
-	stok, _, _ := GenerateToken("kmss")
-	if !strings.HasPrefix(stok, "kmss_") {
-		t.Fatalf("secret token %q missing prefix", stok)
+	// Custom prefixes are honored too.
+	stok, _, _ := GenerateToken("test")
+	if !strings.HasPrefix(stok, "test_") {
+		t.Fatalf("custom token %q missing prefix", stok)
 	}
 }

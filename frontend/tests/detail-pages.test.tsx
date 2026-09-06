@@ -91,7 +91,7 @@ const SECRET: SecretMetadata = {
   key: "api-key",
   content_type: "text/plain",
   bound: false,
-  has_access_token: false,
+
   metadata_json: "{}",
   created_at_unix_ms: 1,
   updated_at_unix_ms: 2,
@@ -101,7 +101,7 @@ const SECRET: SecretMetadata = {
       version: 1,
       state: "enabled",
       bound: false,
-      has_access_token: false,
+
       created_by: "admin",
       created_at_unix_ms: 1,
       destroyed_at_unix_ms: 0,
@@ -112,7 +112,7 @@ const SECRET: SecretMetadata = {
       version: 2,
       state: "enabled",
       bound: false,
-      has_access_token: false,
+
       created_by: "admin",
       created_at_unix_ms: 2,
       destroyed_at_unix_ms: 0,

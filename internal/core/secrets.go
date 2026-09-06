@@ -30,9 +30,6 @@ type PutSecretInput struct {
 	// BindingKey is operator-owned key material used to bind this version. An
 	// empty value creates an unbound version; it is never persisted or hashed.
 	BindingKey string
-	// GenerateToken independently mints or rotates the secret-level access
-	// token, returned exactly once.
-	GenerateToken bool
 	// CreateOnly rejects the write when the secret already exists. Storage's
 	// write expectation also rejects a concurrent creation atomically.
 	CreateOnly bool
@@ -43,15 +40,11 @@ type PutSecretInput struct {
 type PutSecretResult struct {
 	Version  uint64
 	Revision uint64
-	// AccessToken is non-empty only when GenerateToken was set. It is never
-	// persisted or retrievable again.
-	AccessToken string
 }
 
-// GetSecret decrypts and returns a secret value for an authorized machine
-// caller. Per-secret access tokens, when set, are required — including for
-// admins (the audited admin path is RevealSecret).
-func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, secretToken, bindingKey string) (domain.SecretValue, error) {
+// GetSecret decrypts a version for an authorized caller. Bound versions require
+// the corresponding operator-owned binding key.
+func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -71,16 +64,7 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
-	// Both credentials are checked against the exact version before its state,
-	// expiry, or ciphertext is inspected. This prevents callers missing either
-	// credential from probing version state. Access-token failures remain a
-	// generic authorization denial; all unusable binding-key material collapses
-	// to the same generic decryption error.
-	if ver.HasAccessToken && !tokenHashMatches(secretToken, rec.AccessTokenHash) {
-		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
-			map[string]string{"reason": "credential"})
-		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
-	}
+	// Check the exact version's binding key before exposing its state or expiry.
 	if ver.Bound {
 		if err := testVersionBindingKey(keyring, ref, ver, bindingKey); err != nil {
 			s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
@@ -114,9 +98,8 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	}, nil
 }
 
-// RevealSecret is the audited admin break-glass path. It bypasses the
-// independent access-token gate, but a bound version still requires its
-// operator-owned binding key because the server cannot decrypt without it.
+// RevealSecret is the audited administrator reveal path. Bound versions still
+// require their operator-owned binding key.
 func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
@@ -221,16 +204,6 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	expected := &storage.SecretWriteExpectation{Exists: exists}
 	if exists {
 		expected.ID = existing.ID
-		expected.AccessTokenHash = append([]byte(nil), existing.AccessTokenHash...)
-	}
-
-	var newTokenHash []byte
-	var mintedToken string
-	if in.GenerateToken {
-		mintedToken, newTokenHash, err = crypto.GenerateToken("kmss")
-		if err != nil {
-			return PutSecretResult{}, err
-		}
 	}
 
 	// Keep the selected active KEK stable through the write in this process.
@@ -246,14 +219,13 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	value := in.Value
 	ref := in.Ref
 	version, revision, err := s.store.CreateSecretVersion(ctx, storage.CreateSecretParams{
-		Ref:             ref,
-		ContentType:     in.ContentType,
-		Metadata:        metadata,
-		CreatedBy:       pr.Identity.Name,
-		Bound:           bound,
-		AccessTokenHash: newTokenHash,
-		Expected:        expected,
-		ExpiresAt:       unixMSToTime(in.ExpiresAt),
+		Ref:         ref,
+		ContentType: in.ContentType,
+		Metadata:    metadata,
+		CreatedBy:   pr.Identity.Name,
+		Bound:       bound,
+		Expected:    expected,
+		ExpiresAt:   unixMSToTime(in.ExpiresAt),
 		Encrypt: func(version uint64) (storage.EncryptedPayload, error) {
 			aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, version)
 			var res crypto.EncryptResult
@@ -287,13 +259,10 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if bound {
 		meta["bound"] = "true"
 	}
-	if in.GenerateToken {
-		meta["token_minted"] = "true"
-	}
 	s.auditRefWithNamespaceID(ctx, pr, "secret.write", domain.ResourceSecret, ref, namespace.ID, version, "allow", meta)
 	s.getHub().Wake()
 
-	return PutSecretResult{Version: version, Revision: revision, AccessToken: mintedToken}, nil
+	return PutSecretResult{Version: version, Revision: revision}, nil
 }
 
 // SecretVersionTransitionResult reports the new current version and its

@@ -40,7 +40,6 @@ func TestTransitionSecretVersionClonesCurrentAndLeavesSourceImmutable(t *testing
 	r := ref("prod", "app", "transition")
 	expiresAt := time.Now().Add(-time.Hour).UTC()
 	putBindingVersion(t, st, r, 0, func(p *CreateSecretParams) {
-		p.AccessTokenHash = []byte("token-hash")
 		p.ExpiresAt = expiresAt
 	})
 	if _, err := st.SetSecretVersionState(ctx, r, 1, domain.StateDisabled); err != nil {
@@ -63,7 +62,7 @@ func TestTransitionSecretVersionClonesCurrentAndLeavesSourceImmutable(t *testing
 		t.Fatal("source row changed during transition")
 	}
 	bound := rawSecretVersion(t, st, r, 2)
-	if bound.Bound != 1 || bound.HasAccessToken != sourceBefore.HasAccessToken || bound.State != sourceBefore.State ||
+	if bound.Bound != 1 || bound.State != sourceBefore.State ||
 		bound.ContentType != sourceBefore.ContentType || bound.MetadataJSON != sourceBefore.MetadataJSON ||
 		!reflect.DeepEqual(bound.ExpiresAt, sourceBefore.ExpiresAt) || bound.CreatedBy != "operator" {
 		t.Fatalf("new version did not preserve non-protection properties: %+v", bound)
@@ -423,7 +422,7 @@ func TestPreviewAndPurgeSecretUnboundVersionsExactSet(t *testing.T) {
 	}
 	for _, version := range result.AffectedVersions {
 		row := rawSecretVersion(t, st, r, version)
-		if row.State != domain.StateDestroyed || row.ContentType != "" || row.HasAccessToken != 0 || len(row.Ciphertext) != 0 ||
+		if row.State != domain.StateDestroyed || row.ContentType != "" || len(row.Ciphertext) != 0 ||
 			len(row.EncryptedDEK) != 0 || row.KEKID != "" || row.WrapMode != "" || len(row.BindingKeySalt) != 0 ||
 			row.Algorithm != "" || len(row.Nonce) != 0 || row.AAD != "" || row.ExpiresAt != nil || row.MetadataJSON != "" {
 			t.Fatalf("v%d tombstone retained protected data: %+v", version, row)

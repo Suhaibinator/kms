@@ -11,17 +11,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestSecretCredentialsMapToIndependentRequestFields(t *testing.T) {
+func TestSecretBindingKeyMapsToRequestField(t *testing.T) {
 	client, server := newTestClient(t, Config{CacheTTL: 10})
 	server.SetSecret(testNS, "credentials", []byte("value"))
 
 	secret, err := client.GetSecret(context.Background(), "credentials",
-		WithSecretToken("access-token"), WithBindingKey("binding-key"))
+		WithBindingKey("binding-key"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got := server.LastSecretToken("GetSecret"); got != "access-token" {
-		t.Fatalf("secret token = %q", got)
 	}
 	if got := server.LastBindingKey("GetSecret"); got != "binding-key" {
 		t.Fatalf("binding key = %q", got)
@@ -160,7 +157,7 @@ func TestSecretErrorCanonicalizesWrappedContext(t *testing.T) {
 func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecretVersion(testNS, "cleanup-pending", []byte("value"), "text/plain", 1)
-	server.SetSecretVersionCredentials(testNS, "cleanup-pending", 1, "", strings.Repeat("k", 32))
+	server.SetSecretVersionCredentials(testNS, "cleanup-pending", 1, strings.Repeat("k", 32))
 	server.SetSecretOperationError("PurgeSecretBindingCohort", testNS, "cleanup-pending",
 		status.Error(codes.Unavailable, purgeCleanupPendingWireMessage))
 
@@ -181,20 +178,21 @@ func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
 	}
 }
 
-func TestSecretValueSendsBothCredentialsAndEnvSkipsKMS(t *testing.T) {
+func TestSecretValueSendsBindingKeyAndEnvSkipsKMS(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecret(testNS, "declarative", []byte("value"))
-	value := SecretValue{Key: "declarative", Token: "access-token", BindKey: NewBindingKey("binding-key")}
+	value := SecretValue{Key: "declarative", BindKey: NewBindingKey("binding-key")}
 	if err := value.InitContext(context.Background(), client); err != nil {
 		t.Fatal(err)
 	}
-	if server.LastSecretToken("GetSecret") != "access-token" || server.LastBindingKey("GetSecret") != "binding-key" {
-		t.Fatal("SecretValue did not send independent credentials")
+
+	if server.LastBindingKey("GetSecret") != "binding-key" {
+		t.Fatal("SecretValue did not send its binding key")
 	}
 
 	client2, server2 := newTestClient(t, Config{})
 	t.Setenv("KMSCLIENT_BINDING_TEST_OVERRIDE", "from-env")
-	override := SecretValue{Key: "declarative", Token: "token-must-not-be-used", BindKey: NewBindingKey("key-must-not-be-used"), EnvVar: "KMSCLIENT_BINDING_TEST_OVERRIDE"}
+	override := SecretValue{Key: "declarative", BindKey: NewBindingKey("key-must-not-be-used"), EnvVar: "KMSCLIENT_BINDING_TEST_OVERRIDE"}
 	if err := override.InitContext(context.Background(), client2); err != nil {
 		t.Fatal(err)
 	}
@@ -206,17 +204,17 @@ func TestSecretValueSendsBothCredentialsAndEnvSkipsKMS(t *testing.T) {
 func TestSecretMetadataPreservesExactVersionProtection(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecretVersion(testNS, "metadata", []byte("value"), "text/plain", 7)
-	server.SetSecretVersionMetadata(testNS, "metadata", 7, "disabled", true, true, 1234)
+	server.SetSecretVersionMetadata(testNS, "metadata", 7, "disabled", true, 1234)
 
 	metadata, err := client.GetSecretMetadata(context.Background(), "metadata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Path != "/"+testNS+"/metadata" || !metadata.Bound || !metadata.HasAccessToken || len(metadata.Versions) != 1 {
+	if metadata.Path != "/"+testNS+"/metadata" || !metadata.Bound || len(metadata.Versions) != 1 {
 		t.Fatalf("metadata = %+v", metadata)
 	}
 	version := metadata.Versions[0]
-	if version.Version != 7 || version.State != "disabled" || !version.Bound || !version.HasAccessToken || version.ExpiresAtUnixMS != 1234 {
+	if version.Version != 7 || version.State != "disabled" || !version.Bound || version.ExpiresAtUnixMS != 1234 {
 		t.Fatalf("version metadata = %+v", version)
 	}
 	metadata.Labels["current"] = 99
@@ -294,7 +292,7 @@ func TestSecretBindingManagementRequestMapping(t *testing.T) {
 func TestRotateSecretBindingKeySendsIdenticalKeysForServerValidation(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecretVersion(testNS, "managed", []byte("value"), "text/plain", 1)
-	server.SetSecretVersionCredentials(testNS, "managed", 1, "", strings.Repeat("k", 32))
+	server.SetSecretVersionCredentials(testNS, "managed", 1, strings.Repeat("k", 32))
 	key := strings.Repeat("k", 32)
 	if _, err := client.RotateSecretBindingKey(context.Background(), "managed", 1, key, key); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("RotateSecretBindingKey(no-op) = %v", err)

@@ -22,7 +22,6 @@ export interface SecretVersion {
   readonly expiresAtUnixMs: bigint;
   readonly metadataJson: string;
   readonly bound: boolean;
-  readonly hasAccessToken: boolean;
 }
 
 export interface SecretInfo {
@@ -31,7 +30,6 @@ export interface SecretInfo {
   readonly key: string;
   readonly contentType: string;
   readonly bound: boolean;
-  readonly hasAccessToken: boolean;
   readonly metadataJson: string;
   readonly createdAtUnixMs: bigint;
   readonly updatedAtUnixMs: bigint;
@@ -46,9 +44,7 @@ export interface PutResult {
   readonly revision: bigint;
 }
 
-export interface PutSecretResult extends PutResult {
-  readonly accessToken: string;
-}
+export interface PutSecretResult extends PutResult {}
 
 export interface SecretVersionTransitionResult {
   readonly currentVersion: bigint;

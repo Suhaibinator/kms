@@ -1,9 +1,7 @@
 import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import CopyButton from "@/components/CopyButton";
 import { JsonEditor } from "@/components/JsonEditor";
-import { Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
@@ -49,7 +47,6 @@ export default function NewSecretPage() {
 
   const [bindVersion, setBindVersion] = useState(false);
   const [bindingKey, setBindingKey] = useState("");
-  const [generateToken, setGenerateToken] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const { formRef, requestFocus } = useFocusFirstInvalid();
@@ -88,12 +85,6 @@ export default function NewSecretPage() {
   );
 
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
-
-  // Shown once after creation if the server minted an access token.
-  const [mintedToken, setMintedToken] = useState<string | null>(null);
-  const [createdRef, setCreatedRef] = useState<{ env: string; app: string; key: string } | null>(
-    null,
-  );
 
   const seeded = useRef(false);
   useEffect(() => {
@@ -145,23 +136,14 @@ export default function NewSecretPage() {
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
         ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
-        generate_access_token: generateToken,
         create_only: true,
         expires_at_unix_ms: expiresMs,
       });
       // Clear plaintext inputs from the DOM immediately.
       setValue("");
       const ref = { env: ns.env, app: ns.app, key: k };
-      setCreatedRef(ref);
-
-      if (res.access_token) {
-        // Hold navigation until the operator saves the one-time token.
-        setMintedToken(res.access_token);
-        toast.success(`Secret created (version ${res.version})`, "Save the access token below.");
-      } else {
-        toast.success(`Secret created (version ${res.version})`, `${ns.env}/${ns.app}/${k}`);
-        await router.push(links.secretDetail(ref));
-      }
+      toast.success(`Secret created (version ${res.version})`, `${ns.env}/${ns.app}/${k}`);
+      await router.push(links.secretDetail(ref));
     } catch (err) {
       if (isSecretAlreadyExists(err)) {
         toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
@@ -171,12 +153,6 @@ export default function NewSecretPage() {
     } finally {
       setSaving(false);
     }
-  }
-
-  function finishTokenReveal() {
-    const dest = createdRef;
-    setMintedToken(null);
-    if (dest) void router.push(links.secretDetail(dest));
   }
 
   // Back and Cancel return to the list the operator came from, not the unfiltered one.
@@ -302,17 +278,6 @@ export default function NewSecretPage() {
             </Field>
           ) : null}
 
-          <div className="checkbox-row mb-4">
-            <Checkbox
-              id="generate-access-token"
-              checked={generateToken}
-              onCheckedChange={setGenerateToken}
-            />
-            <label htmlFor="generate-access-token">
-              Also generate a per-secret access token (shown once after creation).
-            </label>
-          </div>
-
           <div className="form-actions">
             <ButtonLink href={listLink} variant="outline">
               Cancel
@@ -323,25 +288,6 @@ export default function NewSecretPage() {
           </div>
         </form>
       </div>
-
-      {/* One-time access token reveal */}
-      <Modal
-        mobileFullScreen
-        open={mintedToken !== null}
-        dismissible={false}
-        title="Save this access token now"
-        onClose={finishTokenReveal}
-        footer={<Button onClick={finishTokenReveal}>I&apos;ve saved it — continue</Button>}
-      >
-        <div className="danger-panel mb-4">
-          <strong>This token will never be shown again.</strong> Store it in your application&apos;s
-          configuration now. Access tokens and binding keys are independent credentials.
-        </div>
-        <div className="token-reveal">{mintedToken}</div>
-        <div className="row-wrap mt-4">
-          <CopyButton label="Copy token" value={() => mintedToken ?? ""} />
-        </div>
-      </Modal>
     </>
   );
 }

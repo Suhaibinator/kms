@@ -160,12 +160,11 @@ func TestReadTokenFileRejectsUnsafeFiles(t *testing.T) {
 }
 
 // newConnFlags builds a parsed connFlags bound to c, the way every command
-// does, including the per-secret token flags.
+// does, including the binding key flags.
 func newConnFlags(t *testing.T, c *testCLI, args ...string) *connFlags {
 	t.Helper()
 	fs := c.newFlags("test")
 	cf := addConnFlags(&c.CLI, fs)
-	addSecretTokenFlags(fs, cf, "per-secret `token`")
 	if !c.parseFlags(fs, args) {
 		t.Fatalf("parseFlags(%v) failed: %s", args, c.stderr())
 	}
@@ -186,21 +185,6 @@ func TestFinalizeLoadsTokenFileFromEnv(t *testing.T) {
 	}
 	if cf.token != "env-file-token" {
 		t.Fatalf("token = %q, want %q", cf.token, "env-file-token")
-	}
-}
-
-// TestFinalizeLoadsSecretTokenFileFromEnv covers the per-secret credential.
-func TestFinalizeLoadsSecretTokenFileFromEnv(t *testing.T) {
-	t.Parallel()
-	path := writeTokenFile(t, "secret-token", "per-secret\n", 0o600)
-	c := newTestCLI()
-	c.lookupEnv = mapLookup(map[string]string{"KMS_SECRET_TOKEN_FILE": path})
-	cf := newConnFlags(t, c)
-	if err := cf.finalize(); err != nil {
-		t.Fatalf("finalize: %v", err)
-	}
-	if cf.secretToken != "per-secret" {
-		t.Fatalf("secretToken = %q, want %q", cf.secretToken, "per-secret")
 	}
 }
 
@@ -227,17 +211,6 @@ func TestFinalizeRejectsTwoTokenSources(t *testing.T) {
 			name: "--token with --token-file",
 			args: []string{"--token", "inline", "--token-file", tokenPath},
 			want: "--token and --token-file",
-		},
-		{
-			name: "--secret-token with --secret-token-file",
-			args: []string{"--secret-token", "inline", "--secret-token-file", tokenPath},
-			want: "--secret-token and --secret-token-file",
-		},
-		{
-			name: "--secret-token with KMS_SECRET_TOKEN_FILE",
-			env:  map[string]string{"KMS_SECRET_TOKEN_FILE": tokenPath},
-			args: []string{"--secret-token", "inline"},
-			want: "--secret-token and --secret-token-file",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

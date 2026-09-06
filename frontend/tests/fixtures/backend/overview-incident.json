@@ -348,7 +348,6 @@
         "dev": {
           "bound": false,
           "content_type": "json",
-          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
@@ -356,7 +355,6 @@
         "prod": {
           "bound": false,
           "content_type": "json",
-          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
@@ -370,14 +368,12 @@
         "dev": {
           "bound": false,
           "content_type": "text/plain",
-          "has_access_token": false,
           "present": true,
           "version": 1
         },
         "prod": {
           "bound": false,
           "content_type": "text/plain",
-          "has_access_token": false,
           "present": true,
           "version": 1
         }
@@ -390,7 +386,6 @@
         "dev": {
           "bound": false,
           "content_type": "integer",
-          "has_access_token": false,
           "present": true,
           "value": "7",
           "version": 2
@@ -398,7 +393,6 @@
         "prod": {
           "bound": false,
           "content_type": "integer",
-          "has_access_token": false,
           "present": true,
           "value": "20",
           "version": 4

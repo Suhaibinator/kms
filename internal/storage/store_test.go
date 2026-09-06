@@ -1131,32 +1131,6 @@ func TestCreateSecretVersionMissingNamespace(t *testing.T) {
 	mustErrIs(t, err, domain.ErrNotFound, "create secret in missing namespace")
 }
 
-func TestCreateSecretVersionKeepsTokenHash(t *testing.T) {
-	st := newStore(t)
-	ctx := context.Background()
-	seedNS(t, st, "prod", "app")
-	r := ref("prod", "app", "s")
-	hash := []byte("tokenhash")
-	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, AccessTokenHash: hash, Encrypt: encryptStub(nil),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// New version without a hash must keep the existing one.
-	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Encrypt: encryptStub(nil),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rec, err := st.GetSecretRecord(ctx, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(rec.AccessTokenHash) != "tokenhash" {
-		t.Fatalf("token hash = %q, want kept", rec.AccessTokenHash)
-	}
-}
-
 func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -1164,7 +1138,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	r := ref("prod", "app", "guarded")
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: boundEncryptStub(nil),
+		Ref: r, Bound: true, ContentType: "type-v1", Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1190,32 +1164,8 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	}
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v2"),
-		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
-		Encrypt:  boundEncryptStub(nil),
-	}); err != nil {
-		t.Fatalf("current token rotation: %v", err)
-	}
-
-	encrypted = false
-	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
 		Ref: r, Bound: true,
-		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
-		Encrypt: func(version uint64) (EncryptedPayload, error) {
-			encrypted = true
-			return boundEncryptStub(nil)(version)
-		},
-	})
-	if !errors.Is(err, domain.ErrAborted) {
-		t.Fatalf("stale token write err = %v, want ErrAborted", err)
-	}
-	if encrypted {
-		t.Fatal("stale token write encrypted a version before rejecting the rotated token")
-	}
-
-	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true,
-		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v2")},
+		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID},
 		Encrypt:  boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatalf("write with current expectation: %v", err)
@@ -1224,8 +1174,8 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(info.Versions) != 3 {
-		t.Fatalf("version count = %d, want 3 successful writes only", len(info.Versions))
+	if len(info.Versions) != 2 {
+		t.Fatalf("version count = %d, want 2 successful writes only", len(info.Versions))
 	}
 }
 
@@ -1278,79 +1228,6 @@ func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
 	}
 	if len(info.Versions) != 1 || info.Labels[domain.LabelCurrent] != 1 {
 		t.Fatalf("concurrent create persisted %+v, want exactly version 1", info)
-	}
-}
-
-func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
-	st := newStore(t)
-	ctx := context.Background()
-	seedNS(t, st, "prod", "app")
-	r := ref("prod", "app", "concurrent-rotation")
-	oldHash := []byte("hash-v1")
-	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, AccessTokenHash: oldHash, Encrypt: boundEncryptStub(nil),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rec, err := st.GetSecretRecord(ctx, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	type result struct {
-		hash []byte
-		err  error
-	}
-	start := make(chan struct{})
-	results := make(chan result, 2)
-	var wg sync.WaitGroup
-	for i := range 2 {
-		newHash := fmt.Appendf(nil, "hash-v%d", i+2)
-		wg.Add(1)
-		go func(newHash []byte) {
-			defer wg.Done()
-			<-start
-			_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-				Ref: r, Bound: true, AccessTokenHash: newHash,
-				Expected: &SecretWriteExpectation{Exists: true, ID: rec.ID, AccessTokenHash: oldHash},
-				Encrypt:  boundEncryptStub(nil),
-			})
-			results <- result{hash: newHash, err: err}
-		}(newHash)
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-
-	var winnerHash []byte
-	var succeeded, conflicted int
-	for got := range results {
-		switch {
-		case got.err == nil:
-			succeeded++
-			winnerHash = got.hash
-		case errors.Is(got.err, domain.ErrAborted):
-			conflicted++
-		default:
-			t.Fatalf("unexpected concurrent rotation error: %v", got.err)
-		}
-	}
-	if succeeded != 1 || conflicted != 1 {
-		t.Fatalf("concurrent rotations succeeded=%d conflicted=%d, want 1/1", succeeded, conflicted)
-	}
-	latest, err := st.GetSecretRecord(ctx, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(latest.AccessTokenHash, winnerHash) {
-		t.Fatalf("persisted token hash = %q, want winning hash %q", latest.AccessTokenHash, winnerHash)
-	}
-	info, err := st.GetSecretInfo(ctx, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(info.Versions) != 2 || info.Labels[domain.LabelCurrent] != 2 {
-		t.Fatalf("concurrent rotations persisted %+v, want versions 1 and 2 only", info)
 	}
 }
 
@@ -1447,7 +1324,7 @@ func TestGetSecretVersionReadsOneSnapshot(t *testing.T) {
 	seedNS(t, reader, "prod", "app")
 	r := ref("prod", "app", "snapshot")
 	if _, _, err := reader.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, AccessTokenHash: []byte("hash-v1"), Encrypt: encryptStub(nil),
+		Ref: r, ContentType: "type-v1", Encrypt: encryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1491,7 +1368,7 @@ func TestGetSecretVersionReadsOneSnapshot(t *testing.T) {
 	writeDone := make(chan error, 1)
 	go func() {
 		_, _, err := writer.CreateSecretVersion(ctx, CreateSecretParams{
-			Ref: r, AccessTokenHash: []byte("hash-v2"), Encrypt: encryptStub(nil),
+			Ref: r, ContentType: "type-v2", Encrypt: encryptStub(nil),
 		})
 		writeDone <- err
 	}()
@@ -1508,8 +1385,8 @@ func TestGetSecretVersionReadsOneSnapshot(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("GetSecretVersion: %v", got.err)
 	}
-	if string(got.rec.AccessTokenHash) != "hash-v1" || got.ver.Version != 1 {
-		t.Fatalf("read mixed snapshots: hash=%q version=%d, want hash-v1/version 1", got.rec.AccessTokenHash, got.ver.Version)
+	if got.rec.ContentType != "type-v1" || got.ver.Version != 1 {
+		t.Fatalf("read mixed snapshots: hash=%q version=%d, want hash-v1/version 1", got.rec.ContentType, got.ver.Version)
 	}
 	if !writerCompleted {
 		concurrentWriteErr = <-writeDone
@@ -1522,8 +1399,8 @@ func TestGetSecretVersionReadsOneSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(latest.AccessTokenHash) != "hash-v2" || latestVersion.Version != 2 {
-		t.Fatalf("post-write read = hash %q/version %d, want hash-v2/version 2", latest.AccessTokenHash, latestVersion.Version)
+	if latest.ContentType != "type-v2" || latestVersion.Version != 2 {
+		t.Fatalf("post-write read = hash %q/version %d, want hash-v2/version 2", latest.ContentType, latestVersion.Version)
 	}
 }
 
@@ -1625,12 +1502,10 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, ContentType: "application/json", AccessTokenHash: []byte("token-v2"), Encrypt: encryptStub(nil),
+		Ref: r, ContentType: "application/json", Encrypt: encryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Omitting a hash preserves the per-secret token and records that the new
-	// version is protected without minting or rotating it.
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
 		Ref: r, ContentType: "application/yaml", Encrypt: encryptStub(nil),
 	}); err != nil {
@@ -1641,30 +1516,30 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.ContentType != "application/yaml" || len(rec.AccessTokenHash) == 0 {
+	if rec.ContentType != "application/yaml" {
 		t.Fatalf("latest secret metadata = %+v, want yaml with token", rec)
 	}
-	if v1.ContentType != "text/plain" || v1.Bound || v1.HasAccessToken {
+	if v1.ContentType != "text/plain" || v1.Bound {
 		t.Fatalf("v1 attributes = %+v, want original unprotected text version", v1)
 	}
 	_, v2, err := st.GetSecretVersion(ctx, r, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v2.ContentType != "application/json" || v2.Bound || !v2.HasAccessToken {
+	if v2.ContentType != "application/json" || v2.Bound {
 		t.Fatalf("v2 attributes = %+v, want protected json version", v2)
 	}
 	_, v3, err := st.GetSecretVersion(ctx, r, 3, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v3.ContentType != "application/yaml" || !v3.HasAccessToken {
-		t.Fatalf("v3 attributes = %+v, want inherited token protection", v3)
+	if v3.ContentType != "application/yaml" {
+		t.Fatalf("v3 attributes = %+v, want live version metadata", v3)
 	}
 
 	bound := ref("prod", "app", "bound")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: bound, Bound: true, AccessTokenHash: []byte("bound-token"), Encrypt: boundEncryptStub(nil),
+		Ref: bound, Bound: true, Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1672,7 +1547,7 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !boundV1.Bound || !boundV1.HasAccessToken {
+	if !boundV1.Bound {
 		t.Fatalf("bound v1 attributes = %+v", boundV1)
 	}
 }
@@ -1883,19 +1758,16 @@ func TestSecretInfoAndList(t *testing.T) {
 	ns := nsRef("prod", "app")
 	seedNS(t, st, "prod", "app")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: domain.Ref{NS: ns, Key: "a/one"}, AccessTokenHash: []byte("h"), Encrypt: encryptStub(nil),
+		Ref: domain.Ref{NS: ns, Key: "a/one"}, Encrypt: encryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	putSecret(t, st, domain.Ref{NS: ns, Key: "a/two"}, true)
 	putSecret(t, st, domain.Ref{NS: ns, Key: "b/three"}, false)
 
-	info, err := st.GetSecretInfo(ctx, domain.Ref{NS: ns, Key: "a/one"})
+	_, err := st.GetSecretInfo(ctx, domain.Ref{NS: ns, Key: "a/one"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !info.HasAccessToken {
-		t.Fatal("HasAccessToken should be true")
 	}
 
 	list, _, err := st.ListSecrets(ctx, ns, "a", ListPage{Limit: 100})
@@ -1930,31 +1802,6 @@ func TestDeleteSecret(t *testing.T) {
 	}
 	_, err := st.GetSecretRecord(ctx, r)
 	mustErrIs(t, err, domain.ErrNotFound, "after delete")
-}
-
-func TestUpdateSecretAccessTokenHash(t *testing.T) {
-	st := newStore(t)
-	ctx := context.Background()
-	seedNS(t, st, "prod", "app")
-	r := ref("prod", "app", "s")
-	putSecret(t, st, r, false)
-	if err := st.UpdateSecretAccessTokenHash(ctx, r, []byte("newhash")); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := st.GetSecretRecord(ctx, r)
-	if string(rec.AccessTokenHash) != "newhash" {
-		t.Fatalf("hash = %q", rec.AccessTokenHash)
-	}
-	// clearing to nil.
-	if err := st.UpdateSecretAccessTokenHash(ctx, r, nil); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ = st.GetSecretRecord(ctx, r)
-	if rec.AccessTokenHash != nil {
-		t.Fatalf("hash = %v, want nil", rec.AccessTokenHash)
-	}
-	err := st.UpdateSecretAccessTokenHash(ctx, ref("prod", "app", "missing"), []byte("x"))
-	mustErrIs(t, err, domain.ErrNotFound, "update missing secret")
 }
 
 // ---- key metadata / rotation ---------------------------------------------

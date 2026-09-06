@@ -162,7 +162,7 @@ describe("apiFetch", () => {
       content_type: "text/plain",
       metadata_json: "{}",
       binding_key: "operator-binding-key-00000000001",
-      generate_access_token: false,
+
       expires_at_unix_ms: 0,
     });
 
@@ -431,7 +431,7 @@ describe("secret operation error boundary", () => {
           content_type: "text/plain",
           metadata_json: "{}",
           binding_key: bindingKeyCanary,
-          generate_access_token: true,
+
           expires_at_unix_ms: 0,
         }),
     ],

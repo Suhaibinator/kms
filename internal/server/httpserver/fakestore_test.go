@@ -412,14 +412,11 @@ func (s *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 		s.secrets[k] = sec
 	}
 	sec.next = v
-	if p.AccessTokenHash != nil {
-		sec.rec.AccessTokenHash = p.AccessTokenHash
-	}
 	sec.versions[v] = storage.SecretVersionRecord{
 		ID: int64(v), SecretID: sec.rec.ID, Version: v,
 		ContentType: p.ContentType, Bound: p.Bound,
-		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
-		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
+
+		Ciphertext: payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
 		KEKID: payload.KEKID, WrapMode: payload.WrapMode, BindingKeySalt: payload.BindingKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: now, ExpiresAt: p.ExpiresAt,
@@ -529,7 +526,7 @@ func (s *fakeStore) secretMeta(sec *fakeSecret) domain.Secret {
 	}
 	meta := domain.Secret{
 		Ref: sec.rec.Ref, ContentType: sec.rec.ContentType, Bound: currentBound,
-		HasAccessToken: len(sec.rec.AccessTokenHash) > 0, Metadata: sec.rec.Metadata,
+		Metadata:  sec.rec.Metadata,
 		CreatedAt: sec.rec.CreatedAt, UpdatedAt: sec.rec.UpdatedAt, Labels: cloneLabels(sec.rec.Labels),
 	}
 	for v := uint64(1); v <= sec.next; v++ {
@@ -538,7 +535,7 @@ func (s *fakeStore) secretMeta(sec *fakeSecret) domain.Secret {
 			continue
 		}
 		meta.Versions = append(meta.Versions, domain.SecretVersionInfo{
-			Version: v, Bound: ver.Bound, HasAccessToken: ver.HasAccessToken,
+			Version: v, Bound: ver.Bound,
 			State: ver.State, CreatedBy: ver.CreatedBy, CreatedAt: ver.CreatedAt,
 			DestroyedAt: ver.DestroyedAt, ExpiresAt: ver.ExpiresAt, Metadata: ver.Metadata,
 		})
@@ -795,8 +792,8 @@ func (s *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 	for _, version := range affected {
 		ver := sec.versions[version]
 		ver.ContentType, ver.Metadata, ver.KEKID, ver.WrapMode, ver.Algorithm, ver.AAD = "", "", "", "", "", ""
-		ver.Bound, ver.HasAccessToken = false, false
 		ver.Ciphertext, ver.EncryptedDEK, ver.BindingKeySalt, ver.Nonce = nil, nil, nil, nil
+		ver.Bound = false
 		ver.ExpiresAt = time.Time{}
 		ver.State, ver.DestroyedAt = domain.StateDestroyed, now
 		sec.versions[version] = ver
@@ -863,8 +860,8 @@ func (s *fakeStore) PurgeSecretUnboundVersions(_ context.Context, ref domain.Ref
 	for _, version := range affected {
 		record := sec.versions[version]
 		record.ContentType, record.Metadata, record.KEKID, record.WrapMode, record.Algorithm, record.AAD = "", "", "", "", "", ""
-		record.Bound, record.HasAccessToken = false, false
 		record.Ciphertext, record.EncryptedDEK, record.BindingKeySalt, record.Nonce = nil, nil, nil, nil
+		record.Bound = false
 		record.ExpiresAt, record.State, record.DestroyedAt = time.Time{}, domain.StateDestroyed, now
 		sec.versions[version] = record
 	}
@@ -885,17 +882,6 @@ func (s *fakeStore) setPurgeResultErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.purgeResultErr = err
-}
-
-func (s *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, ref domain.Ref, hash []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sec := s.secrets[refKey(ref)]
-	if sec == nil {
-		return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
-	}
-	sec.rec.AccessTokenHash = hash
-	return nil
 }
 
 // --- identities ------------------------------------------------------------
@@ -1217,11 +1203,6 @@ func cloneLabels(m map[string]uint64) map[string]uint64 {
 
 func cloneSecretRecord(r storage.SecretRecord) storage.SecretRecord {
 	r.Labels = cloneLabels(r.Labels)
-	if r.AccessTokenHash != nil {
-		h := make([]byte, len(r.AccessTokenHash))
-		copy(h, r.AccessTokenHash)
-		r.AccessTokenHash = h
-	}
 	return r
 }
 

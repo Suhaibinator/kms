@@ -42,7 +42,7 @@ func (c *CLI) cmdExec(args []string) int {
 	addEnvSelectionFlags(fs, &sel)
 	preserveEnv := fs.Bool("preserve-env", false, "let an existing environment variable win over an injected one of the same name (the shadowed names are reported)")
 	c.setUsage(fs, "exec ENV/APP [flags] -- COMMAND [ARGS...]",
-		"Run COMMAND with the namespace's parameters and secrets injected as environment variables. Secret-inclusive resolution fails before launch if any selected secret is unavailable; --no-secrets intentionally selects parameters only, while namespace mode may opt into warned omission with --allow-incomplete-secrets. The CLI resolves every value first, then replaces itself with COMMAND (on Unix), so signals and the exit status pass straight through. Injected variables win over the parent environment unless --preserve-env is given; binding keys and KMS_SECRET_TOKEN_* variables never reach the command. Prefer --release NAME in production: the values are then the exact, digest-verified versions the active release pins.", false)
+		"Run COMMAND with the namespace's parameters and secrets injected as environment variables. Secret-inclusive resolution fails before launch if any selected secret is unavailable; --no-secrets intentionally selects parameters only, while namespace mode may opt into warned omission with --allow-incomplete-secrets. The CLI resolves every value first, then replaces itself with COMMAND (on Unix), so signals and the exit status pass straight through. Injected variables win over the parent environment unless --preserve-env is given; process-level binding keys never reach the command. Prefer --release NAME in production: the values are then the exact, digest-verified versions the active release pins.", false)
 	if !c.parseFlags(fs, own) {
 		return 2
 	}
@@ -100,8 +100,7 @@ func (c *CLI) cmdExec(args []string) int {
 }
 
 // scrubBindingKeyEnvironment removes the two exact process-level binding-key
-// variables before exec. Per-secret access-token variables are independently
-// removed by envinject.Merge. Near-miss names are intentionally preserved.
+// variables before exec. Near-miss names are intentionally preserved.
 func scrubBindingKeyEnvironment(parent []string, caseInsensitive bool) []string {
 	out := make([]string, 0, len(parent))
 	for _, entry := range parent {
@@ -125,23 +124,7 @@ func scrubBindingKeyEnvironment(parent []string, caseInsensitive bool) []string 
 }
 
 func scrubChildCredentialEnvironment(parent []string, caseInsensitive bool) []string {
-	withoutBindingKeys := scrubBindingKeyEnvironment(parent, caseInsensitive)
-	out := make([]string, 0, len(withoutBindingKeys))
-	for _, entry := range withoutBindingKeys {
-		name, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			out = append(out, entry)
-			continue
-		}
-		isSecretToken := strings.HasPrefix(name, secretTokenEnvPrefix)
-		if caseInsensitive && len(name) >= len(secretTokenEnvPrefix) {
-			isSecretToken = strings.EqualFold(name[:len(secretTokenEnvPrefix)], secretTokenEnvPrefix)
-		}
-		if !isSecretToken {
-			out = append(out, entry)
-		}
-	}
-	return out
+	return scrubBindingKeyEnvironment(parent, caseInsensitive)
 }
 
 func removeEnvironmentNames(entries, names []string, caseInsensitive bool) []string {

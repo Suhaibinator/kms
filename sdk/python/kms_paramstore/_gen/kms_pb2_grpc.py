@@ -1126,7 +1126,7 @@ class ConfigurationReleaseServiceStub:
 
     Configuration releases are immutable namespace-scoped manifests. They
     contain exact parameter/secret version references and non-sensitive
-    metadata only; values and secret access tokens are never embedded.
+    metadata only; values and binding keys are never embedded.
     """
 
     def __init__(self, channel):
@@ -1184,7 +1184,7 @@ class ConfigurationReleaseServiceServicer:
 
     Configuration releases are immutable namespace-scoped manifests. They
     contain exact parameter/secret version references and non-sensitive
-    metadata only; values and secret access tokens are never embedded.
+    metadata only; values and binding keys are never embedded.
     """
 
     def CreateRelease(self, request, context):
@@ -1301,7 +1301,7 @@ class ConfigurationReleaseService:
 
     Configuration releases are immutable namespace-scoped manifests. They
     contain exact parameter/secret version references and non-sensitive
-    metadata only; values and secret access tokens are never embedded.
+    metadata only; values and binding keys are never embedded.
     """
 
     @staticmethod

@@ -66,7 +66,7 @@ class ParameterVersionInfo(_message.Message):
     def __init__(self, version: _Optional[int] = ..., content_type: _Optional[str] = ..., state: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ...) -> None: ...
 
 class SecretMetadata(_message.Message):
-    __slots__ = ("ref", "content_type", "bound", "has_access_token", "metadata_json", "created_at_unix_ms", "updated_at_unix_ms", "labels", "versions")
+    __slots__ = ("ref", "content_type", "bound", "metadata_json", "created_at_unix_ms", "updated_at_unix_ms", "labels", "versions")
     class LabelsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -77,7 +77,6 @@ class SecretMetadata(_message.Message):
     REF_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOUND_FIELD_NUMBER: _ClassVar[int]
-    HAS_ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     UPDATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
@@ -86,16 +85,15 @@ class SecretMetadata(_message.Message):
     ref: ResourceRef
     content_type: str
     bound: bool
-    has_access_token: bool
     metadata_json: str
     created_at_unix_ms: int
     updated_at_unix_ms: int
     labels: _containers.ScalarMap[str, int]
     versions: _containers.RepeatedCompositeFieldContainer[SecretVersionInfo]
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., content_type: _Optional[str] = ..., bound: _Optional[bool] = ..., has_access_token: _Optional[bool] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., updated_at_unix_ms: _Optional[int] = ..., labels: _Optional[_Mapping[str, int]] = ..., versions: _Optional[_Iterable[_Union[SecretVersionInfo, _Mapping]]] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., content_type: _Optional[str] = ..., bound: _Optional[bool] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., updated_at_unix_ms: _Optional[int] = ..., labels: _Optional[_Mapping[str, int]] = ..., versions: _Optional[_Iterable[_Union[SecretVersionInfo, _Mapping]]] = ...) -> None: ...
 
 class SecretVersionInfo(_message.Message):
-    __slots__ = ("version", "state", "created_by", "created_at_unix_ms", "destroyed_at_unix_ms", "expires_at_unix_ms", "metadata_json", "bound", "has_access_token")
+    __slots__ = ("version", "state", "created_by", "created_at_unix_ms", "destroyed_at_unix_ms", "expires_at_unix_ms", "metadata_json", "bound")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     CREATED_BY_FIELD_NUMBER: _ClassVar[int]
@@ -104,7 +102,6 @@ class SecretVersionInfo(_message.Message):
     EXPIRES_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     BOUND_FIELD_NUMBER: _ClassVar[int]
-    HAS_ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     version: int
     state: str
     created_by: str
@@ -113,8 +110,7 @@ class SecretVersionInfo(_message.Message):
     expires_at_unix_ms: int
     metadata_json: str
     bound: bool
-    has_access_token: bool
-    def __init__(self, version: _Optional[int] = ..., state: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., destroyed_at_unix_ms: _Optional[int] = ..., expires_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ..., bound: _Optional[bool] = ..., has_access_token: _Optional[bool] = ...) -> None: ...
+    def __init__(self, version: _Optional[int] = ..., state: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., destroyed_at_unix_ms: _Optional[int] = ..., expires_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ..., bound: _Optional[bool] = ...) -> None: ...
 
 class GetParameterRequest(_message.Message):
     __slots__ = ("ref", "version", "label")
@@ -216,18 +212,16 @@ class GetParameterMetadataResponse(_message.Message):
     def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., updated_at_unix_ms: _Optional[int] = ..., labels: _Optional[_Mapping[str, int]] = ..., versions: _Optional[_Iterable[_Union[ParameterVersionInfo, _Mapping]]] = ...) -> None: ...
 
 class GetSecretRequest(_message.Message):
-    __slots__ = ("ref", "version", "label", "secret_token", "binding_key")
+    __slots__ = ("ref", "version", "label", "binding_key")
     REF_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
-    SECRET_TOKEN_FIELD_NUMBER: _ClassVar[int]
     BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
     version: int
     label: str
-    secret_token: str
     binding_key: str
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., label: _Optional[str] = ..., secret_token: _Optional[str] = ..., binding_key: _Optional[str] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., label: _Optional[str] = ..., binding_key: _Optional[str] = ...) -> None: ...
 
 class GetSecretResponse(_message.Message):
     __slots__ = ("ref", "version", "value", "content_type", "metadata_json", "created_at_unix_ms")
@@ -246,32 +240,28 @@ class GetSecretResponse(_message.Message):
     def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
 
 class PutSecretRequest(_message.Message):
-    __slots__ = ("ref", "value", "content_type", "metadata_json", "binding_key", "generate_access_token", "expires_at_unix_ms")
+    __slots__ = ("ref", "value", "content_type", "metadata_json", "binding_key", "expires_at_unix_ms")
     REF_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
-    GENERATE_ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
     value: bytes
     content_type: str
     metadata_json: str
     binding_key: str
-    generate_access_token: bool
     expires_at_unix_ms: int
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., binding_key: _Optional[str] = ..., generate_access_token: _Optional[bool] = ..., expires_at_unix_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., binding_key: _Optional[str] = ..., expires_at_unix_ms: _Optional[int] = ...) -> None: ...
 
 class PutSecretResponse(_message.Message):
-    __slots__ = ("version", "revision", "access_token")
+    __slots__ = ("version", "revision")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
-    ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     version: int
     revision: int
-    access_token: str
-    def __init__(self, version: _Optional[int] = ..., revision: _Optional[int] = ..., access_token: _Optional[str] = ...) -> None: ...
+    def __init__(self, version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class ListSecretsRequest(_message.Message):
     __slots__ = ("namespace", "key_prefix", "page_size", "page_token")

@@ -33,58 +33,52 @@ func TestBindingKeyCredentialsAndLiveMetadata(t *testing.T) {
 	}
 
 	created, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Ref: ref, Value: []byte("bound-and-token-gated"), BindingKey: integrationBindingKeyA, GenerateToken: true,
+		Ref: ref, Value: []byte("bound-value"), BindingKey: integrationBindingKeyA,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret v1: %v", err)
 	}
-	if created.Version != 1 || created.AccessToken == "" {
+	if created.Version != 1 {
 		t.Fatalf("PutSecret v1 result = %+v, want version 1 and one-time access token", created)
 	}
 
 	for _, tc := range []struct {
 		name       string
-		token      string
 		bindingKey string
 		want       error
 	}{
-		{name: "neither credential", want: domain.ErrPermissionDenied},
-		{name: "binding key only", bindingKey: integrationBindingKeyA, want: domain.ErrPermissionDenied},
-		{name: "access token only", token: created.AccessToken, want: domain.ErrDecryptFailed},
-		{name: "wrong access token", token: "kmss_wrong-access-token", bindingKey: integrationBindingKeyA, want: domain.ErrPermissionDenied},
-		{name: "wrong binding key", token: created.AccessToken, bindingKey: integrationBindingKeyB, want: domain.ErrDecryptFailed},
+		{name: "missing binding key", want: domain.ErrDecryptFailed},
+		{name: "wrong binding key", bindingKey: integrationBindingKeyB, want: domain.ErrDecryptFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", tc.token, tc.bindingKey); !errors.Is(err, tc.want) {
+			if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", tc.bindingKey); !errors.Is(err, tc.want) {
 				t.Fatalf("GetSecret err = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", created.AccessToken, integrationBindingKeyA)
-	if err != nil || string(got.Value) != "bound-and-token-gated" {
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", integrationBindingKeyA)
+	if err != nil || string(got.Value) != "bound-value" {
 		t.Fatalf("GetSecret(correct credentials) = %q err=%v", got.Value, err)
 	}
 
-	// Reveal bypasses only the independent access-token gate. It still cannot
-	// open a bound version without the operator-owned binding key.
+	// Reveal cannot open a bound version without its operator-owned binding key.
 	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("RevealSecret(missing binding key) err = %v, want ErrDecryptFailed", err)
 	}
 	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 1, "", integrationBindingKeyA)
-	if err != nil || string(revealed.Value) != "bound-and-token-gated" {
+	if err != nil || string(revealed.Value) != "bound-value" {
 		t.Fatalf("RevealSecret(binding key only) = %q err=%v", revealed.Value, err)
 	}
 
-	// Protection is selected independently for every new version. The existing
-	// secret-level access-token hash continues to gate both new versions.
+	// Binding is selected independently for every new version.
 	v2, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("unbound")})
-	if err != nil || v2.Version != 2 || v2.AccessToken != "" {
+	if err != nil || v2.Version != 2 {
 		t.Fatalf("PutSecret v2 = %+v err=%v", v2, err)
 	}
 	v3, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
 		Ref: ref, Value: []byte("bound-again"), BindingKey: integrationBindingKeyB,
 	})
-	if err != nil || v3.Version != 3 || v3.AccessToken != "" {
+	if err != nil || v3.Version != 3 {
 		t.Fatalf("PutSecret v3 = %+v err=%v", v3, err)
 	}
 
@@ -92,12 +86,12 @@ func TestBindingKeyCredentialsAndLiveMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSecretInfo: %v", err)
 	}
-	if !info.Bound || !info.HasAccessToken || info.Labels[domain.LabelCurrent] != 3 {
-		t.Fatalf("current metadata = %+v, want bound and token-gated at v3", info)
+	if !info.Bound || info.Labels[domain.LabelCurrent] != 3 {
+		t.Fatalf("current metadata = %+v, want bound at v3", info)
 	}
-	assertSecretVersionProtection(t, info, 1, true, true)
-	assertSecretVersionProtection(t, info, 2, false, true)
-	assertSecretVersionProtection(t, info, 3, true, true)
+	assertSecretVersionProtection(t, info, 1, true)
+	assertSecretVersionProtection(t, info, 2, false)
+	assertSecretVersionProtection(t, info, 3, true)
 	if cohort, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA); err != nil || !slices.Equal(cohort.AffectedVersions, []uint64{1}) {
 		t.Fatalf("v1 cohort crossed the unbound v2 boundary: %+v err=%v", cohort, err)
 	}
@@ -105,13 +99,10 @@ func TestBindingKeyCredentialsAndLiveMetadata(t *testing.T) {
 		t.Fatalf("v3 cohort crossed the unbound v2 boundary: %+v err=%v", cohort, err)
 	}
 
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Fatalf("unbound token-gated v2 without token err = %v, want ErrPermissionDenied", err)
-	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", created.AccessToken, ""); err != nil || string(got.Value) != "unbound" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", ""); err != nil || string(got.Value) != "unbound" {
 		t.Fatalf("GetSecret v2 = %q err=%v", got.Value, err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", created.AccessToken, integrationBindingKeyB); err != nil || string(got.Value) != "bound-again" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", integrationBindingKeyB); err != nil || string(got.Value) != "bound-again" {
 		t.Fatalf("GetSecret v3 = %q err=%v", got.Value, err)
 	}
 
@@ -158,13 +149,13 @@ func TestUnbindCreatesNewVersionAndPreservesReleasePinnedSource(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(sourceAfter, sourceBefore) {
 		t.Fatalf("release-pinned source changed: before=%+v after=%+v err=%v", sourceBefore, sourceAfter, err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("historical bound source no longer requires its old key: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "stable-value" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", integrationBindingKeyA); err != nil || string(got.Value) != "stable-value" {
 		t.Fatalf("historical source read=%q err=%v", got.Value, err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); err != nil || string(got.Value) != "stable-value" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", ""); err != nil || string(got.Value) != "stable-value" {
 		t.Fatalf("new unbound read=%q err=%v", got.Value, err)
 	}
 	storedOld, err := h.svc.GetConfigurationRelease(ctx, h.admin, ref.NS, "runtime", oldRelease.Version)
@@ -215,20 +206,20 @@ func TestRotationCreatesOneVersionAndLeavesHistoricalCohortUnderOldKey(t *testin
 	if current, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 3, integrationBindingKeyB); err != nil || !slices.Equal(current.AffectedVersions, []uint64{3}) {
 		t.Fatalf("new cohort=%+v err=%v", current, err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "old-2" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", integrationBindingKeyA); err != nil || string(got.Value) != "old-2" {
 		t.Fatalf("old cohort read=%q err=%v", got.Value, err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", integrationBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("new version accepted old key: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
 		t.Fatalf("rotated current read=%q err=%v", got.Value, err)
 	}
 	old, _ := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA)
 	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA, old.Revision, old.AffectedVersions); err != nil {
 		t.Fatalf("purge old cohort: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
 		t.Fatalf("old-cohort purge harmed new current: read=%q err=%v", got.Value, err)
 	}
 }
@@ -278,7 +269,7 @@ func TestPurgeUnboundVersionsBypassesReleasePinsAndPreservesBoundVersions(t *tes
 	if err != nil || !slices.Equal(purged.AffectedVersions, []uint64{1, 3}) {
 		t.Fatalf("purge=%+v err=%v", purged, err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "bound-2" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", integrationBindingKeyA); err != nil || string(got.Value) != "bound-2" {
 		t.Fatalf("bound version after purge=%q err=%v", got.Value, err)
 	}
 	info, err := h.svc.GetSecretInfo(ctx, h.admin, ref)
@@ -390,10 +381,10 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 	if info.Bound || info.Labels[domain.LabelCurrent] != 3 || info.Labels[domain.LabelPrevious] != 2 {
 		t.Fatalf("purge moved current or retained its bound summary: %+v", info)
 	}
-	assertSecretVersionProtection(t, info, 1, true, false)
+	assertSecretVersionProtection(t, info, 1, true)
 	for _, version := range []uint64{2, 3} {
 		versionInfo := findSecretVersionInfo(t, info, version)
-		if versionInfo.State != domain.StateDestroyed || versionInfo.Bound || versionInfo.HasAccessToken || versionInfo.Metadata != "" {
+		if versionInfo.State != domain.StateDestroyed || versionInfo.Bound || versionInfo.Metadata != "" {
 			t.Fatalf("v%d is not a minimal public tombstone: %+v", version, versionInfo)
 		}
 		_, stored, err := h.store.GetSecretVersion(ctx, ref, version, "")
@@ -404,10 +395,10 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 			t.Fatalf("v%d retained recoverable payload: %+v", version, stored)
 		}
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("purged current read err = %v, want ErrFailedPrecondition", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "safe-v1" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", integrationBindingKeyA); err != nil || string(got.Value) != "safe-v1" {
 		t.Fatalf("purge crossed cohort boundary: v1=%q err=%v", got.Value, err)
 	}
 
@@ -465,11 +456,11 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 	}
 }
 
-func assertSecretVersionProtection(t *testing.T, info domain.Secret, version uint64, bound, hasAccessToken bool) {
+func assertSecretVersionProtection(t *testing.T, info domain.Secret, version uint64, bound bool) {
 	t.Helper()
 	got := findSecretVersionInfo(t, info, version)
-	if got.Bound != bound || got.HasAccessToken != hasAccessToken {
-		t.Fatalf("v%d protection = bound:%v access-token:%v, want bound:%v access-token:%v", version, got.Bound, got.HasAccessToken, bound, hasAccessToken)
+	if got.Bound != bound {
+		t.Fatalf("v%d binding = %v, want %v", version, got.Bound, bound)
 	}
 }
 

@@ -43,13 +43,12 @@ type SecretRecord struct {
 	Ref domain.Ref
 	// Bound is the live protection state of the version selected by current.
 	// Exact-version authorization must use SecretVersionRecord.Bound instead.
-	Bound           bool
-	AccessTokenHash []byte // nil when no per-secret token is set
-	ContentType     string
-	Metadata        string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Labels          map[string]uint64
+	Bound       bool
+	ContentType string
+	Metadata    string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Labels      map[string]uint64
 }
 
 // SecretVersionRecord is one stored secret version including ciphertext and
@@ -64,7 +63,6 @@ type SecretVersionRecord struct {
 	// secret-level token hash, but must not authorize a historical version.
 	ContentType    string
 	Bound          bool
-	HasAccessToken bool
 	Ciphertext     []byte
 	EncryptedDEK   []byte
 	KEKID          string
@@ -176,18 +174,11 @@ type SecretBindingAudit struct {
 // binding mutations share the same narrow, credential-free audit envelope.
 type SecretBindingPurgeAudit = SecretBindingAudit
 
-// SecretWriteExpectation is the secret state observed by the service before it
-// prepares a write. Storage compares it inside the write transaction so an
-// absent secret cannot silently become an update and a token-gated write
-// cannot commit after its validated access token has been rotated.
+// SecretWriteExpectation guards creation and delete/recreate races atomically.
 type SecretWriteExpectation struct {
 	Exists bool
-	// ID is the immutable row identity observed by the service. Comparing it
-	// prevents a delete-and-recreate cycle at the same ref (ABA) from being
-	// mistaken for the original secret, including unprotected secrets whose
-	// access-token hashes are both nil.
-	ID              int64
-	AccessTokenHash []byte
+	// ID prevents a delete/recreate cycle from matching the original row.
+	ID int64
 }
 
 // CreateSecretParams describes a new secret version write.
@@ -201,10 +192,6 @@ type CreateSecretParams struct {
 	Metadata    string
 	CreatedBy   string
 	Bound       bool
-	// AccessTokenHash, when non-nil, is stored on the secret row (sha256 of
-	// the per-secret token). It may be set on creation or when minting a new
-	// token for an existing secret.
-	AccessTokenHash []byte
 	// Expected, when non-nil, is checked atomically before any secret state is
 	// changed or Encrypt is called. A mismatch returns domain.ErrAborted.
 	Expected  *SecretWriteExpectation
@@ -397,9 +384,6 @@ type Store interface {
 	// "previous" at the old current (if different). The target version must
 	// exist and be enabled. Appends a change-log entry (promote).
 	PromoteSecretVersion(ctx context.Context, ref domain.Ref, version uint64) (current, previous, revision uint64, err error)
-
-	// UpdateSecretAccessTokenHash replaces the per-secret token hash.
-	UpdateSecretAccessTokenHash(ctx context.Context, ref domain.Ref, hash []byte) error
 
 	// --- identities ------------------------------------------------------
 

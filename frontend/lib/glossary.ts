@@ -202,7 +202,7 @@ export const CONCEPTS: Record<ConceptKey, Concept> = {
 
 export type RejectionCategory =
   | "resolution_failed"
-  | "token_unavailable"
+  | "binding_key_unavailable"
   | "version_mismatch"
   | "digest_mismatch"
   | "prepare_failed"
@@ -228,10 +228,10 @@ export const REJECTION_CATEGORIES: Record<RejectionCategory, RejectionGuidance> 
     response:
       "Revalidate that every exact pin exists, is readable, and is authorized for the application identity.",
   },
-  token_unavailable: {
+  binding_key_unavailable: {
     summary: "A protected secret needs a local credential the instance does not have.",
     response:
-      "Provision the exact version's missing access token through SecretTokenProvider or its binding key through the secret declaration; never put either credential in the release.",
+      "Provide the exact version's binding key through the secret declaration; never put the key in the release.",
   },
   version_mismatch: {
     summary: "A fetched resource did not match the pinned version.",

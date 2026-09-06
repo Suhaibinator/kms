@@ -135,12 +135,11 @@ func toApplicationDTO(app domain.Application) applicationDTO {
 }
 
 type applicationCellDTO struct {
-	Present        bool   `json:"present"`
-	Value          string `json:"value,omitempty"`
-	ContentType    string `json:"content_type"`
-	Version        uint64 `json:"version"`
-	Bound          bool   `json:"bound,omitempty"`
-	HasAccessToken bool   `json:"has_access_token,omitempty"`
+	Present     bool   `json:"present"`
+	Value       string `json:"value,omitempty"`
+	ContentType string `json:"content_type"`
+	Version     uint64 `json:"version"`
+	Bound       bool   `json:"bound,omitempty"`
 }
 
 type applicationRowDTO struct {
@@ -162,7 +161,7 @@ func toApplicationRowDTOs(in []domain.ApplicationConfigurationRow) []application
 	for _, row := range in {
 		cells := make(map[string]applicationCellDTO, len(row.Cells))
 		for env, cell := range row.Cells {
-			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, Bound: cell.Bound, HasAccessToken: cell.HasAccessToken}
+			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, Bound: cell.Bound}
 		}
 		rows = append(rows, applicationRowDTO{Key: row.Key, Kind: row.Kind, Environments: cells})
 	}
@@ -251,7 +250,6 @@ type secretVersionDTO struct {
 	Version           uint64 `json:"version"`
 	State             string `json:"state"`
 	Bound             bool   `json:"bound"`
-	HasAccessToken    bool   `json:"has_access_token"`
 	CreatedBy         string `json:"created_by"`
 	CreatedAtUnixMS   int64  `json:"created_at_unix_ms"`
 	DestroyedAtUnixMS int64  `json:"destroyed_at_unix_ms"`
@@ -265,7 +263,6 @@ type secretMetadataDTO struct {
 	Key             string             `json:"key"`
 	ContentType     string             `json:"content_type"`
 	Bound           bool               `json:"bound"`
-	HasAccessToken  bool               `json:"has_access_token"`
 	MetadataJSON    string             `json:"metadata_json"`
 	CreatedAtUnixMS int64              `json:"created_at_unix_ms"`
 	UpdatedAtUnixMS int64              `json:"updated_at_unix_ms"`
@@ -280,7 +277,6 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 			Version:           v.Version,
 			State:             v.State,
 			Bound:             v.Bound,
-			HasAccessToken:    v.HasAccessToken,
 			CreatedBy:         v.CreatedBy,
 			CreatedAtUnixMS:   unixMS(v.CreatedAt),
 			DestroyedAtUnixMS: unixMS(v.DestroyedAt),
@@ -294,7 +290,6 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 		Key:             s.Ref.Key,
 		ContentType:     s.ContentType,
 		Bound:           s.Bound,
-		HasAccessToken:  s.HasAccessToken,
 		MetadataJSON:    rawJSON(s.Metadata),
 		CreatedAtUnixMS: unixMS(s.CreatedAt),
 		UpdatedAtUnixMS: unixMS(s.UpdatedAt),

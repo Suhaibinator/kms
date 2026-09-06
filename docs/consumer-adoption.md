@@ -43,8 +43,7 @@ application defaults, for example
 `kmsclient.Secret{BindKey: kmsclient.NewBindingKey(resolveFromEnvVar("OKTA_OAUTH_KMS_BIND_KEY"))}`. Leave
 unbound secrets as `kmsclient.Secret{}`. Generated startup extracts this map and
 clears it from retained defaults and published snapshots; do not add a custom
-binding-key provider or file convention. Access-token providers remain
-independent.
+binding-key provider or file convention.
 
 ## 2. Replace the callbacks
 

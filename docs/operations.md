@@ -538,20 +538,17 @@ codes every command shares, and the `--token-file` credential form.
 | `dev` | `--dir DIR`, `--no-seed`, `--reset`, `--allow-remote`, plus `--http-addr`, `--grpc-addr`, `--log-level` | **Evaluation only.** Creates a disposable dev store (database, master key, built-in CA, TLS material, a marker file), bootstraps it the way `init` does, seeds demo namespaces/parameters/secrets/identity/release, and runs the real `serve` wiring on loopback with TLS and the console. Prints a banner on stderr with the console URL, CA path, and two dev-only tokens; `--output json` prints the same facts as one document on stdout. Refuses a `--dir` that has contents but no `.parameter-store-dev` marker, and refuses a non-loopback address without `--allow-remote`. See [Development mode](#development-mode-dev). |
 | `healthcheck` | `--ready`, `--timeout` (default `3s`), plus `--http-addr` and `--tls-enabled` | Probes this host's own HTTP listener at `127.0.0.1:<server.http_addr port>/healthz` (`/readyz` with `--ready`) and exits `0` on HTTP 200, `1` otherwise — a connection error is one line on stderr. It resolves the address and the TLS posture through the same flag > env > config file > default order `serve` uses, so a container or unit that already supplies them needs no arguments. The server certificate is **not** verified: this is a loopback liveness check for a container `HEALTHCHECK` or a process supervisor (the image ships one), never a way to check a remote server. Needs no database, master key, or credentials. |
 | `audit prune` | `--older-than DURATION` (**required**; `720h`, `90d`, or an RFC 3339 instant), `--archive DIR` (must already exist), `--dry-run`, `--sqlite-path`, `--yes` | Retires audit events older than the cutoff directly from the database file, **archiving before it deletes**: with `--archive`, every row is appended to `DIR/audit-<YYYYMMDD>.jsonl` (0600) and the file is synced before the row is removed, so an unwritable archive means the rows stay. Without `--archive` the rows are discarded outright. Prints `Target database: /abs/path (source: ...)` and then **confirms by retyping the absolute database path**; `--dry-run` counts the matching rows, prints `Would prune N audit events`, and skips both the confirmation and any deletion. Needs no master key and no running server. See [Audit retention and archive](#audit-retention-and-archive). |
-| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
+| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret`, and emits a mapping report (old key → `/env/app/key` display path). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `import --from` accepts either a SuhaibParameterStore SQLite database with a
 `parameters(key, value)` table, a JSON object such as `{"KEY":"value"}`, or a
 JSON array such as `[{"key":"KEY","value":"value"}]`. JSON strings import
 as their unquoted text; other JSON values retain their JSON encoding, and all
 imported values use secret content type `text/plain`. The report is plain text,
-not CSV: each real-import row is `old-key -> /env/app/key -> access-token`.
+not CSV: each real-import row is `old-key -> /env/app/key`.
 
-Import is not an all-or-nothing transaction: namespace creation and each
-secret version commit independently, and the one-time token report is written
-only after all values succeed. If a later write or report write fails, inspect
-the destination before retrying. A retry creates additional versions and may
-rotate access tokens; preserve only the final successful report.
+Imports append secret versions. Preserve the mapping report and verify the
+destination paths before updating application configuration.
 
 This importer is a greenfield bootstrap tool, not a KMS schema-compatibility
 path. Its SQLite reader understands only the separate SuhaibParameterStore
@@ -633,13 +630,10 @@ its presence as the signal to page, not its absence as proof of completeness.
 
 One-time credentials keep their table-mode rules:
 
-- A one-time token — an identity token, a rotated admin token, a per-secret
-  access token, an import token — appears in the document exactly once. The
+- A one-time identity token or rotated admin token appears in the document exactly once. The
   "shown once" warning stays on stderr, where `--quiet` cannot reach it.
-- `import --report FILE --output json` writes the tokens to the report file
-  **only**: each entry's `token` is blank and the document carries
-  `report_file`, so the same credentials never land in two places (the same
-  single-sink rule as `get-secret --out`).
+- `import --report FILE --output json` writes the text mapping to the file and
+  returns the mappings and `report_file` in JSON.
 - Certificate bundles are **never** embedded. The files are written to
   `--out`/`--cert-dir` and the document names them (`cert_file`, `key_file`).
   `admin identity create` and `admin identity issue-cert` with `--output json`
@@ -674,7 +668,7 @@ above with `X` as each element:
 | `config validate` | `{valid, config_path}` — only the valid case is printed; an invalid configuration exits non-zero with the reason on stderr |
 | `version` | `{version}` |
 | `whoami` | `{name, kind, namespace, auth_method}` — `kind` `client\|admin`, `namespace` `{env, app}` or `null`, `auth_method` `mtls\|token` |
-| `put-secret` | `{key, version, revision, access_token}` — `access_token` only with `--generate-token` |
+| `put-secret` | `{key, version, revision}` |
 | `get-secret` | `{key, version, value, content_type, created_at, out_file}` — with `--out` the value went to the file, so `value` is `null` and `out_file` names it; otherwise `out_file` is absent |
 | `env` | the `--format json` object `{"NAME": "value", ...}` — with `--out` the assignments went to the file, so stdout carries `{out_file, variables}` instead |
 | `put-parameter` | `{key, version, revision}` |
@@ -754,15 +748,10 @@ also accepts a file:
 | Flag | Environment | Holds |
 |---|---|---|
 | `--token-file FILE` | `KMS_TOKEN_FILE` | The identity bearer token. |
-| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token for `get-secret`. |
 
-`exec` and `env` read many secrets at once, so they spell the same idea as a
-repeatable `--secret-token-file KEY=PATH` with its own
-[`KMS_SECRET_TOKEN_<NAME>`](#bound-secrets-and-per-secret-access-tokens)
-variables; the single-valued
-flag and `KMS_SECRET_TOKEN_FILE` below are `get-secret` only.
+Bulk `exec` and `env` use the same identity authentication as other commands.
 
-Prefer these over `--token`/`--secret-token` anywhere the command line is
+Prefer these over `--token` anywhere the command line is
 observable — a shared host, a CI runner, a container others can `exec` into.
 The file must be a regular file owned by the caller with no group or other
 access (`0600` or `0400`), under a parent chain that satisfies the
@@ -781,13 +770,7 @@ error: --token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually e
 ```
 
 The check covers the environment: exporting `KMS_TOKEN` and passing
-`--token-file` (or the reverse) fails the same way. Note that `--secret-token`
-has no environment fallback of its own; only `--secret-token-file` /
-`KMS_SECRET_TOKEN_FILE` does. `KMS_SECRET_TOKEN_FILE` is read only by
-`get-secret`, the command that accepts the single-valued
-`--secret-token-file`: a shell that exports it can still run `put-secret`, `list`, `whoami`,
-`exec`, `env`, or any `admin` command without those calls opening — or failing
-on — a file they would never use.
+`--token-file` (or the reverse) fails the same way.
 
 #### Confirmations
 
@@ -859,9 +842,9 @@ may notice are recorded here:
   is refused with exit `2` instead of silently confirming. `release create`
   takes the manifest as `FILE` or `--file`, not both.
 - `--output json`, `KMS_OUTPUT`, `--quiet`, `--token-file`,
-  `--secret-token-file`, and the `whoami` command are new.
+  and the `whoami` command are new.
 - **`0.3.x` replaces client-bound mode.** `put-secret` no longer accepts
-  `--client-bound` or a write-side `--secret-token`; set `KMS_BINDING_KEY`
+  `--client-bound`; set `KMS_BINDING_KEY`
   instead. There is no binding-key file option. New lifecycle commands are
   documented in the convenience-command table above.
 
@@ -1174,8 +1157,8 @@ namespace.
 | Command | Extra flags | Purpose |
 |---|---|---|
 | `whoami` | — | Prints the identity the server resolves from the credential this invocation presents: `name`, `kind`, `namespace` (or `(unbound)`), and `auth_method` (`mtls` or `token`). Needs no permission, so it is the first command to run when a token or certificate does not behave as expected. |
-| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--generate-token` | Stores a new version. Non-empty `KMS_BINDING_KEY` binds only the new version; empty creates it unbound. `--generate-token` independently creates/rotates the per-secret access token and prints it once. There is no write-side `--secret-token`, `--client-bound`, or binding-key file flag. |
-| `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`/`--secret-token-file`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches one secret. If exact live metadata says the selected version is bound, the key comes from `KMS_BINDING_KEY` or a no-echo terminal prompt. Access-token input remains independent. Refuses terminal plaintext unless `--show`; there is no offline secret-read/export command. |
+| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`) | Stores a new version. Non-empty `KMS_BINDING_KEY` binds only the new version; empty creates it unbound. There is no `--client-bound` or binding-key file flag. |
+| `get-secret /env/app/key` | `--version`, `--label`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches one secret. If exact live metadata says the selected version is bound, the key comes from `KMS_BINDING_KEY` or a no-echo terminal prompt. Refuses terminal plaintext unless `--show`; there is no offline secret-read/export command. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, and content-type/bound note. Pages through the full result set. |
 | `binding-key generate` | — | Writes exactly one newly generated 256-bit Base64URL binding key plus newline to stdout, with no other output. |
@@ -1184,7 +1167,7 @@ namespace.
 | `binding-key rotate /env/app/key` | `--expected-current-version` | Obtains the old and replacement keys separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits a CAS guard. An explicit positive expected version avoids a metadata read; when omitted, the CLI reads current metadata. It clones only current into one new version protected by the replacement; historical versions retain the old key. The server proves the old key before rejecting a byte-for-byte unchanged replacement. |
 | `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
 | `secret purge-unbound-versions /env/app/key` | — | **Irreversible, admin only.** Previews every non-destroyed unbound version (including disabled, expired, and corrupt rows), prints the exact set, confirms, then replays the mandatory revision/version-set guards and destroys it even if releases pin those versions. |
-| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
+| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
 Binding keys are opaque valid UTF-8 strings containing 32 to 1024 bytes. The CLI reads
@@ -1249,7 +1232,7 @@ digest equal to the one the release recorded. Each secret is fetched at its
 pinned version and checked the same way, minus the digest (a release never
 records one for secret material). Before any exact secret fetch, the CLI reads
 live metadata and verifies the response identity, exact version, state, expiry,
-and that version's `bound` and `has_access_token` flags. Any mismatch aborts
+and that version's `bound` flag. Any mismatch aborts
 the invocation before a process is started, so a workload never runs on a mix
 of pinned and drifted values. In namespace mode `--prefix db/` narrows the selection to a subtree
 exactly as it does for `list`; `--prefix` and `--release` are mutually
@@ -1284,69 +1267,16 @@ note: tls/keystore is not text; injected base64-encoded as TLS_KEYSTORE_B64
 Detection is content-based only: the stored content type carries no signal,
 since `application/octet-stream` is the default for every secret.
 
-#### Bound secrets and per-secret access tokens
+#### Bound secrets
 
-Bulk `env`/`exec` never accept or request binding keys and never call
-`GetSecret` for a bound version. A secret-inclusive invocation that selects a
-bound version fails before `env` prints anything or `exec` launches its child;
-an empty credential value is never synthesized. Use `--no-secrets` for an
-intentional parameter-only invocation, or an SDK release loader when a process
-must consume bound secrets.
+Bulk `env` and `exec` do not accept binding keys and never read bound versions.
+A selection containing a bound version fails before output or child launch.
+Use `--no-secrets` for parameters only, or an SDK to consume bound secrets.
 
-An unbound secret carrying the independent access-token gate needs its token
-before it can be read. Unlike `get-secret`, which takes one single-valued
-`--secret-token`, these commands may read many, so the flags are keyed and
-repeatable:
-
-| Source | Form | Notes |
-|---|---|---|
-| `--secret-token` | `KEY=TOKEN`, repeatable | Visible in `ps`; prefer the file form. |
-| `--secret-token-file` | `KEY=PATH`, repeatable | One token per file, owner-only, same rules as [`--token-file`](#token-files-instead-of---token). |
-| `KMS_SECRET_TOKEN_<NAME>` | environment | `<NAME>` is the variable the secret maps to, **without** `--env-prefix` and without `_B64`. |
-
-Either flag beats the environment. `KEY` is any spelling of the secret: its
-`/env/app/key` display path, its relative key when the secret is in the
-selected namespace, or — with `--release` — its alias. Name a secret once: the
-same `KEY` in both flags is a usage error (exit `2`), and naming one secret
-under two different spellings is refused as ambiguous (exit `1`) even when the
-tokens agree. A flag token is also refused when it names a secret that is not
-in the selection or does not need one (exit `1`): a stale token or a typo that
-lands on the wrong secret is almost certainly an operator error.
-`KMS_SECRET_TOKEN_<NAME>` variables are ambient and may
-be leftovers, so they are read only for a secret that needs a token and never
-cause a refusal. `KMS_SECRET_TOKEN_FILE`, which only `get-secret` reads, is not
-consulted here.
-
-The token travels only in that unbound secret's `GetSecret` protobuf request;
-no other call carries it. By default, a gated unbound secret whose token was
-not supplied fails the complete invocation before any environment output or
-child launch. The same fail-closed rule applies to a selected bound secret.
-This makes the ordinary secret-inclusive mode atomic: it never silently turns
-a missing credential into a partial runtime configuration.
-
-Namespace mode has one explicit availability-oriented escape hatch:
-`--allow-incomplete-secrets`. It emits parameters and successfully resolved
-unbound secrets while omitting bound secrets and gated secrets that lack a
-token. Every omission produces a warning that `--quiet` cannot suppress:
-
-```text
-warning: omitted unavailable secret /prod/gradethis/stripe-key: it requires a per-secret token and none was supplied (--allow-incomplete-secrets)
-```
-
-Incomplete mode never creates an empty secret value. With `exec`, both the
-plain mapped name and its possible `_B64` form are removed from the inherited
-environment before launch, including under `--preserve-env`, so an omitted
-secret cannot fall through to a stale parent credential. With `env`, omission
-cannot unset a variable in the shell that consumes its output: source into a
-clean environment, or explicitly unset the omitted names first. This mode is
-rejected with `--release`, because a release is an atomic configuration unit.
-
-`--no-secrets` intentionally selects parameters only and therefore succeeds
-even when the namespace or release contains unavailable secrets. It makes any
-`--secret-token`/`--secret-token-file` an error, since the token can no longer
-apply to anything. `--allow-incomplete-secrets` and `--no-secrets` are mutually
-exclusive. The former opt-in `--strict` flag no longer exists; fail-closed is
-the default.
+Namespace mode can explicitly use `--allow-incomplete-secrets` to omit bound
+secrets with a warning. Omitted secret names are scrubbed from the inherited
+child environment. Release mode always requires a complete snapshot and
+rejects this flag. Unbound secrets need normal identity authorization only.
 
 #### The command's environment
 
@@ -1361,9 +1291,7 @@ the default.
   are removed before this merge and cannot be preserved. For an ordinary
   resolved value the diagnostic is:
   `note: DB_HOST is already set and kept (--preserve-env); the store's value was not injected`.
-- Every `KMS_SECRET_TOKEN_*` variable is **removed** from the command's
-  environment (`KMS_SECRET_TOKEN_FILE` shares that prefix and goes too). They
-  are inputs to the CLI, not credentials the workload should inherit.
+
 - The exact `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` variables are also
   removed. Near-miss names are left alone; there is no binding-key file or
   directory variable.
@@ -1387,11 +1315,8 @@ anything in the pod spec). `ps eww` shows it to the same accounts. Prefer an
 SDK where you can; where you cannot, run the workload as its own user and treat
 the values as visible to anything running as that user or as root.
 
-The command line is worse than the environment: `--secret-token KEY=TOKEN` and
-`--token TOKEN` are visible to **every** local user in `ps` and
-`/proc/PID/cmdline` for as long as the CLI runs. Use `--secret-token-file`,
-`--token-file`, or the `KMS_SECRET_TOKEN_<NAME>` variables in production.
-Binding keys are never accepted as command-line values.
+Identity tokens supplied through `--token` are visible in process arguments.
+Use `--token-file` in production.
 
 #### `env` output
 
@@ -1495,8 +1420,8 @@ Everything before the launch uses the standard CLI codes: `2` for a usage
 problem (a missing `--`, `--prefix` with `--release`, incomplete mode with a
 release, one key in both token flags), `1` for a resolution failure (a digest
 mismatch, a missing required token, a bound secret in a bulk selection, a
-`--secret-token` that names nothing in the selection), and `3`–`9`
-mirroring the server's status — `4` for a wrong per-secret token, `5` for a
+invalid selection), and `3`–`9`
+mirroring the server's status — `4` for a permission denial, `5` for a
 release that is not there, `7` for a failed precondition. A resolution failure
 never starts the command. Note the overlap: a command that itself exits `126`
 or `127` is indistinguishable from a launch failure, exactly as under `sh -c`.

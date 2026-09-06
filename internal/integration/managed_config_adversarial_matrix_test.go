@@ -41,10 +41,6 @@ type adversarialManagedApp struct {
 	secrets    kmsv1.SecretServiceClient
 	releases   kmsv1.ConfigurationReleaseServiceClient
 	admin      kmsv1.AdminServiceClient
-
-	tokenMu       sync.RWMutex
-	secretTokens  map[string]string
-	providerCalls atomic.Uint64
 }
 
 type adversarialManagedPins struct {
@@ -111,7 +107,6 @@ func newAdversarialManagedApp(
 		secrets:       kmsv1.NewSecretServiceClient(env.adminConn),
 		releases:      kmsv1.NewConfigurationReleaseServiceClient(env.adminConn),
 		admin:         admin,
-		secretTokens:  make(map[string]string),
 	}
 	t.Cleanup(cancel)
 	return h
@@ -148,26 +143,12 @@ func (h *adversarialManagedApp) putSecret(alias, key, plaintext string) uint64 {
 	h.t.Helper()
 	response, err := h.secrets.PutSecretV03(h.authCtx, &kmsv1.PutSecretRequest{
 		Ref: networkRef("prod", h.app, key), Value: []byte(plaintext),
-		ContentType: "text/plain", GenerateAccessToken: true,
+		ContentType: "text/plain",
 	})
 	if err != nil {
 		h.t.Fatalf("put secret %s: %v", key, err)
 	}
-	if response.GetAccessToken() == "" {
-		h.t.Fatalf("put secret %s returned no access token", key)
-	}
-	h.tokenMu.Lock()
-	h.secretTokens[alias] = response.GetAccessToken()
-	h.tokenMu.Unlock()
 	return response.GetVersion()
-}
-
-func (h *adversarialManagedApp) provider(alias, _ string) (string, bool) {
-	h.providerCalls.Add(1)
-	h.tokenMu.RLock()
-	defer h.tokenMu.RUnlock()
-	token, ok := h.secretTokens[alias]
-	return token, ok
 }
 
 func (h *adversarialManagedApp) seed(databaseDocument, runtimeDocument string) adversarialManagedPins {
@@ -272,10 +253,10 @@ func (h *adversarialManagedApp) startStoreWithDefaults(
 	ctx, cancel := context.WithCancel(h.ctx)
 	store, err := fixturekms.Start(ctx, client, fixturekms.Options{
 		Release: adversarialReleaseName, Defaults: defaults,
-		Callbacks:           configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
-		SecretTokenProvider: h.provider,
-		ReconcileInterval:   time.Hour,
-		InstanceID:          instanceID,
+		Callbacks: configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
+
+		ReconcileInterval: time.Hour,
+		InstanceID:        instanceID,
 	})
 	if err != nil {
 		cancel()
@@ -710,7 +691,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 }
 
 // TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction verifies that
-// the application contract rejects shape drift before client secret-token
+// the application contract rejects shape drift before client binding-key
 // lookup, then exercises schema rejection, recovery, redacted status, and
 // normal terminal cancellation.
 func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) {
@@ -727,7 +708,6 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 		t.Fatalf("start managed store: %v", err)
 	}
 	initialSnapshot := running.store.Current()
-	app.providerCalls.Store(0)
 
 	contractEntries := app.standardEntries(pins)
 	contractEntries[1].Alias = "runtime_unexpected"
@@ -736,9 +716,6 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 		SchemaVersion: app.schemaVersion,
 	}); status.Code(createErr) != codes.FailedPrecondition {
 		t.Fatalf("create contract-drift release error = %v, want failed precondition", createErr)
-	}
-	if calls := app.providerCalls.Load(); calls != 0 {
-		t.Fatalf("contract-rejected candidate performed %d secret token lookups; want zero prefetch work", calls)
 	}
 	if got := running.store.Current().Release().Version(); got != initialRelease.GetVersion() {
 		t.Fatalf("contract rejection displaced LKG with release %d", got)

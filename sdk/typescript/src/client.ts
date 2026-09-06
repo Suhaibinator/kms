@@ -49,7 +49,6 @@ import {
   ReleaseLoader,
   type ReleaseTransport,
   type ReleaseWatchStream,
-  type SecretTokenProvider,
   type ValidateReleaseManifest,
 } from "./releases/loader.js";
 import {
@@ -109,7 +108,6 @@ export interface CallOptions {
 }
 
 export interface GetOptions extends CallOptions, VersionRef {
-  readonly secretToken?: string;
   readonly bindingKey?: string;
 }
 
@@ -122,7 +120,6 @@ export interface PutSecretOptions extends CallOptions {
   readonly contentType?: string;
   readonly metadataJson?: string;
   readonly bindingKey?: string;
-  readonly generateAccessToken?: boolean;
   readonly expiresAtUnixMs?: bigint;
 }
 
@@ -185,7 +182,6 @@ export interface ClientReleaseLoaderOptions {
   readonly instanceId?: string;
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
-  readonly secretTokenProvider?: SecretTokenProvider;
   readonly bindingKeys?: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   /** Injected only for deterministic tests. */
@@ -296,9 +292,7 @@ export class KmsClient {
   async getParameter(key: string, options: GetOptions = {}): Promise<string> {
     const ref = await this.#resolveResourceRefForCall(key, options);
     const selector = normalizeVersionRef(options);
-    const cached = options.secretToken
-      ? undefined
-      : this.#cache.getParam(displayPath(ref), selector.version, selector.label);
+    const cached = this.#cache.getParam(displayPath(ref), selector.version, selector.label);
     if (cached !== undefined) return cached;
     const parameter = await this.fetchParameter(ref, selector, options);
     return parameter.value;
@@ -317,7 +311,7 @@ export class KmsClient {
   ): Promise<Parameter> {
     this.#assertOpen();
     const path = displayPath(ref);
-    const generation = options.secretToken ? undefined : this.#cache.beginParameterRead(path);
+    const generation = this.#cache.beginParameterRead(path);
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameter,
@@ -344,13 +338,12 @@ export class KmsClient {
   }
 
   async getSecret(key: string, options: GetOptions = {}): Promise<Secret> {
-    const secretToken = optionalCredential(options.secretToken, "getSecret secretToken");
     const bindingKey = optionalCredential(options.bindingKey, "getSecret bindingKey");
     const selector = normalizeVersionRef(options);
     const ref = await this.#resolveResourceRefForCall(key, options);
     // Secret protection is live metadata. Never serve plaintext from cache:
-    // doing so could bypass binding/token protection added after a prior read.
-    return this.fetchSecret(ref, selector, { ...options, secretToken, bindingKey });
+    // doing so could bypass binding protection added after a prior read.
+    return this.fetchSecret(ref, selector, { ...options, bindingKey });
   }
 
   /** @internal Exact-ref fetch used by the release runtime. */
@@ -360,7 +353,6 @@ export class KmsClient {
     options: GetOptions = {},
   ): Promise<Secret> {
     this.#assertOpen();
-    const secretToken = optionalCredential(options.secretToken, "fetchSecret secretToken");
     const bindingKey = optionalCredential(options.bindingKey, "fetchSecret bindingKey");
     try {
       const response = await this.#transport.unary(
@@ -369,7 +361,6 @@ export class KmsClient {
           ref: toWireRef(ref),
           version: selector.version,
           label: selector.label,
-          secretToken,
           bindingKey,
         },
         this.#callOptions(options),
@@ -441,7 +432,6 @@ export class KmsClient {
             contentType: options.contentType ?? "",
             metadataJson: options.metadataJson ?? "",
             bindingKey,
-            generateAccessToken: options.generateAccessToken ?? false,
             expiresAtUnixMs,
           },
           this.#callOptions(options),
@@ -450,7 +440,6 @@ export class KmsClient {
         return Object.freeze({
           version: response.version,
           revision: response.revision,
-          accessToken: response.accessToken,
         });
       } catch (error) {
         throwSecretMapped(error);
@@ -1042,11 +1031,11 @@ export class KmsClient {
           throwMapped(error);
         }
       },
-      fetchSecret: async (wireRef, version, secretToken, bindingKey, signal) => {
+      fetchSecret: async (wireRef, version, bindingKey, signal) => {
         try {
           const response = await this.#transport.unary(
             SecretServiceService.getSecret,
-            { ref: wireRef, version, label: "", secretToken, bindingKey },
+            { ref: wireRef, version, label: "", bindingKey },
             this.#callOptions(signal ? { signal } : {}),
           );
           // Do not synthesize a missing ref from the request. Absence and
@@ -1334,7 +1323,6 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
         expiresAtUnixMs: version.expiresAtUnixMs,
         metadataJson: version.metadataJson,
         bound: version.bound,
-        hasAccessToken: version.hasAccessToken,
       }),
     ),
   );
@@ -1344,7 +1332,6 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
     key: ref.key,
     contentType: secret.contentType,
     bound: secret.bound,
-    hasAccessToken: secret.hasAccessToken,
     metadataJson: secret.metadataJson,
     createdAtUnixMs: secret.createdAtUnixMs,
     updatedAtUnixMs: secret.updatedAtUnixMs,

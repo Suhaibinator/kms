@@ -91,7 +91,6 @@ export interface ReleaseTransport {
   fetchSecret(
     ref: ResourceRef,
     version: bigint,
-    secretToken: string,
     bindingKey: string,
     signal?: AbortSignal,
   ): Promise<FetchedSecret>;
@@ -106,12 +105,6 @@ export interface ReleaseTransport {
   ): ReleaseWatchStream | Promise<ReleaseWatchStream>;
 }
 
-export type SecretTokenProvider = (
-  alias: string,
-  path: string,
-  signal: AbortSignal,
-) => string | undefined | Promise<string | undefined>;
-
 export type ValidateReleaseManifest = (
   manifest: ReleaseManifest,
   signal: AbortSignal,
@@ -125,7 +118,6 @@ export interface ReleaseLoaderOptions {
   readonly instanceId?: string;
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
-  readonly secretTokenProvider?: SecretTokenProvider;
   readonly bindingKeys?: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   /** @internal Bound for flushing a terminal startup acknowledgement. */
@@ -143,7 +135,6 @@ interface NormalizedOptions {
   readonly instanceId: string;
   readonly reconcileIntervalMs: number;
   readonly maxConcurrentFetches: number;
-  readonly secretTokenProvider?: SecretTokenProvider;
   readonly bindingKeys: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   readonly acknowledgementTimeoutMs: number;
@@ -656,32 +647,13 @@ export class ReleaseLoader {
         throw new ResolutionError("resolution_failed");
       }
 
-      let token = "";
-      if (exact.hasAccessToken) {
-        if (!this.#options.secretTokenProvider) {
-          throw new ResolutionError("token_unavailable");
-        }
-        try {
-          const provided = await this.#options.secretTokenProvider(
-            entry.alias,
-            metadata.path,
-            signal,
-          );
-          if (typeof provided !== "string") throw new ResolutionError("token_unavailable");
-          token = provided;
-        } catch {
-          throw new ResolutionError(signal.aborted ? "superseded" : "token_unavailable");
-        }
-        if (!token) throw new ResolutionError("token_unavailable");
-      }
       const bindingKey = exact.bound ? (this.#options.bindingKeys[entry.alias] ?? "") : "";
-      if (exact.bound && !bindingKey) throw new ResolutionError("token_unavailable");
+      if (exact.bound && !bindingKey) throw new ResolutionError("binding_key_unavailable");
       let secret: FetchedSecret;
       try {
         secret = await this.#transport.fetchSecret(
           cloneRef(ref),
           entry.version,
-          token,
           bindingKey,
           signal,
         );
@@ -963,7 +935,6 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
     instanceId,
     reconcileIntervalMs,
     maxConcurrentFetches,
-    ...(options.secretTokenProvider ? { secretTokenProvider: options.secretTokenProvider } : {}),
     bindingKeys: normalizeBindingKeys(options.bindingKeys),
     ...(options.validateManifest ? { validateManifest: options.validateManifest } : {}),
     acknowledgementTimeoutMs: positiveFinite(

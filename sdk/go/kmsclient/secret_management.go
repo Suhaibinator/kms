@@ -12,7 +12,7 @@ import (
 var errSecretMetadataRefMismatch = errors.New("kmsclient: secret metadata resource reference mismatch")
 
 // SecretVersionInfo describes one exact secret version without exposing its
-// plaintext. Bound and HasAccessToken are independent, immutable protection
+// plaintext. Bound describes the immutable encryption protection
 // properties until the version is destroyed.
 type SecretVersionInfo struct {
 	Version           uint64
@@ -23,7 +23,6 @@ type SecretVersionInfo struct {
 	ExpiresAtUnixMS   int64
 	MetadataJSON      string
 	Bound             bool
-	HasAccessToken    bool
 }
 
 // SecretMetadata describes a secret without exposing its plaintext. Bound
@@ -33,7 +32,6 @@ type SecretMetadata struct {
 	Path            string
 	ContentType     string
 	Bound           bool
-	HasAccessToken  bool
 	MetadataJSON    string
 	CreatedAtUnixMS int64
 	UpdatedAtUnixMS int64
@@ -79,7 +77,6 @@ func secretMetadataFromProto(secret *kmsv1.SecretMetadata, fallbackPath string) 
 		Path:            path,
 		ContentType:     secret.GetContentType(),
 		Bound:           secret.GetBound(),
-		HasAccessToken:  secret.GetHasAccessToken(),
 		MetadataJSON:    secret.GetMetadataJson(),
 		CreatedAtUnixMS: secret.GetCreatedAtUnixMs(),
 		UpdatedAtUnixMS: secret.GetUpdatedAtUnixMs(),
@@ -99,7 +96,6 @@ func secretMetadataFromProto(secret *kmsv1.SecretMetadata, fallbackPath string) 
 			ExpiresAtUnixMS:   version.GetExpiresAtUnixMs(),
 			MetadataJSON:      version.GetMetadataJson(),
 			Bound:             version.GetBound(),
-			HasAccessToken:    version.GetHasAccessToken(),
 		})
 	}
 	return out

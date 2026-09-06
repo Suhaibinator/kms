@@ -19,7 +19,7 @@ const (
 // Bounded rejection categories used by SDK acknowledgements and metrics.
 const (
 	ReleaseRejectResolutionFailed       = "resolution_failed"
-	ReleaseRejectTokenUnavailable       = "token_unavailable"
+	ReleaseRejectBindingKeyUnavailable  = "binding_key_unavailable"
 	ReleaseRejectVersionMismatch        = "version_mismatch"
 	ReleaseRejectDigestMismatch         = "digest_mismatch"
 	ReleaseRejectPrepareFailed          = "prepare_failed"

@@ -375,7 +375,6 @@ export default function SecretsPage() {
                         ) : (
                           <Badge kind="neutral">master key only</Badge>
                         )}
-                        {s.has_access_token ? <Badge kind="accent">access token</Badge> : null}
                       </div>
                     </td>
                     <td className="nowrap" data-label="Updated">
@@ -444,15 +443,12 @@ export default function SecretsPage() {
               content_type: request.contentType,
               metadata_json: request.metadataJson,
               ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
-              generate_access_token: request.generateAccessToken,
               create_only: true,
               expires_at_unix_ms: request.expiresAtUnixMs,
             });
             toast.success(
               `Secret created (version ${response.version})`,
-              response.access_token
-                ? "Save the access token before continuing."
-                : `${request.environment}/${ns.app}/${request.key}`,
+              `${request.environment}/${ns.app}/${request.key}`,
             );
             return response;
           } catch (error) {

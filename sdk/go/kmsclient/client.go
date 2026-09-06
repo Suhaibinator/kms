@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	mdAuthorization     = "authorization"
-	legacyMDSecretToken = "x-kms-secret-token"
+	mdAuthorization = "authorization"
 
 	defaultTimeout = 5 * time.Second
 
@@ -277,13 +276,6 @@ func (c *Client) callCtx(ctx context.Context) (context.Context, context.CancelFu
 // withAuth attaches standard identity metadata to an outgoing context. Using
 // AppendToOutgoingContext preserves any metadata a caller may have set.
 func (c *Client) withAuth(ctx context.Context) context.Context {
-	// A caller may reuse a context created for an older SDK version. Strip the
-	// deprecated credential key so it cannot escape on any RPC.
-	if md, ok := metadata.FromOutgoingContext(ctx); ok && len(md.Get(legacyMDSecretToken)) > 0 {
-		clean := md.Copy()
-		clean.Delete(legacyMDSecretToken)
-		ctx = metadata.NewOutgoingContext(ctx, clean)
-	}
 	kv := make([]string, 0, 2)
 	if c.cfg.Token != "" {
 		kv = append(kv, mdAuthorization, "Bearer "+c.cfg.Token)
@@ -380,8 +372,7 @@ func (c *Client) fetchParameter(ctx context.Context, r ref, o getOptions) (strin
 
 // GetSecret returns a secret. The returned Secret redacts itself in logs and
 // string/JSON formatting; call Value or StringValue for plaintext. Use
-// WithSecretToken for token-protected secrets and WithBindingKey for bound
-// secrets. The credentials are independent and a version may require both.
+// WithBindingKey for bound secrets.
 // Secret plaintext is never cached; every read is authorized by the server.
 func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (Secret, error) {
 	o := applyGetOptions(opts)
@@ -394,11 +385,10 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.GetSecret(cctx, &kmsv1.GetSecretRequest{
-		Ref:         r.resourceProto(),
-		Version:     o.version,
-		Label:       o.label,
-		SecretToken: o.secretToken,
-		BindingKey:  o.bindingKey.plaintext(),
+		Ref:        r.resourceProto(),
+		Version:    o.version,
+		Label:      o.label,
+		BindingKey: o.bindingKey.plaintext(),
 	})
 	if err != nil {
 		return Secret{}, mapSecretError(err)
@@ -445,12 +435,10 @@ func (c *Client) PutParameter(ctx context.Context, key, value string, opts ...Pu
 	return PutParameterResult{Version: resp.GetVersion(), Revision: resp.GetRevision()}, nil
 }
 
-// PutSecretResult reports the outcome of a secret write. AccessToken is set only
-// when WithGenerateAccessToken was supplied, and is never retrievable again.
+// PutSecretResult reports the stored version and revision.
 type PutSecretResult struct {
-	Version     uint64
-	Revision    uint64
-	AccessToken string
+	Version  uint64
+	Revision uint64
 }
 
 // PutSecret creates a new immutable version of a secret. key is relative to the
@@ -465,21 +453,19 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.PutSecretV03(cctx, &kmsv1.PutSecretRequest{
-		Ref:                 r.resourceProto(),
-		Value:               value,
-		ContentType:         o.contentType,
-		MetadataJson:        o.metadataJSON,
-		BindingKey:          o.bindingKey.plaintext(),
-		GenerateAccessToken: o.generateAccessToken,
-		ExpiresAtUnixMs:     o.expiresAtUnixMS,
+		Ref:             r.resourceProto(),
+		Value:           value,
+		ContentType:     o.contentType,
+		MetadataJson:    o.metadataJSON,
+		BindingKey:      o.bindingKey.plaintext(),
+		ExpiresAtUnixMs: o.expiresAtUnixMS,
 	})
 	if err != nil {
 		return PutSecretResult{}, mapSecretError(err)
 	}
 	return PutSecretResult{
-		Version:     resp.GetVersion(),
-		Revision:    resp.GetRevision(),
-		AccessToken: resp.GetAccessToken(),
+		Version:  resp.GetVersion(),
+		Revision: resp.GetRevision(),
 	}, nil
 }
 

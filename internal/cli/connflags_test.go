@@ -236,7 +236,7 @@ func TestInlineTokenAndTokenFileAreMutuallyExclusive(t *testing.T) {
 }
 
 // TestClientEnvNamesDisjointFromServerSettings keeps the two KMS_* namespaces
-// apart: config.EnvNames() configures a server process, while these seven tell a
+// apart: config.EnvNames() configures a server process, while these six tell a
 // client which server to talk to and as whom. A name in both would make one
 // variable mean two things depending on the subcommand.
 func TestClientEnvNamesDisjointFromServerSettings(t *testing.T) {
@@ -245,8 +245,8 @@ func TestClientEnvNamesDisjointFromServerSettings(t *testing.T) {
 		server[name] = true
 	}
 	fallbacks := (&connFlags{}).envFallbacks()
-	if len(fallbacks) != 7 {
-		t.Fatalf("connection fallbacks = %d, want 7", len(fallbacks))
+	if len(fallbacks) != 6 {
+		t.Fatalf("connection fallbacks = %d, want 6", len(fallbacks))
 	}
 	for _, fallback := range fallbacks {
 		if !strings.HasPrefix(fallback.env, "KMS_") {

@@ -62,10 +62,10 @@ func TestProtectionTransitionAfterKEKRotationUsesActiveKEKAndPreservesSource(t *
 	if current.KEKID != newID || current.Bound {
 		t.Fatalf("new version did not use active KEK/unbound protection: %+v", current)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", bindingKey); err != nil || string(got.Value) != value {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", bindingKey); err != nil || string(got.Value) != value {
 		t.Fatalf("historical source read=%q err=%v", got.Value, err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); err != nil || string(got.Value) != value {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", ""); err != nil || string(got.Value) != value {
 		t.Fatalf("new version read=%q err=%v", got.Value, err)
 	}
 }
@@ -126,10 +126,10 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	}
 
 	// Both secrets still decrypt through the live (rotated) service.
-	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, "", "", ""); err != nil || string(got.Value) != stdValue {
+	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, "", ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("standard after rotate = %q err=%v, want %q", got.Value, err, stdValue)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, boundRef, 0, "", "", bindingKey); err != nil || string(got.Value) != boundValue {
+	if got, err := h.svc.GetSecret(ctx, h.admin, boundRef, 0, "", bindingKey); err != nil || string(got.Value) != boundValue {
 		t.Errorf("bound after rotate = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 
@@ -185,10 +185,10 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	}
 	svc2 := core.New(st2, newTestLogger(h.logBuf), "test")
 	svc2.SetKeyring(kr)
-	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, "", "", ""); err != nil || string(got.Value) != stdValue {
+	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, "", ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, stdValue)
 	}
-	if got, err := svc2.GetSecret(ctx, h.admin, boundRef, 0, "", "", bindingKey); err != nil || string(got.Value) != boundValue {
+	if got, err := svc2.GetSecret(ctx, h.admin, boundRef, 0, "", bindingKey); err != nil || string(got.Value) != boundValue {
 		t.Errorf("bound decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 }

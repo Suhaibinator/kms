@@ -371,18 +371,15 @@ func TestSecretsLifecycle(t *testing.T) {
 
 	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "stripe-api-key",
-		"value_base64": b64, "content_type": "text/plain", "generate_access_token": true,
+		"value_base64": b64, "content_type": "text/plain",
 	})
 	mustStatus(t, w, http.StatusOK)
-	if tok := decodeBody(t, w)["access_token"]; tok == nil || tok == "" {
-		t.Fatalf("expected access_token")
-	}
 
 	// Metadata (no value).
 	w = e.admin(http.MethodGet, "/api/v1/secrets/metadata?env=prod&app=gradethis&key=stripe-api-key", nil)
 	mustStatus(t, w, http.StatusOK)
 	sec, _ := decodeBody(t, w)["secret"].(map[string]any)
-	if sec["has_access_token"] != true || sec["key"] != "stripe-api-key" {
+	if sec["key"] != "stripe-api-key" {
 		t.Fatalf("secret meta = %v", sec)
 	}
 	if _, leaked := sec["value"]; leaked {
@@ -443,15 +440,13 @@ func TestCreateOnlySecretRejectsExistingKey(t *testing.T) {
 	e.createNS("prod", "gradethis")
 	body := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "stripe-api-key",
-		"value_base64":          base64.StdEncoding.EncodeToString([]byte("original")),
-		"generate_access_token": true,
-		"create_only":           true,
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("original")),
+		"create_only":  true,
 	}
 
 	w := e.admin(http.MethodPost, "/api/v1/secrets", body)
 	mustStatus(t, w, http.StatusOK)
 	created := decodeBody(t, w)
-	token := created["access_token"].(string)
 	revision := uint64(created["revision"].(float64))
 	body["value_base64"] = base64.StdEncoding.EncodeToString([]byte("replacement"))
 	w = e.admin(http.MethodPost, "/api/v1/secrets", body)
@@ -472,7 +467,7 @@ func TestCreateOnlySecretRejectsExistingKey(t *testing.T) {
 	value, err := e.svc.GetSecret(context.Background(), core.Principal{
 		Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin},
 		Method:   domain.AuthMethodToken,
-	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-api-key"}, 0, "", token, "")
+	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-api-key"}, 0, "", "")
 	if err != nil || string(value.Value) != "original" {
 		t.Fatalf("original token read = %q, %v", value.Value, err)
 	}
@@ -485,13 +480,10 @@ func TestBoundRevealRequiresBindingKey(t *testing.T) {
 	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "bound",
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("v")),
-		"binding_key":  bindingKey, "generate_access_token": true,
+		"binding_key":  bindingKey,
 	})
 	mustStatus(t, w, http.StatusOK)
-	token, ok := decodeBody(t, w)["access_token"].(string)
-	if !ok || token == "" {
-		t.Fatal("token-gated bound create did not return an access token")
-	}
+	const token = "obsolete-token"
 	body := map[string]any{"env": "prod", "app": "gradethis", "key": "bound"}
 
 	// Reveal does not accept the per-secret access token. Strict decoding keeps
@@ -555,13 +547,10 @@ func TestSecretWritesFreelyAlternateBindingAndRejectLegacyFields(t *testing.T) {
 	create := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "bound-update",
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("v1")),
-		"binding_key":  keyA, "generate_access_token": true,
+		"binding_key":  keyA,
 	}
 	w := e.admin(http.MethodPost, "/api/v1/secrets", create)
 	mustStatus(t, w, http.StatusOK)
-	if token, _ := decodeBody(t, w)["access_token"].(string); token == "" {
-		t.Fatal("expected independently generated access token")
-	}
 
 	// The next version may be unbound even though v1 is bound; no prior
 	// binding key or access token is a write credential in the 0.3 contract.
@@ -624,7 +613,7 @@ func TestSecretWritesFreelyAlternateBindingAndRejectLegacyFields(t *testing.T) {
 		}
 		for i, raw := range versions {
 			version := raw.(map[string]any)
-			if version["version"] != float64(i+1) || version["bound"] != wantBound[i] || version["has_access_token"] != true {
+			if version["version"] != float64(i+1) || version["bound"] != wantBound[i] {
 				t.Fatalf("version %d metadata = %v", i+1, version)
 			}
 		}
@@ -671,7 +660,7 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 		}
 		for i, raw := range versions {
 			version := raw.(map[string]any)
-			if version["version"] != float64(i+1) || version["bound"] != wantBound[i] || version["state"] != wantState[i] || version["has_access_token"] != false {
+			if version["version"] != float64(i+1) || version["bound"] != wantBound[i] || version["state"] != wantState[i] {
 				t.Fatalf("version %d metadata = %v", i+1, version)
 			}
 		}

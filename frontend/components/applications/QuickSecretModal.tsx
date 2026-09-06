@@ -1,6 +1,5 @@
 import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import CopyButton from "@/components/CopyButton";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
@@ -41,7 +40,6 @@ export interface QuickSecretRequest {
   metadataJson: string;
   expiresAtUnixMs: number;
   bindingKey?: string;
-  generateAccessToken: boolean;
 }
 
 export function QuickSecretModal({
@@ -75,10 +73,7 @@ export function QuickSecretModal({
   const [expires, setExpires] = useState("");
   const [bindVersion, setBindVersion] = useState(false);
   const [bindingKey, setBindingKey] = useState("");
-  const [generateToken, setGenerateToken] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [mintedToken, setMintedToken] = useState<string | null>(null);
-  const [createdRef, setCreatedRef] = useState<ResourceRef | null>(null);
   const [seeded, setSeeded] = useState({ environment: "", key: "" });
   const errors = useFieldErrors<QuickSecretField>();
   const { formRef, requestFocus } = useFocusFirstInvalid();
@@ -88,7 +83,6 @@ export function QuickSecretModal({
   const formInstance = useRef(0);
   const formId = useId();
   const bindId = `${formId}-bind`;
-  const tokenId = `${formId}-token`;
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
 
   useEffect(() => {
@@ -97,8 +91,6 @@ export function QuickSecretModal({
     if (!seedOpen) {
       setValue("");
       setBindingKey("");
-      setMintedToken(null);
-      setCreatedRef(null);
       return;
     }
     const initialEnvironment =
@@ -112,10 +104,7 @@ export function QuickSecretModal({
     setExpires("");
     setBindVersion(false);
     setBindingKey("");
-    setGenerateToken(false);
     setAdvancedOpen(false);
-    setMintedToken(null);
-    setCreatedRef(null);
     setSeeded({ environment: initialEnvironment, key: seedKey });
     errors.reset();
     return () => {
@@ -170,8 +159,7 @@ export function QuickSecretModal({
     !isEmptyJson(metadataJson) ||
     expires !== "" ||
     bindVersion ||
-    bindingKey !== "" ||
-    generateToken;
+    bindingKey !== "";
   const initialFocus = !seeded.environment ? environmentRef : !seeded.key ? keyRef : valueRef;
 
   async function submit() {
@@ -187,9 +175,8 @@ export function QuickSecretModal({
     const submittedForm = formInstance.current;
     const requestBindingKey = bindVersion ? bindingKey : undefined;
     setBindingKey("");
-    let response: CreateSecretResponse;
     try {
-      response = await onSave({
+      await onSave({
         environment,
         key: ref.key,
         valueBase64: secretValueBase64(value, alreadyBase64),
@@ -197,23 +184,13 @@ export function QuickSecretModal({
         metadataJson: metadataJson.trim() || "{}",
         expiresAtUnixMs: datetimeLocalToUnixMs(expires) ?? 0,
         ...(requestBindingKey !== undefined ? { bindingKey: requestBindingKey } : null),
-        generateAccessToken: generateToken,
       });
     } catch {
       return;
     }
     if (formInstance.current !== submittedForm) return;
     setValue("");
-    setCreatedRef(ref);
-    if (response.access_token) setMintedToken(response.access_token);
-    else onCreated(ref);
-  }
-
-  function finishTokenReveal() {
-    const ref = createdRef;
-    setMintedToken(null);
-    setCreatedRef(null);
-    if (ref) onCreated(ref);
+    onCreated(ref);
   }
 
   return (
@@ -221,180 +198,154 @@ export function QuickSecretModal({
       mobileFullScreen
       open={seedOpen}
       wide
-      title={mintedToken ? "Save this access token now" : "New secret"}
-      description={mintedToken ? undefined : "Create the value without leaving this application."}
-      onClose={mintedToken ? () => undefined : onClose}
-      dismissible={!saving && mintedToken === null}
-      dirty={dirty && !saving && mintedToken === null}
-      initialFocus={mintedToken ? undefined : initialFocus}
-      footer={
-        mintedToken ? (
-          <Button onClick={finishTokenReveal}>I&apos;ve saved it — manage secret</Button>
-        ) : (
-          (close) => (
-            <>
-              <Button type="button" variant="outline" onClick={close} disabled={saving}>
-                Cancel
-              </Button>
-              <Button form={formId} type="submit" loading={saving} disabled={blocked}>
-                Create secret
-              </Button>
-            </>
-          )
-        )
-      }
-    >
-      {mintedToken ? (
+      title="New secret"
+      description="Create the value without leaving this application."
+      onClose={onClose}
+      dismissible={!saving}
+      dirty={dirty && !saving}
+      initialFocus={initialFocus}
+      footer={(close) => (
         <>
-          <div className="danger-panel mb-4">
-            <strong>This token will never be shown again.</strong> Store it in the application
-            configuration now. Access tokens and binding keys are independent credentials.
-          </div>
-          <div className="token-reveal">{mintedToken}</div>
-          <div className="row-wrap mt-4">
-            <CopyButton label="Copy token" value={() => mintedToken} />
-          </div>
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
+            Cancel
+          </Button>
+          <Button form={formId} type="submit" loading={saving} disabled={blocked}>
+            Create secret
+          </Button>
         </>
-      ) : (
-        <form
-          id={formId}
-          ref={formRef}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit();
-          }}
+      )}
+    >
+      <form
+        id={formId}
+        ref={formRef}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="form-row">
+          <Field label="Application">
+            <Input className="font-mono" value={app} disabled />
+          </Field>
+          <Field label="Environment" error={shownEnvironmentProblem}>
+            <AppSelect
+              ref={environmentRef}
+              className="font-mono"
+              value={environment}
+              onValueChange={setEnvironment}
+              onBlur={() => errors.touch("environment")}
+              placeholder="Select environment…"
+              options={environments.map((item) => ({ value: item, label: item }))}
+            />
+          </Field>
+        </div>
+        <Field
+          label="Secret key"
+          hint="Examples: stripe-api-key or billing/webhook-secret"
+          error={shownKeyProblem}
         >
-          <div className="form-row">
-            <Field label="Application">
-              <Input className="font-mono" value={app} disabled />
-            </Field>
-            <Field label="Environment" error={shownEnvironmentProblem}>
-              <AppSelect
-                ref={environmentRef}
-                className="font-mono"
-                value={environment}
-                onValueChange={setEnvironment}
-                onBlur={() => errors.touch("environment")}
-                placeholder="Select environment…"
-                options={environments.map((item) => ({ value: item, label: item }))}
+          <Input
+            ref={keyRef}
+            className="font-mono"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            onBlur={() => errors.touch("key")}
+            placeholder="stripe-api-key"
+          />
+        </Field>
+        <div className="form-row secret-write-primary">
+          <Field label="Content type">
+            <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
+          </Field>
+        </div>
+        <Field
+          label="Secret value"
+          hint={
+            alreadyBase64
+              ? "Sent as standard base64 and decoded by the server."
+              : "Stored encrypted. Generate a random value or paste text."
+          }
+          error={shownValueProblem}
+        >
+          <SecretValueField
+            value={value}
+            onChange={setValue}
+            base64={alreadyBase64}
+            onBase64Change={setAlreadyBase64}
+            inputRef={valueRef}
+            onBlur={() => errors.touch("value")}
+          />
+        </Field>
+
+        <details
+          className="advanced-panel advanced-panel-modal"
+          open={advancedOpen}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open || advancedHasError)}
+        >
+          <summary>Advanced options</summary>
+          <div className="advanced-panel-content">
+            <Field label="Expires at" hint="Optional." error={shownExpiresProblem}>
+              <Input
+                type="datetime-local"
+                min={expiresMin}
+                value={expires}
+                onChange={(event) => setExpires(event.target.value)}
+                onBlur={() => {
+                  errors.touch("expires");
+                  if (expiresProblem) setAdvancedOpen(true);
+                }}
               />
             </Field>
-          </div>
-          <Field
-            label="Secret key"
-            hint="Examples: stripe-api-key or billing/webhook-secret"
-            error={shownKeyProblem}
-          >
-            <Input
-              ref={keyRef}
-              className="font-mono"
-              value={key}
-              onChange={(event) => setKey(event.target.value)}
-              onBlur={() => errors.touch("key")}
-              placeholder="stripe-api-key"
-            />
-          </Field>
-          <div className="form-row secret-write-primary">
-            <Field label="Content type">
-              <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
+            <Field label="Metadata JSON" error={shownMetadataProblem}>
+              <JsonEditor
+                toolbar="minimal"
+                rows={3}
+                maxHeight="30vh"
+                value={metadataJson}
+                onChange={setMetadataJson}
+                onBlur={() => {
+                  errors.touch("metadata");
+                  if (metadataProblem) setAdvancedOpen(true);
+                }}
+                onSubmit={() => void submit()}
+              />
             </Field>
-          </div>
-          <Field
-            label="Secret value"
-            hint={
-              alreadyBase64
-                ? "Sent as standard base64 and decoded by the server."
-                : "Stored encrypted. Generate a random value or paste text."
-            }
-            error={shownValueProblem}
-          >
-            <SecretValueField
-              value={value}
-              onChange={setValue}
-              base64={alreadyBase64}
-              onBase64Change={setAlreadyBase64}
-              inputRef={valueRef}
-              onBlur={() => errors.touch("value")}
-            />
-          </Field>
-
-          <details
-            className="advanced-panel advanced-panel-modal"
-            open={advancedOpen}
-            onToggle={(event) => setAdvancedOpen(event.currentTarget.open || advancedHasError)}
-          >
-            <summary>Advanced options</summary>
-            <div className="advanced-panel-content">
-              <Field label="Expires at" hint="Optional." error={shownExpiresProblem}>
-                <Input
-                  type="datetime-local"
-                  min={expiresMin}
-                  value={expires}
-                  onChange={(event) => setExpires(event.target.value)}
-                  onBlur={() => {
-                    errors.touch("expires");
-                    if (expiresProblem) setAdvancedOpen(true);
-                  }}
-                />
-              </Field>
-              <Field label="Metadata JSON" error={shownMetadataProblem}>
-                <JsonEditor
-                  toolbar="minimal"
-                  rows={3}
-                  maxHeight="30vh"
-                  value={metadataJson}
-                  onChange={setMetadataJson}
-                  onBlur={() => {
-                    errors.touch("metadata");
-                    if (metadataProblem) setAdvancedOpen(true);
-                  }}
-                  onSubmit={() => void submit()}
-                />
-              </Field>
-              <div className="checkbox-row">
-                <Checkbox
-                  id={bindId}
-                  checked={bindVersion}
-                  onCheckedChange={(checked) => {
-                    setBindVersion(checked);
-                    if (!checked) setBindingKey("");
-                  }}
-                />
-                <label htmlFor={bindId}>
-                  <strong>Bind this version to an application key</strong>
-                  <div className="faint text-sm">
-                    KMS needs the same binding key to decrypt this version and never stores it.
-                  </div>
-                </label>
-              </div>
-              {bindVersion ? (
-                <Field
-                  label="Binding key"
-                  hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it."
-                  error={shownBindingKeyProblem}
-                >
-                  <SensitiveValueField
-                    controlLabel="binding key"
-                    placeholder="application binding key"
-                    value={bindingKey}
-                    onChange={setBindingKey}
-                    onBlur={() => {
-                      errors.touch("bindingKey");
-                      if (bindingKeyProblem) setAdvancedOpen(true);
-                    }}
-                  />
-                </Field>
-              ) : null}
-              <div className="checkbox-row">
-                <Checkbox id={tokenId} checked={generateToken} onCheckedChange={setGenerateToken} />
-                <label htmlFor={tokenId}>
-                  Generate a per-secret access token (shown once after creation).
-                </label>
-              </div>
+            <div className="checkbox-row">
+              <Checkbox
+                id={bindId}
+                checked={bindVersion}
+                onCheckedChange={(checked) => {
+                  setBindVersion(checked);
+                  if (!checked) setBindingKey("");
+                }}
+              />
+              <label htmlFor={bindId}>
+                <strong>Bind this version to an application key</strong>
+                <div className="faint text-sm">
+                  KMS needs the same binding key to decrypt this version and never stores it.
+                </div>
+              </label>
             </div>
-          </details>
-        </form>
-      )}
+            {bindVersion ? (
+              <Field
+                label="Binding key"
+                hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it."
+                error={shownBindingKeyProblem}
+              >
+                <SensitiveValueField
+                  controlLabel="binding key"
+                  value={bindingKey}
+                  onChange={setBindingKey}
+                  onBlur={() => {
+                    errors.touch("bindingKey");
+                    if (bindingKeyProblem) setAdvancedOpen(true);
+                  }}
+                />
+              </Field>
+            ) : null}
+          </div>
+        </details>
+      </form>
     </Modal>
   );
 }

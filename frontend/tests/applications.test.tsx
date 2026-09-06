@@ -667,7 +667,6 @@ describe("ApplicationsPage", () => {
     mocks.createSecret.mockResolvedValue({
       version: 1,
       revision: 9,
-      access_token: "kmss_created_once",
     });
 
     render(<ApplicationsPage />);
@@ -694,9 +693,6 @@ describe("ApplicationsPage", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "32 bytes, hex" }));
     const bindingKey = (within(modal).getByLabelText("Binding key") as HTMLInputElement).value;
     expect(bindingKey).toMatch(/^[0-9a-f]{64}$/);
-    fireEvent.click(
-      within(modal).getByRole("checkbox", { name: /Generate a per-secret access token/ }),
-    );
     fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
 
     await waitFor(() => expect(mocks.createSecret).toHaveBeenCalledTimes(1));
@@ -708,14 +704,11 @@ describe("ApplicationsPage", () => {
       content_type: "text/plain",
       metadata_json: '{"owner":"platform"}',
       binding_key: bindingKey,
-      generate_access_token: true,
+
       create_only: true,
       expires_at_unix_ms: datetimeLocalToUnixMs("2099-01-02T03:04"),
     });
 
-    const token = await screen.findByRole("dialog", { name: "Save this access token now" });
-    expect(token).toHaveTextContent("kmss_created_once");
-    fireEvent.click(within(token).getByRole("button", { name: "I've saved it — manage secret" }));
     expect(mocks.secretWorkspace).toHaveBeenLastCalledWith(
       expect.objectContaining({
         secretRef: { env: "prod", app: overview.application.name, key: secret.alias },

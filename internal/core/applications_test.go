@@ -245,7 +245,7 @@ func TestCollectApplicationRowsUsesExactPromotedSecretVersion(t *testing.T) {
 	ref := domain.Ref{NS: ns, Key: "db_password"}
 	if _, err := service.PutSecret(ctx, admin, PutSecretInput{
 		Ref: ref, Value: []byte(`{"new":true}`), ContentType: "application/json", Metadata: `{"generation":2}`,
-		BindingKey: "0123456789abcdef0123456789abcdef", GenerateToken: true,
+		BindingKey: "0123456789abcdef0123456789abcdef",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestCollectApplicationRowsUsesExactPromotedSecretVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasAccessToken || info.ContentType != "text/plain" || info.Metadata != "{}" {
+	if info.ContentType != "text/plain" || info.Metadata != "{}" {
 		t.Fatalf("secret-level current projection was not refreshed on promotion: %+v", info)
 	}
 	namespace, err := store.GetNamespace(ctx, ns)
@@ -277,7 +277,7 @@ func TestCollectApplicationRowsUsesExactPromotedSecretVersion(t *testing.T) {
 			break
 		}
 	}
-	if !cell.Present || cell.Version != 1 || cell.ContentType != "text/plain" || cell.Bound || cell.HasAccessToken {
+	if !cell.Present || cell.Version != 1 || cell.ContentType != "text/plain" || cell.Bound {
 		t.Fatalf("current secret cell used secret-level/latest projection: %+v", cell)
 	}
 	states := service.secretStates(ctx, app, ns, map[string]domain.Ref{"db_password": ref}, secretsByEnv[ns.Env], service.now())

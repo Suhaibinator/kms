@@ -216,7 +216,7 @@ func TestImportReportRefusesExistingFile(t *testing.T) {
 
 func TestWriteImportReportPropagatesOutputFailure(t *testing.T) {
 	err := writeImportReport(errorWriter{err: io.ErrClosedPipe}, []importResult{{
-		Key: "OLD_KEY", Path: "/prod/app/old-key", Token: "kmss_secret",
+		Key: "OLD_KEY", Path: "/prod/app/old-key",
 	}}, true)
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("writeImportReport error = %v, want closed pipe", err)
@@ -262,9 +262,8 @@ func TestImportDryRunJSON(t *testing.T) {
 	}
 }
 
-// A real import mints one access token per secret. Each appears exactly once
-// in the document, with the one-time warning on stderr.
-func TestImportJSONCarriesEachAccessTokenOnce(t *testing.T) {
+// A real import reports each destination path once.
+func TestImportJSONReportsImportedPaths(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "kms.db")
 	keyFile := filepath.Join(dir, "master.key")
@@ -291,17 +290,8 @@ func TestImportJSONCarriesEachAccessTokenOnce(t *testing.T) {
 	}
 	entries, _ := document["entries"].([]any)
 	entry, _ := entries[0].(map[string]any)
-	assertJSONFields(t, entry, "key", "path", "token")
-	token, _ := entry["token"].(string)
-	if !strings.HasPrefix(token, "kmss_") {
-		t.Fatalf("token = %q", token)
-	}
-	if strings.Count(c.stdout(), token) != 1 {
-		t.Fatalf("the one-time token appears more than once: %s", c.stdout())
-	}
-	if !strings.Contains(c.stderr(), "WARNING: the access tokens are shown once") {
-		t.Fatalf("stderr = %q", c.stderr())
-	}
+	assertJSONFields(t, entry, "key", "path")
+
 }
 
 // --report keeps its meaning in JSON mode: the file still receives the text
@@ -334,7 +324,7 @@ func TestImportJSONWithReportFileWritesBoth(t *testing.T) {
 // exactly one place: the report file the operator named. The JSON document
 // carries the mapping without tokens and names the file instead, the way
 // get-secret --out reports out_file rather than the value.
-func TestImportJSONWithReportFileKeepsTokensOutOfStdout(t *testing.T) {
+func TestImportJSONWithReportFileReportsPaths(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "kms.db")
 	keyFile := filepath.Join(dir, "master.key")
@@ -354,11 +344,8 @@ func TestImportJSONWithReportFileKeepsTokensOutOfStdout(t *testing.T) {
 		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
 	}
 	body := readFileString(t, report)
-	if !strings.Contains(body, "kmss_") {
-		t.Fatalf("report file carries no token: %q", body)
-	}
-	if strings.Contains(c.stdout(), "kmss_") || strings.Contains(c.stderr(), "kmss_") {
-		t.Fatalf("a token left the report file:\nstdout=%s\nstderr=%s", c.stdout(), c.stderr())
+	if !strings.Contains(body, "STRIPE_KEY -> /prod/gradethis/stripe-key") {
+		t.Fatalf("report missing mapping: %q", body)
 	}
 	document := decodeJSONStdout(t, c)
 	if document["report_file"] != report {
@@ -367,9 +354,6 @@ func TestImportJSONWithReportFileKeepsTokensOutOfStdout(t *testing.T) {
 	entries, _ := document["entries"].([]any)
 	entry, _ := entries[0].(map[string]any)
 	assertJSONFields(t, entry, "key", "path")
-	if !strings.Contains(c.stderr(), "WARNING: the access tokens were written once to "+report) {
-		t.Fatalf("stderr = %q", c.stderr())
-	}
 }
 
 // --- helpers ---------------------------------------------------------------

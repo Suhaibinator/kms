@@ -365,7 +365,6 @@ blocking → warning → info and, within a severity, in emission order
 | `kind_mismatch` | blocking | env + alias | `alias`, `kind`, `found` | open resource |
 | `content_type_mismatch` | blocking | env + alias | `alias`, `content_type`, `found` | open resource |
 | `secret_unreadable` | blocking | env + alias | `alias`, `state` (`disabled`, `destroyed`, `expired`) | open secret |
-| `secret_token_required` | info | env + alias | `alias` | open secret |
 | `no_active_release` | warning | env | — | ship |
 | `unreleased_changes` | warning | env + alias | `alias`, `current`, `pinned` | ship |
 | `alias_not_in_release` | warning | env + alias | `alias` | ship |
@@ -813,7 +812,6 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
   "key": "stripe-api-key",
   "content_type": "text/plain",
   "bound": false,
-  "has_access_token": true,
   "metadata_json": "{}",
   "created_at_unix_ms": 0,
   "updated_at_unix_ms": 0,
@@ -822,17 +820,15 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
     { "version": 2, "state": "enabled", "created_by": "admin",
       "created_at_unix_ms": 0, "destroyed_at_unix_ms": 0,
       "expires_at_unix_ms": 0, "metadata_json": "{}",
-      "bound": false, "has_access_token": true }
+      "bound": false }
   ]
 }
 ```
 
-Top-level `bound` summarizes the version selected by `current`; top-level
-`has_access_token` reports whether the secret currently has an access-token
-hash. Exact-version decisions use both fields on that item in `versions`;
-both flags are immutable until the version is destroyed. Release entries omit
-them, but an exact version pin implicitly pins their values. Purged tombstones
-have `state: "destroyed"` with both version flags false.
+Top-level `bound` summarizes the version selected by `current`. Each exact
+version has its own immutable-while-live `bound` flag. Release entries omit it,
+but their version pin implicitly fixes the encryption requirement. Purged
+tombstones have `state: "destroyed"` and `bound: false`.
 
 `Identity`:
 ```json
@@ -989,31 +985,26 @@ Listing is always namespace-scoped: `env` and `app` are required.
   { "env": "prod", "app": "gradethis", "key": "stripe-api-key",
     "value_base64": "...", "content_type": "text/plain",
     "metadata_json": "{}", "binding_key": "",
-    "generate_access_token": false, "create_only": false,
+    "create_only": false,
     "expires_at_unix_ms": 0 }
   ```
-  → `{"version": 1, "revision": 7, "access_token": "..."}`
-  (`access_token` present only when `generate_access_token` was true — shown
-  once, never again.) A non-empty `binding_key` creates a bound version; empty
+  → `{"version": 1, "revision": 7}`
+  A non-empty `binding_key` creates a bound version; empty
   creates an unbound version, independent of the preceding version. A non-empty
-  key must be opaque valid UTF-8 containing 32 to 1024 bytes. Access-token
-  generation is independent and there is no write-side `secret_token`. Set `create_only`
+  key must be opaque valid UTF-8 containing 32 to 1024 bytes. Set `create_only`
   to reject an existing key instead of appending a version; the absence check
   is enforced atomically with creation.
 - `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","binding_key":"..."}` →
   `{"env","app","key","version","value_base64","content_type"}`.
   Admin only. Every successful reveal and decryption failure is audited as a
-  reveal event. This administrator break-glass path deliberately bypasses the
-  access-token gate, and `secret_token` is therefore rejected as an unknown
-  field. A bound version still requires `binding_key`, because KMS cannot
+  reveal event. A bound version requires `binding_key`, because KMS cannot
   decrypt it without that material. Per-secret credentials are not accepted in
   custom headers, avoiding exposure through proxy configurations that log
   them. Request bodies are not logged by the server, and credentials are never
   included in the response or audit event. Missing, wrong, and unusable
   binding-key material collapse to the same sanitized credential/decryption
-  response. By contrast, data-plane gRPC `GetSecret` enforces the exact
-  version's access-token and binding-key requirements independently and needs
-  both when both flags are set.
+  response. Data-plane gRPC `GetSecret` also requires the exact version's binding
+  key when bound, alongside normal authentication and authorization.
 - `POST /api/v1/secrets/disable` — `{"env","app","key","version": 0,"enable": false}` →
   `{"revision"}` (`version: 0` = all versions; `enable: true` re-enables.)
 - `POST /api/v1/secrets/destroy` — `{"env","app","key","version"}` →

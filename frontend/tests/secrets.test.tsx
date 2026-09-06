@@ -56,7 +56,7 @@ const SECRET: SecretMetadata = {
   key: "api-key",
   content_type: "text/plain",
   bound: false,
-  has_access_token: false,
+
   metadata_json: "{}",
   created_at_unix_ms: 1,
   updated_at_unix_ms: 2,
@@ -66,7 +66,7 @@ const SECRET: SecretMetadata = {
       version: 1,
       state: "enabled",
       bound: false,
-      has_access_token: false,
+
       created_by: "admin",
       created_at_unix_ms: 1,
       destroyed_at_unix_ms: 0,
@@ -398,7 +398,7 @@ describe("new secret validation", () => {
   });
 
   it.each([false, true])(
-    "sends a binding key without coupling it to access-token generation (generated: %s)",
+    "sends a binding key to the request (generated: %s)",
     async (generated) => {
       let finish: (value: { version: number; revision: number }) => void = () => undefined;
       const createSecret = vi.spyOn(api, "createSecret").mockImplementation(
@@ -426,7 +426,6 @@ describe("new secret validation", () => {
       await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
       expect(createSecret.mock.calls[0][0]).toMatchObject({
         binding_key: opaqueKey,
-        generate_access_token: false,
       });
       expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
       expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
@@ -479,11 +478,11 @@ describe("new secret version validation", () => {
     expect(createSecret).not.toHaveBeenCalled();
   });
 
-  it("confirms token rotation, carries expiry, and holds the replacement token", async () => {
+  it("creates a new version with expiry and returns to the secret", async () => {
     const protectedSecret: SecretMetadata = {
       ...SECRET,
-      has_access_token: true,
-      versions: SECRET.versions.map((version) => ({ ...version, has_access_token: true })),
+
+      versions: SECRET.versions.map((version) => ({ ...version })),
     };
     mocks.router.query = {
       env: protectedSecret.env,
@@ -494,7 +493,6 @@ describe("new secret version validation", () => {
     const createSecret = vi.spyOn(api, "createSecret").mockResolvedValue({
       version: 2,
       revision: 3,
-      access_token: "kmss_replacement",
     });
 
     render(<SecretDetailPage />);
@@ -506,36 +504,25 @@ describe("new secret version validation", () => {
     fireEvent.click(within(dialog).getByText("Advanced options"));
     const expires = within(dialog).getByLabelText("Expires at");
     fireEvent.change(expires, { target: { value: "2099-01-02T03:04" } });
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Rotate access token/ }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create version & rotate token" }));
-
-    expect(createSecret).not.toHaveBeenCalled();
-    const confirm = screen.getByRole("dialog", { name: "Rotate access token?" });
-    expect(confirm).toHaveTextContent("current token");
-    fireEvent.click(within(confirm).getByRole("button", { name: "Create version & rotate token" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save new version" }));
 
     await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
     expect(createSecret).toHaveBeenCalledWith(
       expect.objectContaining({
-        generate_access_token: true,
         expires_at_unix_ms: datetimeLocalToUnixMs("2099-01-02T03:04"),
       }),
     );
-    const token = await screen.findByRole("dialog", { name: "Save this access token now" });
-    expect(token).toHaveTextContent("kmss_replacement");
-    expect(within(token).queryByRole("button", { name: "Dismiss dialog" })).toBeNull();
-    fireEvent.click(within(token).getByRole("button", { name: "I've saved it — continue" }));
     await waitFor(() => expect(metadata).toHaveBeenCalledTimes(2));
   });
 });
 
 describe("protected secret reveal", () => {
-  it("bypasses the exact-version access token and sends only the transient binding key", async () => {
+  it("sends only the transient binding key for an exact-version reveal", async () => {
     const protectedSecret: SecretMetadata = {
       ...SECRET,
       bound: true,
-      has_access_token: true,
-      versions: [{ ...SECRET.versions[0], bound: true, has_access_token: true }],
+
+      versions: [{ ...SECRET.versions[0], bound: true }],
     };
     mocks.router.query = {
       env: protectedSecret.env,
@@ -660,8 +647,8 @@ describe("protected secret reveal", () => {
     const firstSecret: SecretMetadata = {
       ...SECRET,
       bound: true,
-      has_access_token: true,
-      versions: [{ ...SECRET.versions[0], bound: true, has_access_token: true }],
+
+      versions: [{ ...SECRET.versions[0], bound: true }],
     };
     const nextSecret: SecretMetadata = {
       ...firstSecret,
@@ -850,7 +837,6 @@ describe("new secret version dialog", () => {
       await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
       expect(createSecret.mock.calls[0][0]).toMatchObject({
         binding_key: bindingKey,
-        generate_access_token: false,
       });
       expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
       expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");

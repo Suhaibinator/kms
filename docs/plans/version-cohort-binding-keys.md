@@ -7,7 +7,7 @@ migration and does not change the database table layout, application
 configuration schema, `ConfigurationReleaseEntry`, or deterministic release
 digest format. It changes the SecretService API and all public clients.
 
-For every non-destroyed secret version, `bound` and `has_access_token` are
+For every non-destroyed secret version, `bound` is
 immutable. An exact release pin therefore implicitly pins the protection mode,
 even though protection flags remain absent from release entries and digests.
 Destroyed rows are minimal tombstones and clear those flags.
@@ -23,7 +23,7 @@ Each successful request:
 2. decrypts current and re-encrypts it with fresh ciphertext, DEK, nonce,
    version-bound AAD, active KEK, and binding salt where applicable;
 3. preserves plaintext, content type, metadata, state, expiry, and the source
-   version's access-token requirement while recording fresh creation identity
+   version's encryption protection while recording fresh creation identity
    and time;
 4. makes the clone `current` and the byte-for-byte unchanged source `previous`;
 5. commits the change event, sanitized audit row, and revision atomically; and
@@ -110,9 +110,8 @@ The operational sequence is:
 3. retire releases that pin the old version; and
 4. purge the old bound cohort or unbound versions when required.
 
-Any future protection-mode toggle must create a new version. Rotating the
-credential accepted by token-gated versions is allowed, but it may never remove
-a live version's `has_access_token` requirement.
+Future protection changes create new versions; existing live versions retain
+their original binding requirements.
 
 ## Verification
 

@@ -24,7 +24,6 @@ from .async_release import (
     AsyncManifestValidator,
     AsyncReleaseLoader,
     AsyncReleaseLoaderConfig,
-    AsyncSecretTokenProvider,
     run_typed_release_async,
 )
 from .client import Client
@@ -77,7 +76,6 @@ from .release import (
     ReleaseStatus,
     RELEASE_REJECTION_CATEGORIES,
     RELEASE_STATES,
-    SecretTokenProvider,
     run_typed_release,
 )
 from .secret import Secret, new_secret
@@ -96,7 +94,6 @@ __all__ = [
     "AsyncReleaseLoader",
     "AsyncReleaseLoaderConfig",
     "AsyncManifestValidator",
-    "AsyncSecretTokenProvider",
     "WhoAmI",
     "Secret",
     "new_secret",
@@ -139,7 +136,6 @@ __all__ = [
     "ReleaseStatus",
     "RELEASE_REJECTION_CATEGORIES",
     "RELEASE_STATES",
-    "SecretTokenProvider",
     "run_typed_release",
     "run_typed_release_async",
     "ParamStoreError",

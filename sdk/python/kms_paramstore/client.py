@@ -341,7 +341,6 @@ class Client:
         *,
         version: int = 0,
         label: str = "",
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> str:
         """Return the value of a non-secret parameter.
@@ -353,7 +352,7 @@ class Client:
         version, label = _normalize_selector(version, label)
         return self._get_parameter_ref(
             self._resolve_ref(key), version=version, label=label,
-            secret_token=secret_token, timeout=timeout
+            timeout=timeout
         )
 
     def get_parameter_info(
@@ -362,38 +361,36 @@ class Client:
         *,
         version: int = 0,
         label: str = "",
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> Parameter:
         """Return a parameter value together with its immutable metadata."""
         version, label = _normalize_selector(version, label)
         return self._fetch_parameter_info(
             self._resolve_ref(key), version=version, label=label,
-            secret_token=secret_token, timeout=timeout
+            timeout=timeout
         )
 
     def _get_parameter_ref(
-        self, ref: Ref, *, version: int = 0, label: str = "", secret_token: str = "", timeout: Optional[float] = None
+        self, ref: Ref, *, version: int = 0, label: str = "", timeout: Optional[float] = None
     ) -> str:
-        if not secret_token:
-            cached = self._cache.get_param(str(ref), version, label)
-            if cached is not None:
-                return cached
-        return self._fetch_parameter(ref, version=version, label=label, secret_token=secret_token, timeout=timeout)
+        cached = self._cache.get_param(str(ref), version, label)
+        if cached is not None:
+            return cached
+        return self._fetch_parameter(ref, version=version, label=label, timeout=timeout)
 
     def _fetch_parameter(
-        self, ref: Ref, *, version: int, label: str, secret_token: str, timeout: Optional[float] = None
+        self, ref: Ref, *, version: int, label: str, timeout: Optional[float] = None
     ) -> str:
         parameter = self._fetch_parameter_info(
-            ref, version=version, label=label, secret_token=secret_token, timeout=timeout
+            ref, version=version, label=label, timeout=timeout
         )
         return parameter.value
 
     def _fetch_parameter_info(
-        self, ref: Ref, *, version: int, label: str, secret_token: str = "", timeout: Optional[float] = None
+        self, ref: Ref, *, version: int, label: str, timeout: Optional[float] = None
     ) -> Parameter:
         version, label = _normalize_selector(version, label)
-        generation = None if secret_token else self._cache.begin_parameter_read(str(ref))
+        generation = self._cache.begin_parameter_read(str(ref))
         try:
             try:
                 resp = self._param_stub.GetParameter(
@@ -407,8 +404,7 @@ class Client:
                 raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
             parameter = _parameter_from_proto(resp.parameter)
             _assert_read_identity("parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version)
-            if not secret_token:
-                self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
+            self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
             return parameter
         finally:
             self._cache.end_read(generation)
@@ -557,14 +553,13 @@ class Client:
         *,
         version: int = 0,
         label: str = "",
-        secret_token: str = "",
         binding_key: str = "",
         timeout: Optional[float] = None,
     ) -> Secret:
         """Return a secret as a redacting :class:`Secret`.
 
         ``key`` is relative to the client namespace, or an absolute
-        ``/env/app/key``. ``secret_token`` and ``binding_key`` are independent
+        ``/env/app/key``. ``binding_key`` supplies the key for bound versions; identity permissions are
         credentials and are sent only for this request.
 
         Secret plaintext is never cached by the SDK.
@@ -577,7 +572,7 @@ class Client:
             resp = self._secret_stub.GetSecret(
                 kms_pb2.GetSecretRequest(
                     ref=to_proto_ref(ref), version=version, label=label,
-                    secret_token=secret_token, binding_key=binding_key,
+                    binding_key=binding_key,
                 ),
                 metadata=self._auth_metadata(),
                 timeout=call_timeout,
@@ -609,7 +604,6 @@ class Client:
         content_type: str = "",
         metadata_json: str = "",
         binding_key: str = "",
-        generate_access_token: bool = False,
         expires_at_unix_ms: int = 0,
         timeout: Optional[float] = None,
     ) -> PutSecretResult:
@@ -637,7 +631,6 @@ class Client:
                     content_type=content_type,
                     metadata_json=metadata_json,
                     binding_key=binding_key,
-                    generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
                 ),
                 metadata=self._auth_metadata(),
@@ -648,7 +641,7 @@ class Client:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return PutSecretResult(version=resp.version, revision=resp.revision, access_token=resp.access_token)
+        return PutSecretResult(version=resp.version, revision=resp.revision)
 
     def list_secrets(
         self,

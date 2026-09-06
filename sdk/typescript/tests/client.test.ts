@@ -243,7 +243,7 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("never caches secret plaintext and forwards independent read credentials", async () => {
+  it("never caches secret plaintext and forwards binding keys", async () => {
     let reads = 0;
     const transport = new FakeTransport((_path, _request, options) => {
       reads++;
@@ -268,59 +268,17 @@ describe("KmsClient", () => {
     expect(JSON.stringify(second)).toBe(`"${REDACTED}"`);
 
     const credentialed = await client.getSecret("db/password", {
-      secretToken: "one-time",
       bindingKey: "operator-binding-key",
     });
     expect(credentialed.bindKey).toBe("");
     await client.getSecret("db/password", {
-      secretToken: "one-time",
       bindingKey: "operator-binding-key",
     });
     expect(reads).toBe(4);
     expect(transport.calls.at(-1)?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
     expect(
-      (transport.calls.at(-1)?.request as { secretToken?: string } | undefined)?.secretToken,
-    ).toBe("one-time");
-    expect(
       (transport.calls.at(-1)?.request as { bindingKey?: string } | undefined)?.bindingKey,
     ).toBe("operator-binding-key");
-    await client.close();
-  });
-
-  it("never forwards parameter secret tokens and never promotes those reads into cache", async () => {
-    let reads = 0;
-    const transport = new FakeTransport((path, request, options) => {
-      if (!path.endsWith("/GetParameter")) throw new Error(`unexpected ${path}`);
-      reads += 1;
-      const key = (request as { ref?: { key?: string } }).ref?.key ?? "missing";
-      return {
-        parameter: {
-          ref: { namespace: { env: "prod", app: "api" }, key },
-          value: `value-${reads}`,
-          contentType: "string",
-          version: BigInt(reads),
-          metadataJson: "{}",
-          createdBy: "test",
-          createdAtUnixMs: 0n,
-          labels: {},
-          observedMetadata: options.metadata,
-        },
-      };
-    });
-    const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
-
-    await expect(client.getParameter("protected", { secretToken: "read-token" })).resolves.toBe(
-      "value-1",
-    );
-    await expect(
-      client.getParameterInfo("protected", { secretToken: "metadata-token" }),
-    ).resolves.toMatchObject({ value: "value-2" });
-    expect(transport.calls[0]?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
-    expect(transport.calls[1]?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
-
-    await expect(client.getParameter("protected")).resolves.toBe("value-3");
-    await expect(client.getParameter("protected")).resolves.toBe("value-3");
-    expect(reads).toBe(3);
     await client.close();
   });
 
@@ -338,7 +296,7 @@ describe("KmsClient", () => {
     const transport = new FakeTransport(() => Promise.reject(failure));
     const client = new KmsClient({ transport, namespace: "prod/api" });
     const operations: readonly [string, () => Promise<unknown>][] = [
-      ["get", () => client.getSecret("secret", { secretToken, bindingKey })],
+      ["get", () => client.getSecret("secret", { bindingKey })],
       ["put", () => client.putSecret("secret", plaintext, { bindingKey })],
       ["bind", () => client.bindSecret("secret", { expectedCurrentVersion: 1n, bindingKey })],
       ["unbind", () => client.unbindSecret("secret", { expectedCurrentVersion: 1n, bindingKey })],
@@ -441,16 +399,15 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("invalidates writes and preserves one-time access tokens", async () => {
+  it("invalidates writes and returns the new version", async () => {
     const transport = new FakeTransport((path, request) => {
       if (path.endsWith("/PutSecretV03")) {
         expect(request).toMatchObject({
           bindingKey: "operator-binding-key",
-          generateAccessToken: true,
         });
         expect(request).not.toHaveProperty("clientBound");
         expect(request).not.toHaveProperty("secretToken");
-        return { version: 7n, revision: 10n, accessToken: "only-once" };
+        return { version: 7n, revision: 10n };
       }
       return { version: 2n, revision: 3n };
     });
@@ -459,9 +416,8 @@ describe("KmsClient", () => {
     await expect(
       client.putSecret("token", "value", {
         bindingKey: "operator-binding-key",
-        generateAccessToken: true,
       }),
-    ).resolves.toEqual({ version: 7n, revision: 10n, accessToken: "only-once" });
+    ).resolves.toEqual({ version: 7n, revision: 10n });
     await client.close();
   });
 
@@ -814,7 +770,7 @@ describe("KmsClient", () => {
         return wireSecret("target", "fresh", 2n);
       }
       if (path.endsWith("/PutSecretV03")) {
-        return { version: 2n, revision: 2n, accessToken: "" };
+        return { version: 2n, revision: 2n };
       }
       throw new Error(`unexpected ${path}`);
     });
@@ -871,7 +827,6 @@ describe("KmsClient", () => {
     });
     const calls: readonly (() => Promise<unknown>)[] = [
       () => client.getSecret("secret", { bindingKey: hostile as never }),
-      () => client.getSecret("secret", { secretToken: hostile as never }),
       () => client.putSecret("secret", "value", { bindingKey: hostile as never }),
       () =>
         client.bindSecret("secret", {
@@ -1042,7 +997,7 @@ function wireSecretMetadata(key: string, namespace = { env: "prod", app: "api" }
     ref: { namespace, key },
     contentType: "text/plain",
     bound: false,
-    hasAccessToken: false,
+
     metadataJson: "{}",
     createdAtUnixMs: 0n,
     updatedAtUnixMs: 0n,

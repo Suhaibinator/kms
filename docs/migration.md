@@ -26,8 +26,8 @@ as a server-side wire or storage field.
 |---|---|
 | flat key, e.g. `gradethis_TWILIO_ACCOUNT_SID` | namespace `prod/gradethis` + relative key `gradethis-twilio-account-sid` (`slug` lowercases and replaces `_` with `-`; it does not strip prefixes) |
 | `ParameterStoreKey` | `SecretValue` / `ParameterValue` key — a **relative** key (or an absolute `/env/app/key` for cross-namespace reads) |
-| `ParameterStoreSecret` (per-key access secret) | `SecretValue` token option (per-secret access token) |
-| — | optional declaration-only binding key (`BindKey` / `bind_key` / `bindKey`), independent of the access token |
+| `ParameterStoreSecret` (per-key access secret) | Retired; configure KMS client identity and namespace permissions |
+| — | optional declaration-only binding key (`BindKey` / `bind_key` / `bindKey`) |
 | `EnvironmentVariableKey` | `SecretValue` / `ParameterValue` environment-variable option |
 | `ParameterStoreValue` (dev default) | `SecretValue` / `ParameterValue` default option |
 | application-managed `config/release` manifest | native immutable configuration release + atomic activation revision + Go/Python `ReleaseLoader` |
@@ -102,7 +102,6 @@ func Load(ctx context.Context) (*Config, error) {
     cfg := &Config{
         StripeAPIKey: kmsclient.SecretValue{
             Key:     "gradethis-stripe-api-key",    // importer preserves the source prefix
-            Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token if the secret requires one (from the import report)
             BindKey: kmsclient.NewBindingKey(os.Getenv("STRIPE_API_KMS_BIND_KEY")), // only if this version is bound
             EnvVar:  "STRIPE_API_KEY",              // env override still wins
             Default: "sk_test_dev_only",            // dev only
@@ -211,7 +210,7 @@ release.
 2. Optionally register a Draft 2020-12 schema for the alias-keyed **parameter**
    object. Secrets are excluded from that object.
 3. Create and validate the immutable release without activating it.
-4. Deploy release-aware replicas with locally distributed access tokens and
+4. Deploy release-aware replicas with locally distributed
    alias-keyed binding keys required by the exact pinned versions, then
    activate with compare-and-swap.
 5. Monitor per-instance `applied` state and remove the old manifest watcher
@@ -248,10 +247,7 @@ bookkeeping with one loader:
 ```go
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
     Name: "runtime",
-    SecretTokenProvider: func(alias, path string) (string, bool) {
-        token, ok := bootstrapSecretTokens[alias]
-        return token, ok
-    },
+
     BindingKeys: map[string]kmsclient.BindingKey{
         "db_password": kmsclient.NewBindingKey(os.Getenv("DB_PASSWORD_KMS_BIND_KEY")),
     },
@@ -279,7 +275,6 @@ TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
 `await loader.run(prepare, signal)`. Decode and validate the complete
 `ReleaseSnapshot` before returning `{ commit, abort }`; keep `commit`
 synchronous and infallible so the application snapshot swaps atomically. Pass
-locally distributed per-secret access tokens through `secretTokenProvider` and
 binding keys through the alias-keyed `bindingKeys` object. A complete
 compile-checked example is in
 [`sdk/typescript/examples/release.ts`](../sdk/typescript/examples/release.ts).
@@ -371,7 +366,6 @@ destination through `PutSecret`. It cannot open, repair, copy, or translate a
    JSON encoding and are still imported as `text/plain` secrets.
 
    A dry-run report contains only the old-key → display-path mapping. A real
-   import additionally includes each freshly minted per-secret access token;
    store that report securely, distribute the tokens into gradethis config,
    then delete it. The report is arrow-delimited plain text, not CSV.
    Import commits one secret at a time and writes the report last, so a later

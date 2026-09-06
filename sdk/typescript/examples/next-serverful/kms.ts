@@ -65,9 +65,7 @@ export const kms = createNextKms<
     try {
       const loader = await client.createReleaseLoader({
         name: "runtime",
-        secretTokenProvider(alias) {
-          return alias === "password_pepper" ? process.env.KMS_PASSWORD_PEPPER_TOKEN : undefined;
-        },
+        bindingKeys: { password_pepper: requiredEnvironment("KMS_PASSWORD_PEPPER_BINDING_KEY") },
       });
       let closing = false;
       const running = loader

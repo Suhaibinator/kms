@@ -50,9 +50,9 @@ persistence. The immutable stored entry contains:
 - SHA-256 of the exact parameter bytes, or no value digest for a secret.
 
 Both parameter and secret references must be in the release's own namespace.
-Entries carry no protection flags: `bound` and `has_access_token` are
-deliberately absent from both the entry and release digest. Those properties
-are immutable for the lifetime of a non-destroyed secret version, so an exact
+Entries carry no protection flags: `bound` is
+deliberately absent from both the entry and release digest. That property
+is immutable for the lifetime of a non-destroyed secret version, so an exact
 version pin implicitly pins its protection mode without changing the release
 entry schema or deterministic digest format.
 
@@ -205,7 +205,7 @@ is budgeted per identity; see the
 [`release verify-defaults`](operations.md#configuration-release-commands)
 command.
 
-Bounded rejection categories are `resolution_failed`, `token_unavailable`,
+Bounded rejection categories are `resolution_failed`, `binding_key_unavailable`,
 `version_mismatch`, `digest_mismatch`, `prepare_failed`,
 `config_contract_mismatch`, `config_decode_failed`,
 `config_validation_failed`, `default_mismatch`, `restart_required`,
@@ -225,8 +225,8 @@ Equivalent Go, Python, and TypeScript loaders perform these steps:
    complete deterministic manifest digest;
 2. resolve all exact pins concurrently (default limit 16); before fetching a
    secret value, fresh-read its metadata and verify response identity, exact
-   version, enabled/destroyed state, expiry, `bound`, and `has_access_token`;
-3. resolve an access token and binding key independently, by alias, only when
+   version, enabled/destroyed state, expiry, and `bound`;
+3. resolve the binding key by alias only when
    that exact live version requires each credential;
 4. verify returned resource identity/version and parameter digests;
 5. construct an immutable snapshot whose normal formatting omits resolved
@@ -240,7 +240,7 @@ Equivalent Go, Python, and TypeScript loaders perform these steps:
    last-known-good release.
 
 Missing either required local credential rejects the whole candidate as
-`token_unavailable`; wrong credentials or failed resolution reject it as
+`binding_key_unavailable`; wrong credentials or failed resolution reject it as
 `resolution_failed`. There is no partial snapshot. Startup fails until an
 initial release is successfully applied. After that,
 transport outages and rejected candidates do not displace the last-known-good
@@ -281,10 +281,7 @@ secret versions. Parameter deletion, secret deletion, and secret-version
 destruction fail with `FAILED_PRECONDITION` and identify the release/version/
 alias when they would break a protected release. These attempts are audited.
 Promoting a parameter or secret's ordinary `current` label never changes an
-active release pin. Ordinary secret value rotation preserves the independent
-per-secret access token unless token generation/rotation is explicitly
-requested; the token remains outside the release. Every exact secret version
-has immutable `bound` and `has_access_token` flags. Bind, unbind, and
+active release pin. Every exact secret version has an immutable `bound` flag. Bind, unbind, and
 binding-key rotation clone the current secret into exactly one new current
 version and leave the source unchanged as `previous`. Existing releases
 therefore continue resolving the source with its original credentials; a newly
@@ -296,9 +293,7 @@ The safe operational sequence is: transition current, create and activate a
 new release, retire old releases, then purge the old bound cohort or all
 unbound versions when required. Both administrator purge operations bypass
 release-reference protection and leave referencing releases immutable but
-unresolvable. Future protection-mode toggles must create versions as well;
-access-token credential rotation may replace the credential but may never
-weaken an existing version's token requirement. See
+unresolvable. Future protection-mode toggles must create versions as well. See
 [`binding-keys.md`](binding-keys.md).
 
 Release history defaults to at least the newest 100 inactive versions and 90

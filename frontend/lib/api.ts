@@ -351,7 +351,7 @@ function safeSecretErrorCode(error: ApiError): string {
 }
 
 /**
- * Secret-bearing requests may contain plaintext, an access token, or one or
+ * Secret-bearing requests may contain plaintext or one or
  * two binding keys. Do not retain any remote diagnostic text or validation
  * payload: a buggy or hostile peer could reflect those request fields in its
  * error envelope. Only the structured HTTP status and a small allowlisted code

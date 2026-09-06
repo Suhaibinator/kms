@@ -312,7 +312,7 @@ func (s *Service) collectApplicationRows(ctx context.Context, environments []dom
 				}
 				row.Cells[ns.Env] = domain.ApplicationConfigurationCell{
 					Environment: ns.Env, Present: true, ContentType: currentVersion.ContentType,
-					Version: currentVersion.Version, Bound: currentVersion.Bound, HasAccessToken: currentVersion.HasAccessToken,
+					Version: currentVersion.Version, Bound: currentVersion.Bound,
 				}
 			}
 			if next == "" {

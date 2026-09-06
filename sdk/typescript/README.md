@@ -109,7 +109,6 @@ To request an exact version or label:
 const pinned = await client.getParameter("rate-limit", { version: 7n });
 const previous = await client.getSecret("session-signing-key", {
   label: "previous",
-  secretToken: process.env.SIGNING_KEY_TOKEN,
   bindingKey: process.env.SIGNING_KEY_BINDING_KEY,
 });
 ```
@@ -235,12 +234,8 @@ await loader.run(async (snapshot: ReleaseSnapshot): Promise<PreparedRelease> => 
 });
 ```
 
-Supply `secretTokenProvider` for access-token-gated release aliases and
-`bindingKeys` for bound aliases. The loader checks the exact pinned version's
-live metadata before requesting only the credentials it requires. Preparation
-errors that may contain application data are reported to the service as bounded
-rejection categories, not raw text. Secret plaintext is never read from the SDK
-cache; every read is authorized by the server.
+Supply `bindingKeys` by release alias for bound secret versions. Identity
+authentication and namespace authorization apply to every resource read.
 
 ## Public policy and Next.js
 

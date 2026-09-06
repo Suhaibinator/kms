@@ -101,7 +101,7 @@ func rawSecretVersion(t *testing.T, st *SQLStore, r domain.Ref, version uint64) 
 
 func bindingRowSnapshot(row secretVersionModel) []any {
 	return []any{
-		row.ID, row.SecretID, row.VersionNumber, row.ContentType, row.Bound, row.HasAccessToken,
+		row.ID, row.SecretID, row.VersionNumber, row.ContentType, row.Bound,
 		string(row.Ciphertext), string(row.EncryptedDEK), row.KEKID, row.WrapMode,
 		string(row.BindingKeySalt), row.Algorithm, string(row.Nonce), row.AAD, row.State,
 		row.CreatedBy, row.CreatedAt, row.DestroyedAt, row.ExpiresAt, row.MetadataJSON,
@@ -292,7 +292,7 @@ func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	ns := seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "purge")
 	putBindingVersion(t, st, r, 'A')
-	putBindingVersion(t, st, r, 'B', func(p *CreateSecretParams) { p.AccessTokenHash = []byte("hash") })
+	putBindingVersion(t, st, r, 'B')
 	putBindingVersion(t, st, r, 'B', func(p *CreateSecretParams) { p.ExpiresAt = time.Now().Add(-time.Hour) })
 	if _, err := st.SetSecretVersionState(ctx, r, 2, domain.StateDisabled); err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	}
 	for _, version := range []uint64{2, 3} {
 		row := rawSecretVersion(t, st, r, version)
-		if row.State != domain.StateDestroyed || row.DestroyedAt == nil || row.Bound != 0 || row.HasAccessToken != 0 ||
+		if row.State != domain.StateDestroyed || row.DestroyedAt == nil || row.Bound != 0 ||
 			len(row.Ciphertext) != 0 || len(row.EncryptedDEK) != 0 || len(row.Nonce) != 0 || len(row.BindingKeySalt) != 0 ||
 			row.KEKID != "" || row.WrapMode != "" || row.Algorithm != "" || row.AAD != "" || row.ExpiresAt != nil ||
 			row.ContentType != "" || row.MetadataJSON != "" || row.CreatedBy != "creator" || row.CreatedAt == "" {

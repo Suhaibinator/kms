@@ -59,7 +59,8 @@ message SecretMetadata {
   // bound summarizes the version selected by the current label. Callers that
   // operate on an exact version must use SecretVersionInfo.bound instead.
   bool bound = 3;
-  bool has_access_token = 4;
+  reserved 4;
+  reserved "has_access_token";
   string metadata_json = 5;
   int64 created_at_unix_ms = 6;
   int64 updated_at_unix_ms = 7;
@@ -76,7 +77,8 @@ message SecretVersionInfo {
   int64 expires_at_unix_ms = 6;
   string metadata_json = 7;
   bool bound = 8;
-  bool has_access_token = 9;
+  reserved 9;
+  reserved "has_access_token";
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +194,9 @@ message GetSecretRequest {
   ResourceRef ref = 1;
   uint64 version = 2; // 0 = use label
   string label = 3;   // default "current"
-  // Per-secret access token, independent of the version's binding key.
-  string secret_token = 4;
+  // Retired per-secret token field; never reuse its wire number.
+  reserved 4;
+  reserved "secret_token";
   // Operator-owned key for opening a bound version. It is request-scoped and
   // is never logged, hashed, fingerprinted, or persisted by KMS.
   string binding_key = 5;
@@ -216,9 +219,9 @@ message PutSecretRequest {
   // A non-empty operator-owned key creates a bound version. It is request-
   // scoped and is never logged, hashed, fingerprinted, or persisted by KMS.
   string binding_key = 5;
-  // generate_access_token asks the server to mint a per-secret access token.
-  // The token is returned exactly once in the response.
-  bool generate_access_token = 6;
+  // Retired token-generation request; stale writers are explicitly rejected.
+  reserved 6;
+  reserved "generate_access_token";
   // expires_at for the new version, 0 = never.
   int64 expires_at_unix_ms = 7;
 }
@@ -226,9 +229,9 @@ message PutSecretRequest {
 message PutSecretResponse {
   uint64 version = 1;
   uint64 revision = 2;
-  // access_token is set only when generate_access_token was true. It is never
-  // retrievable again.
-  string access_token = 3;
+  // Retired token response field.
+  reserved 3;
+  reserved "access_token";
 }
 
 // ListSecrets is always namespace-scoped and returns metadata only, never
@@ -401,7 +404,7 @@ service WatchService {
 
 // Configuration releases are immutable namespace-scoped manifests. They
 // contain exact parameter/secret version references and non-sensitive
-// metadata only; values and secret access tokens are never embedded.
+// metadata only; values and binding keys are never embedded.
 service ConfigurationReleaseService {
   rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse);
   rpc ValidateRelease(ValidateReleaseRequest) returns (ValidateReleaseResponse);
@@ -1119,7 +1122,7 @@ message HealthResponse {
 // generated parameter defaults against current values, carries forward exact
 // active secret pins when present, and resolves current only for new secret
 // aliases. Neither the request nor response exposes parameter values, secret
-// material, access tokens, or stored value digests. Execute requires the exact
+// material or stored value digests. Execute requires the exact
 // plan_digest returned by a preceding preview and never activates the release.
 message CreateApplicationReleaseRequest {
   NamespaceRef namespace = 1;

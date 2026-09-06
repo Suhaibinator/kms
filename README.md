@@ -10,6 +10,8 @@ versioning, namespace-scoped access control, audit logging, and hot reload,
 without requiring every consumer to understand encryption or key
 management.
 
+Per-secret access tokens have been removed. See the [database and SDK upgrade guide](docs/secret-token-removal.md).
+
 ## Try it in one minute
 
 ```bash
@@ -149,7 +151,7 @@ deployment, start at [Quickstart](#quickstart).
   — `2` usage, `3` unauthenticated, `4` permission denied, `5` not found, `6`
   conflict, `7` failed precondition, `8` unavailable, `9` rate limited — so a
   script branches without parsing messages. Credentials can come from an
-  owner-only file (`--token-file`, `--secret-token-file`) instead of an
+  owner-only file (`--token-file`) instead of an
   argument every local user can read in `ps`. Irreversible commands confirm,
   either by retyping the target or `[y/N]`, and refuse to run on a
   non-interactive stdin without `--yes`. `whoami` reports the identity the
@@ -172,8 +174,8 @@ deployment, start at [Quickstart](#quickstart).
   forever until an operator asks otherwise. See
   [`docs/operations.md`](docs/operations.md#audit-retention-and-archive).
 - **SuhaibParameterStore bootstrap import**: `parameter-store import` maps
-  flat keys into an `(env, app)` namespace (`--env`/`--app`) and mints fresh
-  per-secret tokens with a one-time mapping report. It does not read or upgrade
+  flat keys into an `(env, app)` namespace (`--env`/`--app`) and emits
+  a source-to-destination mapping report. It does not read or upgrade
   a `0.2.x` KMS database. See
   [`docs/migration.md`](docs/migration.md).
 
@@ -389,8 +391,8 @@ echo -n 'sk_test_123' | ./bin/parameter-store put-secret /dev/gradethis/stripe-a
 To create a bound version, supply `KMS_BINDING_KEY` (an opaque UTF-8 string of
 at least 32 bytes) to `put-secret`; a bound `get-secret` consumes the same
 variable or prompts without echo on an interactive terminal. There is no
-binding-key file convention. Access tokens remain an independent optional
-gate: a version can require the binding key, an access token, both, or neither.
+binding-key file convention. Bound versions require that binding key in addition
+to normal client authentication and authorization.
 
 A process that cannot link an SDK can still read from the store: `exec`
 resolves the namespace and hands the values to the command as environment
@@ -407,7 +409,7 @@ parameter-store exec prod/gradethis --release runtime -- ./server
 ```
 
 Secret-inclusive `env` and `exec` invocations fail closed if any selected
-secret is bound or lacks a required per-secret token. Use `--no-secrets` for an
+secret is bound. Use `--no-secrets` for an
 intentional parameter-only run. Namespace mode can explicitly opt into a
 partial result with `--allow-incomplete-secrets`; unavailable secrets are
 omitted with an unsuppressible warning and are never synthesized as empty
@@ -662,8 +664,8 @@ Full detail: [`docs/security.md`](docs/security.md). Summary:
   stolen admin token is useless on its own and cannot mint a replacement.
 - **Tokens**: high-entropy, server-minted, shown once, stored only as
   SHA-256 hashes (nullable for cert-only identities). Per-client identity
-  tokens establish the caller; optional per-secret access tokens
-  additionally gate individual secrets.
+  tokens establish the caller. Bound secret versions additionally require their
+  operator-owned binding key.
 - **Authorization**: namespace-native RBAC — `{operation, env, app}` rules
   (env/app exact or `*`) over whole namespaces, explicit deny always wins over
   allow, default deny, plus an implicit home-namespace read/list grant. There
@@ -715,7 +717,7 @@ console for applications and environments, parameters and secrets, identities
 and policies, releases and schemas, audit events, subscribers, and service
 health. Secret plaintext is hidden unless explicitly revealed. Revealing a
 bound version additionally requires that version's binding key. The audited
-administrator reveal path bypasses the independent access-token gate. The
+administrator reveal path is audited. The
 console sends the binding key only in the reveal request body. Dynamic data
 comes from the [`/api/v1/*` API](docs/http-api.md); unknown frontend routes
 fall back to the exported entry HTML so client-side deep links work on refresh.
