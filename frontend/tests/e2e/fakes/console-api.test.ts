@@ -186,3 +186,15 @@ describe("console API fake binding fidelity", () => {
     expect(secret.versions?.[1]).toMatchObject({ bound: true, hasAccessToken: false });
   });
 });
+
+it("isolates application contract mutations between console fixtures", () => {
+  const first = incidentState();
+  const original = structuredClone(first.application.contract);
+  first.application.contract.push({
+    alias: "test_only",
+    kind: "parameter",
+    content_type: "string",
+  });
+  first.application.contract[0].alias = "changed";
+  expect(incidentState().application.contract).toEqual(original);
+});

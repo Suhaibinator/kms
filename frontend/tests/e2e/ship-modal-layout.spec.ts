@@ -1,45 +1,83 @@
-// The ship modal must never scroll sideways: wide preview content (the entries
-// table with long mono aliases and keys) scrolls inside its own .table-wrap,
-// not by widening the modal body's grid column.
-
+// Quick Change needs room for every release column; long identifiers wrap
+// within the preview instead of forcing horizontal navigation.
 import { expect, test } from "@playwright/test";
 import { incidentState, mockConsole } from "./fakes/console-api";
 
-test("ship modal body does not scroll horizontally with a wide preview", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "desktop-only layout check");
-  const state = incidentState();
-  // Long aliases and keys, like a real app with many provider credentials,
-  // make the preview table's min-content wider than the modal.
-  for (const alias of [
-    "attachment_presign_secret_key_rotation_window_seconds",
-    "discord_oauth_client_secret_fallback_credential",
-  ]) {
-    state.application.contract.push({ alias, kind: "parameter", content_type: "string" });
-    for (const ns of Object.values(state.namespaces)) {
-      ns.parameters[alias] = { key: alias, content_type: "string", versions: ["value-1"] };
+for (const width of [320, 390, 640, 768, 820, 1024, 1280, 1440]) {
+  test(`Quick Change keeps all preview columns visible at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(width > 768 && testInfo.project.name !== "chromium", "desktop table layout");
+    await page.setViewportSize({ width, height: 1000 });
+    const state = incidentState();
+    await mockConsole(page, state);
+    await page.goto("/applications?app=gradethis&env=prod");
+    await page.getByRole("button", { name: "Edit & ship rate_limits in prod" }).click();
+    const modal = page.getByTestId("ship-modal");
+    const dialog = page.getByRole("dialog", { name: /Quick change/ });
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole("textbox", { name: "rate_limits value" })).toBeVisible();
+    // Expand the server preview after opening so this test isolates the dialog
+    // from the application page's separate long-contract layout.
+    for (const alias of [
+      "attachment_presign_secret_key_rotation_window_seconds",
+      "discord_oauth_client_secret_fallback_credential",
+      `integration_${"long_identifier_".repeat(12)}`,
+    ]) {
+      state.application.contract.push({ alias, kind: "parameter", content_type: "string" });
+      for (const ns of Object.values(state.namespaces)) {
+        ns.parameters[alias] = { key: alias, content_type: "string", versions: ["value-1"] };
+      }
     }
-  }
-  await mockConsole(page, state);
-
-  await page.goto("/applications?app=gradethis&env=prod");
-  await page.getByRole("button", { name: "Edit & ship rate_limits in prod" }).click();
-  const modal = page.getByTestId("ship-modal");
-  await expect(modal).toBeVisible();
-  // The dry run only runs after an edit; the table renders once it lands.
-  await modal.getByRole("textbox", { name: "rate_limits value" }).fill("250");
-  await expect(modal.getByTestId("ship-activation")).toBeVisible();
-  await expect(modal.locator("table.ship-entries")).toBeVisible();
-
-  const body = page.locator("[data-modal-body]");
-  const widths = await body.evaluate((el) => ({
-    scroll: el.scrollWidth,
-    client: el.clientWidth,
-    table: el.querySelector("table.ship-entries")?.scrollWidth ?? 0,
-  }));
-  console.log("modal body widths", JSON.stringify(widths));
-  expect(widths.table).toBeGreaterThan(widths.client); // the table really is wider
-  expect(widths.scroll).toBeLessThanOrEqual(widths.client); // …but the body does not scroll
-});
+    await modal.getByRole("textbox", { name: "rate_limits value" }).fill("250");
+    const table = modal.locator("table.ship-entries");
+    await expect(table).toBeVisible();
+    await table.scrollIntoViewIfNeeded();
+    if (process.env.CAPTURE_QA)
+      await page.screenshot({ path: testInfo.outputPath(`quick-change-${width}.png`) });
+    const geometry = await table.evaluate((element) => {
+      const wrapper = element.parentElement;
+      const body = element.closest("[data-modal-body]");
+      if (!wrapper || !body) throw new Error("Missing preview container");
+      const rect = wrapper.getBoundingClientRect();
+      return {
+        wrapper: { scroll: wrapper.scrollWidth, client: wrapper.clientWidth },
+        body: { scroll: body.scrollWidth, client: body.clientWidth },
+        columns: Array.from(element.querySelectorAll("th")).map((header) => {
+          const cell = header.getBoundingClientRect();
+          return {
+            text: header.textContent,
+            visible: cell.left >= rect.left && cell.right <= rect.right,
+          };
+        }),
+      };
+    });
+    expect(geometry.wrapper.scroll).toBeLessThanOrEqual(geometry.wrapper.client);
+    expect(geometry.body.scroll).toBeLessThanOrEqual(geometry.body.client);
+    expect(geometry.columns.map((column) => column.text)).toEqual([
+      "Alias",
+      "Kind",
+      "Key",
+      "Version",
+      "Change",
+    ]);
+    if (width > 640) {
+      expect(geometry.columns.every((column) => column.visible)).toBe(true);
+    } else {
+      // Phone tables become cards; each field retains its visible data label.
+      await expect(table.locator("tbody tr").first().locator("td[data-label]")).toHaveCount(5);
+      await expect(
+        table.locator("tbody tr").first().locator('td[data-label="Change"]'),
+      ).toBeVisible();
+    }
+    const bounds = await dialog.boundingBox();
+    if (!bounds) throw new Error("Missing dialog bounds");
+    if (width > 768) expect(bounds.width).toBeGreaterThan(720);
+    else expect(bounds.width).toBeCloseTo(width, 0);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+  });
+}
 
 test("ship environment summary is anchored independently of field content", async ({
   page,
