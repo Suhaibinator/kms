@@ -91,11 +91,11 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  /* An emphasised link in flow. `.ship-link` is the old name, still on
-     components/releases/ViolationTable.tsx; both resolve to one rule until
-     that caller moves to `.text-link`. */
-  .text-link,
-  .ship-link {
+  /* An emphasised link in flow: a generic name, not a ship one, because the
+     releases surface uses it too. Was `.ship-link`, which put a releases
+     component's styling in a ship stylesheet; the alias it was renamed through
+     is gone now that every caller has moved. */
+  .text-link {
     color: var(--primary);
     font-weight: 600;
     text-decoration: underline;
