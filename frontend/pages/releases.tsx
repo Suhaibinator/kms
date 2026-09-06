@@ -526,7 +526,12 @@ export default function ReleasesPage() {
               Release history and creation are scoped to one isolated environment.
             </EmptyState>
           ) : !seeded || !settled || releasesLoading ? (
-            <TableSkeleton headers={headerLabels(COLUMNS)} toolbar toolbarHint summary />
+            <TableSkeleton
+              headers={headerLabels(COLUMNS)}
+              toolbar
+              toolbarHint={PAGE_SORT_HINT}
+              summary
+            />
           ) : releases.length === 0 ? (
             <EmptyState
               icon={<Icon.release size={20} />}

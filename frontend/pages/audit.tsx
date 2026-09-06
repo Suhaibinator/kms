@@ -172,7 +172,7 @@ export default function AuditPage() {
         rows={lastRowCount}
         trailing={1}
         toolbar
-        toolbarHint
+        toolbarHint={PAGE_SORT_HINT}
         summary
       />
     );
@@ -432,7 +432,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
           rows={lastRowCount}
           trailing={1}
           toolbar
-          toolbarHint
+          toolbarHint={PAGE_SORT_HINT}
           summary
         />
       ) : events.length === 0 ? (

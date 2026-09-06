@@ -90,6 +90,11 @@ const COLUMNS: ReadonlyArray<SortColumn<Identity>> = [
 
 const PAGE_SORT_HINT = "Sorts the identities loaded on this page, not every identity.";
 
+/** Named once: the header checkbox, the mobile toolbar and the skeleton that
+ *  reserves that toolbar's row all have to say the same thing, and the
+ *  skeleton's placeholder only wraps to the loaded number of lines if it does. */
+const SELECT_ALL_LABEL = "Select all active identities on this page";
+
 function shortSerial(serial: string): string {
   return serial.length > SERIAL_PREVIEW_LENGTH
     ? `${serial.slice(0, SERIAL_PREVIEW_LENGTH)}…`
@@ -729,8 +734,8 @@ export default function IdentitiesPage() {
           leading={canBulkRevoke ? 1 : 0}
           trailing={1}
           toolbar
-          toolbarHint
-          toolbarSelection={canBulkRevoke}
+          toolbarHint={PAGE_SORT_HINT}
+          toolbarSelection={canBulkRevoke && SELECT_ALL_LABEL}
           summary
         />
       ) : identities.length === 0 ? (
@@ -746,7 +751,7 @@ export default function IdentitiesPage() {
           <MobileListToolbar
             controller={sort}
             selection={canBulkRevoke ? selection : undefined}
-            selectionLabel="Select all active identities on this page"
+            selectionLabel={SELECT_ALL_LABEL}
             hint={PAGE_SORT_HINT}
           />
           <table className="data">
@@ -761,10 +766,7 @@ export default function IdentitiesPage() {
                 hint={PAGE_SORT_HINT}
                 before={
                   canBulkRevoke ? (
-                    <SelectAllCell
-                      selection={selection}
-                      label="Select all active identities on this page"
-                    />
+                    <SelectAllCell selection={selection} label={SELECT_ALL_LABEL} />
                   ) : null
                 }
                 after={<th />}
