@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
 import { VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
+import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { ApiError, api } from "@/lib/api";
 import type {
   ApplicationOverview,
@@ -750,5 +751,71 @@ describe("parameter workspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New version" }));
     const editor = await screen.findByRole("dialog", { name: "New parameter version" });
     expect(within(editor).getByRole("textbox", { name: "Value" })).toHaveValue("8");
+  });
+});
+
+/** The dialog must not resize, gain a toolbar, or move its cards when the data
+ *  arrives, so the loading branch renders the loaded chrome with inert
+ *  controls. */
+describe("workspace loading chrome", () => {
+  function dialogBox(): HTMLElement {
+    return screen.getByRole("dialog").closest('[data-slot="dialog-content"]') as HTMLElement;
+  }
+
+  function toolbar(): HTMLElement {
+    return document.querySelector(".secret-workspace-toolbar") as HTMLElement;
+  }
+
+  function cardTitles(): string[] {
+    return [...document.querySelectorAll(".card-title")].map((el) => el.textContent ?? "");
+  }
+
+  it("keeps the parameter workspace's footprint, header and toolbar across the load", async () => {
+    let finish!: (value: ParameterMetadata) => void;
+    vi.spyOn(api, "parameterMetadata").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve as typeof finish;
+      }) as ReturnType<typeof api.parameterMetadata>,
+    );
+    vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
+    render(<ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} />);
+
+    const loadingClass = dialogBox().className;
+    // The header keeps its two lines: a mono path and the namespace description.
+    expect(screen.getByRole("dialog", { name: "/prod/billing/retries" })).toBeVisible();
+    expect(screen.getByText("prod/billing")).toBeVisible();
+    // The chrome is there but inert, so nothing here is announced or clickable.
+    expect(toolbar()).toHaveAttribute("aria-hidden", "true");
+    for (const control of toolbar().querySelectorAll(".row-wrap button")) {
+      expect(control).toBeDisabled();
+    }
+    expect(screen.queryByRole("button", { name: "New version" })).toBeNull();
+    // Overview only: Version history lives behind the other tab.
+    expect(cardTitles()).toEqual(["Current value", "Metadata"]);
+
+    finish(PARAMETER_META);
+    await screen.findByRole("button", { name: "New version" });
+    expect(dialogBox().className).toBe(loadingClass);
+    expect(toolbar()).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("keeps the secret workspace's footprint and shows only the Overview cards", async () => {
+    let finish!: (value: { secret: SecretMetadata }) => void;
+    vi.spyOn(api, "secretMetadata").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve as typeof finish;
+      }) as ReturnType<typeof api.secretMetadata>,
+    );
+    render(<SecretWorkspace secretRef={SECRET} onClose={vi.fn()} />);
+
+    const loadingClass = dialogBox().className;
+    expect(screen.getByRole("dialog", { name: "/prod/billing/api-key" })).toBeVisible();
+    expect(toolbar()).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(cardTitles()).toEqual(["Metadata", "Secret value"]);
+
+    finish({ secret: SECRET });
+    await screen.findByRole("button", { name: "New version" });
+    expect(dialogBox().className).toBe(loadingClass);
   });
 });

@@ -697,7 +697,13 @@ export function ReleaseBuilder({
                           Resolved at creation
                         </div>
                       )}
-                      {entry.contractOwned ? null : (
+                      {/* A placeholder, not `null`: the remove button owns the
+                          sixth grid track, and dropping the item collapses that
+                          track so a contract-owned row's fields stop lining up
+                          with its neighbours'. */}
+                      {entry.contractOwned ? (
+                        <div className="release-builder-entry-spacer" aria-hidden />
+                      ) : (
                         <Button
                           variant="ghost"
                           size="icon"

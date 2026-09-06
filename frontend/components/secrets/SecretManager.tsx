@@ -352,36 +352,71 @@ export default function SecretManager({
   // Header and card frames come straight from the URL, so they paint at once
   // and only the values fill in — no full-page spinner swap.
   if (!ready || (hasRef && (loadState === "idle" || loadState === "loading"))) {
-    const loadingCards = (
-      <>
-        <div className="card">
-          <div className="card-title">Metadata</div>
-          <Skeleton height={96} />
-        </div>
-        <div className="card">
-          <div className="card-title">Secret value</div>
-          <Skeleton height={64} />
-        </div>
-        <div className="card">
-          <div className="card-title">Versions</div>
-          <TableSkeleton
-            headers={["Version", "State & protection", "Created by", "Created", "Expires"]}
-            rows={3}
-          />
-        </div>
-      </>
+    // Heights track the loaded cards: eight KeyValue rows, and a warning panel
+    // above the version picker.
+    const metadataSkeleton = (
+      <div className="card">
+        <div className="card-title">Metadata</div>
+        <Skeleton height={160} />
+      </div>
+    );
+    const valueSkeleton = (
+      <div className="card">
+        <div className="card-title">Secret value</div>
+        <Skeleton height={140} />
+      </div>
+    );
+    const versionsSkeleton = (
+      <div className="card">
+        <div className="card-title">Versions</div>
+        <TableSkeleton
+          headers={["Version", "State & protection", "Created by", "Created", "Expires"]}
+          trailing={1}
+          rows={3}
+        />
+      </div>
     );
     if (surface === "workspace") {
       return (
         <Modal
           mobileFullScreen
           open
-          wide
-          title={hasRef ? displayPath(ref) : "Secret"}
+          workspace
+          title={
+            <span className="row-wrap">
+              {hasRef ? <span className="mono">{displayPath(ref)}</span> : "Secret"}
+            </span>
+          }
           description={hasRef ? displayNamespace(ref) : "Loading secret details"}
           onClose={() => onClose?.()}
         >
-          <div className="secret-workspace-stack">{loadingCards}</div>
+          {/* The loaded chrome, inert: the dialog must not gain a toolbar or
+              change height when the data arrives. Hidden from the accessibility
+              tree because none of these placeholders can be operated. */}
+          <Tabs defaultValue="overview">
+            <div className="secret-workspace-toolbar" aria-hidden>
+              <TabsList variant="line">
+                <TabsTrigger value="overview" disabled>
+                  Overview
+                </TabsTrigger>
+                <TabsTrigger value="versions" disabled>
+                  Versions
+                </TabsTrigger>
+              </TabsList>
+              <div className="row-wrap">
+                <Button variant="outline" size="sm" disabled>
+                  New version
+                </Button>
+                <Button variant="destructive" size="sm" disabled>
+                  Delete
+                </Button>
+              </div>
+            </div>
+            <TabsContent value="overview" className="secret-workspace-stack">
+              {metadataSkeleton}
+              {valueSkeleton}
+            </TabsContent>
+          </Tabs>
         </Modal>
       );
     }
@@ -392,7 +427,9 @@ export default function SecretManager({
           title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Secret"}
           breadcrumbs={trail}
         />
-        {loadingCards}
+        {metadataSkeleton}
+        {valueSkeleton}
+        {versionsSkeleton}
       </>
     );
   }
@@ -417,7 +454,7 @@ export default function SecretManager({
   if (loadState === "not-found") {
     if (surface === "workspace") {
       return (
-        <Modal mobileFullScreen open wide title="Secret not found" onClose={() => onClose?.()}>
+        <Modal mobileFullScreen open workspace title="Secret not found" onClose={() => onClose?.()}>
           <EmptyState icon={<Icon.secret size={20} />} title="Not found">
             No secret exists at <span className="mono">{displayPath(ref)}</span>.
           </EmptyState>
@@ -444,7 +481,13 @@ export default function SecretManager({
   if (loadState === "error" || !secret) {
     if (surface === "workspace") {
       return (
-        <Modal mobileFullScreen open wide title="Could not load secret" onClose={() => onClose?.()}>
+        <Modal
+          mobileFullScreen
+          open
+          workspace
+          title="Could not load secret"
+          onClose={() => onClose?.()}
+        >
           <EmptyState
             icon={<Icon.secret size={20} />}
             title="Secret unavailable"
@@ -482,17 +525,23 @@ export default function SecretManager({
       ? null
       : (secret.versions.find((version) => version.version === revealTarget) ?? null);
 
-  const actions = (
+  // The page header carries full-height controls; the workspace toolbar's row
+  // has to fit beside a 31px tab list, so it asks for `sm`.
+  const actions = (size: "default" | "sm") => (
     <>
-      <Button variant="outline" onClick={() => setNewVersionOpen(true)}>
+      <Button variant="outline" size={size} onClick={() => setNewVersionOpen(true)}>
         New version
       </Button>
       {isAdmin && hasUnboundVersions ? (
-        <Button variant="destructive" onClick={() => setBindingAction({ kind: "purge-unbound" })}>
+        <Button
+          variant="destructive"
+          size={size}
+          onClick={() => setBindingAction({ kind: "purge-unbound" })}
+        >
           Purge unbound versions
         </Button>
       ) : null}
-      <Button variant="destructive" onClick={() => setConfirm({ kind: "delete" })}>
+      <Button variant="destructive" size={size} onClick={() => setConfirm({ kind: "delete" })}>
         Delete
       </Button>
     </>
@@ -829,7 +878,7 @@ export default function SecretManager({
       <Modal
         mobileFullScreen
         open
-        wide
+        workspace
         title={
           <span className="row-wrap">
             <span className="mono">{displayPath(ref)}</span>
@@ -854,7 +903,7 @@ export default function SecretManager({
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="versions">Versions</TabsTrigger>
             </TabsList>
-            <div className="row-wrap">{actions}</div>
+            <div className="row-wrap">{actions("sm")}</div>
           </div>
           <TabsContent value="overview" className="secret-workspace-stack">
             {metadataCard}
@@ -881,7 +930,7 @@ export default function SecretManager({
         }
         subtitle={displayNamespace(ref)}
         breadcrumbs={trail}
-        actions={actions}
+        actions={actions("default")}
       />
       {metadataCard}
       {revealCard}

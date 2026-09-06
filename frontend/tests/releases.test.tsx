@@ -565,6 +565,11 @@ describe("ReleasesPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
     expect(await within(dialog).findByRole("textbox", { name: "Release name" })).toBeDisabled();
     expect(within(dialog).getByRole("textbox", { name: "Schema" })).toBeDisabled();
+    // A contract-owned row cannot be removed, but it still has to hold the
+    // remove button's grid track open so its fields line up with other rows'.
+    const entry = dialog.querySelector(".release-builder-entry") as HTMLElement;
+    expect(within(entry).queryByRole("button", { name: /^Remove / })).toBeNull();
+    expect(entry.lastElementChild).toHaveClass("release-builder-entry-spacer");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
     await waitFor(() =>
@@ -1038,5 +1043,50 @@ describe("ReleasesPage", () => {
     const workspace = screen.getByRole("dialog", { name: "Release runtime@2" });
     fireEvent.click(within(workspace).getByRole("button", { name: "Roll back to previous" }));
     expect(await screen.findByRole("dialog", { name: "Roll back release?" })).toBeVisible();
+  });
+
+  it("keeps the elided digest readable and the sort toolbar out of the scroller", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+
+    render(<ReleasesPage />);
+    await screen.findByText("runtime@2");
+    const digest = document.querySelector('td[data-label="Digest"]') as HTMLElement;
+    expect(digest).toHaveTextContent("2222222222222222…");
+    expect(digest).toHaveAttribute("title", releaseV2.digest);
+    // A block child of the overflow-x scroller would slide out of view with it.
+    const toolbar = document.querySelector(".mobile-list-toolbar") as HTMLElement;
+    expect(toolbar.closest(".table-wrap")).toBeNull();
+    expect(toolbar.nextElementSibling).toHaveClass("table-wrap");
+  });
+
+  it("heads the schema table's actions column on desktop as well as in the card view", async () => {
+    mocks.query = { tab: "schemas" };
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [
+        {
+          application: "payments",
+          release_name: "runtime",
+          version: 3,
+          schema_json: "{}",
+          digest: "abcdef0123456789abcdef0123456789",
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: 1,
+        },
+      ],
+      next_page_token: "",
+    });
+
+    render(<ReleasesPage />);
+    expect(await screen.findByText("payments/runtime@3")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeVisible();
+    expect(screen.getByText(/^abcdef0123456789…$/)).toHaveAttribute(
+      "title",
+      "abcdef0123456789abcdef0123456789",
+    );
   });
 });

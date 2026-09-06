@@ -538,84 +538,89 @@ export default function ReleasesPage() {
                 : "Create the first immutable release for this environment."}
             </EmptyState>
           ) : (
-            <div className="table-wrap card-table">
+            // The toolbar is a sibling of the scroller, not a child: a block
+            // child of `.table-wrap` tracks its content box, so it would scroll
+            // out of view whenever the table scrolled sideways.
+            <>
               <MobileListToolbar controller={sort} hint={PAGE_SORT_HINT} />
-              <table className="data">
-                <TableSummary
-                  shown={releases.length}
-                  noun="releases"
-                  filters={name ? 1 : 0}
-                  hint={sort.sort ? PAGE_SORT_HINT : undefined}
-                />
-                <thead>
-                  <SortHeaderRow controller={sort} hint={PAGE_SORT_HINT} />
-                </thead>
-                <tbody>
-                  {sort.apply(releases).map((summary) => {
-                    const release = summary.release;
-                    return (
-                      <tr key={releaseKey(release)}>
-                        <td data-label="Release">
-                          <ReleaseIdent name={release.name} version={release.version} />
-                        </td>
-                        <td data-label="State">
-                          {summary.current ? (
-                            <Badge kind="success">
-                              current · rev {summary.activation_revision}
-                            </Badge>
-                          ) : summary.previous ? (
-                            <Badge kind="warning">previous</Badge>
-                          ) : (
-                            <Badge>inactive</Badge>
-                          )}
-                        </td>
-                        <td data-label="Schema">
-                          {release.schema_version ? (
-                            <Ident
-                              kind="schema"
-                              value={`${release.namespace.app}/${release.name}@${release.schema_version}`}
-                            />
-                          ) : (
-                            <span className="faint">none</span>
-                          )}
-                        </td>
-                        <td data-label="Entries">{release.entries.length}</td>
-                        <td className="mono" data-label="Digest">
-                          {release.digest.slice(0, 16)}…
-                        </td>
-                        <td data-label="Actions">
-                          <div className="row-wrap row-actions">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => openWorkspace(releaseKey(release))}
-                            >
-                              View
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={Boolean(busyAction)}
-                              loading={busyAction === `validate:${releaseKey(release)}`}
-                              onClick={() => void validate(release)}
-                            >
-                              Validate
-                            </Button>
-                            <Button
-                              size="sm"
-                              disabled={summary.current || Boolean(busyAction)}
-                              onClick={() => setPendingAction({ kind: "activate", summary })}
-                            >
-                              Activate
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+              <div className="table-wrap card-table">
+                <table className="data">
+                  <TableSummary
+                    shown={releases.length}
+                    noun="releases"
+                    filters={name ? 1 : 0}
+                    hint={sort.sort ? PAGE_SORT_HINT : undefined}
+                  />
+                  <thead>
+                    <SortHeaderRow controller={sort} hint={PAGE_SORT_HINT} />
+                  </thead>
+                  <tbody>
+                    {sort.apply(releases).map((summary) => {
+                      const release = summary.release;
+                      return (
+                        <tr key={releaseKey(release)}>
+                          <td data-label="Release">
+                            <ReleaseIdent name={release.name} version={release.version} />
+                          </td>
+                          <td data-label="State">
+                            {summary.current ? (
+                              <Badge kind="success">
+                                current · rev {summary.activation_revision}
+                              </Badge>
+                            ) : summary.previous ? (
+                              <Badge kind="warning">previous</Badge>
+                            ) : (
+                              <Badge>inactive</Badge>
+                            )}
+                          </td>
+                          <td data-label="Schema">
+                            {release.schema_version ? (
+                              <Ident
+                                kind="schema"
+                                value={`${release.namespace.app}/${release.name}@${release.schema_version}`}
+                              />
+                            ) : (
+                              <span className="faint">none</span>
+                            )}
+                          </td>
+                          <td data-label="Entries">{release.entries.length}</td>
+                          <td className="mono" data-label="Digest" title={release.digest}>
+                            {release.digest.slice(0, 16)}…
+                          </td>
+                          <td data-label="Actions">
+                            <div className="row-wrap row-actions">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openWorkspace(releaseKey(release))}
+                              >
+                                View
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={Boolean(busyAction)}
+                                loading={busyAction === `validate:${releaseKey(release)}`}
+                                onClick={() => void validate(release)}
+                              >
+                                Validate
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={summary.current || Boolean(busyAction)}
+                                onClick={() => setPendingAction({ kind: "activate", summary })}
+                              >
+                                Activate
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {hasNS && settled && !releasesLoading ? (

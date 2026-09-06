@@ -370,7 +370,10 @@ export function SchemaRegistry() {
       </form>
 
       {loading ? (
-        <TableSkeleton headers={["Schema", "Digest", "Created by", "Created", ""]} rows={4} />
+        <TableSkeleton
+          headers={["Schema", "Digest", "Created by", "Created", "Actions"]}
+          rows={4}
+        />
       ) : schemas.length === 0 ? (
         <EmptyState
           icon={<Icon.release size={20} />}
@@ -388,7 +391,7 @@ export function SchemaRegistry() {
                 <th>Digest</th>
                 <th>Created by</th>
                 <th>Created</th>
-                <th />
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -397,7 +400,7 @@ export function SchemaRegistry() {
                   <td className="mono" data-label="Schema">
                     {schemaLabel(schema)}
                   </td>
-                  <td className="mono" data-label="Digest">
+                  <td className="mono" data-label="Digest" title={schema.digest}>
                     {schema.digest.slice(0, 16)}…
                   </td>
                   <td className="mono" data-label="Created by">
