@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 async function mockAuthenticatedConsole(page: Page, namespaces: Record<string, unknown>[] = []) {
   await page.addInitScript(() => {
@@ -45,6 +45,23 @@ test("login exposes a labelled identity-token form with the intended font", asyn
     .getByRole("heading", { name: "KMS Console", level: 1 })
     .evaluate((heading) => getComputedStyle(heading).fontFamily);
   expect(fontFamily.toLowerCase()).not.toContain("times");
+});
+
+test("the validation line is reserved, so signing in blank moves nothing", async ({ page }) => {
+  await page.goto("/login");
+  const token = page.getByLabel("Identity token");
+  const submit = page.getByRole("button", { name: "Sign in", exact: true });
+  await expect(token).toBeVisible();
+  const tops = () =>
+    Promise.all([token, submit].map((c) => c.evaluate((el) => el.getBoundingClientRect().top)));
+
+  const before = await tops();
+  await submit.click();
+  await expect(page.locator("[data-slot=field-error]")).toContainText("Enter a token to continue.");
+  const after = await tops();
+  // The card is vertically centred, so an unreserved message pushed the input
+  // up and the button down by half a line each as the card re-centred.
+  for (const [index, top] of after.entries()) expect(top).toBeCloseTo(before[index], 0);
 });
 
 test("shows neutral certificate diagnostics and generic login failures", async ({

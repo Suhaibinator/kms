@@ -297,9 +297,13 @@ describe("policy editor", () => {
     expect(within(dialog).queryByText(/will match nothing/)).not.toBeInTheDocument();
 
     fireEvent.change(app, { target: { value: "gradethis" } });
-    expect(
-      within(dialog).getByText(/No namespace for application gradethis exists yet/),
-    ).toBeVisible();
+    const appNote = within(dialog).getByText(/No namespace for application gradethis exists yet/);
+    expect(appNote).toBeVisible();
+    // The sentence is a row-level note, not a hint inside the 130px App column
+    // where it wrapped to five lines — but it still describes the control it is
+    // about, which is the part the move could have quietly dropped.
+    expect(appNote.closest(".rule-note")).not.toBeNull();
+    expect(app).toHaveAccessibleDescription(/No namespace for application gradethis exists yet/);
     // A warning is not an error: the field stays valid and the alert slot empty.
     expect(app).not.toHaveAttribute("aria-invalid");
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
@@ -309,9 +313,10 @@ describe("policy editor", () => {
 
     fireEvent.change(app, { target: { value: "payments" } });
     fireEvent.change(env, { target: { value: "staging" } });
-    expect(
-      within(dialog).getByText(/No namespace named staging\/payments exists yet/),
-    ).toBeVisible();
+    const envNote = within(dialog).getByText(/No namespace named staging\/payments exists yet/);
+    expect(envNote).toBeVisible();
+    expect(envNote.closest(".rule-note")).not.toBeNull();
+    expect(env).toHaveAccessibleDescription(/No namespace named staging\/payments exists yet/);
   });
 
   it("summarises what the policy grants and which grants a deny cancels", async () => {

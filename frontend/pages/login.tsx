@@ -92,7 +92,11 @@ export default function LoginPage() {
         </p>
 
         <form onSubmit={onSubmit}>
+          {/* field-reserve: the card is vertically centred, so without the
+              reserved message line the input jumped up 10.9px and the submit
+              button down 10.9px the moment the validation message appeared. */}
           <Field
+            className="field-reserve"
             label="Identity token"
             error={missingToken ? "Enter a token to continue." : authError}
             hint={

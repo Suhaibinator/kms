@@ -435,7 +435,11 @@ export function ContentTypeSelect({
             type="button"
             variant="link"
             size="xs"
-            className="value-type-clear"
+            // Geometry as utilities for the reason SchemaForm's reset link
+            // carries its own: size="xs" ships h-6/px-2 as utilities, which a
+            // .value-type-clear rule in the components layer cannot beat, and
+            // a 24px box on this 17px line grew the offer paragraph by 7px.
+            className="h-auto p-0 align-baseline"
             onClick={() => {
               setOfferFor(null);
               onClearValue();

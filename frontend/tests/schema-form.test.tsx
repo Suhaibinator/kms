@@ -327,7 +327,15 @@ describe("SchemaForm", () => {
       "2–8 characters · Pattern: ^[a-z]+$",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+    // The link sits inside the hint's own text line, so its geometry has to be
+    // utilities: size="xs" ships h-6/px-2 as utilities, which the old
+    // .schema-form-reset rule could not beat from the components layer.
+    const reset = screen.getByRole("button", { name: "Reset to default" });
+    for (const utility of ["h-auto", "p-0", "text-sm", "align-baseline"])
+      expect(reset.className.split(" ")).toContain(utility);
+    expect(reset.className).not.toMatch(/\bh-6\b|\bpx-2\b|\btext-xs\b/);
+
+    fireEvent.click(reset);
     expect(out()).toMatchObject({ region: "eu" });
     // Back at the default there is nothing to reset.
     expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
