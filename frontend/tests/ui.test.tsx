@@ -200,4 +200,28 @@ describe("TableSkeleton", () => {
     expect(container.querySelector(".mobile-list-toolbar > .mobile-list-hint")).not.toBeNull();
     expect(container.querySelector(".mobile-list-toolbar > .mobile-list-selection")).not.toBeNull();
   });
+
+  // A bare `true` reserves one line, which is 18px short wherever the real
+  // sentence wraps to two in a 343px card. Given the loaded strings the
+  // placeholder wraps identically; the selection row carries the same
+  // `(0 selected)` suffix the loaded row starts at.
+  it("wraps its toolbar rows like the loaded ones when given their text", () => {
+    const { container } = render(
+      <TableSkeleton
+        headers={["A"]}
+        rows={1}
+        toolbar
+        toolbarHint="Sorts the rows loaded on this page, not the whole namespace."
+        toolbarSelection="Select all parameters on this page"
+      />,
+    );
+    expect(container.querySelector(".mobile-list-hint")).toHaveTextContent(
+      "Sorts the rows loaded on this page, not the whole namespace.",
+    );
+    expect(container.querySelector(".mobile-list-selection")).toHaveTextContent(
+      "Select all parameters on this page (0 selected)",
+    );
+    // Chrome, not data: the toolbar is hidden from assistive tech either way.
+    expect(container.querySelector(".mobile-list-toolbar")).toHaveAttribute("aria-hidden");
+  });
 });

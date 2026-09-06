@@ -170,9 +170,15 @@ export function TableSkeleton({
   toolbar?: boolean;
   /** Mirror the loaded `MobileListToolbar`'s own `hint` and `selection`: each
    *  is a further full-width row of that toolbar, and a list that renders both
-   *  reserves 99px too little without them. */
-  toolbarHint?: boolean;
-  toolbarSelection?: boolean;
+   *  reserves 99px too little without them.
+   *
+   *  Pass the same values the loaded toolbar gets — `hint` verbatim, and for
+   *  the selection its `selectionLabel` (the skeleton adds the same
+   *  `(0 selected)` suffix, which is what the loaded row starts at). A bare
+   *  `true` reserves one line instead, which is 18px short wherever the real
+   *  sentence wraps to two in a 343px card. */
+  toolbarHint?: ReactNode;
+  toolbarSelection?: ReactNode;
   /** Reserve the `TableSummary` caption the loaded list renders (34px). */
   summary?: boolean;
 }) {
@@ -200,7 +206,14 @@ export function TableSkeleton({
             <Skeleton width="45%" height="1.5em" />
             <Skeleton height={44} />
           </span>
-          {toolbarHint ? <p className="mobile-list-hint">&nbsp;</p> : null}
+          {/* The real sentence, not a bar: both of these are static chrome that
+              does not come from the request, so rendering the text the loaded
+              row will hold is both honest and the only way the placeholder
+              wraps onto the same number of lines. The fieldset is aria-hidden,
+              so nothing is announced twice. */}
+          {toolbarHint ? (
+            <p className="mobile-list-hint">{toolbarHint === true ? " " : toolbarHint}</p>
+          ) : null}
           {/* The loaded row is a <label>, which picks up the toolbar's own
               `display: flex`, 6px gap and 13px type from its element selector;
               a placeholder that is not labelable has to restate them or it
@@ -208,7 +221,11 @@ export function TableSkeleton({
           {toolbarSelection ? (
             <span className="mobile-list-selection flex items-center gap-1.5 text-[13px]">
               <Skeleton width={16} height={16} />
-              <Skeleton width="60%" height="1.5em" />
+              {toolbarSelection === true ? (
+                <Skeleton width="60%" height="1.5em" />
+              ) : (
+                <span>{toolbarSelection} (0 selected)</span>
+              )}
             </span>
           ) : null}
         </fieldset>
