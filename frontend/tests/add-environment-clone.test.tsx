@@ -96,6 +96,26 @@ describe("AddEnvironmentModal with Start from", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("warns about production on the hint line rather than inserting a panel", () => {
+    render(
+      <AddEnvironmentModal
+        app={ready.application.name}
+        open
+        saving={false}
+        onClose={() => undefined}
+        onSave={vi.fn(async () => undefined)}
+      />,
+    );
+    const modal = screen.getByRole("dialog");
+    const field = within(modal).getByLabelText("Environment");
+    expect(field).toHaveAccessibleDescription("Examples: dev, staging, prod, prod-gcp");
+    fireEvent.change(field, { target: { value: "prod-eu" } });
+    // The hint line is already reserved, so completing "prod" swaps text rather
+    // than growing a centred dialog under the caret.
+    expect(field).toHaveAccessibleDescription(/prod-eu is a production environment/);
+    expect(modal.querySelector(".warn-panel")).toBeNull();
+  });
+
   it("still creates an empty environment by default", () => {
     const onSave = vi.fn(async () => undefined);
     render(
