@@ -5,6 +5,7 @@ import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
+import { countOtherKeys } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   Application,
@@ -23,25 +24,15 @@ export interface EnvironmentCallbacks {
   onAddValue: (env: string, alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
   onOpenSecret?: (env: string, key: string) => void;
+  onOpenParameter?: (env: string, key: string) => void;
   onShip: (env: string, alias?: string) => void;
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
+  onImportDefaults?: (env: string) => void;
+  /** The empty-contract row's "Edit contract"; the contract is edited at the application. */
+  onEditContract?: (env: string) => void;
   /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
   onFix: (action: FixAction, finding: Finding) => void;
-}
-
-/** Parameters present in this environment that no contract alias resolves to. */
-export function countOtherKeys(
-  environment: EnvironmentOverview,
-  rows: ApplicationConfigurationRow[],
-): number {
-  const env = environment.namespace.env;
-  const resolved = new Set(
-    environment.values.filter((value) => value.key).map((value) => value.key as string),
-  );
-  return rows.filter(
-    (row) => row.kind === "parameter" && row.environments[env]?.present && !resolved.has(row.key),
-  ).length;
 }
 
 // Findings the column's own sections already show in a richer form (the drift
@@ -81,6 +72,7 @@ export function EnvironmentColumn({
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
   const findings = useMemo(() => columnFindings(environment), [environment]);
+  const otherKeys = useMemo(() => countOtherKeys(environment, rows), [environment, rows]);
   // `?env=` deep links land on the column: scroll it into view. Focus stays
   // where it is — the ring (.pipeline-column-focused) marks the target, and a
   // query-only navigation is not a request to move the keyboard cursor.
@@ -107,7 +99,6 @@ export function EnvironmentColumn({
           <StatusChip status={environment.status} production={environment.production} />
         </div>
         <ActionMenu
-          label={`${ns.env} links`}
           trigger={
             <Button type="button" variant="ghost" size="icon-sm" aria-label={`More for ${ns.env}`}>
               <MoreHorizontal size={16} />
@@ -121,6 +112,16 @@ export function EnvironmentColumn({
               label: "Releases",
               href: links.releases({ app: ns.app, env: ns.env, name: application.release_name }),
             },
+            { key: "connect", label: "Connect SDK", onSelect: () => callbacks.onConnect(ns.env) },
+            ...(callbacks.onImportDefaults
+              ? [
+                  {
+                    key: "import-defaults",
+                    label: "Import defaults",
+                    onSelect: () => callbacks.onImportDefaults?.(ns.env),
+                  },
+                ]
+              : []),
           ]}
         />
       </header>
@@ -130,11 +131,13 @@ export function EnvironmentColumn({
       <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
-        otherKeys={countOtherKeys(environment, rows)}
+        otherKeys={otherKeys}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
         onOpenSecret={callbacks.onOpenSecret}
+        onOpenParameter={callbacks.onOpenParameter}
         onShip={callbacks.onShip}
+        onEditContract={() => callbacks.onEditContract?.(ns.env)}
       />
       <ReleaseSection
         environment={environment}

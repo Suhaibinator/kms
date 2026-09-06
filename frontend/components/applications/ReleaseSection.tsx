@@ -1,9 +1,13 @@
 import { RotateCcw, Send } from "lucide-react";
+import Link from "next/link";
 import { Ident, ReleaseIdent } from "@/components/Ident";
+import { releaseKey } from "@/components/releases/utils";
 import { Button } from "@/components/ui/button";
+import { formatRelative, formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
 import type { EnvironmentOverview } from "@/lib/types";
-import { isUnreleased } from "./ValuesSection";
+import { useNow } from "@/lib/useNow";
+import { isUnreleased } from "./ValueBadges";
 
 /** Why "Create first release" is disabled, or null when it may run. */
 export function firstReleaseBlocker(environment: EnvironmentOverview): string | null {
@@ -28,7 +32,9 @@ export function ReleaseSection({
   onRollback: (env: string) => void;
 }) {
   const ns = environment.namespace;
+  const now = useNow();
   const active = environment.release.active;
+  const latest = environment.release.latest_version;
   const unreleased = environment.values.filter((value) => isUnreleased(value, Boolean(active)));
   const missing = environment.values.filter((value) => !value.present);
   const blocker = active ? null : firstReleaseBlocker(environment);
@@ -88,6 +94,23 @@ export function ReleaseSection({
               })}
             />
             <Ident kind="revision" value={String(active.activation_revision)} />
+            <span className="pipeline-release-meta" title={formatUnixMs(active.created_at_unix_ms)}>
+              shipped {formatRelative(active.created_at_unix_ms, now)}
+              {active.created_by ? ` by ${active.created_by}` : ""}
+            </span>
+            {latest > active.version ? (
+              <Link
+                className="pipeline-release-meta"
+                href={links.releases({
+                  app: ns.app,
+                  env: ns.env,
+                  name: active.name,
+                  release: releaseKey({ name: active.name, version: latest }),
+                })}
+              >
+                latest v{latest} not active
+              </Link>
+            ) : null}
             {active.previous_version > 0 ? (
               <span className="pipeline-previous faint text-sm">
                 previous{" "}

@@ -361,7 +361,6 @@ export default function NamespacesPage() {
                                   Edit
                                 </Button>
                                 <ActionMenu
-                                  label={`More for ${ns.env}/${ns.app}`}
                                   trigger={
                                     <Button
                                       type="button"

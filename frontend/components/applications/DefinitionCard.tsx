@@ -119,7 +119,6 @@ export function DefinitionCard({
         <div className="between">
           <span className="faint text-sm">Alignment</span>
           <ActionMenu
-            label="Fix alignment"
             trigger={
               <Button
                 type="button"

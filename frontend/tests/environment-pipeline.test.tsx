@@ -5,9 +5,16 @@ import {
   EnvironmentPipeline,
   orderEnvironments,
 } from "@/components/applications/EnvironmentPipeline";
+import { formatRelative, formatUnixMs } from "@/lib/format";
+import { links } from "@/lib/links";
 import { findingCopy } from "@/lib/readiness";
 import type { ApplicationOverview, EnvironmentOverview, Finding } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
+
+// CopyButton (the row's Copy key) reports through the toast context.
+vi.mock("@/context/ToastContext", () => ({
+  useToast: () => ({ success: vi.fn(), info: vi.fn(), error: vi.fn(), dismiss: vi.fn() }),
+}));
 
 const incident = incidentJson as unknown as ApplicationOverview;
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -21,9 +28,13 @@ function env(overview: ApplicationOverview, name: string): EnvironmentOverview {
 const callbacks: EnvironmentCallbacks = {
   onAddValue: vi.fn(),
   onAddSecret: vi.fn(),
+  onOpenSecret: vi.fn(),
+  onOpenParameter: vi.fn(),
   onShip: vi.fn(),
   onRollback: vi.fn(),
   onConnect: vi.fn(),
+  onImportDefaults: vi.fn(),
+  onEditContract: vi.fn(),
   onFix: vi.fn(),
 };
 
@@ -273,5 +284,129 @@ describe("EnvironmentPipeline", () => {
       "href",
       `/releases?app=${app}&env=prod&name=${incident.application.release_name}`,
     );
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Connect SDK" }));
+    expect(callbacks.onConnect).toHaveBeenCalledWith("prod");
+    fireEvent.click(screen.getByRole("button", { name: "More for prod" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults" }));
+    expect(callbacks.onImportDefaults).toHaveBeenCalledWith("prod");
+  });
+
+  it("marks secret rows with a lock glyph and offers Copy key and Manage on every present row", () => {
+    renderPipeline(incident);
+    const prod = screen.getByRole("region", { name: "prod environment" });
+    const values = env(incident, "prod").values;
+    const present = values.filter((value) => value.present);
+    const secrets = values.filter((value) => value.kind === "secret");
+    expect(within(prod).getAllByRole("img", { name: "Secret" })).toHaveLength(secrets.length);
+    expect(within(prod).getAllByRole("button", { name: "Copy key" })).toHaveLength(present.length);
+    const app = incident.application.name;
+    const secret = secrets[0];
+    const manageSecret = within(prod).getByRole("link", {
+      name: `Manage ${secret.alias} in prod`,
+    });
+    expect(manageSecret).toHaveAttribute(
+      "href",
+      links.secretDetail({ env: "prod", app, key: secret.key ?? secret.alias }),
+    );
+    fireEvent.click(manageSecret);
+    expect(callbacks.onOpenSecret).toHaveBeenCalledWith("prod", secret.key ?? secret.alias);
+    const parameter = values.find((value) => value.kind === "parameter" && value.present);
+    if (!parameter) throw new Error("fixture has no present parameter");
+    const manageParameter = within(prod).getByRole("link", {
+      name: `Manage ${parameter.alias} in prod`,
+    });
+    expect(manageParameter).toHaveAttribute(
+      "href",
+      links.parameterDetail({ env: "prod", app, key: parameter.key ?? parameter.alias }),
+    );
+    fireEvent.click(manageParameter);
+    expect(callbacks.onOpenParameter).toHaveBeenCalledWith(
+      "prod",
+      parameter.key ?? parameter.alias,
+    );
+  });
+
+  it("shows the resolved key only when it differs from the alias, and the binding badge only when bound", () => {
+    const overview = clone(incident);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.key = `${secret.alias}-v2`;
+    secret.bound = true;
+    renderPipeline(overview);
+    const column = screen.getByRole("region", { name: "prod environment" });
+    const row = column.querySelector(`[data-alias="${secret.alias}"]`) as HTMLElement;
+    expect(within(row).getByText(secret.key)).toHaveClass("ident-value");
+    expect(within(row).getByText("binding key")).toBeVisible();
+    expect(within(column).getAllByText("binding key")).toHaveLength(1);
+    // Copy key copies the resolved key, not the alias.
+    expect(within(row).getByRole("button", { name: "Copy key" })).toBeVisible();
+    // Rows whose key equals the alias render one chip for it.
+    for (const value of prod.values.filter((value) => value !== secret)) {
+      const other = column.querySelector(`[data-alias="${value.alias}"]`) as HTMLElement;
+      expect(within(other).getAllByText(value.alias)).toHaveLength(1);
+    }
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(within(dev).queryByText("binding key")).toBeNull();
+  });
+
+  it("counts secrets no alias resolves to separately from parameters", () => {
+    const overview = clone(incident);
+    overview.rows.push({
+      key: "legacy-token",
+      kind: "secret",
+      environments: { dev: { present: true, content_type: "text/plain", version: 1 } },
+    });
+    renderPipeline(overview);
+    const column = screen.getByRole("region", { name: "dev environment" });
+    expect(within(column).getByRole("link", { name: "1 other secret → Secrets" })).toHaveAttribute(
+      "href",
+      links.secrets({ env: "dev", app: overview.application.name }),
+    );
+    expect(within(column).queryByRole("link", { name: /other keys/ })).toBeNull();
+  });
+
+  it("offers Edit contract when the contract has no aliases", () => {
+    const overview = clone(incident);
+    env(overview, "dev").values = [];
+    renderPipeline(overview);
+    const column = screen.getByRole("region", { name: "dev environment" });
+    expect(within(column).getByText("The contract has no aliases.")).toBeVisible();
+    fireEvent.click(within(column).getByRole("button", { name: "Edit contract" }));
+    expect(callbacks.onEditContract).toHaveBeenCalledWith("dev");
+  });
+
+  it("says when and by whom the active release shipped, and links a newer inactive release", () => {
+    const overview = clone(incident);
+    const prod = env(overview, "prod");
+    const active = prod.release.active;
+    if (!active) throw new Error("fixture has no active release in prod");
+    prod.release.latest_version = active.version + 3;
+    renderPipeline(overview);
+    const column = screen.getByRole("region", { name: "prod environment" });
+    const meta = within(column).getByText(
+      `shipped ${formatRelative(active.created_at_unix_ms)} by ${active.created_by}`,
+    );
+    expect(meta).toHaveAttribute("title", formatUnixMs(active.created_at_unix_ms));
+    const latest = `${active.name}@${active.version + 3}`;
+    expect(
+      within(column).getByRole("link", { name: `latest v${active.version + 3} not active` }),
+    ).toHaveAttribute(
+      "href",
+      links.releases({
+        app: overview.application.name,
+        env: "prod",
+        name: active.name,
+        release: latest,
+      }),
+    );
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(within(dev).queryByText(/not active/)).toBeNull();
+  });
+
+  it("makes the scroller a focusable, labelled group", () => {
+    renderPipeline(incident);
+    const scroller = screen.getByRole("group", { name: "Environment pipeline" });
+    expect(scroller).toHaveAttribute("tabindex", "0");
   });
 });

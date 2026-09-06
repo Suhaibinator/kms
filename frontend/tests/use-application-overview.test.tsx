@@ -38,12 +38,27 @@ function shipped(): ApplicationOverview {
 }
 
 describe("releaseMovements", () => {
-  it("is empty for identical overviews and value-only changes", () => {
+  it("is empty for identical overviews", () => {
     expect(releaseMovements(ready, clone(ready))).toEqual([]);
+  });
+
+  it("names a value written elsewhere without moving the release", () => {
     const values = clone(ready);
     const dev = values.environments.find((env) => env.namespace.env === "dev");
-    if (dev?.values[0]) dev.values[0].current_version = 99;
-    expect(releaseMovements(ready, values)).toEqual([]);
+    const written = dev?.values.find((value) => value.present);
+    if (!written) throw new Error("fixture has no present value in dev");
+    written.current_version = (written.current_version ?? 0) + 1;
+    expect(releaseMovements(ready, values)).toEqual([
+      `dev: \`${written.alias}\` is now v${written.current_version}`,
+    ]);
+    // An alias that lost its value is a contract problem, not a write.
+    const removed = clone(ready);
+    const gone = removed.environments.find((env) => env.namespace.env === "dev")?.values[0];
+    if (gone) {
+      gone.present = false;
+      gone.current_version = undefined;
+    }
+    expect(releaseMovements(ready, removed)).toEqual([]);
   });
 
   it("names the environment, release and actor of a moved activation", () => {
@@ -51,6 +66,15 @@ describe("releaseMovements", () => {
     const active = next.environments.find((env) => env.namespace.env === "prod")?.release.active;
     expect(releaseMovements(ready, next)).toEqual([
       `prod: ${active?.name}@${active?.version} activated at rev ${active?.activation_revision} by alice`,
+    ]);
+    // A ship that also wrote a value reports both, activation first.
+    const prod = next.environments.find((env) => env.namespace.env === "prod");
+    const written = prod?.values.find((value) => value.present);
+    if (!written) throw new Error("fixture has no present value in prod");
+    written.current_version = (written.current_version ?? 0) + 1;
+    expect(releaseMovements(ready, next)).toEqual([
+      `prod: ${active?.name}@${active?.version} activated at rev ${active?.activation_revision} by alice`,
+      `prod: \`${written.alias}\` is now v${written.current_version}`,
     ]);
   });
 
@@ -200,5 +224,28 @@ describe("useApplicationOverview", () => {
     });
     // Only the reload itself asked for the overview.
     expect(mocks.applicationOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not check while paused, so an operator's own writes are not announced under their modal", async () => {
+    mocks.applicationOverview.mockResolvedValue(ready);
+    const { result, rerender } = renderHook(
+      ({ paused }: { paused: boolean }) => useApplicationOverview("gradethis", { paused }),
+      { initialProps: { paused: true } },
+    );
+    await waitFor(() => expect(result.current.slot?.status).toBe("success"));
+
+    mocks.applicationOverview.mockResolvedValue(shipped());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OVERVIEW_CHECK_MS);
+    });
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(1);
+    expect(mocks.toast.info).not.toHaveBeenCalled();
+
+    rerender({ paused: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OVERVIEW_CHECK_MS);
+    });
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mocks.toast.info).toHaveBeenCalled());
   });
 });

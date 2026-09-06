@@ -1,7 +1,8 @@
-import { Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import type { CloneEnvironmentModalProps } from "@/components/applications/contracts";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { contractSecrets } from "@/components/ship/model";
 import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,7 @@ export default function CloneEnvironmentModal({
     }
   }
 
+  const hasSecrets = contractSecrets(application).length > 0;
   const sourceOptions = environments.map((environment) => ({
     value: environment.namespace.env,
     label: environment.namespace.env,
@@ -227,15 +229,10 @@ export default function CloneEnvironmentModal({
                       </td>
                       <td data-label="Actions">
                         {item.action === "needs_value" && onAddSecret ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
+                          <AddResourceButton
+                            kind="secret"
                             onClick={() => onAddSecret(result.namespace.env, item.alias)}
-                          >
-                            <Plus size={13} />
-                            Add secret
-                          </Button>
+                          />
                         ) : null}
                       </td>
                     </tr>
@@ -254,8 +251,9 @@ export default function CloneEnvironmentModal({
             }}
           >
             <div className="info-panel mb-4 text-sm">
-              Parameter values are copied as new versions in the target; existing target keys are
-              kept. Secrets are listed as needing a value.
+              {copyValues
+                ? "Parameter values are copied as new versions in the target; existing target keys are kept."
+                : "Only the namespace is created; no values are copied."}
             </div>
             <div className="form-row">
               <Field label="Copy values from" error={shown("source", sourceProblem)}>
@@ -310,6 +308,12 @@ export default function CloneEnvironmentModal({
                 <span className="mono">{target.trim()}</span> is a production environment. You will
                 be asked to type its name.
               </div>
+            ) : null}
+            {hasSecrets ? (
+              <p className="faint text-sm mt-4 mb-0" data-testid="clone-secrets-note">
+                Secret values are never copied. Each secret alias needs a value in the new
+                environment before a release can ship.
+              </p>
             ) : null}
           </form>
         )}

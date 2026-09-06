@@ -1,4 +1,5 @@
 import { RefreshCw } from "lucide-react";
+import { useState } from "react";
 import { FindingList } from "@/components/FindingList";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { ViolationTable, type ViolationTableProps } from "@/components/releases/ViolationTable";
@@ -6,7 +7,7 @@ import { Badge, Button, Checkbox, Spinner } from "@/components/ui";
 import type { FixAction } from "@/lib/readiness";
 import type { Finding, ShipEntryChange, ShipPreview as ShipPreviewData } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import type { DriftCandidate } from "./model";
+import { type DriftCandidate, entryChanged } from "./model";
 
 export interface ShipPreviewProps {
   application: string;
@@ -64,6 +65,13 @@ export function ShipPreview({
 }: ShipPreviewProps) {
   const nextVersion = preview ? preview.base_version + 1 : null;
   const writes = preview?.entries.filter((entry) => entry.change === "edited") ?? [];
+  // The release table opens on the rows that move; a release with nothing
+  // moving has nothing to fold and lists every pin.
+  const [showUnchanged, setShowUnchanged] = useState(false);
+  const entries = preview?.entries ?? [];
+  const unchangedCount = entries.filter((entry) => !entryChanged(entry)).length;
+  const foldable = unchangedCount > 0 && unchangedCount < entries.length;
+  const shownEntries = foldable && !showUnchanged ? entries.filter(entryChanged) : entries;
   const status = loading
     ? "Previewing…"
     : !ready
@@ -146,11 +154,8 @@ export function ShipPreview({
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.entries.map((entry) => {
-                    const changed =
-                      entry.change === "edited" ||
-                      entry.change === "missing" ||
-                      entry.from_version !== entry.to_version;
+                  {shownEntries.map((entry) => {
+                    const changed = entryChanged(entry);
                     return (
                       <tr
                         key={entry.alias}
@@ -159,7 +164,18 @@ export function ShipPreview({
                         data-changed={changed ? "true" : "false"}
                       >
                         <td data-label="Alias" className="mono">
-                          {entry.alias}
+                          {onEditAlias && entry.kind === "parameter" ? (
+                            <button
+                              type="button"
+                              className="ship-entry-alias"
+                              title="Edit this value"
+                              onClick={() => onEditAlias(entry.alias)}
+                            >
+                              {entry.alias}
+                            </button>
+                          ) : (
+                            entry.alias
+                          )}
                         </td>
                         <td data-label="Kind">{entry.kind}</td>
                         <td data-label="Key" className="mono">
@@ -177,6 +193,19 @@ export function ShipPreview({
                 </tbody>
               </table>
             </div>
+            {foldable ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ship-entries-toggle"
+                aria-pressed={showUnchanged}
+                onClick={() => setShowUnchanged((value) => !value)}
+                data-testid="ship-toggle-unchanged"
+              >
+                {showUnchanged ? "Hide" : "Show"} {unchangedCount} unchanged
+              </Button>
+            ) : null}
           </div>
 
           {drift.length > 0 ? (
@@ -203,6 +232,7 @@ export function ShipPreview({
                           include <code>{candidate.alias}</code> v{candidate.current}
                           <span className="faint"> (pinned v{candidate.pinned})</span>
                         </span>
+                        <Badge kind="neutral">{candidate.kind}</Badge>
                       </label>
                     </li>
                   );

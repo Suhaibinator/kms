@@ -55,8 +55,8 @@ function renderDialog(overrides: Partial<RollbackDialogProps> = {}) {
   return props;
 }
 
-function dialog(): HTMLElement {
-  return screen.getByRole("dialog", { name: "Roll back release?" });
+function dialog(name: string | RegExp = "Roll back release?"): HTMLElement {
+  return screen.getByRole("dialog", { name });
 }
 
 function confirmButton(): HTMLElement {
@@ -94,11 +94,38 @@ describe("RollbackDialog", () => {
     expect(props.onDone).toHaveBeenCalledWith(rolledBack);
   });
 
+  it("links to the previous release so the operator can compare before confirming", async () => {
+    renderDialog();
+    expect(
+      within(dialog()).getByRole("link", {
+        name: `See what changes (v${active.version} → v${active.previous_version})`,
+      }),
+    ).toHaveAttribute(
+      "href",
+      links.releases({
+        app: incident.application.name,
+        env: "prod",
+        name,
+        release: `${name}@${active.version}`,
+        section: "compare",
+      }),
+    );
+  });
+
+  it("calls a rollback of a rollback a re-activation", async () => {
+    renderDialog({ active: { ...active, is_rolled_back: true } });
+    const reactivate = dialog(`Re-activate v${active.previous_version}?`);
+    await within(reactivate).findByText("is valid and can be activated.");
+    expect(within(reactivate).getByTestId("rollback-confirm")).toBeDisabled();
+  });
+
   it("keeps Confirm disabled on production until the environment name is typed", async () => {
     renderDialog();
     await within(dialog()).findByText("is valid and can be activated.");
     expect(confirmButton()).toBeDisabled();
     const field = within(dialog()).getByTestId("rollback-confirm-env");
+    // The field appears only after validation, and takes focus when it does.
+    await waitFor(() => expect(field).toHaveFocus());
     fireEvent.change(field, { target: { value: "pro" } });
     expect(confirmButton()).toBeDisabled();
     fireEvent.change(field, { target: { value: "prod" } });

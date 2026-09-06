@@ -2542,6 +2542,21 @@
     vertical-align: top;
   }
 
+  .matrix-alias {
+    display: block;
+    margin-top: var(--space-1);
+  }
+  .matrix-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+    margin-bottom: var(--space-3);
+  }
+  .application-matrix tfoot td {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
   .application-matrix .matrix-key {
     position: sticky;
     left: 0;
@@ -2576,8 +2591,29 @@
     white-space: nowrap;
   }
 
-  .secret-cell {
+  /* "Secret v3" with the lock glyph; a link, but the whole line like the value link. */
+  .matrix-secret {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     white-space: nowrap;
+    color: var(--text);
+  }
+  /* Lucide SVGs are display:block under preflight; the wrapper keeps them inline. */
+  /* The kind glyph beside a secret (pipeline row, matrix cell); inline-flex so the SVG cannot wrap alone. */
+  .kind-glyph {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-faint);
+  }
+  .matrix-filter {
+    flex: 0 1 280px;
+    min-width: 180px;
+  }
+
+  /* Tooltip trigger around a badge: inline-flex so the badge keeps its box. */
+  .badge-tip {
+    display: inline-flex;
   }
 
   .quick-secret-advanced {

@@ -514,4 +514,76 @@
       flex: 1 1 auto;
     }
   }
+
+  /* --- Secret pins (Change step) ---------------------------------------- */
+  .ship-secret-pins {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ship-secret-pin {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h-sm);
+  }
+  .ship-confirm-summary {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+  /* The summary describes the last preview; once an edit outdates it, it fades
+     with the preview until the next dry run. */
+  .ship-confirm-summary.is-stale {
+    opacity: 0.6;
+  }
+  .ship-secret-pins-section {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .ship-secret-pins-section .ship-subtitle {
+    margin-bottom: 0;
+  }
+  .ship-secret-pin-manage {
+    margin-left: auto;
+  }
+
+  /* --- Compose form ------------------------------------------------------ */
+  /* The Change and Preview steps share one form so Enter ships; it lays its
+     children out exactly as the modal grid would. */
+  .ship-form {
+    display: grid;
+    gap: var(--space-5);
+  }
+  .ship-form > * {
+    min-width: 0;
+  }
+  /* A parameter alias in the release table is a jump to its editor row. */
+  .ship-entry-alias {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--primary);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+    transition: text-decoration-color 120ms ease;
+  }
+  .ship-entry-alias:hover,
+  .ship-entry-alias:focus-visible {
+    text-decoration-color: currentColor;
+  }
+  .ship-entry-alias:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  .ship-entries-toggle {
+    margin-top: var(--space-2);
+  }
 }

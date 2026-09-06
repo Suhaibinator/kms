@@ -14,10 +14,7 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
-import {
-  ParameterWorkspace,
-  shouldOpenParameterWorkspace,
-} from "@/components/parameters/ParameterWorkspace";
+import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
 import {
   headerLabels,
   MobileListToolbar,
@@ -67,6 +64,7 @@ import {
   validateParameterValue,
   validateValueSize,
 } from "@/lib/validation";
+import { shouldOpenWorkspace } from "@/lib/workspace";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -503,7 +501,7 @@ export default function ParametersPage() {
                       className="cell-path"
                       href={links.parameterDetail(p)}
                       onClick={(event) => {
-                        if (shouldOpenParameterWorkspace(event)) setParameterTarget(p);
+                        if (shouldOpenWorkspace(event)) setParameterTarget(p);
                       }}
                     >
                       {p.key}
@@ -532,7 +530,7 @@ export default function ParametersPage() {
                         size="sm"
                         href={links.parameterDetail(p)}
                         onClick={(event) => {
-                          if (shouldOpenParameterWorkspace(event)) setParameterTarget(p);
+                          if (shouldOpenWorkspace(event)) setParameterTarget(p);
                         }}
                       >
                         <Eye size={14} aria-hidden />
@@ -541,7 +539,6 @@ export default function ParametersPage() {
                       {/* Delete is the only destructive row action; it sits
                           behind a menu so a stray click cannot reach it. */}
                       <ActionMenu
-                        label={`Actions for ${p.key}`}
                         trigger={
                           <Button
                             variant="ghost"

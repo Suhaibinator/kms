@@ -6,6 +6,8 @@ import { entryHrefResolver, ViolationTable } from "@/components/releases/Violati
 import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
 import { api, isAbortError, isConflict } from "@/lib/api";
+import { countNoun } from "@/lib/format";
+import { useFocusOnAppear } from "@/lib/forms";
 import type { ShipStepId } from "@/lib/glossary";
 import { useLatestRequest } from "@/lib/hooks";
 import { links } from "@/lib/links";
@@ -17,12 +19,14 @@ import type {
   ShipPreview as ShipPreviewData,
   ShipResult,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { ConflictPanel, type ShipConflict } from "./ConflictPanel";
 import {
   buildChanges,
   changesKey,
   defaultEnvironment,
   driftCandidates,
+  entryChanged,
   everActivated,
   initialRows,
   makeRow,
@@ -64,8 +68,27 @@ function newRequestId(): string {
 }
 
 /**
- * Quick change: edit values, dry-run a preview, ship with a CAS guard, watch
- * the rollout — one modal, guided or express.
+ * The value control of an editor row, else its first enabled button (a folded
+ * row's Edit). The row head's Revert and Show diff come earlier in DOM order
+ * and may be disabled, so the control is looked up before any button.
+ */
+
+/** "{n} aliases change ({m} secrets); runtime@3 → @4": the one line above Ship. */
+function confirmSummary(preview: ShipPreviewData): string {
+  const changed = preview.entries.filter(entryChanged);
+  const secrets = changed.filter((entry) => entry.kind === "secret").length;
+  const aliases = `${changed.length} ${changed.length === 1 ? "alias changes" : "aliases change"}`;
+  const secretNote = `${secrets} ${countNoun(secrets, "secrets")}`;
+  const activation =
+    preview.base_version > 0
+      ? `${preview.release_name}@${preview.base_version} → @${preview.base_version + 1}`
+      : `${preview.release_name}@1 is the first activation`;
+  return `${aliases} (${secretNote}); ${activation}`;
+}
+
+/**
+ * Ship: edit values, dry-run a preview, ship with a CAS guard, watch the
+ * rollout — one modal, guided or express.
  */
 export default function ShipModal({
   application,
@@ -76,7 +99,9 @@ export default function ShipModal({
   open,
   onClose,
   onShipped,
+  onRolledBack,
   onAddSecret,
+  onOpenSecret,
 }: ShipModalProps) {
   const [environment, setEnvironment] = useState("");
   const [rows, setRows] = useState<ShipRow[]>([]);
@@ -89,6 +114,7 @@ export default function ShipModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  const summary = useMemo(() => (preview ? confirmSummary(preview) : ""), [preview]);
   const [shipError, setShipError] = useState<string | null>(null);
   const [result, setResult] = useState<ShipResult | null>(null);
   const [conflict, setConflict] = useState<ShipConflict | null>(null);
@@ -104,8 +130,16 @@ export default function ShipModal({
   // What each row's editor started from, so the dirty guard only fires on a
   // real edit: the prefilled current value, or "" for a row with no value yet.
   const prefilled = useRef(new Map<string, string>());
-  // The environment select is the first real control; the dialog opens on it.
+  // The environment select is the first real control; the dialog opens on it
+  // unless a prefilled row is already editable, in which case it opens there.
   const environmentSelectRef = useRef<HTMLElement | null>(null);
+  const initialFocus = useCallback(() => environmentSelectRef.current, []);
+  // Every row's value control, by alias, so focus never has to scrape the DOM.
+  const controls = useRef(new Map<string, HTMLElement>());
+  const registerControl = useCallback((alias: string, node: HTMLElement | null) => {
+    if (node) controls.current.set(alias, node);
+    else controls.current.delete(alias);
+  }, []);
   const confirmId = useId();
 
   const env = useMemo(
@@ -205,6 +239,18 @@ export default function ShipModal({
         });
     }
   }, [open, environment, rows, application.name]);
+
+  // The prefilled row's editor appears only once its current value has
+  // loaded, after the dialog already opened on the environment select. Hand
+  // focus over then, unless the operator has moved on meanwhile.
+  const initialRowLoaded =
+    initialAlias !== undefined && rows.some((row) => row.alias === initialAlias && row.loaded);
+  const initialRowControl = useCallback(
+    () => (initialAlias ? (controls.current.get(initialAlias) ?? null) : null),
+    [initialAlias],
+  );
+  const restingOn = useMemo(() => [environmentSelectRef], []);
+  useFocusOnAppear(initialRowControl, open && initialRowLoaded, { unlessMoved: true, restingOn });
 
   const runPreview = useCallback(async () => {
     if (!ready) return;
@@ -343,19 +389,11 @@ export default function ShipModal({
     // later — so keep re-asserting the row focus until it sticks.
     let attempts = 0;
     const attempt = () => {
-      const row = document.querySelector<HTMLElement>(
-        `[data-testid="ship-editor"] [data-alias="${CSS.escape(alias)}"]`,
-      );
-      if (row) {
-        if (attempts === 0) row.scrollIntoView?.({ block: "center" });
-        // The value control first; the row head's buttons (Revert, Show diff)
-        // come earlier in DOM order and may be disabled.
-        const control =
-          row.querySelector<HTMLElement>('textarea, input:not([type="hidden"]), select') ??
-          row.querySelector<HTMLElement>(
-            'button:not([disabled]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])',
-          );
-        (control ?? row).focus?.({ preventScroll: true });
+      const control = controls.current.get(alias) ?? null;
+      const row = control?.closest<HTMLElement>("[data-alias]") ?? null;
+      if (control) {
+        if (attempts === 0) row?.scrollIntoView?.({ block: "center" });
+        control.focus?.({ preventScroll: true });
       }
       attempts += 1;
       if (attempts < 6 && !row?.contains(document.activeElement)) {
@@ -369,7 +407,7 @@ export default function ShipModal({
   function enterRollout(shipped: ShipResult, next: Activation) {
     setActivation(next);
     setPhase("rollout");
-    onShipped(shipped);
+    onShipped(shipped, environment);
   }
 
   async function ship() {
@@ -413,7 +451,7 @@ export default function ShipModal({
       case "release_created_not_activated":
         setRows((current) => reuseWrittenVersions(current, response));
         setPhase("release_created_not_activated");
-        onShipped(response);
+        onShipped(response, environment);
         return;
       case "conflict":
         setRows((current) => reuseWrittenVersions(current, response));
@@ -423,7 +461,7 @@ export default function ShipModal({
           currentVersion: response.error?.current_version,
         });
         setPhase("conflict");
-        onShipped(response);
+        onShipped(response, environment);
         return;
       default:
         // A `preview` status from a non-dry-run call is a server bug; treat it as nothing shipped.
@@ -473,7 +511,7 @@ export default function ShipModal({
 
   function handleClose() {
     if (phase === "shipping") return;
-    onClose();
+    onClose(environment);
   }
 
   const step: ShipStepId =
@@ -493,7 +531,7 @@ export default function ShipModal({
       </span>
     ) : (
       <span className="ship-title">
-        Quick change · <Ident kind="app" value={application.name} />
+        Ship · <Ident kind="app" value={application.name} />
       </span>
     );
 
@@ -517,7 +555,7 @@ export default function ShipModal({
         title={title}
         onClose={handleClose}
         dismissible={phase !== "shipping"}
-        initialFocus={environmentSelectRef}
+        initialFocus={initialFocus}
         dirty={dirty}
         footer={(close) =>
           phase === "rollout" ? (
@@ -533,7 +571,7 @@ export default function ShipModal({
                   Roll back
                 </Button>
               ) : null}
-              <Button type="button" onClick={onClose} data-testid="ship-done">
+              <Button type="button" onClick={() => onClose(environment)} data-testid="ship-done">
                 Done
               </Button>
             </>
@@ -549,10 +587,10 @@ export default function ShipModal({
               </Button>
               <Button
                 type="button"
+                onClick={() => void ship()}
                 variant={production ? "destructive-solid" : "default"}
                 disabled={!canShip}
                 loading={phase === "shipping"}
-                onClick={() => void ship()}
                 data-testid="ship-submit"
               >
                 Ship
@@ -585,11 +623,12 @@ export default function ShipModal({
           ) : null}
 
           {phase === "compose" || phase === "shipping" ? (
-            <>
+            <div className="ship-form">
               <ShipEditor
                 application={application}
                 environments={environments}
                 initialFocusRef={environmentSelectRef}
+                registerControl={registerControl}
                 schemaJson={schemaJson}
                 environment={environment}
                 env={env}
@@ -601,6 +640,7 @@ export default function ShipModal({
                 onAddRow={addRow}
                 onRemoveRow={removeRow}
                 onAddSecret={onAddSecret}
+                onOpenSecret={onOpenSecret}
               />
               <ShipPreview
                 application={application.name}
@@ -618,6 +658,14 @@ export default function ShipModal({
                 resolveHref={resolveHref}
                 onEditAlias={onEditAlias}
               />
+              {preview ? (
+                <p
+                  className={cn("ship-confirm-summary", stale && "is-stale")}
+                  data-testid="ship-confirm-summary"
+                >
+                  {summary}
+                </p>
+              ) : null}
               {production ? (
                 <Field
                   label={
@@ -637,10 +685,19 @@ export default function ShipModal({
                     disabled={disabled}
                     data-testid="ship-confirm-env"
                     onChange={(event) => setConfirmText(event.target.value)}
+                    // Enter here is the operator's "yes"; nowhere else in the
+                    // editor does Enter ship, so a stray keypress in a value
+                    // field cannot activate a release.
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void ship();
+                      }
+                    }}
                   />
                 </Field>
               ) : null}
-            </>
+            </div>
           ) : null}
 
           {phase === "rejected" ? (
@@ -737,7 +794,7 @@ export default function ShipModal({
               conflict={conflict}
               disabled={false}
               onRepreview={backToCompose}
-              onDiscard={onClose}
+              onDiscard={() => onClose(environment)}
             />
           ) : null}
 
@@ -828,7 +885,7 @@ export default function ShipModal({
             setRollbackOpen(false);
             setRolledBack(rollback);
             // The environment moved again; let the page reload its overview.
-            if (result) onShipped(result);
+            onRolledBack?.(environment);
           }}
         />
       ) : null}

@@ -7,7 +7,6 @@ describe("ActionMenu", () => {
     const onOpenChange = vi.fn();
     render(
       <ActionMenu
-        label="No actions"
         trigger={<button type="button">More</button>}
         items={[]}
         onOpenChange={onOpenChange}
@@ -26,7 +25,6 @@ describe("ActionMenu", () => {
   it("renders an empty submenu as a disabled item", async () => {
     render(
       <ActionMenu
-        label="More actions"
         trigger={<button type="button">More</button>}
         items={[{ key: "connect", label: "Connect SDK", children: [] }]}
       />,
@@ -47,7 +45,6 @@ describe("ActionMenu", () => {
     const onPick = vi.fn();
     render(
       <ActionMenu
-        label="More actions"
         trigger={<button type="button">More</button>}
         items={[
           { key: "edit", label: "Edit definition", onSelect: onEdit },

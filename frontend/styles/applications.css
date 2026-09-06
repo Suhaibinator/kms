@@ -100,6 +100,11 @@
       var(--bg);
     background-attachment: local, local, scroll, scroll;
   }
+  /* The scroller is focusable so keyboard users can reach offscreen columns. */
+  .pipeline-scroll:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
   .pipeline {
     display: grid;
     grid-auto-flow: column;
@@ -163,11 +168,23 @@
     gap: var(--space-2);
     min-height: var(--control-h-sm);
   }
-  .pipeline-row-action {
+  /* Copy key / Manage / Edit & ship sit together at the row's far edge. */
+  .pipeline-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     margin-left: auto;
   }
-  .pipeline-drift {
-    display: inline-flex;
+  .pipeline-release-meta {
+    color: var(--text-faint);
+    font-size: var(--text-sm);
+  }
+  a.pipeline-release-meta {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  a.pipeline-release-meta:hover {
+    color: var(--text);
   }
   .pipeline-other-keys {
     color: var(--text-muted);

@@ -30,10 +30,11 @@ export interface OverviewFreshness {
 }
 
 /**
- * Lifecycle or release activations that differ between two overviews of the
- * same application, as value-free lines ("application archived by alice" or
- * "prod: runtime@13 activated at rev 13 by alice"). Environments that appeared
- * or disappeared count as well.
+ * Lifecycle, release activations or value writes that differ between two
+ * overviews of the same application, as value-free lines ("application
+ * archived by alice", "prod: runtime@13 activated at rev 13 by alice",
+ * "prod: `rate_limits` is now v5"). Environments that appeared or disappeared
+ * count as well.
  */
 export function releaseMovements(prev: ApplicationOverview, next: ApplicationOverview): string[] {
   const before = new Map(prev.environments.map((env) => [env.namespace.env, env]));
@@ -66,12 +67,19 @@ export function releaseMovements(prev: ApplicationOverview, next: ApplicationOve
     const was = old.release.active?.activation_revision ?? 0;
     const active = env.release.active;
     const now = active?.activation_revision ?? 0;
-    if (was === now) continue;
-    lines.push(
-      active
-        ? `${name}: ${active.name}@${active.version} activated at rev ${active.activation_revision}${active.created_by ? ` by ${active.created_by}` : ""}`
-        : `${name}: no release is active any more`,
-    );
+    if (was !== now) {
+      lines.push(
+        active
+          ? `${name}: ${active.name}@${active.version} activated at rev ${active.activation_revision}${active.created_by ? ` by ${active.created_by}` : ""}`
+          : `${name}: no release is active any more`,
+      );
+    }
+    // A value written elsewhere moves the drift badge and the Ship preview.
+    const versions = new Map(old.values.map((value) => [value.alias, value.current_version]));
+    for (const value of env.values) {
+      if (!value.present || value.current_version === versions.get(value.alias)) continue;
+      lines.push(`${name}: \`${value.alias}\` is now v${value.current_version ?? 0}`);
+    }
   }
   for (const name of before.keys()) {
     if (!after.has(name)) lines.push(`${name}: environment removed`);
@@ -81,7 +89,10 @@ export function releaseMovements(prev: ApplicationOverview, next: ApplicationOve
 
 const changedToastId = (name: string) => `overview-changed:${name}`;
 
-export function useApplicationOverview(name: string): {
+export function useApplicationOverview(
+  name: string,
+  { paused = false }: { paused?: boolean } = {},
+): {
   /** Only ever the slot for `name`; null before the first response. */
   slot: OverviewSlot | null;
   loading: boolean;
@@ -102,6 +113,10 @@ export function useApplicationOverview(name: string): {
   const loadingRef = useRef(false);
   // Bumped when a reload starts; a check that began before it is discarded.
   const generationRef = useRef(0);
+  // While the operator is writing values (a write modal open, possibly mid-retry),
+  // their own writes must not come back as "changed elsewhere" under that modal.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   const reload = useCallback(async () => {
     if (!name) return;
@@ -162,7 +177,14 @@ export function useApplicationOverview(name: string): {
     let disposed = false;
     const check = async () => {
       const shown = shownRef.current;
-      if (disposed || document.hidden || loadingRef.current || controller || shown?.name !== name) {
+      if (
+        disposed ||
+        pausedRef.current ||
+        document.hidden ||
+        loadingRef.current ||
+        controller ||
+        shown?.name !== name
+      ) {
         return;
       }
       const generation = generationRef.current;

@@ -68,7 +68,6 @@ export function SensitiveValueField({
           {`${visible ? "Hide" : "Show"} ${controlLabel}`}
         </Button>
         <ActionMenu
-          label={`Generate a random ${controlLabel}`}
           align="start"
           trigger={
             <Button

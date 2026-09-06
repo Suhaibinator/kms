@@ -1,13 +1,24 @@
 import { ChevronDown, GitCompareArrows, RotateCcw, Trash2 } from "lucide-react";
 import { type Ref, useId, useRef, useState } from "react";
+import { AddResourceButton } from "@/components/applications/AddResourceButton";
+import { ResourceLink } from "@/components/applications/ResourceLink";
 import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Badge, Button, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { assignRef } from "@/lib/forms";
 import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
-import type { Application, EnvironmentOverview } from "@/lib/types";
-import { addableAliases, rowChanged, type ShipRow, shownRowError, valueFor } from "./model";
+import type { Application, EnvironmentOverview, OverviewValue } from "@/lib/types";
+import {
+  addableAliases,
+  pinnedSecrets,
+  rowChanged,
+  type ShipRow,
+  shownRowError,
+  valueFor,
+} from "./model";
 
 /** Above this many rows the editor folds each one to a line until it is opened. */
 export const COLLAPSE_ROWS_ABOVE = 3;
@@ -28,8 +39,12 @@ export interface ShipEditorProps {
   onAddRow: (alias: string) => void;
   onRemoveRow: (alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
+  /** Opens a pinned secret's workspace in place; without it Manage navigates. */
+  onOpenSecret?: (env: string, key: string) => void;
   /** The Environment select's trigger — the step's first control, for the modal's `initialFocus`. */
   initialFocusRef?: Ref<HTMLElement>;
+  /** Each row's value control (or its expand button while folded), for focus management. */
+  registerControl?: (alias: string, node: HTMLElement | null) => void;
 }
 
 function firstLine(value: string): string {
@@ -47,6 +62,7 @@ function RowCard({
   onToggle,
   onChange,
   onRemove,
+  controlRef,
 }: {
   row: ShipRow;
   env: EnvironmentOverview | null;
@@ -57,6 +73,8 @@ function RowCard({
   onToggle: () => void;
   onChange: (patch: Partial<ShipRow>) => void;
   onRemove: () => void;
+  /** Receives the row's value control, or its expand button while folded. */
+  controlRef?: Ref<HTMLElement>;
 }) {
   const current = valueFor(env, row.alias);
   const error = shownRowError(row);
@@ -166,6 +184,7 @@ function RowCard({
             {row.value ? firstLine(row.value) : <span className="faint">(no value)</span>}
           </span>
           <button
+            ref={(node) => assignRef(controlRef, node)}
             type="button"
             className="ship-row-expand"
             aria-expanded={false}
@@ -201,6 +220,7 @@ function RowCard({
               disabled={disabled}
               aria-label={`${row.alias} value`}
               rows={6}
+              inputRef={controlRef}
               onChange={(value) => onChange({ value, reuseVersion: undefined, touched: true })}
             />
           </Field>
@@ -224,6 +244,48 @@ function RowCard({
   );
 }
 
+/**
+ * One present secret and how the release will carry it: the pin the active
+ * release already holds, or the version a first release will pin. Secrets are
+ * never typed here, so the only action is Manage.
+ */
+function SecretPin({
+  value,
+  environment,
+  app,
+  onOpen,
+}: {
+  value: OverviewValue;
+  environment: string;
+  app: string;
+  onOpen?: (env: string, key: string) => void;
+}) {
+  const pin =
+    value.pinned_version !== undefined
+      ? `pinned v${value.pinned_version}`
+      : `will pin v${value.current_version ?? "?"}`;
+  return (
+    <li className="ship-secret-pin" data-testid={`ship-secret-pin-${value.alias}`}>
+      <Ident kind="alias" value={value.alias} />
+      <span className="faint text-sm">{pin}</span>
+      {value.bound && value.current_version !== undefined ? (
+        <BindingKeyBadge version={value.current_version} />
+      ) : null}
+      <ResourceLink
+        kind="secret"
+        button
+        env={environment}
+        app={app}
+        keyName={value.key ?? value.alias}
+        onOpen={onOpen}
+        className="ship-secret-pin-manage"
+      >
+        Manage
+      </ResourceLink>
+    </li>
+  );
+}
+
 /** The Change step: environment picker, blocker rows for missing secrets, one editor per parameter. */
 export function ShipEditor({
   application,
@@ -239,10 +301,14 @@ export function ShipEditor({
   onAddRow,
   onRemoveRow,
   onAddSecret,
+  onOpenSecret,
   initialFocusRef,
+  registerControl,
 }: ShipEditorProps) {
   const envSelectId = useId();
+  const pinsId = useId();
   const addable = addableAliases(application, rows);
+  const pins = pinnedSecrets(env);
   // With many rows each folds to a line until opened; a row with a problem or
   // an edit in progress stays open on its own.
   const collapsible = rows.length > COLLAPSE_ROWS_ABOVE;
@@ -296,18 +362,33 @@ export function ShipEditor({
                 <Ident kind="alias" value={alias} /> is a secret with no value in this environment.
                 Secret values are never typed here; add one first and it will be pinned.
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
+              <AddResourceButton
+                kind="secret"
                 disabled={disabled}
                 onClick={() => onAddSecret(environment, alias)}
-              >
-                Add secret
-              </Button>
+              />
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {pins.length > 0 ? (
+        <section className="ship-secret-pins-section" aria-labelledby={pinsId}>
+          <h4 id={pinsId} className="ship-subtitle">
+            Secrets pinned in this release
+          </h4>
+          <ul className="ship-secret-pins" data-testid="ship-secret-pins">
+            {pins.map((value) => (
+              <SecretPin
+                key={value.alias}
+                value={value}
+                environment={environment}
+                app={application.name}
+                onOpen={onOpenSecret}
+              />
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {rows.length === 0 ? (
@@ -331,6 +412,7 @@ export function ShipEditor({
               }
               onChange={(patch) => onRowChange(row.alias, patch)}
               onRemove={() => onRemoveRow(row.alias)}
+              controlRef={(node) => registerControl?.(row.alias, node)}
             />
           ))}
         </ul>

@@ -128,7 +128,7 @@ export function ConflictPanel({
               ))}{" "}
               {written.length === 1 ? "stays" : "stay"} saved as parameter{" "}
               {written.length === 1 ? "version" : "versions"}, but no release pins{" "}
-              {written.length === 1 ? "it" : "them"}; you can re-preview later from Quick change.
+              {written.length === 1 ? "it" : "them"}; you can re-preview later from Ship.
             </>
           }
           confirmLabel="Close"

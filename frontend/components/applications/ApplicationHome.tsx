@@ -20,6 +20,7 @@ import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
+import { releaseKey } from "@/components/releases/utils";
 import { StatusChip } from "@/components/StatusChip";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import RollbackDialog from "@/components/ship/RollbackDialog";
@@ -29,16 +30,24 @@ import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
-import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
+import {
+  api,
+  isSecretAlreadyExists,
+  type ResourceRef,
+  SECRET_ALREADY_EXISTS_MESSAGE,
+} from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
+import { valueFor, valueForKey } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
   Finding,
   HealthResponse,
+  ReleaseEntryKind,
+  ShipResult,
 } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
@@ -61,6 +70,8 @@ export interface ApplicationHomeProps {
   reload: () => Promise<void>;
   /** When the overview was loaded and whether it is known to be behind. */
   freshness?: OverviewFreshness;
+  /** True while a write modal is open, so the page can pause its background change check. */
+  onWritingChange?: (writing: boolean) => void;
   /** `?env=`: the pipeline column to focus and the default Ship environment. */
   env: string | null;
   /** `?ship=`: `1` opens the Ship modal, an alias also prefills a row. Each new value seeds once. */
@@ -105,7 +116,6 @@ function EnvironmentAction({
   }
   return (
     <ActionMenu
-      label={`${label} environment`}
       open={open}
       onOpenChange={onOpenChange}
       trigger={
@@ -158,6 +168,7 @@ export function ApplicationHome({
   loading,
   reload,
   freshness,
+  onWritingChange,
   env,
   ship,
   tab,
@@ -201,21 +212,19 @@ export function ApplicationHome({
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
-  const [parameterTarget, setParameterTarget] = useState<{
-    env: string;
-    app: string;
-    key: string;
-  } | null>(null);
-  const [secretTarget, setSecretTarget] = useState<{
-    env: string;
-    app: string;
-    key: string;
-  } | null>(null);
+  // Ship is waiting for the secret; opening its workspace on top would hide the modal.
+  const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
+  const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
   const [secretSaving, setSecretSaving] = useState(false);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
   const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
+  const writing = writeRow !== null;
+  useEffect(() => {
+    onWritingChange?.(writing);
+    return () => onWritingChange?.(false);
+  }, [writing, onWritingChange]);
   const [writeSaving, setWriteSaving] = useState(false);
   const [lifecycleSaving, setLifecycleSaving] = useState(false);
 
@@ -263,9 +272,32 @@ export function ApplicationHome({
     };
   }, [connectEnv, health]);
 
-  function closeShip() {
+  /** Land on the column that was open in Ship, and drop `?ship=` so it cannot reopen. */
+  function closeShip(environment?: string) {
     setShipTarget(null);
-    if (ship) replaceQuery({ ship: "" });
+    if (ship || environment)
+      replaceQuery({ ship: "", ...(environment ? { env: environment } : {}) });
+  }
+
+  function onShipped(result: ShipResult, environment: string) {
+    const release = result.release;
+    if (result.status === "activated" && release) {
+      toast.success(`Shipped ${release.name}@${release.version} to ${environment}`, undefined, {
+        action: {
+          label: "Open release",
+          onClick: () =>
+            void router.push(
+              links.releases({
+                app: application.name,
+                env: environment,
+                name: release.name,
+                release: releaseKey(release),
+              }),
+            ),
+        },
+      });
+    }
+    void reload();
   }
 
   function closeRollback() {
@@ -273,13 +305,16 @@ export function ApplicationHome({
     if (rollback) replaceQuery({ rollback: "" });
   }
 
-  function openAddValue(environment: string, alias: string) {
-    const value = environments
-      .find((candidate) => candidate.namespace.env === environment)
-      ?.values.find((candidate) => candidate.alias === alias);
+  /** Write one parameter by its physical key (a matrix cell). */
+  function openAddValueForKey(environment: string, key: string) {
     setRetryEnvironments(null);
     setWriteTargets([environment]);
-    setWriteRow({ key: value?.key ?? alias, kind: "parameter", environments: {} });
+    setWriteRow({ key, kind: "parameter", environments: {} });
+  }
+
+  /** Write the parameter a contract alias resolves to (a pipeline row or a finding). */
+  function openAddValue(environment: string, alias: string) {
+    openAddValueForKey(environment, valueFor(environments, environment, alias)?.key ?? alias);
   }
 
   function openWriteRow(row: ApplicationConfigurationRow) {
@@ -298,12 +333,21 @@ export function ApplicationHome({
     }
   }
 
-  function openSecret(environment: string, alias: string) {
-    setSecretSeed({ environment, key: alias });
+  /** Quick-add a secret for an alias: the key the alias resolves to, typed like a sibling environment's value. */
+  function openSecret(environment: string, alias: string, then?: QuickSecretSeed["then"]) {
+    const value = valueFor(environments, environment, alias);
+    const contentType = environments
+      .flatMap((candidate) => candidate.values)
+      .find((candidate) => candidate.alias === alias && candidate.content_type)?.content_type;
+    setSecretSeed({ environment, key: value?.key ?? alias, contentType, then });
   }
 
   function openExistingSecret(environment: string, key: string) {
     setSecretTarget({ env: environment, app: application.name, key });
+  }
+
+  function openExistingParameter(environment: string, key: string) {
+    setParameterTarget({ env: environment, app: application.name, key });
   }
 
   function onSetupAction(action: SetupAction) {
@@ -338,10 +382,7 @@ export function ApplicationHome({
   /** The key a finding's alias resolves to in its environment (falls back to the alias). */
   function keyFor(finding: Finding): string {
     const alias = finding.scope.alias ?? "";
-    const environment = environments.find(
-      (candidate) => candidate.namespace.env === finding.scope.env,
-    );
-    return environment?.values.find((value) => value.alias === alias)?.key ?? alias;
+    return valueFor(environments, finding.scope.env ?? "", alias)?.key ?? alias;
   }
 
   // Every FixAction in lib/readiness.ts lands somewhere on this page or on the
@@ -370,7 +411,7 @@ export function ApplicationHome({
         openSecret(scopeEnv ?? "", finding.scope.alias ?? "");
         break;
       case "open_resource":
-        setParameterTarget({ ...ns, key: keyFor(finding) });
+        openExistingParameter(ns.env, keyFor(finding));
         break;
       case "open_secret":
         openExistingSecret(ns.env, keyFor(finding));
@@ -403,6 +444,29 @@ export function ApplicationHome({
   const rollbackTarget = activeEnvironments.find(
     (environment) => environment.namespace.env === rollbackEnv,
   );
+  // The alias the open secret serves, read from the overview's resolved values.
+  /** The alias behind an opened resource plus a way back to its column, shown under the workspace title. */
+  function workspaceContext(target: ResourceRef, kind: ReleaseEntryKind) {
+    const alias = valueForKey(
+      environments.find((candidate) => candidate.namespace.env === target.env),
+      kind,
+      target.key,
+    )?.alias;
+    return (
+      <span className="row-wrap">
+        {alias ? <Ident kind="alias" value={alias} tooltip={false} /> : null}
+        <Ident
+          kind="app"
+          value={application.name}
+          tooltip={false}
+          href={links.application(application.name, {
+            env: target.env,
+            tab: tab === "matrix" ? "matrix" : undefined,
+          })}
+        />
+      </span>
+    );
+  }
 
   async function setArchived(next: boolean) {
     if (lifecycleSaving) return;
@@ -531,7 +595,7 @@ export function ApplicationHome({
               onClick={() => setShipTarget({ env: defaultShipEnv })}
             >
               <Send size={15} />
-              Quick change
+              Ship
             </Button>
             <EnvironmentAction
               label="Roll back"
@@ -542,7 +606,6 @@ export function ApplicationHome({
               onOpenChange={setRollbackMenuOpen}
             />
             <ActionMenu
-              label="More actions"
               items={moreItems}
               trigger={
                 <Button type="button" variant="outline" aria-label="More actions">
@@ -606,9 +669,12 @@ export function ApplicationHome({
                 onAddValue: openAddValue,
                 onAddSecret: openSecret,
                 onOpenSecret: openExistingSecret,
+                onOpenParameter: openExistingParameter,
                 onShip: (environment, alias) => setShipTarget({ env: environment, alias }),
                 onRollback: setRollbackEnv,
                 onConnect: setConnectEnv,
+                onImportDefaults: setDefaultsEnv,
+                onEditContract: () => setDefinition({ prefill: null }),
                 onFix,
               }}
             />
@@ -645,12 +711,12 @@ export function ApplicationHome({
                 env: environment.namespace.env,
                 production: environment.production,
               }))}
+              overview={environments}
               rows={overview.rows}
-              onAddSecret={openSecret}
+              onAddSecret={(environment, key) => setSecretSeed({ environment, key })}
+              onAddValue={openAddValueForKey}
               onOpenSecret={openExistingSecret}
-              onOpenParameter={(env, key) =>
-                setParameterTarget({ env, app: application.name, key })
-              }
+              onOpenParameter={openExistingParameter}
               onEdit={openWriteRow}
             />
           </TabsContent>
@@ -665,8 +731,10 @@ export function ApplicationHome({
         initialAlias={shipTarget?.alias}
         open={!archived && shipTarget !== null}
         onClose={closeShip}
-        onShipped={() => void reload()}
-        onAddSecret={openSecret}
+        onShipped={onShipped}
+        onAddSecret={(environment, alias) => openSecret(environment, alias, "stay")}
+        onOpenSecret={openExistingSecret}
+        onRolledBack={() => void reload()}
       />
       <RollbackDialog
         namespace={{ env: rollbackEnv ?? "", app: application.name }}
@@ -731,12 +799,14 @@ export function ApplicationHome({
         seed={cloneSeed}
         open={!archived && cloneOpen}
         onClose={() => setCloneOpen(false)}
-        onCreated={() => {
+        onCreated={(result) => {
           setCloneOpen(false);
+          replaceQuery({ env: result.namespace.env });
           void reload();
         }}
         onAddSecret={(environment, alias) => {
           setCloneOpen(false);
+          replaceQuery({ env: environment });
           void reload();
           openSecret(environment, alias);
         }}
@@ -800,19 +870,22 @@ export function ApplicationHome({
           }
         }}
         onCreated={(ref) => {
+          // A secret added for Ship returns to the modal that asked for it.
+          if (secretSeed?.then !== "stay") setSecretTarget(ref);
           setSecretSeed(null);
-          setSecretTarget(ref);
           void reload();
         }}
       />
       <ParameterWorkspace
         parameterRef={parameterTarget}
+        context={parameterTarget ? workspaceContext(parameterTarget, "parameter") : undefined}
         onClose={() => setParameterTarget(null)}
         onChanged={() => void reload()}
         onDeleted={() => void reload()}
       />
       <SecretWorkspace
         secretRef={secretTarget}
+        context={secretTarget ? workspaceContext(secretTarget, "secret") : undefined}
         onClose={() => setSecretTarget(null)}
         onChanged={() => void reload()}
         onDeleted={() => void reload()}
