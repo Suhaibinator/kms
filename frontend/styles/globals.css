@@ -110,6 +110,10 @@
   --space-8: calc(var(--spacing) * 10);
   --space-9: calc(var(--spacing) * 12);
   --space-10: calc(var(--spacing) * 16);
+  /* The one deliberate half-step. Tight stacks (nav rows, the identity card,
+     a checkbox's label over its hint) read as one block at 2px and as a list
+     at 4px; every other spacing value on this scale is a whole step. */
+  --space-0-5: calc(var(--spacing) * 0.5); /* 2px */
 
   --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* --font-inter is injected by next/font/local in _app.tsx; the system stack
@@ -153,6 +157,12 @@
      while the utilities are now --spacing-relative. */
   --control-h: calc(var(--spacing) * 9.5); /* 38px */
   --control-h-sm: calc(var(--spacing) * 7.5); /* 30px — Button size="sm" */
+  /* The touch floor the mobile block lifts every control to. It was written
+     out as `44px` at twenty sites, including a skeleton that had to hard-code
+     it to match the controls it stands in for; naming it is what stops the
+     skeleton drifting from the row. Hit *areas* (an ::after inset) reach this
+     size too, but they are not layout and do not read this token. */
+  --control-h-touch: calc(var(--spacing) * 11); /* 44px */
   /* A field label's line box plus the gap to its control: what a label-less
      button in a filter row has to clear to line up with its neighbours.
      = text-sm x leading-snug (1.375) + gap-1. Derived, never a literal.
@@ -318,6 +328,9 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
+    /* The root font size is what --text-base (14px) and every rem in the
+       Tailwind primitives resolve against; it defines the scale rather than
+       reading from it, so it stays a literal. */
     font-size: 14px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -423,6 +436,9 @@
     place-items: center;
     font-weight: 700;
     color: var(--brand-mark-foreground);
+    /* Brand-mark glyph, not text on the type scale: the letter is sized to a
+       28px gradient tile (18px on the login card, 13px in the mobile top bar).
+       It must not move when the body token moves. */
     font-size: 14px;
   }
   /* The only literal colour outside the two token blocks was this one, and it
@@ -437,11 +453,11 @@
   }
   .sidebar-brand .brand-name {
     font-weight: 700;
-    font-size: 15px;
+    font-size: var(--text-md);
     letter-spacing: 0.02em;
   }
   .sidebar-brand .brand-sub {
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--text-faint);
   }
   /* Every other focusable child of .sidebar is inset 8px, so its 2px outset ring
@@ -456,11 +472,11 @@
     padding: var(--space-3) var(--space-2);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     flex: 1;
   }
   .nav-section-label {
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-faint);
@@ -474,7 +490,7 @@
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     font-weight: 500;
-    font-size: 13.5px;
+    font-size: var(--text-base);
     cursor: pointer;
   }
   .nav-link:hover {
@@ -509,21 +525,21 @@
   .identity-card {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     /* .nav-link's padding, so the card's text starts on the nav labels' edge. */
     padding: var(--space-2) var(--space-3);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
   }
   .identity-card .who {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--text-sm);
     overflow-wrap: anywhere;
   }
   .identity-card .kind {
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--text-faint);
   }
 
@@ -548,13 +564,13 @@
     flex-wrap: wrap;
   }
   .page-title {
-    font-size: 22px;
+    font-size: var(--text-xl);
     overflow-wrap: anywhere;
   }
   .page-subtitle {
     color: var(--text-muted);
     margin-top: var(--space-1);
-    font-size: 13.5px;
+    font-size: var(--text-base);
   }
   .page-actions {
     display: flex;
@@ -585,7 +601,7 @@
     margin-top: var(--space-4);
   }
   .card-title {
-    font-size: 14px;
+    font-size: var(--text-base);
     font-weight: 600;
     margin-bottom: var(--space-3);
     display: flex;
@@ -598,7 +614,7 @@
      text. The levels the app actually uses have to opt back in; 15px separates a
      section from the copy under it. */
   .section-title {
-    font-size: 15px;
+    font-size: var(--text-md);
     font-weight: 600;
   }
   .card-grid {
@@ -655,7 +671,7 @@
     align-items: center;
     min-height: calc(var(--stat-value) * 1.25);
     margin-top: var(--space-1);
-    font-size: 15px;
+    font-size: var(--text-md);
     font-weight: 600;
     overflow-wrap: anywhere;
   }
@@ -691,6 +707,8 @@
   .stack > .field,
   .form-row > .field,
   .schema-form > .field,
+  .ship-env-row > .field,
+  .ship-form > .field,
   .rollback-dialog > .field,
   .advanced-panel-content > .field,
   .schema-form-fields > .field,
@@ -762,7 +780,7 @@
   .checkbox-row {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
+    gap: var(--space-3);
   }
   .checkbox-row label {
     /* Title above hint, always: as a wrapping row the hint printed on the
@@ -771,8 +789,8 @@
     min-width: 0;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
-    font-size: 13px;
+    gap: var(--space-0-5);
+    font-size: var(--text-sm);
     cursor: pointer;
   }
   .checkbox-row + .checkbox-row {
@@ -1161,7 +1179,7 @@
   @media (width < 768px) {
     /* 16px stops iOS from zooming the page on focus; both layers inherit it. */
     .json-editor-body {
-      font-size: 16px;
+      font-size: var(--text-touch);
     }
   }
   @media (width < 640px) {
@@ -1313,7 +1331,7 @@
   table.data {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
   }
   /* --border-strong, not --border, on every rule that separates one row of data
@@ -1325,7 +1343,7 @@
   table.data th {
     text-align: left;
     font-weight: 600;
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-faint);
@@ -1419,7 +1437,7 @@
   table.data td.mono,
   table.data th.mono {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
   }
   /* The wrap scrolls: .table-wrap has been a real scroller since the Sep 2026
      pass, so a wide table no longer widens its ancestors. Breaking mid-token
@@ -1470,7 +1488,7 @@
      identifier, and the scroller — not a mid-word break — absorbs the width. */
   .cell-path {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     color: var(--text);
     overflow-wrap: normal;
   }
@@ -1496,8 +1514,8 @@
      the ::after that grows, not a min-height on the link. */
   @media (width < 768px) {
     .cell-count::after {
-      width: max(44px, 100%);
-      height: 44px;
+      width: max(var(--control-h-touch), 100%);
+      height: var(--control-h-touch);
     }
   }
   .row-actions {
@@ -1758,21 +1776,21 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
   .row-wrap {
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
   .between {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
     flex-wrap: wrap;
   }
   /* Layout rule 2: both of these hold chips, mono strings and button clusters.
@@ -1787,7 +1805,7 @@
   .stack {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--space-4);
   }
   .spacer {
     flex: 1;
@@ -1823,7 +1841,7 @@
        depending only on whether it was editable. 14px closes most of that
        without spending the width 16px costs a read-only block. */
     .json-block {
-      font-size: 14px;
+      font-size: var(--text-base);
     }
   }
 
@@ -2222,7 +2240,7 @@
     }
     /* Matches the floor the halves and every neighbouring control sit on. */
     .value-segment {
-      min-height: 44px;
+      min-height: var(--control-h-touch);
     }
   }
   /* Secret value field (components/secrets/SecretValueField.tsx). The mask is
@@ -2287,8 +2305,8 @@
   .kv {
     display: grid;
     grid-template-columns: 160px 1fr;
-    gap: 8px 18px;
-    font-size: 13px;
+    gap: var(--space-2) var(--space-5);
+    font-size: var(--text-sm);
   }
   .kv dt {
     color: var(--text-faint);
@@ -2301,7 +2319,7 @@
   .divider {
     height: 1px;
     background: var(--border);
-    margin: 18px 0;
+    margin: var(--space-5) 0;
     border: none;
   }
 
@@ -2522,7 +2540,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     line-height: 1.55;
     white-space: pre;
     tab-size: 2;
@@ -2599,6 +2617,9 @@
     background: none;
     padding: var(--space-6) var(--space-4);
   }
+  /* A decorative circle that happens to be the same 44px as the touch floor.
+     It is not a control, so it does not read --control-h-touch: if the floor
+     ever moves, this glyph should not move with it. */
   .empty-state .empty-icon {
     display: grid;
     place-items: center;
@@ -2611,7 +2632,7 @@
     color: var(--text-faint);
   }
   .empty-state .empty-title {
-    font-size: 15px;
+    font-size: var(--text-md);
     color: var(--text-muted);
     font-weight: 600;
     margin-bottom: var(--space-1);
@@ -2651,16 +2672,16 @@
   @media (width < 768px) {
     /* The touch floor lifts sm buttons to 44px, so real rows grow with them. */
     .skeleton-row td {
-      min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + 44px));
+      min-height: var(--skeleton-row-h, calc(var(--space-3) * 2 + var(--control-h-touch)));
     }
   }
 
   .loading-block {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2);
     color: var(--text-muted);
-    padding: 40px;
+    padding: var(--space-8);
     justify-content: center;
   }
   /* ---------- Reduced motion ----------
@@ -2729,10 +2750,11 @@
     place-items: center;
     font-weight: 700;
     color: var(--brand-mark-foreground);
+    /* Brand-mark glyph on a 38px tile — see .sidebar-brand .logo. */
     font-size: 18px;
   }
   .auth-title {
-    font-size: 18px;
+    font-size: var(--text-lg);
     font-weight: 700;
     line-height: 1.25;
   }
@@ -2743,14 +2765,14 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     background: var(--bg-elev);
-    padding: 14px;
+    padding: var(--space-4);
   }
   .reveal-value {
     font-family: var(--mono);
-    font-size: 13.5px;
+    font-size: var(--text-base);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    padding: 10px 12px;
+    padding: var(--space-3);
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -2758,40 +2780,40 @@
     transition: filter 0.12s ease;
   }
   .secret-concealed {
-    padding: 12px;
+    padding: var(--space-3);
     background: var(--bg);
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius-sm);
     color: var(--text-muted);
   }
   .reveal-countdown {
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--warning);
-    margin-top: 8px;
+    margin-top: var(--space-2);
   }
 
   .warn-panel {
     background: var(--warning-soft);
     border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
     border-radius: var(--radius);
-    padding: 13px 15px;
-    font-size: 13px;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
     color: var(--warning-fg);
   }
   .danger-panel {
     background: var(--danger-soft);
     border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
     border-radius: var(--radius);
-    padding: 13px 15px;
-    font-size: 13px;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
     color: var(--danger-fg);
   }
   .info-panel {
     background: var(--accent-soft);
     border: 1px solid var(--accent-border);
     border-radius: var(--radius);
-    padding: 13px 15px;
-    font-size: 13px;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
     color: var(--info-fg);
   }
 
@@ -2846,14 +2868,14 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
   }
   .certificate-map-compact .certificate-role {
     background: var(--surface);
   }
   .certificate-role strong {
     color: var(--text);
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
   .certificate-role code,
   .advanced-panel code,
@@ -2864,7 +2886,7 @@
   }
   .certificate-role-label {
     color: var(--accent-hover);
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -2876,7 +2898,7 @@
     border-radius: var(--radius);
   }
   .advanced-panel > summary {
-    padding: 11px 14px;
+    padding: var(--space-3) var(--space-4);
     color: var(--text-muted);
     cursor: pointer;
     font-weight: 600;
@@ -2924,9 +2946,9 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--space-2);
     color: var(--text-faint);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     font-weight: 600;
   }
   .wizard-step-number {
@@ -2939,7 +2961,7 @@
     border: 1px solid var(--border-strong);
     border-radius: 50%;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
   .wizard-step-current {
     color: var(--text);
@@ -2986,7 +3008,7 @@
     gap: var(--space-3);
     margin-bottom: var(--space-4);
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
   }
   .loading-inline,
   .namespace-load-error {
@@ -3045,7 +3067,7 @@
     border-top: 0;
     border-radius: 0 0 var(--radius) var(--radius);
     color: var(--text);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     line-height: 1.6;
     white-space: pre;
   }
@@ -3055,11 +3077,11 @@
 
   .token-reveal {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--text-sm);
     background: var(--bg);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    padding: 12px;
+    padding: var(--space-3);
     overflow-wrap: anywhere;
     word-break: break-all;
     color: var(--text);
@@ -3292,23 +3314,23 @@
   .environment-check-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 8px;
-    margin-top: 8px;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
   }
 
   .ns-group {
-    margin-bottom: 22px;
+    margin-bottom: var(--space-5);
   }
   .ns-group-title {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 8px;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
   }
   .ns-group-name {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -3336,7 +3358,7 @@
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-sm);
     color: var(--text);
-    font-size: 13px;
+    font-size: var(--text-sm);
     cursor: default;
     text-decoration: none;
     outline: none;
@@ -3375,7 +3397,7 @@
     background: var(--ident-soft, var(--bg-elev));
     color: var(--ident-fg, var(--text));
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--text-sm);
     line-height: 1;
     white-space: nowrap;
     vertical-align: middle;
@@ -3386,7 +3408,7 @@
      mono is enough hierarchy on its own. */
   .ident-kind {
     font-family: var(--sans);
-    font-size: 11px;
+    font-size: var(--text-xs);
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -3478,7 +3500,7 @@
     margin: 0;
     padding: 0;
     list-style: none;
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
   }
   .crumb {
@@ -3582,7 +3604,7 @@
     box-shadow: inset 0 -1px 0 var(--border);
     color: var(--text-muted);
     font-family: var(--sans);
-    font-size: 11px;
+    font-size: var(--text-xs);
     font-weight: 600;
     line-height: 1;
   }
@@ -3602,7 +3624,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface);
     color: var(--text-faint);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     text-align: left;
     cursor: pointer;
   }
@@ -3629,7 +3651,7 @@
     border-bottom: 1px solid var(--border);
     background: var(--accent-soft);
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
   }
 
   /* ---------- Rollout transport (components/TransportBadge.tsx) ---------- */
@@ -3652,7 +3674,7 @@
     border-radius: 999px;
     background: var(--surface);
     color: var(--text-muted);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
     white-space: nowrap;
   }
   .transport-dot {
@@ -3703,7 +3725,7 @@
     border-left-width: 3px;
     border-radius: var(--radius-sm);
     background: var(--surface);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
   }
   .finding-blocking {
     border-left-color: var(--danger);
@@ -3784,8 +3806,8 @@
     .mobile-topbar {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 10px 14px;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
       background: var(--bg-elev);
       border-bottom: 1px solid var(--border);
       position: sticky;
@@ -3795,9 +3817,9 @@
     .mobile-topbar-brand {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: var(--space-2);
       font-weight: 700;
-      font-size: 14px;
+      font-size: var(--text-base);
       letter-spacing: 0.02em;
       color: inherit;
       text-decoration: none;
@@ -3811,6 +3833,7 @@
       place-items: center;
       font-weight: 700;
       color: var(--brand-mark-foreground);
+      /* Brand-mark glyph on a 26px tile — see .sidebar-brand .logo. */
       font-size: 13px;
     }
 
@@ -3822,16 +3845,17 @@
     }
     /* Clears the sheet close button: 44px at a 12px inset on this breakpoint. */
     .mobile-sidebar .sidebar-brand {
-      padding-right: 60px;
+      padding-right: calc(var(--control-h-touch) + var(--space-3) + var(--space-1));
     }
 
-    /* Larger touch targets inside the drawer. */
+    /* Larger touch targets inside the drawer. The padding is what delivers
+       that; the font-size used to bump 13.5px to 14.5px, which is not a touch
+       affordance, and both ends now sit on --text-base. */
     .nav-link {
-      padding: 12px 14px;
-      font-size: 14.5px;
+      padding: var(--space-3) var(--space-4);
     }
     .mobile-sidebar .sidebar-footer [data-slot="button"] {
-      min-height: 44px;
+      min-height: var(--control-h-touch);
     }
 
     .main {
@@ -3840,17 +3864,17 @@
     }
 
     .page {
-      padding: 20px 16px 48px;
+      padding: var(--space-5) var(--space-4) var(--space-9);
     }
     .form-row {
       grid-template-columns: 1fr;
     }
     .kv {
       grid-template-columns: 1fr;
-      gap: 2px 0;
+      gap: var(--space-0-5) 0;
     }
     .kv dt {
-      margin-top: 8px;
+      margin-top: var(--space-2);
     }
     .card-grid {
       grid-template-columns: 1fr;
@@ -3877,16 +3901,16 @@
     /* (0,2,0) beats the 44px touch floor below, so the height has to be
        restated here or the drawer search is the one 40px control in it. */
     .mobile-sidebar .nav-search {
-      min-height: 44px;
-      font-size: 14px;
+      min-height: var(--control-h-touch);
+      font-size: var(--text-base);
       /* The drawer's .nav-link padding, less this field's 1px border. */
-      padding-inline: calc(14px - 1px);
+      padding-inline: calc(var(--space-4) - 1px);
     }
     /* Same edge for the footer rows: the drawer widens .nav-link's inline
        padding to 14px, so the desktop 12px would leave them 2px shy of it. */
     .mobile-sidebar .identity-card,
     .mobile-sidebar .sidebar-theme {
-      padding-inline: 14px;
+      padding-inline: var(--space-4);
     }
     /* The client-identity strip shares the page gutter. */
     .identity-strip {
@@ -3938,11 +3962,11 @@
     /* Touch targets: buttons and inputs get comfortably tappable. */
     [data-slot="button"][data-size="default"],
     [data-slot="button"][data-size="icon"] {
-      min-height: 44px;
+      min-height: var(--control-h-touch);
     }
     [data-slot="input"],
     [data-slot="select-trigger"] {
-      min-height: 44px;
+      min-height: var(--control-h-touch);
     }
     /* Filters and the audit filter row: one full-width field per line. */
     .filters {
@@ -4024,7 +4048,7 @@
       /* The one line between two stacked cards, held to the same 3:1 floor as
          the desktop row separators. */
       border-bottom: 1px solid var(--border-strong);
-      padding: 12px 14px;
+      padding: var(--space-3) var(--space-4);
     }
     .table-wrap.card-table tr:last-child {
       border-bottom: none;
@@ -4039,16 +4063,22 @@
     .table-wrap.card-table td {
       display: block;
       border-bottom: none;
-      padding: 4px 0;
+      padding: var(--space-1) 0;
       white-space: normal;
     }
+    /* 6px, 15px and 3px stay literals on purpose. 15px is the measured line
+       box of the --text-2xs uppercase label below, not a spacing step, and the
+       6px padding and 3px margin are optically balanced against it. Five sites
+       carry these three numbers — this rule, the ::before below, the chevron's
+       `top` calc, and the skeleton's two mirrors near the end of this file —
+       and they only stay in register if all five move together. */
     .table-wrap.card-table td[data-label] {
       padding-top: 6px;
     }
     .table-wrap.card-table td[data-label]::before {
       content: attr(data-label);
       display: block;
-      font-size: 10.5px;
+      font-size: var(--text-2xs);
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
@@ -4058,15 +4088,16 @@
     .table-wrap.card-table .row-actions {
       justify-content: flex-start;
       flex-wrap: wrap;
-      margin-top: 8px;
+      margin-top: var(--space-2);
     }
     /* The chevron is lifted out of flow and pinned right; only the field it
        sits beside has to stay clear of it, which is the first one. The row-wide
        40px inset this replaces indented all seven field values to clear a glyph
-       that appears once. 26px = the 18px glyph plus an 8px gap, measured from
-       the card's own 14px content edge. */
+       that appears once. It is the 18px glyph (a `size={18}` ChevronRight, not
+       a spacing step) plus one --space-2 of gap, measured from the card's own
+       content edge, which is the row's padding-inline. */
     .table-wrap.card-table tr.navigable-row > td:first-child {
-      padding-right: 26px;
+      padding-right: calc(18px + var(--space-2));
     }
     /* Pinned to the first field's value line, not to the card's middle: at
        `top: 50%` the glyph landed six fields down a 395px card and read as
@@ -4077,8 +4108,8 @@
     .table-wrap.card-table td.navigable-row-chevron,
     .table-wrap.card-table .navigable-row-end > .navigable-row-chevron {
       position: absolute;
-      top: calc(12px + 6px + 15px + 3px);
-      right: 14px;
+      top: calc(var(--space-3) + 6px + 15px + 3px);
+      right: var(--space-4);
       display: flex;
       align-items: center;
       width: auto;
@@ -4107,19 +4138,18 @@
 
   @media (width < 480px) {
     .page-title {
-      font-size: 19px;
+      font-size: var(--text-lg);
     }
     .card,
     .stat {
-      padding: 14px 16px;
+      padding: var(--space-4);
     }
 
     .wizard-selection-summary {
       grid-template-columns: 1fr;
     }
-    .wizard-step {
-      font-size: 11px;
-    }
+    /* `.wizard-step { font-size: 11px }` stood here. It was a 0.5px shrink off
+       the desktop 11.5px, and both ends are --text-xs now, so it said nothing. */
 
     .auth-wrap {
       padding: var(--space-4);
@@ -4152,8 +4182,8 @@
   .theme-switch {
     margin: 0;
     display: inline-flex;
-    gap: 2px;
-    padding: 2px;
+    gap: var(--space-0-5);
+    padding: var(--space-0-5);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -4198,7 +4228,7 @@
     gap: var(--space-2);
     margin-bottom: var(--space-2);
     padding-inline: var(--space-3);
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
   }
   .auth-foot {
@@ -4214,10 +4244,24 @@
   }
 }
 
+/* The type scale. Every one of these names is also a Tailwind utility
+   (`text-sm`, `text-base`, …), so a value here is what both the hand-written
+   rules and the utilities render — that is the point, and it is also the trap:
+   changing one of the five names Tailwind ships by default restyles every
+   component using that utility. `text-base` has seven users (Input, Textarea,
+   CardTitle, FieldLegend, and the Dialog/Sheet/AlertDialog titles), so
+   --text-base is pinned at 14px, the root font size those components already
+   resolved 1rem to. --text-2xs/-md/-touch are ours; --text-lg had no users. */
 @theme {
   --spacing: 4px;
-  --text-sm: 12.5px; /* exactly what the legacy `.text-sm` rule produces */
+  --text-2xs: 10.5px; /* uppercase micro-labels */
   --text-xs: 11.5px; /* was 10.5px — below the 11px floor the rest of the chrome keeps */
+  --text-sm: 12.5px; /* exactly what the legacy `.text-sm` rule produces */
+  --text-base: 14px; /* body and chrome; = 1rem at this root, do not move */
+  --text-md: 15px; /* section titles */
+  --text-lg: 19px; /* page titles below 480px, and the login heading */
+  --text-xl: 22px; /* the desktop page title, the largest text in the console */
+  --text-touch: 16px; /* the iOS no-zoom floor for a focusable field */
 }
 
 @theme inline {
@@ -4304,16 +4348,16 @@
       overflow-wrap: anywhere;
     }
     .page {
-      padding-left: max(16px, env(safe-area-inset-left));
-      padding-right: max(16px, env(safe-area-inset-right));
-      padding-bottom: max(48px, env(safe-area-inset-bottom));
+      padding-left: max(var(--space-4), env(safe-area-inset-left));
+      padding-right: max(var(--space-4), env(safe-area-inset-right));
+      padding-bottom: max(var(--space-9), env(safe-area-inset-bottom));
     }
     .mobile-topbar {
-      padding-top: max(10px, env(safe-area-inset-top));
+      padding-top: max(var(--space-3), env(safe-area-inset-top));
     }
     .bulk-bar {
       flex-wrap: wrap;
-      bottom: max(12px, env(safe-area-inset-bottom));
+      bottom: max(var(--space-3), env(safe-area-inset-bottom));
     }
     /* The spacer means "push the actions to the right" on a single line; once
        the bar wraps it is gone from the second line and the two buttons fall
@@ -4339,8 +4383,8 @@
       content: "";
       position: absolute;
       inset: 50% auto auto 50%;
-      width: 44px;
-      height: 44px;
+      width: var(--control-h-touch);
+      height: var(--control-h-touch);
       transform: translate(-50%, -50%);
     }
     /* Keyed on [data-size], not [data-slot="button"]: a Base UI `render={<Button/>}`
@@ -4364,16 +4408,16 @@
     [role="menuitem"],
     [role="option"],
     summary {
-      min-height: 44px;
-      min-width: 44px;
+      min-height: var(--control-h-touch);
+      min-width: var(--control-h-touch);
     }
     [data-slot="input"],
     [data-slot="textarea"],
     [data-slot="select-trigger"],
     textarea,
     select {
-      font-size: 16px;
-      min-height: 44px;
+      font-size: var(--text-touch);
+      min-height: var(--control-h-touch);
       max-width: 100%;
     }
     /* The 44px target is reserved in the column, not on the 16px ink: the
@@ -4381,7 +4425,7 @@
        layout, so the cell has to be the thing that makes room for it. */
     table.data td.select-cell,
     table.data th.select-cell {
-      width: 44px;
+      width: var(--control-h-touch);
     }
     /* A single-line label centres on its checkbox; a label that stacks a title
        over a hint keeps the box beside its first line, which is what
@@ -4403,7 +4447,7 @@
     }
     .mobile-comparison-hint {
       display: block;
-      padding: 12px;
+      padding: var(--space-3);
       color: var(--text-muted);
     }
     /* The rows stack to one column here, so a caption row above them would name
@@ -4454,11 +4498,11 @@
          so the two cannot drift apart. 44px is the touch floor the block above
          gives every control; it becomes --control-h-touch when that token
          lands. */
-      --mobile-select-h: 44px;
+      --mobile-select-h: var(--control-h-touch);
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
-      padding: 12px;
+      gap: var(--space-3);
+      padding: var(--space-3);
       /* Divides the toolbar band from the first card, like the row separators. */
       border-bottom: 1px solid var(--border-strong);
       /* Pinned to the scroll port, not to the table's content box: the toolbar
@@ -4478,16 +4522,22 @@
       flex: 1 1 120px;
       min-width: 0;
       flex-direction: column;
-      gap: 6px;
-      font-size: 13px;
+      /* The same label-to-control gap every .field uses (it is the `gap-1`
+         --label-offset is derived from); this was 6px, off that by 2. */
+      gap: var(--space-1);
+      font-size: var(--text-sm);
     }
     .mobile-sort-field {
       position: relative;
     }
     /* Anchored to the select, which is the field's last child and so shares its
        bottom edge: the glyph's centre sits half a select above it. The old
-       literal 20px only held while the label was exactly 19.5px + 6px + 44px,
-       and measured 1.5px above the control's centre. */
+       literal 20px only held while the label was exactly 19.5px + 6px + 44px
+       (the gap above is 4px now, which is exactly why 20px could not hold),
+       and measured 1.5px above the control's centre. The 7px in that calc is
+       the glyph's own size, repeated below, not a spacing step; and `right`
+       is hand-placed inside the select's 32px trailing gutter rather than
+       centred in it, so neither reads the space scale. */
     .mobile-sort-field::after {
       content: "";
       position: absolute;
@@ -4528,7 +4578,7 @@
     }
     .mobile-list-hint {
       flex-basis: 100%;
-      font-size: 12px;
+      font-size: var(--text-sm);
       color: var(--text-muted);
     }
     .table-wrap.card-table td,
@@ -4593,7 +4643,7 @@
        buttons, their gap and the band's own padding — so the body keeps one
        height across the steps instead of jumping 52px under the reader. */
     [data-slot="dialog-footer"].modal-footer-steps {
-      min-height: calc(2 * 44px + var(--space-2) + 2 * 12px);
+      min-height: calc(2 * var(--control-h-touch) + var(--space-2) + 2 * var(--space-3));
     }
   }
 
@@ -4625,7 +4675,7 @@
     }
     [data-mobile-fullscreen] > [data-slot="dialog-header"],
     [data-mobile-fullscreen] > [data-slot="dialog-footer"] {
-      padding-block: 12px;
+      padding-block: var(--space-3);
       padding-inline: var(--modal-pad);
     }
     [data-mobile-fullscreen] > [data-modal-body] {
@@ -4637,13 +4687,13 @@
        positioned box is offset from the padding edge — the max() counted it
        twice and put the ✕ a notch's height below the physical top. */
     [data-mobile-fullscreen] > [data-slot="dialog-close"] {
-      top: 8px;
-      right: 8px;
+      top: var(--space-2);
+      right: var(--space-2);
     }
     [data-slot="input"],
     [data-slot="textarea"],
     [data-slot="select-trigger"] {
-      font-size: 16px;
+      font-size: var(--text-touch);
     }
     /* The 44px touch area is this pseudo-element and nothing else: it is
        absolutely positioned, so it costs no layout. The `margin: 14px` that

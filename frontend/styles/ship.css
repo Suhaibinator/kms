@@ -76,7 +76,7 @@
     margin: 0;
     /* 14px is the console's section-title size; it has no token yet (the type
        scale is Lane H's, css 20). Keep this and .rollout-progress together. */
-    font-size: 14px;
+    font-size: var(--text-base);
     font-weight: 700;
     color: var(--text);
   }
@@ -136,12 +136,14 @@
      Environment select stretched to 526px beside a 320px "Add change…"), and
      `margin-bottom: 0` lost to `.field { margin-bottom: 16px }` outright,
      stacking 16px on top of the container's own gap. Both are structural, so
-     they carry the parent's class. .ship-editor and .ship-form belong in the
-     shared reset list in globals.css; until then this stands in for it. */
+     they carry the parent's class. The `margin-bottom: 0` half of this rule is
+     gone: the shared reset list in globals.css carries it now. Note the
+     selectors there are `.ship-env-row > .field` and `.ship-form > .field` —
+     `.ship-env-field` is a child of the row, not of `.ship-editor`, so the
+     obvious `.ship-editor > .field` would have matched nothing. */
   .ship-editor .ship-env-field,
   .ship-form .ship-confirm {
     max-width: 320px;
-    margin-bottom: 0;
   }
   /* Sits beside the environment select: the same control height keeps the
      text centred on the select rather than hanging off its bottom edge. */
@@ -414,7 +416,7 @@
      the same column. Bleed it through the panel's 15px inline padding so both
      share one left edge. */
   .ship-modal .danger-panel .table-wrap {
-    margin-inline: -15px;
+    margin-inline: calc(var(--space-4) * -1);
     width: auto;
   }
   .ship-valid {
@@ -490,7 +492,7 @@
     gap: var(--space-2);
     flex-wrap: wrap;
     /* The section-title size (see .ship-section-title); 15px was off-scale. */
-    font-size: 14px;
+    font-size: var(--text-base);
   }
   .rollout-tools {
     display: flex;
@@ -582,8 +584,8 @@
        label's first line even when the label wraps. */
     .ship-optin,
     .ship-mode-toggle {
-      min-height: 44px;
-      padding-block: calc((44px - 1lh) / 2);
+      min-height: var(--control-h-touch);
+      padding-block: calc((var(--control-h-touch) - 1lh) / 2);
     }
     .ship-facts,
     .conflict-facts {
