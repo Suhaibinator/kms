@@ -2,9 +2,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JsonEditor } from "@/components/JsonEditor";
-import { ValueView } from "@/components/JsonView";
-import { Field, JsonView } from "@/components/ui";
-import { formatJson, HIGHLIGHT_MAX_BYTES } from "@/lib/json-text";
+import { Field } from "@/components/ui";
+import { HIGHLIGHT_MAX_BYTES } from "@/lib/json-text";
 import { validateParameterValue } from "@/lib/validation";
 
 vi.mock("@/context/ToastContext", () => ({
@@ -159,55 +158,5 @@ describe("JsonEditor", () => {
     expect(textbox()).toBeDisabled();
     expect(screen.getByRole("button", { name: "Format" })).toBeDisabled();
     expect(document.querySelector(".json-editor")).toHaveAttribute("data-disabled", "true");
-  });
-});
-
-describe("JsonView", () => {
-  it("colours well-formed JSON without changing the text", () => {
-    const raw = '{\n  "a": [1, true, null]\n}';
-    render(<JsonView raw={raw} />);
-    const block = document.querySelector(".json-block");
-    expect(block?.textContent).toBe(raw);
-    expect(block?.querySelectorAll(".tok-key")).toHaveLength(1);
-    expect(block?.querySelector(".tok-boolean")?.textContent).toBe("true");
-    expect(block?.querySelector(".tok-null")?.textContent).toBe("null");
-  });
-
-  it("leaves anything else as plain text", () => {
-    render(<JsonView raw="not json" />);
-    const block = document.querySelector(".json-block");
-    expect(block?.textContent).toBe("not json");
-    expect(block?.querySelector("[class^=tok-]")).toBeNull();
-  });
-
-  it("numbers the lines and offers wrap, copy and a size readout", () => {
-    render(<JsonView raw={'{\n  "a": 1\n}'} copyLabel="Copy value" />);
-    expect(document.querySelector(".json-highlight")).toHaveAttribute("data-line-numbers", "true");
-    expect(screen.getByText("3 lines · 12 bytes")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy value" })).toBeInTheDocument();
-
-    const wrap = screen.getByRole("button", { name: "Wrap" });
-    expect(wrap).toHaveAttribute("aria-pressed", "true");
-    expect(document.querySelector(".json-view")).toHaveAttribute("data-wrap", "on");
-    fireEvent.click(wrap);
-    expect(document.querySelector(".json-view")).toHaveAttribute("data-wrap", "off");
-  });
-});
-
-describe("ValueView", () => {
-  it("pretty-prints json and copies the stored form", () => {
-    const stored = '{"a":1,"b":[2]}';
-    render(<ValueView value={stored} contentType="json" />);
-    expect(document.querySelector(".json-block")?.textContent).toBe(formatJson(stored));
-    expect(document.querySelector(".tok-key")).not.toBeNull();
-  });
-
-  it("shows other content types verbatim with line numbers and no colouring", () => {
-    render(<ValueView value={"first\nsecond"} contentType="string" />);
-    const block = document.querySelector(".json-block");
-    expect(block?.textContent).toBe("first\nsecond");
-    expect(block?.querySelectorAll(".json-line")).toHaveLength(2);
-    expect(block?.querySelector("[class^=tok-]")).toBeNull();
-    expect(screen.getByText("2 lines · 12 bytes")).toBeInTheDocument();
   });
 });

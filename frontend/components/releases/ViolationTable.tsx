@@ -24,7 +24,7 @@ export interface ViolationTableProps {
 export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTableProps) {
   const actionable = Boolean(resolveHref || onEdit);
   return (
-    <div className="table-wrap mt-3 card-table">
+    <div className="table-wrap card-table">
       <table className="data">
         <thead>
           <tr>

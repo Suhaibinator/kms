@@ -254,7 +254,9 @@ export default function RollbackDialog({
                 <Badge kind="danger">invalid</Badge>
                 <ReleaseIdent name={name} version={previous} /> can no longer be activated.
               </div>
-              <ViolationTable violations={check.violations} resolveHref={resolveHref} />
+              <div className="mt-3">
+                <ViolationTable violations={check.violations} resolveHref={resolveHref} />
+              </div>
               <div className="text-sm mt-3">
                 <Link href={releasesHref} className="ship-link">
                   Activate a different version…
