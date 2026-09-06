@@ -4282,6 +4282,24 @@
   --text-lg: 19px; /* page titles below 480px, and the login heading */
   --text-xl: 22px; /* the desktop page title, the largest text in the console */
   --text-touch: 16px; /* the iOS no-zoom floor for a focusable field */
+
+  /* See the note above the theme-switch block on why a bare `text-sm` utility
+     is not `font-size: var(--text-sm)`. Which of these names that bites is not
+     obvious, so: a `--text-*` name Tailwind also ships has a
+     `--text-*--line-height` companion that survives overriding the size, and
+     its utility emits the ratio. --text-2xs/-md/-touch are names Tailwind does
+     not ship, so no companion exists and their utilities are font-size only.
+
+     --text-lg and --text-xl are Tailwind's names, so they arrived with ratios
+     (1.556 and 1.4) that neither rule using them wants — .page-title sets no
+     line-height and takes the page's 1.5, .auth-title sets its own 1.25. Both
+     are pinned to `inherit` so that every token added here means a font size
+     and nothing else. --text-sm/-xs/-base keep Tailwind's ratios instead:
+     230 utility uses resolve them, .field-reserve reads --text-sm--line-height
+     by name, and --text-base's ratio is the second reason that token had to
+     stay 14px — being unitless, 13.5px would have moved the line box too. */
+  --text-lg--line-height: inherit;
+  --text-xl--line-height: inherit;
 }
 
 @theme inline {

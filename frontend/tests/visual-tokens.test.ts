@@ -109,6 +109,43 @@ describe("globals.css stays out of Tailwind's way", () => {
     expect(css).toMatch(/--text-xs:\s*11\.5px/);
   });
 
+  // A `--text-*` name Tailwind also ships keeps its `--text-*--line-height`
+  // companion when we override only the size, so the utility carries a ratio
+  // the matching `font-size: var(--text-*)` rule does not. --text-lg/-xl are
+  // ours by value but Tailwind's by name, so they are pinned to `inherit` and
+  // mean a font size only. --text-2xs/-md/-touch are names Tailwind does not
+  // ship: no companion is generated, and adding one would break the same rule.
+  it("keeps every type token this file added to a font size alone", () => {
+    // Comment prose names these tokens too; only declarations count.
+    const declared = new Set(
+      [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/^\s*(--text-[\w-]+):\s*([^;]+);/gm)].map(
+        (m) => `${m[1]}=${(m[2] ?? "").trim()}`,
+      ),
+    );
+    for (const name of ["lg", "xl"]) {
+      expect(declared).toContain(`--text-${name}--line-height=inherit`);
+    }
+    for (const name of ["2xs", "md", "touch"]) {
+      expect([...declared].some((d) => d.startsWith(`--text-${name}=`))).toBe(true);
+      expect([...declared].some((d) => d.startsWith(`--text-${name}--line-height=`))).toBe(false);
+    }
+    // The three that deliberately keep Tailwind's ratio, because live utility
+    // uses and .field-reserve's `line-height: var(--text-sm--line-height)`
+    // resolve them. Pinning these would move 230 call sites at once.
+    for (const name of ["sm", "xs", "base"]) {
+      expect([...declared].some((d) => d.startsWith(`--text-${name}--line-height=`))).toBe(false);
+    }
+  });
+
+  // --text-base is 14px because `text-base` is a live utility on Input,
+  // Textarea, CardTitle, FieldLegend and three dialog titles, all of which
+  // resolved 1rem against this root before it was named. Its line-height
+  // ratio is unitless, so changing the size moves the line box too.
+  it("keeps --text-base on the root font size the text-base utility assumes", () => {
+    expect(css).toMatch(/--text-base:\s*14px/);
+    expect(css).toMatch(/font-size:\s*14px;[\s\S]{0,40}line-height:\s*1\.5/);
+  });
+
   // Column-0 openers are a file's top-level blocks. Anything that is not a
   // token block or a layer is a rule that would silently outrank every
   // utility, so the list of allowed openers is closed on purpose — and it
