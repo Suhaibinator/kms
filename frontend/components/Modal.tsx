@@ -147,22 +147,41 @@ export function Modal({
         className={cn(
           // Header and footer are pinned rows; only the middle row scrolls.
           // Without this the action buttons scroll off the bottom of a long form.
-          "grid max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[560px]",
+          // The viewport inset comes from the spacing scale, not `2rem`: the
+          // root font is 14px, so `2rem` was silently 28 while the page gutter
+          // beside it is 16. --space-4 × 2 is 32 and matches that gutter.
+          "grid max-h-[calc(100dvh_-_var(--space-4)_*_2)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[560px]",
           wide && "sm:max-w-[720px]",
           // Workspace modals only change their footprint; the row layout is shared.
-          workspace && "h-[calc(100dvh-2rem)] sm:max-w-[min(1200px,calc(100vw-2rem))]",
-          wizard && "min-h-[min(560px,calc(100dvh-2rem))]",
+          workspace &&
+            "h-[calc(100dvh_-_var(--space-4)_*_2)] sm:max-w-[min(1200px,calc(100vw_-_var(--space-4)_*_2))]",
+          wizard && "min-h-[min(560px,calc(100dvh_-_var(--space-4)_*_2))]",
         )}
       >
-        <DialogHeader className="border-b border-border px-5 py-4 pr-14">
+        {/* px from --modal-pad, so the header shares the body's and footer's
+            left edge at every width; py-4 is deliberately tighter than the
+            body's 20px, so the title band reads as chrome rather than content.
+            pr-14 reserves the close button's corner, and only then: a
+            non-dismissible dialog has no button there and its title — the
+            longest in the console — would lose 56px for nothing. */}
+        <DialogHeader
+          className={cn("border-b border-border px-(--modal-pad) py-4", dismissible && "pr-14")}
+        >
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
-        <div data-modal-body className="min-h-0 min-w-0 overflow-y-auto p-5">
+        <div data-modal-body className="min-h-0 min-w-0 overflow-y-auto p-(--modal-pad)">
           {children}
         </div>
         {footer ? (
-          <DialogFooter className="m-0 rounded-none px-5 py-4">
+          <DialogFooter
+            className={cn(
+              "m-0 rounded-none px-(--modal-pad) py-4",
+              // A wizard's button count changes between steps; the class gives
+              // the mobile footer a floor so the body does not move with it.
+              wizard && "modal-footer-steps",
+            )}
+          >
             {typeof footer === "function" ? footer(requestClose) : footer}
           </DialogFooter>
         ) : null}

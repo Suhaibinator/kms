@@ -1201,7 +1201,6 @@
   .json-block,
   .json-diff-scroll,
   .schema-code,
-  .connect-code,
   .integration-code,
   .credential-pem {
     position: relative;
@@ -1219,11 +1218,23 @@
   [data-slot="dialog-title"] {
     overflow-wrap: anywhere;
   }
-  [data-modal-body] {
+  /* The popup owns the gutter, not the body: header, body and footer all read
+     it, so the three bands share one left edge at every width. While it lived on
+     [data-modal-body] the header and footer carried a literal px-5 and the
+     mobile block had to patch them separately — and did so only on the block
+     axis, leaving the body 4px wider than the bands on both sides. */
+  [data-slot="dialog-content"] {
     --modal-pad: var(--space-5);
+  }
+  [data-modal-body] {
     position: relative;
     scrollbar-gutter: stable;
     background: var(--bg);
+  }
+  /* A card on the body's --bg ground is a 1.08:1 fill step away from it, so the
+     border is the only thing grouping the blocks inside a dialog. */
+  [data-modal-body] .card {
+    border-color: var(--border-strong);
   }
 
   table.data {
@@ -1580,12 +1591,16 @@
       margin-right: auto;
     }
   }
-  /* DialogFooter stacks with `flex-col-reverse`, so DOM order is painted bottom
-     to top. Every caller writes the note first; without this it lands under the
-     button it explains. The last-ordered item is the topmost one here. */
+  /* The footer is a two-column grid below `sm` (see the utilities block at the
+     end of this file, which is the only place that can beat DialogFooter's own
+     `flex` utility). The note takes a row of its own above the buttons: under
+     the `flex-col-reverse` this replaced, DOM order painted bottom to top and
+     `order: 99` was what put the note on top, so under grid the same intent is
+     the negative order. */
   @media (width < 640px) {
     .footer-note {
-      order: 99;
+      grid-column: 1 / -1;
+      order: -1;
     }
   }
 
@@ -2676,11 +2691,14 @@
   .advanced-panel-modal {
     margin-top: var(--space-2);
   }
-  /* The modal body's own padding is the bottom gutter; a trailing field must not
-     add a second one. Deliberately not generalised to a bare .field:last-child —
-     page forms rely on that margin before .form-actions. */
-  [data-modal-body] > .field:last-child,
-  [data-modal-body] > form:last-child > .field:last-child {
+  /* The modal body's own padding is the bottom gutter; whatever ends the body
+     must not add a second one. The body's last flow child, not an enumerated
+     list of component classes: the list was one shape short of what the modals
+     render (a trailing <details class="advanced-panel">), and would have gone
+     on being one shape short. Scoped to the body, so page forms keep the margin
+     they rely on before .form-actions. */
+  [data-modal-body] > :last-child,
+  [data-modal-body] > form:last-child > :last-child {
     margin-bottom: 0;
   }
   .advanced-ca-action,
@@ -4123,6 +4141,34 @@
 
 /* These overrides belong to utilities: Modal's footprint is authored there. */
 @layer utilities {
+  /* Below `sm` DialogFooter is a flex column, so every button costs a whole
+     44px row: the ship modal's footer was 145px of a 667px screen and the
+     create-application wizard's went from 121px to 173px the moment step 2
+     added a Back button. Two columns halve that. `display` has to be set here —
+     the `flex` it replaces is a utility on the element. `.footer-note` spans
+     the grid and orders itself above the buttons, from the components block.
+
+     nth-of-type, not nth-child: the parity being tested is "is this button
+     alone on the last row", and a leading `<p class="footer-note">` would
+     otherwise flip it. A button alone spans both columns rather than sitting
+     half-width beside a hole. */
+  @media (width < 640px) {
+    [data-slot="dialog-footer"] {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    [data-slot="dialog-footer"] > [data-slot="button"]:last-child:nth-of-type(odd) {
+      grid-column: 1 / -1;
+    }
+    /* A wizard's footer gains its Back button at step 2, which is a second row
+       the grid cannot absorb. The floor is that second row — two touch-height
+       buttons, their gap and the band's own padding — so the body keeps one
+       height across the steps instead of jumping 52px under the reader. */
+    [data-slot="dialog-footer"].modal-footer-steps {
+      min-height: calc(2 * 44px + var(--space-2) + 2 * 12px);
+    }
+  }
+
   @media (width < 768px) {
     [data-slot="dialog-content"][data-mobile-fullscreen] {
       /* Reset Tailwind offsets even when the CSS compiler folds translate into transform. */
@@ -4144,19 +4190,27 @@
       padding-bottom: env(safe-area-inset-bottom);
       padding-left: env(safe-area-inset-left);
     }
+    /* One gutter for all three bands on a phone too; the header and footer keep
+       their own tighter block padding. */
+    [data-mobile-fullscreen] {
+      --modal-pad: 16px;
+    }
     [data-mobile-fullscreen] > [data-slot="dialog-header"],
     [data-mobile-fullscreen] > [data-slot="dialog-footer"] {
-      padding-top: 12px;
-      padding-bottom: 12px;
+      padding-block: 12px;
+      padding-inline: var(--modal-pad);
     }
     [data-mobile-fullscreen] > [data-modal-body] {
-      --modal-pad: 16px;
       padding: var(--modal-pad);
       overscroll-behavior: contain;
     }
+    /* No safe-area term: the popup's own padding-top/right above has already
+       moved this button's containing block in by the inset, and an absolutely
+       positioned box is offset from the padding edge — the max() counted it
+       twice and put the ✕ a notch's height below the physical top. */
     [data-mobile-fullscreen] > [data-slot="dialog-close"] {
-      top: max(8px, env(safe-area-inset-top));
-      right: max(8px, env(safe-area-inset-right));
+      top: 8px;
+      right: 8px;
     }
     [data-slot="input"],
     [data-slot="textarea"],
@@ -4185,6 +4239,7 @@
        character and rendered "Overview" as "Overvie"/"w". */
     [role="tab"],
     [data-slot="button"],
+    [data-slot="badge"],
     [data-slot="tabs-list"] {
       overflow-wrap: normal;
       word-break: normal;
