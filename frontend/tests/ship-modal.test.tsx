@@ -365,7 +365,7 @@ describe("ShipModal", () => {
     });
 
     expect(await within(dialog()).findByTestId("ship-rollout")).toBeVisible();
-    expect(props.onShipped).toHaveBeenCalledWith(activated);
+    expect(props.onShipped).toHaveBeenCalledWith(activated, expect.any(String));
     expect(within(dialog()).getByTestId("ship-modal")).toHaveAttribute("data-phase", "rollout");
   });
 
@@ -477,7 +477,7 @@ describe("ShipModal", () => {
       "href",
       `/releases?app=${app.name}&env=dev&name=${releaseName}&release=${encodeURIComponent(`${releaseName}@${next}`)}`,
     );
-    expect(props.onShipped).toHaveBeenCalledWith(notActivated);
+    expect(props.onShipped).toHaveBeenCalledWith(notActivated, expect.any(String));
 
     fireEvent.click(within(panel).getByRole("button", { name: "Fix and retry" }));
     await settlePreview();
@@ -546,7 +546,7 @@ describe("ShipModal", () => {
     expect(panel).toHaveTextContent(`${releaseName}@${conflictRelease}`);
     expect(panel).toHaveTextContent("created, not activated");
     expect(within(panel).queryByRole("button", { name: /activate anyway/i })).toBeNull();
-    expect(props.onShipped).toHaveBeenCalledWith(conflict);
+    expect(props.onShipped).toHaveBeenCalledWith(conflict, expect.any(String));
 
     fireEvent.click(
       within(panel).getByRole("button", { name: `Re-preview against @${conflictCurrent}` }),

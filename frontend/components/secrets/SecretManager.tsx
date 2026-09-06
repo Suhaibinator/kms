@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
@@ -91,6 +91,8 @@ export interface SecretManagerProps {
   /** Omit on the dedicated page, which reads its reference from the URL. */
   resourceRef?: ResourceRef;
   surface?: "page" | "workspace";
+  /** Workspace surface only: where the caller came from, rendered under the title. */
+  context?: ReactNode;
   onClose?: () => void;
   onChanged?: (ref: ResourceRef) => void;
   onDeleted?: (ref: ResourceRef) => void;
@@ -99,6 +101,7 @@ export interface SecretManagerProps {
 export default function SecretManager({
   resourceRef,
   surface = "page",
+  context,
   onClose,
   onChanged,
   onDeleted,
@@ -842,7 +845,16 @@ export default function SecretManager({
             {refreshing ? <Spinner /> : null}
           </span>
         }
-        description={displayNamespace(ref)}
+        description={
+          context ? (
+            <span className="row-wrap">
+              {displayNamespace(ref)}
+              {context}
+            </span>
+          ) : (
+            displayNamespace(ref)
+          )
+        }
         onClose={() => onClose?.()}
       >
         <Tabs value={section} onValueChange={(value) => setSection(String(value))}>

@@ -100,6 +100,11 @@
       var(--bg);
     background-attachment: local, local, scroll, scroll;
   }
+  /* The scroller is focusable so keyboard users can reach offscreen columns. */
+  .pipeline-scroll:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
   .pipeline {
     display: grid;
     grid-auto-flow: column;
@@ -166,8 +171,15 @@
   .pipeline-row-action {
     margin-left: auto;
   }
-  .pipeline-drift {
+  /* The kind glyph on a secret row; inline-flex so the SVG cannot wrap alone. */
+  .pipeline-row-kind {
     display: inline-flex;
+    align-items: center;
+    color: var(--text-faint);
+  }
+  .pipeline-release-meta {
+    color: var(--text-faint);
+    font-size: var(--text-sm);
   }
   .pipeline-other-keys {
     color: var(--text-muted);

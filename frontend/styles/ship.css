@@ -514,4 +514,24 @@
       flex: 1 1 auto;
     }
   }
+
+  /* --- Secret pins (Change step) ---------------------------------------- */
+  .ship-secret-pins {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ship-secret-pin {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h-sm);
+  }
+  .ship-confirm-summary {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
 }

@@ -8,6 +8,8 @@ export const LIST_HEADERS = ["Application", "Environments", "Release", "Schema",
 export interface QuickSecretSeed {
   environment: string;
   key: string;
+  /** Seeded from a sibling environment's value for the same alias, when known. */
+  contentType?: string;
 }
 
 /** What the Add-environment form hands over when the user picks "Copy values from…". */

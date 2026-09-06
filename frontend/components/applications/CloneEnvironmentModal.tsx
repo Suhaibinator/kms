@@ -1,5 +1,5 @@
-import { Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import type { CloneEnvironmentModalProps } from "@/components/applications/contracts";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { Badge, Checkbox, Field, Input } from "@/components/ui";
@@ -227,15 +227,10 @@ export default function CloneEnvironmentModal({
                       </td>
                       <td data-label="Actions">
                         {item.action === "needs_value" && onAddSecret ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
+                          <AddResourceButton
+                            kind="secret"
                             onClick={() => onAddSecret(result.namespace.env, item.alias)}
-                          >
-                            <Plus size={13} />
-                            Add secret
-                          </Button>
+                          />
                         ) : null}
                       </td>
                     </tr>

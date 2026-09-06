@@ -369,7 +369,7 @@ export default function ShipModal({
   function enterRollout(shipped: ShipResult, next: Activation) {
     setActivation(next);
     setPhase("rollout");
-    onShipped(shipped);
+    onShipped(shipped, environment);
   }
 
   async function ship() {
@@ -413,7 +413,7 @@ export default function ShipModal({
       case "release_created_not_activated":
         setRows((current) => reuseWrittenVersions(current, response));
         setPhase("release_created_not_activated");
-        onShipped(response);
+        onShipped(response, environment);
         return;
       case "conflict":
         setRows((current) => reuseWrittenVersions(current, response));
@@ -423,7 +423,7 @@ export default function ShipModal({
           currentVersion: response.error?.current_version,
         });
         setPhase("conflict");
-        onShipped(response);
+        onShipped(response, environment);
         return;
       default:
         // A `preview` status from a non-dry-run call is a server bug; treat it as nothing shipped.
@@ -473,7 +473,7 @@ export default function ShipModal({
 
   function handleClose() {
     if (phase === "shipping") return;
-    onClose();
+    onClose(environment);
   }
 
   const step: ShipStepId =
@@ -533,7 +533,7 @@ export default function ShipModal({
                   Roll back
                 </Button>
               ) : null}
-              <Button type="button" onClick={onClose} data-testid="ship-done">
+              <Button type="button" onClick={() => onClose(environment)} data-testid="ship-done">
                 Done
               </Button>
             </>
@@ -737,7 +737,7 @@ export default function ShipModal({
               conflict={conflict}
               disabled={false}
               onRepreview={backToCompose}
-              onDiscard={onClose}
+              onDiscard={() => onClose(environment)}
             />
           ) : null}
 
@@ -828,7 +828,7 @@ export default function ShipModal({
             setRollbackOpen(false);
             setRolledBack(rollback);
             // The environment moved again; let the page reload its overview.
-            if (result) onShipped(result);
+            if (result) onShipped(result, environment);
           }}
         />
       ) : null}

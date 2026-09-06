@@ -1,8 +1,6 @@
 import type { ResourceRef } from "@/lib/api";
 import ParameterManager from "./ParameterManager";
 
-export { shouldOpenWorkspace as shouldOpenParameterWorkspace } from "@/lib/workspace";
-
 export function ParameterWorkspace({
   parameterRef,
   onClose,

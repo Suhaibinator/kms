@@ -1,5 +1,6 @@
 import { ChevronDown, GitCompareArrows, RotateCcw, Trash2 } from "lucide-react";
 import { type Ref, useId, useRef, useState } from "react";
+import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
@@ -296,15 +297,11 @@ export function ShipEditor({
                 <Ident kind="alias" value={alias} /> is a secret with no value in this environment.
                 Secret values are never typed here; add one first and it will be pinned.
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
+              <AddResourceButton
+                kind="secret"
                 disabled={disabled}
                 onClick={() => onAddSecret(environment, alias)}
-              >
-                Add secret
-              </Button>
+              />
             </li>
           ))}
         </ul>

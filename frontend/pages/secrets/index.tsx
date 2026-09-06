@@ -17,7 +17,7 @@ import {
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
-import { SecretWorkspace, shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
+import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import {
   Badge,
   EmptyState,
@@ -49,6 +49,7 @@ import type { SortColumn } from "@/lib/sort";
 import type { SecretMetadata } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { validateKeyPrefix } from "@/lib/validation";
+import { shouldOpenWorkspace } from "@/lib/workspace";
 
 function currentVersion(s: SecretMetadata): number | null {
   const c = s.labels?.current;
@@ -206,7 +207,7 @@ export default function SecretsPage() {
   );
 
   function openNewSecret(event: React.MouseEvent<HTMLElement>) {
-    if (hasNs && shouldOpenSecretWorkspace(event)) setNewSecretOpen(true);
+    if (hasNs && shouldOpenWorkspace(event)) setNewSecretOpen(true);
   }
 
   // A deep link's env/app land one frame after mount, so "Choose an
@@ -355,7 +356,7 @@ export default function SecretsPage() {
                         className="cell-path"
                         href={links.secretDetail(s)}
                         onClick={(event) => {
-                          if (shouldOpenSecretWorkspace(event)) setSecretTarget(s);
+                          if (shouldOpenWorkspace(event)) setSecretTarget(s);
                         }}
                       >
                         {s.key}

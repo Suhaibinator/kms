@@ -33,6 +33,7 @@ import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
+import { valueFor } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
@@ -274,9 +275,7 @@ export function ApplicationHome({
   }
 
   function openAddValue(environment: string, alias: string) {
-    const value = environments
-      .find((candidate) => candidate.namespace.env === environment)
-      ?.values.find((candidate) => candidate.alias === alias);
+    const value = valueFor(environments, environment, alias);
     setRetryEnvironments(null);
     setWriteTargets([environment]);
     setWriteRow({ key: value?.key ?? alias, kind: "parameter", environments: {} });
@@ -338,10 +337,7 @@ export function ApplicationHome({
   /** The key a finding's alias resolves to in its environment (falls back to the alias). */
   function keyFor(finding: Finding): string {
     const alias = finding.scope.alias ?? "";
-    const environment = environments.find(
-      (candidate) => candidate.namespace.env === finding.scope.env,
-    );
-    return environment?.values.find((value) => value.alias === alias)?.key ?? alias;
+    return valueFor(environments, finding.scope.env ?? "", alias)?.key ?? alias;
   }
 
   // Every FixAction in lib/readiness.ts lands somewhere on this page or on the

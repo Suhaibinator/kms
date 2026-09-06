@@ -35,9 +35,10 @@ export interface ShipModalProps {
   /** Prefills one row (`?ship=alias`, the Values row's Edit & ship). */
   initialAlias?: string;
   open: boolean;
-  onClose: () => void;
+  /** `env` is the environment that was open, so the page can land on its column. */
+  onClose: (env?: string) => void;
   /** Called on every terminal outcome so the page can reload its overview. */
-  onShipped: (result: ShipResult) => void;
+  onShipped: (result: ShipResult, env: string) => void;
   /** A secret alias needs a value first; opens the quick-secret modal. */
   onAddSecret: (env: string, alias: string) => void;
 }

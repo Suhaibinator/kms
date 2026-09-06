@@ -5,6 +5,7 @@ import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
+import { countOtherKeys } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   Application,
@@ -23,25 +24,13 @@ export interface EnvironmentCallbacks {
   onAddValue: (env: string, alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
   onOpenSecret?: (env: string, key: string) => void;
+  onOpenParameter?: (env: string, key: string) => void;
   onShip: (env: string, alias?: string) => void;
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
+  onImportDefaults?: (env: string) => void;
   /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
   onFix: (action: FixAction, finding: Finding) => void;
-}
-
-/** Parameters present in this environment that no contract alias resolves to. */
-export function countOtherKeys(
-  environment: EnvironmentOverview,
-  rows: ApplicationConfigurationRow[],
-): number {
-  const env = environment.namespace.env;
-  const resolved = new Set(
-    environment.values.filter((value) => value.key).map((value) => value.key as string),
-  );
-  return rows.filter(
-    (row) => row.kind === "parameter" && row.environments[env]?.present && !resolved.has(row.key),
-  ).length;
 }
 
 // Findings the column's own sections already show in a richer form (the drift
@@ -130,7 +119,7 @@ export function EnvironmentColumn({
       <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
-        otherKeys={countOtherKeys(environment, rows)}
+        otherKeys={countOtherKeys(environment, rows).parameters}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
         onOpenSecret={callbacks.onOpenSecret}

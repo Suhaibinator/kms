@@ -1,13 +1,12 @@
-import { Plus, SlidersHorizontal } from "lucide-react";
-import Link from "next/link";
+import { SlidersHorizontal } from "lucide-react";
 import CopyButton from "@/components/CopyButton";
 import { Ident } from "@/components/Ident";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
-import type { ApplicationConfigurationRow } from "@/lib/types";
-import { shouldOpenWorkspace } from "@/lib/workspace";
+import type { ApplicationConfigurationRow, EnvironmentOverview } from "@/lib/types";
+import { AddResourceButton } from "./AddResourceButton";
+import { ResourceLink } from "./ResourceLink";
 
 /** Tooltips are not scroll containers; a megabyte JSON value is not a tooltip. */
 const TITLE_MAX_CHARS = 200;
@@ -18,6 +17,19 @@ export interface MatrixEnvironment {
   production?: boolean;
 }
 
+export interface ConfigurationMatrixProps {
+  app: string;
+  environments: MatrixEnvironment[];
+  /** The overview's per-environment contract values, for alias and pin lookup. */
+  overview?: EnvironmentOverview[];
+  rows: ApplicationConfigurationRow[];
+  onAddSecret: (environment: string, key: string) => void;
+  onAddValue?: (environment: string, key: string) => void;
+  onOpenSecret?: (environment: string, key: string) => void;
+  onOpenParameter?: (environment: string, key: string) => void;
+  onEdit: (row: ApplicationConfigurationRow) => void;
+}
+
 export function ConfigurationMatrix({
   app,
   environments,
@@ -26,15 +38,7 @@ export function ConfigurationMatrix({
   onOpenSecret,
   onOpenParameter,
   onEdit,
-}: {
-  app: string;
-  environments: MatrixEnvironment[];
-  rows: ApplicationConfigurationRow[];
-  onAddSecret: (environment: string, key: string) => void;
-  onOpenSecret?: (environment: string, key: string) => void;
-  onOpenParameter?: (environment: string, key: string) => void;
-  onEdit: (row: ApplicationConfigurationRow) => void;
-}) {
+}: ConfigurationMatrixProps) {
   return (
     <div className="table-wrap application-matrix">
       <p className="mobile-comparison-hint">Scroll horizontally to compare environments.</p>
@@ -119,49 +123,46 @@ function MatrixCell({
   if (!cell?.present) {
     if (row.kind === "secret") {
       return (
-        <Button
-          type="button"
+        <AddResourceButton
+          kind="secret"
           variant="ghost"
-          size="sm"
           onClick={() => onAddSecret(environment, row.key)}
-        >
-          <Plus size={13} />
-          Add secret
-        </Button>
+        />
       );
     }
     return <Badge kind="danger">missing</Badge>;
   }
   if (row.kind === "secret")
     return (
-      <Link
-        href={links.secretDetail({ env: environment, app, key: row.key })}
-        onClick={(event) => {
-          if (onOpenSecret && shouldOpenWorkspace(event)) onOpenSecret(environment, row.key);
-        }}
+      <ResourceLink
+        kind="secret"
+        env={environment}
+        app={app}
+        keyName={row.key}
+        onOpen={onOpenSecret}
       >
         <span className="secret-cell">
           Secret v{cell.version}
           {cell.bound ? " · binding key" : ""}
         </span>
-      </Link>
+      </ResourceLink>
     );
   const value = cell.value ?? "";
   const title = value.length > TITLE_MAX_CHARS ? `${value.slice(0, TITLE_MAX_CHARS)}…` : value;
-  const detail = links.parameterDetail({ env: environment, app, key: row.key });
   return (
     <div className="matrix-value">
-      <Link
-        href={detail}
-        onClick={(event) => {
-          if (onOpenParameter && shouldOpenWorkspace(event)) onOpenParameter(environment, row.key);
-        }}
+      <ResourceLink
+        kind="parameter"
+        env={environment}
+        app={app}
+        keyName={row.key}
+        onOpen={onOpenParameter}
         className="mono matrix-value-link"
         title={title}
         aria-label={`Open ${row.key} in ${environment}`}
       >
         {value === "" ? "(empty)" : value}
-      </Link>
+      </ResourceLink>
       <span className="matrix-value-meta faint text-sm">
         <span>
           v{cell.version} · {cell.content_type}
