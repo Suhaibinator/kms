@@ -24,6 +24,33 @@ func TestStandardHealthCheckRemainsPublic(t *testing.T) {
 	}
 }
 
+func TestStandardHealthStartsNotServing(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		name := "unready"
+		if ready {
+			name = "ready"
+		}
+		t.Run(name, func(t *testing.T) {
+			svc, hub := buildService(t, newMemStore(), ready)
+			srv, err := New(svc, hub, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(srv.Stop)
+			// Before the readiness worker runs, no service may report SERVING.
+			for _, service := range []string{"", "kms.v1.ParameterService", "kms.v1.SecretService", "kms.v1.WatchService", "kms.v1.ConfigurationReleaseService", "kms.v1.ConfigurationSchemaService"} {
+				resp, err := srv.health.Check(context.Background(), &healthgrpc.HealthCheckRequest{Service: service})
+				if err != nil {
+					t.Fatalf("initial health for %q: %v", service, err)
+				}
+				if got := resp.GetStatus(); got != healthgrpc.HealthCheckResponse_NOT_SERVING {
+					t.Fatalf("initial health for %q = %v, want NOT_SERVING", service, got)
+				}
+			}
+		})
+	}
+}
+
 func TestStandardHealthServiceRegistersOnlyUnaryMethods(t *testing.T) {
 	env := newTestEnv(t, true)
 	service, ok := env.srv.GRPCServer().GetServiceInfo()["grpc.health.v1.Health"]
@@ -59,12 +86,23 @@ func TestStandardHealthListRemainsAuthenticated(t *testing.T) {
 	if _, err := client.List(context.Background(), &healthgrpc.HealthListRequest{}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("unauthenticated health list code = %v, want Unauthenticated (%v)", status.Code(err), err)
 	}
-	resp, err := client.List(adminCtx(), &healthgrpc.HealthListRequest{})
-	if err != nil {
-		t.Fatalf("authenticated health list: %v", err)
-	}
-	if got := resp.GetStatuses()[""].GetStatus(); got != healthgrpc.HealthCheckResponse_SERVING {
-		t.Fatalf("overall health list status = %v, want SERVING", got)
+	// Readiness is evaluated asynchronously, so a keyed server may initially
+	// report NOT_SERVING before its first store check completes.
+	ctx, cancel := context.WithTimeout(adminCtx(), 2*time.Second)
+	defer cancel()
+	for {
+		resp, err := client.List(ctx, &healthgrpc.HealthListRequest{})
+		if err != nil {
+			t.Fatalf("authenticated health list: %v", err)
+		}
+		if resp.GetStatuses()[""].GetStatus() == healthgrpc.HealthCheckResponse_SERVING {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("health list did not become SERVING")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

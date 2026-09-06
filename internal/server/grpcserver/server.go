@@ -125,6 +125,9 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 
 	s.grpc = grpc.NewServer(opts...)
 	s.health = health.NewServer()
+	// gRPC defaults the overall status to SERVING. Fail closed until the
+	// asynchronous readiness worker has verified the keyring and store.
+	s.setHealthStatus(healthgrpc.HealthCheckResponse_NOT_SERVING)
 
 	kmsv1.RegisterParameterServiceServer(s.grpc, &parameterServer{s: s})
 	kmsv1.RegisterSecretServiceServer(s.grpc, &secretServer{s: s})
@@ -207,12 +210,7 @@ func (s *Server) refreshHealth() {
 		if s.svc.Ready(context.Background()) == nil {
 			st = healthgrpc.HealthCheckResponse_SERVING
 		}
-		s.health.SetServingStatus("", st)
-		s.health.SetServingStatus("kms.v1.ParameterService", st)
-		s.health.SetServingStatus("kms.v1.SecretService", st)
-		s.health.SetServingStatus("kms.v1.WatchService", st)
-		s.health.SetServingStatus("kms.v1.ConfigurationReleaseService", st)
-		s.health.SetServingStatus("kms.v1.ConfigurationSchemaService", st)
+		s.setHealthStatus(st)
 	}
 	set()
 	ticker := time.NewTicker(s.cfg.HealthRefreshInterval)
@@ -225,4 +223,13 @@ func (s *Server) refreshHealth() {
 			set()
 		}
 	}
+}
+
+func (s *Server) setHealthStatus(st healthgrpc.HealthCheckResponse_ServingStatus) {
+	s.health.SetServingStatus("", st)
+	s.health.SetServingStatus("kms.v1.ParameterService", st)
+	s.health.SetServingStatus("kms.v1.SecretService", st)
+	s.health.SetServingStatus("kms.v1.WatchService", st)
+	s.health.SetServingStatus("kms.v1.ConfigurationReleaseService", st)
+	s.health.SetServingStatus("kms.v1.ConfigurationSchemaService", st)
 }

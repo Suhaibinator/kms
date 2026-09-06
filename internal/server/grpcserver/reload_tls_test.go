@@ -133,7 +133,7 @@ func TestReloadableTLSThroughCredentials(t *testing.T) {
 	addr := lis.Addr().String()
 
 	// check opens a fresh connection — the only way to observe a swap — and
-	// completes one RPC over it, returning what the handshake showed.
+	// waits for readiness over it, returning what the handshake showed.
 	check := func(t *testing.T) (serial, alpn string) {
 		t.Helper()
 		rec := &handshakeRecord{}
@@ -153,12 +153,20 @@ func TestReloadableTLSThroughCredentials(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		resp, err := healthgrpc.NewHealthClient(conn).Check(ctx, &healthgrpc.HealthCheckRequest{})
-		if err != nil {
-			t.Fatalf("health check: %v", err)
-		}
-		if resp.GetStatus() != healthgrpc.HealthCheckResponse_SERVING {
-			t.Fatalf("health status = %v, want SERVING", resp.GetStatus())
+		client := healthgrpc.NewHealthClient(conn)
+		for {
+			resp, err := client.Check(ctx, &healthgrpc.HealthCheckRequest{})
+			if err != nil {
+				t.Fatalf("health check: %v", err)
+			}
+			if resp.GetStatus() == healthgrpc.HealthCheckResponse_SERVING {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("health check did not become SERVING")
+			case <-time.After(time.Millisecond):
+			}
 		}
 		return rec.observed()
 	}
