@@ -147,15 +147,20 @@ export function ApplicationList({
                 {LIST_HEADERS.map((header) => (
                   <th key={header}>{header}</th>
                 ))}
-                <th />
+                <th>
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((app) => (
                 <tr key={app.name} className="navigable-row">
                   <td data-label="Application">
+                    {/* inline-flex: as a plain inline anchor the JSX newline
+                        between the name and the badge is stripped, so the pill
+                        lands against the last glyph of the name. */}
                     <Link
-                      className="navigable-row-link"
+                      className="navigable-row-link inline-flex items-center gap-2"
                       href={{ pathname: "/applications", query: { app: app.name } }}
                       aria-label={`Manage ${app.name}`}
                     >

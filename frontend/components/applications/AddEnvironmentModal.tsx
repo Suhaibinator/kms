@@ -98,9 +98,22 @@ export function AddEnvironmentModal({
           submit();
         }}
       >
+        {/* The production notice rides the hint line rather than appearing as a
+            panel between this field and the next. The line is already reserved,
+            so the keystroke that completes "prod" changes text instead of
+            growing a centred, content-height dialog under the caret. */}
         <Field
           label="Environment"
-          hint="Examples: dev, staging, prod, prod-gcp"
+          hint={
+            production ? (
+              <span className="text-warning">
+                <span className="mono">{environment.trim()}</span> is a production environment:
+                shipping and rolling back there ask you to type its name.
+              </span>
+            ) : (
+              "Examples: dev, staging, prod, prod-gcp"
+            )
+          }
           error={shown("environment", environmentProblem)}
         >
           <Input
@@ -112,12 +125,6 @@ export function AddEnvironmentModal({
             placeholder="prod-gcp"
           />
         </Field>
-        {production ? (
-          <div className="warn-panel mb-4 text-sm">
-            <span className="mono">{environment.trim()}</span> is a production environment: shipping
-            and rolling back there ask you to type its name.
-          </div>
-        ) : null}
         <Field label="Description">
           <Input value={description} onChange={(event) => setDescription(event.target.value)} />
         </Field>

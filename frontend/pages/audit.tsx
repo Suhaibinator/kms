@@ -165,7 +165,7 @@ export default function AuditPage() {
   const { values, ready } = useQueryParams(QUERY_KEYS);
   // On a static export the query is empty until the client router hydrates;
   // rendering the list before that would fetch page 1 unfiltered for nothing.
-  if (!ready) return <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} />;
+  if (!ready) return <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} trailing={1} />;
   return <AuditLog initial={values} />;
 }
 
@@ -417,7 +417,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
       </form>
 
       {loading ? (
-        <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} />
+        <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} trailing={1} />
       ) : events.length === 0 ? (
         <EmptyState
           icon={<Icon.audit size={20} />}

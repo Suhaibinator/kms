@@ -1,6 +1,8 @@
 import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
+import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
+import { headerLabels, SortHeaderRow, staticController } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -14,7 +16,12 @@ import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { useLatestRequest, useQueryParams } from "@/lib/hooks";
-import type { PostureResponse } from "@/lib/types";
+import type {
+  ExpiringAdminCert,
+  ExpiringIdentityCert,
+  ExpiringSecretVersion,
+  PostureResponse,
+} from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { useNow } from "@/lib/useNow";
 
@@ -34,9 +41,48 @@ const DEFAULT_WINDOW: WindowValue = "30d";
 // expires, and the server does not refuse anything at 366 days.
 const KEK_AGE_WARNING_DAYS = 365;
 
-const ADMIN_CERT_HEADERS = ["Identity", "Status", "Serial", "Expires"];
-const IDENTITY_CERT_HEADERS = ["Identity", "Environment", "Serial", "Expires"];
-const SECRET_HEADERS = ["Secret", "Version", "Expires"];
+// Every list here is a server-capped snapshot of one window, so nothing sorts.
+// The columns are still declared so the headers come from `SortHeaderRow` like
+// every other list's rather than from a hand-rolled `<thead>`.
+const ADMIN_CERT_COLUMNS = staticController<ExpiringAdminCert>([
+  { id: "identity", label: "Identity" },
+  { id: "status", label: "Status" },
+  { id: "serial", label: "Serial" },
+  { id: "expires", label: "Expires" },
+]);
+const IDENTITY_CERT_COLUMNS = staticController<ExpiringIdentityCert>([
+  { id: "identity", label: "Identity" },
+  { id: "environment", label: "Environment" },
+  { id: "serial", label: "Serial" },
+  { id: "expires", label: "Expires" },
+]);
+const SECRET_COLUMNS = staticController<ExpiringSecretVersion>([
+  { id: "secret", label: "Secret" },
+  { id: "version", label: "Version" },
+  { id: "expires", label: "Expires" },
+]);
+
+/** Enough of a certificate serial to recognise a row; the rest is in `title`. */
+const SERIAL_PREVIEW_LENGTH = 12;
+
+function shortSerial(serial: string): string {
+  return serial.length > SERIAL_PREVIEW_LENGTH
+    ? `${serial.slice(0, SERIAL_PREVIEW_LENGTH)}…`
+    : serial;
+}
+
+/** A serial cell: shortened so it cannot widen the card, whole on hover and on
+ *  the clipboard, because the revoke command needs it exactly. */
+function SerialCell({ serial }: { serial: string }) {
+  return (
+    <td className="mono" data-label="Serial">
+      <span className="row-wrap">
+        <span title={serial}>{shortSerial(serial)}</span>
+        <CopyButton label="Copy serial" value={serial} />
+      </span>
+    </td>
+  );
+}
 
 const QUERY_KEYS = ["window"] as const;
 
@@ -98,7 +144,7 @@ function PostureSkeleton() {
         <StatSkeleton label="Metrics" />
       </div>
       <div className="card">
-        <TableSkeleton headers={IDENTITY_CERT_HEADERS} rows={5} />
+        <TableSkeleton headers={headerLabels(IDENTITY_CERT_COLUMNS.columns)} rows={5} />
       </div>
     </>
   );
@@ -109,6 +155,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
   const now = useNow();
   const replaceQuery = useQueryReplace("/posture");
   const { begin } = useLatestRequest();
+  const windowLabelId = useId();
   const [expiryWindow, setExpiryWindow] = useState<WindowValue>(initialWindow);
   const [posture, setPosture] = useState<PostureResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -260,13 +307,20 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
             </div>
           </div>
 
-          <fieldset className="filters">
-            <legend className="faint text-sm">Expiring within</legend>
+          {/* A segmented control, not a filter row: `.filters` drops a bare
+              button by one label block to line it up with labelled siblings,
+              and there are none here. The caption is a span, not a <legend>,
+              because a rendered legend is lifted out of the fieldset's flex
+              formatting context and would sit on its own line above the row.
+              min-w-0 undoes the fieldset's min-content floor so it can wrap. */}
+          <fieldset className="row-wrap mb-4 min-w-0" aria-labelledby={windowLabelId}>
+            <span className="field-label" id={windowLabelId}>
+              Expiring within
+            </span>
             {WINDOWS.map((option) => (
               <Button
                 key={option.value}
                 type="button"
-                size="sm"
                 variant={option.value === expiryWindow ? "outline" : "ghost"}
                 aria-pressed={option.value === expiryWindow}
                 onClick={() => chooseWindow(option.value)}
@@ -294,11 +348,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
               <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
-                    <tr>
-                      {ADMIN_CERT_HEADERS.map((header) => (
-                        <th key={header}>{header}</th>
-                      ))}
-                    </tr>
+                    <SortHeaderRow controller={ADMIN_CERT_COLUMNS} />
                   </thead>
                   <tbody>
                     {adminCerts?.lacking.map((identity) => (
@@ -321,9 +371,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
                         <td data-label="Status">
                           <Badge kind="warning">expiring</Badge>
                         </td>
-                        <td className="mono" data-label="Serial">
-                          {cert.serial}
-                        </td>
+                        <SerialCell serial={cert.serial} />
                         <td data-label="Expires">
                           <When iso={cert.not_after} now={now} />
                         </td>
@@ -342,11 +390,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
                 <div className="table-wrap card-table">
                   <table className="data">
                     <thead>
-                      <tr>
-                        {IDENTITY_CERT_HEADERS.map((header) => (
-                          <th key={header}>{header}</th>
-                        ))}
-                      </tr>
+                      <SortHeaderRow controller={IDENTITY_CERT_COLUMNS} />
                     </thead>
                     <tbody>
                       {identityCerts.items.map((cert) => (
@@ -359,9 +403,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
                               <span className="faint">unbound</span>
                             )}
                           </td>
-                          <td className="mono" data-label="Serial">
-                            {cert.serial}
-                          </td>
+                          <SerialCell serial={cert.serial} />
                           <td data-label="Expires">
                             <When iso={cert.not_after} now={now} />
                           </td>
@@ -388,11 +430,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
                 <div className="table-wrap card-table">
                   <table className="data">
                     <thead>
-                      <tr>
-                        {SECRET_HEADERS.map((header) => (
-                          <th key={header}>{header}</th>
-                        ))}
-                      </tr>
+                      <SortHeaderRow controller={SECRET_COLUMNS} />
                     </thead>
                     <tbody>
                       {secretVersions.items.map((version) => (

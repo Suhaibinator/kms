@@ -204,7 +204,10 @@ export function ImportDefaultsModal({
       dismissible={busy === null}
       dirty={artifact !== null && busy === null}
       initialFocus={chooseRef}
-      workspace
+      // wide, not workspace: the preview is five short columns, and the
+      // workspace footprint opened a 1200px × full-height box around ~180px of
+      // content. CloneEnvironmentModal shows a comparable table at wide.
+      wide
       footer={(close) => (
         <>
           {blockedReason ? (

@@ -212,15 +212,15 @@ export function JsonEditor({
               >
                 <WrapText size={14} aria-hidden /> Wrap
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={copied ? "Copied" : "Copy"}
-                onClick={() => void copy()}
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={() => void copy()}>
                 {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
-                {copied ? "Copied" : "Copy"}
+                {/* Fixed label, like CopyButton: "Copied" is ~10px wider and
+                    reflowed the toolbar for 1.8s after every copy. The icon
+                    swap and the live region carry the confirmation. */}
+                Copy
+                <span className="sr-only" aria-live="polite">
+                  {copied ? "Copied to clipboard" : ""}
+                </span>
               </Button>
             </>
           ) : null}

@@ -1,6 +1,6 @@
 import { LogoMark } from "@/components/LogoMark";
-import { ButtonLink } from "@/components/ui/button";
 import { PageTitle } from "@/components/ui";
+import { ButtonLink } from "@/components/ui/button";
 
 // Next's built-in 404 renders a light-themed page, which reads as a broken app
 // inside a dark console. This one matches the shell and carries a title.

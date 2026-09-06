@@ -55,6 +55,9 @@
   }
   .ship-step-blurb {
     margin: 0;
+    /* The workspace footprint is up to 1200px wide for the release table's
+       sake; prose set across all of it runs ~185 characters to the line. */
+    max-width: 900px;
     padding: var(--space-3) var(--space-4);
     background: var(--bg-elev);
     border: 1px solid var(--border);
@@ -245,10 +248,17 @@
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+  }
+  .ship-preview-body,
+  .ship-confirm-summary {
     transition: opacity 120ms ease;
   }
+  /* The fade waits out the dry-run debounce, so ordinary typing never reaches
+     it; the restore has no delay, so a fresh preview brightens at once. Keep
+     the delay equal to PREVIEW_DEBOUNCE_MS in components/ship/model.ts. */
   .ship-preview.is-stale .ship-preview-body {
     opacity: 0.55;
+    transition-delay: 400ms;
   }
   .ship-preview-head {
     display: flex;
@@ -539,6 +549,7 @@
      with the preview until the next dry run. */
   .ship-confirm-summary.is-stale {
     opacity: 0.6;
+    transition-delay: 400ms;
   }
   .ship-secret-pins-section {
     display: grid;
@@ -557,6 +568,11 @@
   .ship-form {
     display: grid;
     gap: var(--space-5);
+    /* A single-column form inside the 1200px workspace footprint stranded each
+       row's actions ~900px from the identity they act on, because every head
+       here is `justify-content: space-between`. Wide content still scrolls
+       inside its own .table-wrap. */
+    max-width: 900px;
   }
   .ship-form > * {
     min-width: 0;

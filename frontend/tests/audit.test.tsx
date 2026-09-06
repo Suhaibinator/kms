@@ -113,6 +113,25 @@ describe("audit table", () => {
     );
   });
 
+  it("reserves the loaded table's column count while loading", async () => {
+    let settle: (page: { events: AuditEvent[]; next_page_token: string }) => void = () => {};
+    vi.mocked(api.listAudit).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<AuditPage />);
+    const skeletonColumns = document.querySelectorAll("thead th").length;
+    expect(skeletonColumns).toBeGreaterThan(0);
+
+    settle({ events: [event(1)], next_page_token: "" });
+    await screen.findByText("secret.read");
+    // The loaded header adds a gutter for the expand control; a skeleton one
+    // column short re-lays out every column the instant the data lands.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
   it("counts the events on screen and the filters narrowing them", async () => {
     vi.mocked(api.listAudit).mockResolvedValue({ events: [event(1)], next_page_token: "" });
     render(<AuditPage />);

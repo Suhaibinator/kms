@@ -74,7 +74,9 @@ export function FileInput({
     // biome-ignore lint/a11y/noStaticElementInteractions: the drop target only augments the button and input inside it.
     <div
       className={cn(
-        "flex min-h-(--control-h) flex-wrap items-center gap-3 rounded-md border border-dashed border-input px-3 py-2 transition-colors",
+        // py-1, not py-2: the zone holds a 30px `sm` button, so 8px of padding
+        // plus two borders made it 48px in a column of 38px controls.
+        "flex min-h-(--control-h) flex-wrap items-center gap-3 rounded-md border border-dashed border-input px-3 py-1 transition-colors",
         dragging && !disabled && "border-ring bg-muted ring-3 ring-ring/40",
         disabled && "opacity-50",
         className,

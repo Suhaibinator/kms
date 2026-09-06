@@ -307,6 +307,9 @@ export default function CreateApplicationWizard({
       dirty={dirty && !busy}
       initialFocus={nameRef}
       wide
+      // Four steps whose bodies run from ~200px (Basics) to ~600px (Contract);
+      // without a floor the dialog resized and re-centred on every Next.
+      wizard
       footer={(close) =>
         created ? (
           <>

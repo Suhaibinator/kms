@@ -9,7 +9,7 @@ import FleetGrid from "@/components/overview/FleetGrid";
 import ServiceStrip, { type Count } from "@/components/overview/ServiceStrip";
 import { StatusChip } from "@/components/StatusChip";
 import { TransportBadge } from "@/components/TransportBadge";
-import { Badge, EmptyState, PageHeader, Spinner, TableSkeleton } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
@@ -117,7 +117,13 @@ function RecentActivity({
         </Link>
       </h2>
       {loading ? (
-        <TableSkeleton headers={["When", "Event", "Actor", "Resource", "Decision"]} rows={5} />
+        // Matches the loaded table: page_size 8, and rows with no action
+        // buttons are 44px rather than the skeleton's default 54px.
+        <TableSkeleton
+          headers={["When", "Event", "Actor", "Resource", "Decision"]}
+          rows={8}
+          rowHeight={44}
+        />
       ) : failed ? (
         <EmptyState
           icon={<Icon.audit size={20} />}
@@ -225,7 +231,12 @@ function LiveSubscribers({
         </Link>
       </h2>
       {loading ? (
-        <TableSkeleton headers={["Client", "Last heartbeat", "Applied revision"]} rows={3} />
+        // The loaded table renders subscribers.slice(0, 6) at 44px a row.
+        <TableSkeleton
+          headers={["Client", "Last heartbeat", "Applied revision"]}
+          rows={6}
+          rowHeight={44}
+        />
       ) : failed ? (
         <EmptyState
           icon={<Icon.subscribers size={20} />}
@@ -451,11 +462,12 @@ export default function DashboardPage() {
       staleTitle="Part of the last refresh failed; the cards say which."
     />
   );
+  // `loading` overlays the spinner on an invisible label, so the button keeps
+  // its width and the freshness badge beside it does not shift.
   const refresh = (
-    <Button variant="outline" onClick={() => void load()} disabled={loading}>
-      {loading ? <Spinner /> : null}
-      {!loading ? <RefreshCw size={16} aria-hidden /> : null}
-      {loading ? "Refreshing…" : "Refresh"}
+    <Button variant="outline" loading={loading} onClick={() => void load()}>
+      <RefreshCw size={16} aria-hidden />
+      Refresh
     </Button>
   );
 

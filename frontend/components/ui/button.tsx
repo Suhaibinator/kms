@@ -39,7 +39,7 @@ const buttonVariants = cva(
         "icon-xs":
           "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":
-          "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
+          "size-(--control-h-sm) rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-11",
       },
     },
@@ -60,7 +60,7 @@ function Button({
   ...props
 }: ButtonPrimitive.Props &
   VariantProps<typeof buttonVariants> & {
-    /** An in-flight action: shows a spinner, disables the button and marks it busy. The label stays. */
+    /** An in-flight action: shows a spinner over the label, disables the button and marks it busy. The box never changes size. */
     loading?: boolean;
   }) {
   return (
@@ -71,11 +71,23 @@ function Button({
       data-loading={loading || undefined}
       aria-busy={loading || undefined}
       disabled={disabled || loading}
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={cn(buttonVariants({ variant, size, className }), loading && "relative")}
       {...props}
     >
-      {loading ? <Spinner /> : null}
-      {children}
+      {loading ? (
+        // Decorative: the button already says aria-busy, and a labelled spinner
+        // would prepend "Loading" to the button's accessible name.
+        <Spinner
+          aria-hidden
+          aria-label={undefined}
+          role="presentation"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+        />
+      ) : null}
+      {/* `contents` keeps the icon and label as flex items (so their gap holds);
+          opacity (not visibility) hides the label without changing the box or
+          removing it from the accessibility tree. */}
+      <span className={cn("contents", loading && "opacity-0")}>{children}</span>
     </ButtonPrimitive>
   );
 }

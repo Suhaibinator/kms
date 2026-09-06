@@ -27,6 +27,8 @@ export type ShipPhase =
 export type ShipMode = "guided" | "express";
 
 export const SHIP_MODE_STORAGE_KEY = "kms-ship-mode";
+/** Keep `.ship-preview.is-stale`'s transition-delay in styles/ship.css equal to
+ *  this, so an ordinary keystroke never reaches the stale fade. */
 export const PREVIEW_DEBOUNCE_MS = 400;
 
 /** One editable parameter row. Secrets never become rows: they are pinned, not typed. */

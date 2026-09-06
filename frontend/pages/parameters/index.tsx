@@ -434,13 +434,21 @@ export default function ParametersPage() {
       </form>
 
       {awaitingDeepLink ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton
+          headers={headerLabels(COLUMNS)}
+          leading={canBulkDelete ? 1 : 0}
+          trailing={1}
+        />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its parameters.
         </EmptyState>
       ) : !settled || loading ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton
+          headers={headerLabels(COLUMNS)}
+          leading={canBulkDelete ? 1 : 0}
+          trailing={1}
+        />
       ) : rows.length === 0 ? (
         <EmptyState
           icon={<Icon.parameter size={20} />}

@@ -90,6 +90,24 @@ afterEach(() => {
 });
 
 describe("policy list", () => {
+  it("reserves the loaded table's column count while loading", async () => {
+    let settle: (page: { policies: Policy[]; next_page_token: string }) => void = () => {};
+    vi.mocked(api.listPolicies).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<PoliciesPage />);
+    const skeletonColumns = document.querySelectorAll("thead th").length;
+    expect(skeletonColumns).toBeGreaterThan(0);
+
+    settle({ policies: [policy("first")], next_page_token: "" });
+    await screen.findByText("first");
+    // The loaded header adds an actions gutter the skeleton must stand in for.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
   it("reorders the loaded page from a column header and records the sort in the URL", async () => {
     vi.mocked(api.listPolicies).mockResolvedValue({
       policies: [policy("second"), policy("first")],

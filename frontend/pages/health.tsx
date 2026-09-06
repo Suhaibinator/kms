@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
+import { headerLabels, SortHeaderRow, staticController } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -16,6 +17,16 @@ import { formatRelative, formatUnixMs } from "@/lib/format";
 import { useLatestRequest } from "@/lib/hooks";
 import type { HealthResponse, KeyMetadata } from "@/lib/types";
 import { useNow } from "@/lib/useNow";
+
+// Key metadata arrives in the server's own order and there is never more than a
+// handful of generations, so nothing here sorts. The columns are still declared
+// so the header row comes from `SortHeaderRow` like every other list's.
+const KEY_COLUMNS = staticController<KeyMetadata>([
+  { id: "id", label: "ID" },
+  { id: "source", label: "Source" },
+  { id: "state", label: "State" },
+  { id: "created", label: "Created" },
+]);
 
 function keyStateKind(state: string): "success" | "warning" | "neutral" {
   const s = state.toLowerCase();
@@ -81,7 +92,7 @@ export default function HealthPage() {
           </div>
           <div className="card">
             <h2 className="card-title">Encryption keys</h2>
-            <TableSkeleton headers={["ID", "Source", "State", "Created"]} rows={3} />
+            <TableSkeleton headers={headerLabels(KEY_COLUMNS.columns)} rows={3} />
           </div>
         </>
       ) : (
@@ -146,12 +157,7 @@ export default function HealthPage() {
               <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Source</th>
-                      <th>State</th>
-                      <th>Created</th>
-                    </tr>
+                    <SortHeaderRow controller={KEY_COLUMNS} />
                   </thead>
                   <tbody>
                     {keys.map((k) => (

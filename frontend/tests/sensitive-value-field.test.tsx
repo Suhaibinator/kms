@@ -7,8 +7,8 @@ import { Field } from "@/components/ui";
 vi.mock("@/context/ToastContext", () => ({ useToast: () => ({ error: vi.fn() }) }));
 afterEach(() => vi.restoreAllMocks());
 
-function Input({ multiline = false, disabled = false }) {
-  const [value, setValue] = useState("initial credential");
+function Input({ multiline = false, disabled = false, initial = "initial credential" }) {
+  const [value, setValue] = useState(initial);
   return (
     <Field label="Credential" hint="Save this key" required>
       <SensitiveValueField
@@ -62,6 +62,16 @@ describe("SensitiveValueField", () => {
       expect(input).toHaveAttribute("type", "text");
     },
   );
+
+  it("keeps Copy mounted and disabled while the value is empty", () => {
+    render(<Input initial="" />);
+    // Mounting it on the first keystroke pushed the controls after it sideways
+    // and could add a line to the field mid-edit.
+    const copy = screen.getByRole("button", { name: "Copy credential" });
+    expect(copy).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Credential/), { target: { value: "s3cret" } });
+    expect(screen.getByRole("button", { name: "Copy credential" })).toBeEnabled();
+  });
 
   it("disables the input and all shared actions", () => {
     render(<Input disabled />);

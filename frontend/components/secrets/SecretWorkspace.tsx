@@ -19,6 +19,7 @@ export function SecretWorkspace({
   if (!secretRef) return null;
   return (
     <SecretManager
+      key={JSON.stringify([secretRef.env, secretRef.app, secretRef.key])}
       resourceRef={secretRef}
       surface="workspace"
       context={context}

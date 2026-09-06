@@ -284,6 +284,23 @@ describe("ConfigurationMatrix", () => {
     );
   });
 
+  it("names the action column and scopes the comparison width floor to environment cells", () => {
+    const overview = clone(ready);
+    renderMatrix(overview);
+    // The trailing column was an unnamed <th> that screen readers announced as
+    // a blank, and that inherited the 160px floor meant for value comparison.
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toHaveClass("matrix-actions");
+
+    const envCount = overview.environments.length;
+    const headers = document.querySelectorAll("thead th.matrix-env");
+    expect(headers).toHaveLength(envCount);
+    // Key, Kind and the action cell must not carry the floor.
+    for (const row of document.querySelectorAll("tbody tr")) {
+      expect(row.querySelectorAll("td.matrix-env")).toHaveLength(envCount);
+      expect(row.querySelector("td.matrix-key")).not.toHaveClass("matrix-env");
+    }
+  });
+
   it("links each environment header to that environment on the application page", () => {
     const overview = clone(ready);
     renderMatrix(overview);

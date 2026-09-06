@@ -158,7 +158,7 @@ export function ConfigurationMatrix({
               after={
                 <>
                   {environments.map((env) => (
-                    <th key={env.env} scope="col">
+                    <th key={env.env} scope="col" className="matrix-env">
                       <Ident
                         kind="env"
                         value={env.env}
@@ -168,7 +168,9 @@ export function ConfigurationMatrix({
                       />
                     </th>
                   ))}
-                  <th />
+                  <th className="matrix-actions">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </>
               }
             />
@@ -191,7 +193,7 @@ export function ConfigurationMatrix({
                     <Badge kind="neutral">{row.kind}</Badge>
                   </td>
                   {environments.map((env) => (
-                    <td key={env.env}>
+                    <td key={env.env} className="matrix-env">
                       <MatrixCell
                         row={row}
                         environment={env.env}
@@ -204,7 +206,7 @@ export function ConfigurationMatrix({
                       />
                     </td>
                   ))}
-                  <td>
+                  <td className="matrix-actions">
                     {row.kind === "parameter" ? (
                       <Button variant="outline" size="sm" onClick={() => onEdit(row)}>
                         <SlidersHorizontal size={14} />
@@ -231,9 +233,11 @@ export function ConfigurationMatrix({
                 <td className="matrix-key">Missing</td>
                 <td />
                 {environments.map((env, index) => (
-                  <td key={env.env}>{missing[index] > 0 ? `${missing[index]} missing` : null}</td>
+                  <td key={env.env} className="matrix-env">
+                    {missing[index] > 0 ? `${missing[index]} missing` : null}
+                  </td>
                 ))}
-                <td />
+                <td className="matrix-actions" />
               </tr>
             </tfoot>
           ) : null}
@@ -334,7 +338,9 @@ function MatrixCell({
           v{cell.version} · {cell.content_type}
         </span>
         {drift}
-        <CopyButton value={text} label="Copy" className="matrix-copy" />
+        {/* Sized through utilities: the Button cva's own h-/px- utilities beat
+            any component-layer rule, however specific. */}
+        <CopyButton value={text} label="Copy" className="matrix-copy h-[22px] px-2" />
       </span>
     </div>
   );

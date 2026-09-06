@@ -215,6 +215,24 @@ describe("ApplicationsPage", () => {
     );
   });
 
+  it("names the list's action column and separates the archived pill from the name", async () => {
+    const archived = clone(ready.application);
+    archived.name = "orders";
+    archived.archived_at_unix_ms = 1;
+    mocks.listApplications.mockResolvedValue({
+      applications: [archived],
+      next_page_token: "",
+    });
+    render(<ApplicationsPage />);
+    // Was an empty <th>, announced as a blank column.
+    expect(await screen.findByRole("columnheader", { name: "Actions" })).toBeVisible();
+    // The JSX newline between the name and the badge is stripped, so the gap
+    // has to come from the link's own layout.
+    const link = screen.getByRole("link", { name: "Manage orders" });
+    expect(link).toHaveClass("inline-flex", "items-center", "gap-2");
+    expect(within(link).getByText("archived")).toBeVisible();
+  });
+
   it("shows a skeleton instead of the list until the router has hydrated", () => {
     mocks.isReady = false;
     mocks.query = { app: ready.application.name };

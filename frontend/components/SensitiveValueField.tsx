@@ -65,7 +65,12 @@ export function SensitiveValueField({
           onClick={() => setVisible((current) => !current)}
         >
           {visible ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
-          {`${visible ? "Hide" : "Show"} ${controlLabel}`}
+          {/* Only the verb changes, and an unpinned width slid Generate and Copy
+              sideways — and could rewrap this row — on every click. */}
+          <span>
+            <span className="inline-block min-w-[4.5ch]">{visible ? "Hide" : "Show"}</span>{" "}
+            {controlLabel}
+          </span>
         </Button>
         <ActionMenu
           align="start"
@@ -93,13 +98,14 @@ export function SensitiveValueField({
             },
           }))}
         />
-        {value ? (
-          <CopyButton
-            label={controlLabel === "value" ? "Copy" : `Copy ${controlLabel}`}
-            value={() => value}
-            disabled={disabled}
-          />
-        ) : null}
+        {/* Always mounted: appearing on the first keystroke pushed the controls
+            after it sideways, and near the wrap threshold added a line to the
+            field while the operator was still typing into it. */}
+        <CopyButton
+          label={controlLabel === "value" ? "Copy" : `Copy ${controlLabel}`}
+          value={() => value}
+          disabled={disabled || !value}
+        />
         {additionalControls}
       </div>
     </div>

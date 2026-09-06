@@ -87,6 +87,18 @@ describe("NamespacesPage", () => {
     expect(screen.getByText("dev").closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
   });
 
+  it("reserves the loaded table's column count while loading", () => {
+    mocks.namespaces.loading = true;
+    const { rerender } = render(<NamespacesPage />);
+    const skeletonColumns = document.querySelectorAll("thead th").length;
+
+    mocks.namespaces = { ...mocks.namespaces, loading: false, namespaces: [namespace("dev")] };
+    rerender(<NamespacesPage />);
+    // The loaded header adds an actions gutter the skeleton must stand in for,
+    // or every column shifts the moment the data arrives.
+    expect(document.querySelectorAll("thead th")).toHaveLength(skeletonColumns);
+  });
+
   it("reorders every environment table from a column header and records it in the URL", () => {
     mocks.namespaces.namespaces = [
       namespace("dev", { parameters: 9 }),
@@ -158,6 +170,20 @@ describe("NamespacesPage", () => {
     await waitFor(() =>
       expect(mocks.deleteNamespace).toHaveBeenCalledWith({ env: "dev", app: "payments-api" }),
     );
+  });
+
+  it("shows the namespace being edited as read-only, not as a disabled control", async () => {
+    mocks.namespaces.namespaces = [namespace("dev")];
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog");
+
+    // It is a display of what is being edited, so it has to stay legible and
+    // selectable; `disabled` greyed it out and took it off the tab order.
+    const field = within(modal).getByLabelText("Namespace");
+    expect(field).toHaveValue("dev/payments-api");
+    expect(field).toHaveAttribute("readonly");
+    expect(field).toBeEnabled();
   });
 
   it("requires at least one auth method inline before saving", async () => {

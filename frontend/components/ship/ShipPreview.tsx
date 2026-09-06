@@ -273,11 +273,13 @@ export function ShipPreview({
               <div className="danger-panel" role="alert">
                 <strong>The candidate release is invalid; Ship stays disabled.</strong>
                 {preview.validation.errors.length > 0 ? (
-                  <ViolationTable
-                    violations={preview.validation.errors}
-                    resolveHref={resolveHref}
-                    onEdit={onEditAlias}
-                  />
+                  <div className="mt-3">
+                    <ViolationTable
+                      violations={preview.validation.errors}
+                      resolveHref={resolveHref}
+                      onEdit={onEditAlias}
+                    />
+                  </div>
                 ) : (
                   <div className="text-sm mt-2">
                     The server reported no violations; refresh the preview.

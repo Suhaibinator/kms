@@ -269,6 +269,28 @@ describe("CommandPalette", () => {
     expect(mocks.push).toHaveBeenCalledTimes(1);
   });
 
+  it("reserves the enter glyph on every row so arrowing does not re-truncate subtitles", async () => {
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "gradethis" } });
+    const options = await screen.findAllByRole("option");
+    // Mounted everywhere; only the selected row's copy is visible, so the
+    // glyph's width is charged to every row's layout, not just the active one.
+    for (const option of options) {
+      expect(option.querySelector(".palette-item-enter")).not.toBeNull();
+    }
+    expect(options[0]?.querySelector(".palette-item-enter")).not.toHaveClass(
+      "palette-item-enter-idle",
+    );
+    expect(options[1]?.querySelector(".palette-item-enter")).toHaveClass("palette-item-enter-idle");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(options[0]?.querySelector(".palette-item-enter")).toHaveClass("palette-item-enter-idle");
+    expect(options[1]?.querySelector(".palette-item-enter")).not.toHaveClass(
+      "palette-item-enter-idle",
+    );
+  });
+
   it("closes on Escape and shows an empty state for no matches", async () => {
     const onOpenChange = vi.fn();
     render(<CommandPalette open onOpenChange={onOpenChange} />);

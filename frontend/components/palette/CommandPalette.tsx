@@ -231,9 +231,14 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
                 >
                   <span className="palette-item-title">{item.title}</span>
                   {item.subtitle ? <span className="palette-item-sub">{item.subtitle}</span> : null}
-                  {selected ? (
-                    <CornerDownLeft size={13} aria-hidden className="palette-item-enter" />
-                  ) : null}
+                  {/* Mounted on every row and hidden with visibility: the glyph
+                      is flex-shrink: 0, so mounting it only on the selected row
+                      re-truncated that row's subtitle on every arrow key. */}
+                  <CornerDownLeft
+                    size={13}
+                    aria-hidden
+                    className={cn("palette-item-enter", !selected && "palette-item-enter-idle")}
+                  />
                 </div>
               );
             })}

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ContractEditor, exportContract } from "@/components/applications/ContractEditor";
+import { Field } from "@/components/ui";
 import type { ContractEntry, ParsedContractFile } from "@/lib/contract-derive";
 
 vi.mock("@/context/ToastContext", () => ({
@@ -31,15 +32,22 @@ function Harness({
   schemaJson,
   onChange,
   onImport,
+  // A wrapping <Field> clones its control with id/aria-*; pass them through so
+  // the harness is transparent to that.
+  ...forwarded
 }: {
   initial: ContractEntry[];
   schemaJson?: string | null;
   onChange?: (next: ContractEntry[]) => void;
   onImport?: (parsed: ParsedContractFile) => void;
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   return (
     <ContractEditor
+      {...forwarded}
       value={value}
       schemaJson={schemaJson}
       onImport={onImport}
@@ -179,6 +187,38 @@ describe("ContractEditor", () => {
     expect(rows()).toHaveLength(3);
     fireEvent.click(within(alignment).getByRole("button", { name: "Use json" }));
     expect(within(alignment).getByText("Aligned with the schema.")).toBeVisible();
+  });
+
+  it("takes the id and description a wrapping Field hands it", () => {
+    render(
+      <Field label="Contract" hint="Every alias the application reads">
+        <Harness
+          initial={[{ alias: "database", kind: "parameter", content_type: "json" }]}
+          onChange={() => undefined}
+        />
+      </Field>,
+    );
+    // <Field> clones its control with these; dropping them left the label's
+    // htmlFor pointing at an id that never reached the DOM.
+    const first = screen.getByRole("textbox", { name: "Alias 1" });
+    expect(screen.getByText("Contract").closest("label")).toHaveAttribute("for", first.id);
+    expect(first).toHaveAccessibleDescription("Every alias the application reads");
+  });
+
+  it("lays the caption row and the alias rows out on one subgrid", () => {
+    render(
+      <Harness
+        initial={[
+          { alias: "database", kind: "parameter", content_type: "json" },
+          { alias: "db_password", kind: "secret" },
+        ]}
+      />,
+    );
+    // Per-row grids resolved their own `fr` share, so a row carrying a badge
+    // came out narrower than the row above it and the captions drifted.
+    const grid = document.querySelector(".contract-editor-grid");
+    expect(grid?.querySelector(".contract-editor-head")).toBeInTheDocument();
+    expect(grid?.querySelector(".contract-editor-rows")).toBeInTheDocument();
   });
 
   it("exports the envelope for the current rows", () => {

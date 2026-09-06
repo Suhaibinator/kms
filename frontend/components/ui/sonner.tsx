@@ -1,11 +1,11 @@
-import { Toaster as Sonner, type ToasterProps } from "sonner";
 import {
   CircleCheckIcon,
   InfoIcon,
-  TriangleAlertIcon,
-  OctagonXIcon,
   Loader2Icon,
+  OctagonXIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
+import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
@@ -29,7 +29,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
       }
       toastOptions={{
         classNames: {
-          toast: "cn-toast",
+          // sonner styles the action button off --normal-bg/--normal-text,
+          // which richColors never repaints — a solid near-black pill on a
+          // tinted card. Every other action in the console is primary blue.
+          actionButton: "bg-primary! text-primary-foreground!",
+          cancelButton: "bg-muted! text-muted-foreground!",
         },
       }}
       {...props}

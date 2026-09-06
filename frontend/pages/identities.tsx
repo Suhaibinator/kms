@@ -9,6 +9,7 @@ import {
   useBulkSelection,
 } from "@/components/BulkSelection";
 import CopyButton from "@/components/CopyButton";
+import { NamespaceIdent } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
@@ -720,7 +721,11 @@ export default function IdentitiesPage() {
       </details>
 
       {loading ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} />
+        <TableSkeleton
+          headers={headerLabels(COLUMNS)}
+          leading={canBulkRevoke ? 1 : 0}
+          trailing={1}
+        />
       ) : identities.length === 0 ? (
         <EmptyState
           icon={<Icon.identity size={20} />}
@@ -793,7 +798,7 @@ export default function IdentitiesPage() {
                     </td>
                     <td data-label="Namespace">
                       {id.namespace ? (
-                        <span className="chip">{displayNamespace(id.namespace)}</span>
+                        <NamespaceIdent ns={id.namespace} />
                       ) : (
                         <span className="faint">unbound</span>
                       )}
@@ -832,7 +837,9 @@ export default function IdentitiesPage() {
                         {id.has_token ? (
                           <span
                             className={
-                              tokenAvailability === "allowed" ? undefined : "action-unavailable"
+                              tokenAvailability === "allowed"
+                                ? "row-action-group"
+                                : "row-action-group action-unavailable"
                             }
                           >
                             <Button
@@ -909,6 +916,7 @@ export default function IdentitiesPage() {
         mobileFullScreen
         open={createOpen}
         wide
+        wizard
         title={
           createStep === 1
             ? identityMode === "application"
@@ -1323,12 +1331,20 @@ export default function IdentitiesPage() {
                         const revocable = status.label === "valid";
                         return (
                           <tr key={cert.serial}>
-                            <td data-label="Fingerprint" className="mono text-sm">
-                              {cert.fingerprint}
+                            {/* A full SHA-256 fingerprint is an unbreakable
+                                480px box that pushed this table ~540px past the
+                                modal it lives in. The tooltip carries the whole
+                                value; the revoke confirmation prints it in full. */}
+                            <td
+                              data-label="Fingerprint"
+                              className="mono text-sm"
+                              title={cert.fingerprint}
+                            >
+                              {shortSerial(cert.fingerprint)}
                             </td>
                             <td data-label="Serial" className="mono text-sm">
                               <span className="row-wrap">
-                                <span>{shortSerial(cert.serial)}</span>
+                                <span title={cert.serial}>{shortSerial(cert.serial)}</span>
                                 <CopyButton label="Copy serial" value={cert.serial} />
                               </span>
                             </td>
@@ -1584,6 +1600,7 @@ function CredentialsModal({
       mobileFullScreen
       open={credentials !== null}
       wide
+      wizard
       dismissible={false}
       title={
         stage === 3

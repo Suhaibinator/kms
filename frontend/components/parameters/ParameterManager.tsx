@@ -379,14 +379,36 @@ export default function ParameterManager({
   const trail = hasRef ? crumbs.parameter(ref) : undefined;
 
   if (surface === "workspace" && (loadState !== "success" || !meta)) {
-    const title =
-      loadState === "not-found"
-        ? "Parameter not found"
-        : loadState === "error"
-          ? "Could not load parameter"
-          : displayPath(ref);
+    const settled = loadState === "not-found" || loadState === "error";
     return (
-      <Modal mobileFullScreen open wide title={title} onClose={() => onClose?.()}>
+      <Modal
+        mobileFullScreen
+        open
+        workspace
+        title={
+          loadState === "not-found" ? (
+            "Parameter not found"
+          ) : loadState === "error" ? (
+            "Could not load parameter"
+          ) : (
+            // Same shape as the loaded title, so the header keeps its height.
+            <span className="row-wrap">
+              <span className="mono">{displayPath(ref)}</span>
+            </span>
+          )
+        }
+        description={
+          settled ? undefined : context ? (
+            <span className="row-wrap">
+              {displayNamespace(ref)}
+              {context}
+            </span>
+          ) : (
+            displayNamespace(ref)
+          )
+        }
+        onClose={() => onClose?.()}
+      >
         {loadState === "not-found" ? (
           <EmptyState title="Not found">No parameter exists at {displayPath(ref)}.</EmptyState>
         ) : loadState === "error" ? (
@@ -397,7 +419,39 @@ export default function ParameterManager({
             <Button onClick={() => void load()}>Try again</Button>
           </>
         ) : (
-          <Skeleton height={160} />
+          // The loaded chrome, inert: the dialog must not gain a toolbar or
+          // change height when the data arrives. Hidden from the accessibility
+          // tree because none of these placeholders can be operated.
+          <Tabs defaultValue="overview">
+            <div className="secret-workspace-toolbar" aria-hidden>
+              <TabsList variant="line">
+                <TabsTrigger value="overview" disabled>
+                  Overview
+                </TabsTrigger>
+                <TabsTrigger value="versions" disabled>
+                  Versions
+                </TabsTrigger>
+              </TabsList>
+              <div className="row-wrap">
+                <Button size="sm" disabled>
+                  New version
+                </Button>
+                <Button variant="destructive" size="sm" disabled>
+                  Delete
+                </Button>
+              </div>
+            </div>
+            <TabsContent value="overview" className="secret-workspace-stack">
+              <div className="card">
+                <div className="card-title">Current value</div>
+                <Skeleton height={72} />
+              </div>
+              <div className="card">
+                <div className="card-title">Metadata</div>
+                <Skeleton height={140} />
+              </div>
+            </TabsContent>
+          </Tabs>
         )}
       </Modal>
     );
@@ -419,11 +473,15 @@ export default function ParameterManager({
         </div>
         <div className="card">
           <div className="card-title">Metadata</div>
-          <Skeleton height={96} />
+          <Skeleton height={140} />
         </div>
         <div className="card">
           <div className="card-title">Version history</div>
-          <TableSkeleton headers={["Version", "State", "Created by", "Created"]} rows={3} />
+          <TableSkeleton
+            headers={["Version", "State", "Created by", "Created"]}
+            trailing={1}
+            rows={3}
+          />
         </div>
       </>
     );
@@ -896,7 +954,7 @@ export default function ParameterManager({
       <Modal
         mobileFullScreen
         open
-        wide
+        workspace
         title={
           <span className="row-wrap">
             <span className="mono">{displayPath(ref)}</span>
@@ -922,9 +980,12 @@ export default function ParameterManager({
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="versions">Versions</TabsTrigger>
             </TabsList>
+            {/* `sm` so the row fits beside the 31px tab list. */}
             <div className="row-wrap">
-              <Button onClick={() => openNewVersion()}>New version</Button>
-              <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+              <Button size="sm" onClick={() => openNewVersion()}>
+                New version
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
                 Delete
               </Button>
             </div>

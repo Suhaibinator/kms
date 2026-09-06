@@ -124,7 +124,9 @@ describe("RollbackDialog", () => {
     await within(dialog()).findByText("is valid and can be activated.");
     expect(confirmButton()).toBeDisabled();
     const field = within(dialog()).getByTestId("rollback-confirm-env");
-    // The field appears only after validation, and takes focus when it does.
+    // The field is mounted from the start and enabled by validation; it takes
+    // focus when it becomes usable.
+    expect(field).toBeEnabled();
     await waitFor(() => expect(field).toHaveFocus());
     fireEvent.change(field, { target: { value: "pro" } });
     expect(confirmButton()).toBeDisabled();
@@ -158,7 +160,9 @@ describe("RollbackDialog", () => {
       links.secretDetail({ ...prodNs, key: entry?.ref.key ?? "" }),
     );
     expect(confirmButton()).toBeDisabled();
-    expect(within(dialog()).queryByTestId("rollback-confirm-env")).toBeNull();
+    // The field holds its place for the whole of a production rollback so the
+    // dialog does not grow when validation lands; it is disabled until valid.
+    expect(within(dialog()).getByTestId("rollback-confirm-env")).toBeDisabled();
   });
 
   it("explains a 412 without violations", async () => {

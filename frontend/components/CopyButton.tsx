@@ -1,6 +1,6 @@
-import { Button } from "@/components/ui/button";
 import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 
 interface CopyButtonProps {
@@ -8,6 +8,9 @@ interface CopyButtonProps {
   // are passed lazily and never rendered here.
   value: string | (() => string);
   label?: string;
+  /** `icon-sm` hides the label (it stays the accessible name) for rows too
+   *  narrow to spend ~90px on a word every reader already knows. */
+  size?: "sm" | "icon-sm";
   className?: string;
   disabled?: boolean;
 }
@@ -15,6 +18,7 @@ interface CopyButtonProps {
 export default function CopyButton({
   value,
   label = "Copy",
+  size = "sm",
   className,
   disabled,
 }: CopyButtonProps) {
@@ -67,13 +71,17 @@ export default function CopyButton({
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size={size}
       className={className}
       disabled={disabled}
+      title={size === "icon-sm" ? label : undefined}
       onClick={onCopy}
     >
-      {copied ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
-      {copied ? "Copied" : label}
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      {/* The label never changes, so the button never changes width; the icon
+          swap and the live region carry the confirmation. Icon-only keeps the
+          same accessible name, visually hidden. */}
+      {size === "icon-sm" ? <span className="sr-only">{label}</span> : label}
       <span className="sr-only" aria-live="polite">
         {copied ? "Copied to clipboard" : ""}
       </span>
