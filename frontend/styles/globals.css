@@ -541,6 +541,8 @@
   }
 
   .stat {
+    min-width: 0;
+    overflow-wrap: anywhere;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -2526,6 +2528,8 @@
 
   .application-matrix {
     overflow-x: auto;
+    /* Wide table descendants must not expand the mobile layout viewport. */
+    contain: inline-size layout paint;
   }
 
   .application-matrix table {
@@ -2544,6 +2548,12 @@
     z-index: 1;
     min-width: 210px;
     background: var(--surface);
+  }
+  @media (max-width: 768px) {
+    /* Let environment values scroll into the full viewport without the key covering them. */
+    .application-matrix .matrix-key {
+      position: static;
+    }
   }
   /* The sticky column paints over the row beneath it, so it has to repeat both
      the header tint and the row hover itself. */
@@ -3458,4 +3468,224 @@
   --radius-2xl: 20px;
   --radius-3xl: 24px;
   --radius-4xl: 999px;
+}
+
+/* Mobile adaptations are isolated so desktop sizing remains the baseline. */
+@layer components {
+  .mobile-list-toolbar,
+  .mobile-comparison-hint {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    .filters > .field,
+    .filters > .filter-grow,
+    .release-context-bar > .field,
+    .release-context-bar > .filter-grow {
+      flex: 0 0 auto;
+    }
+    .page-header > *,
+    .page-actions,
+    .field,
+    .card,
+    .table-wrap,
+    .row-wrap > *,
+    .between > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+    .page-actions {
+      flex-shrink: 1;
+    }
+    .page,
+    [data-modal-body] {
+      overflow-wrap: anywhere;
+    }
+    .page {
+      padding-left: max(16px, env(safe-area-inset-left));
+      padding-right: max(16px, env(safe-area-inset-right));
+      padding-bottom: max(48px, env(safe-area-inset-bottom));
+    }
+    .mobile-topbar {
+      padding-top: max(10px, env(safe-area-inset-top));
+    }
+    .bulk-bar {
+      flex-wrap: wrap;
+      bottom: max(12px, env(safe-area-inset-bottom));
+    }
+    [data-slot="button"][data-size],
+    [data-slot="dialog-close"],
+    [data-slot="sheet-close"],
+    [role="tab"],
+    .sort-button,
+    .nav-search,
+    [role="menuitem"],
+    [role="option"],
+    summary {
+      min-height: 44px;
+      min-width: 44px;
+    }
+    [data-slot="input"],
+    [data-slot="textarea"],
+    [data-slot="select-trigger"],
+    textarea,
+    select {
+      font-size: 16px;
+      min-height: 44px;
+      max-width: 100%;
+    }
+    [role="tablist"] {
+      max-width: 100%;
+      height: auto;
+      flex-wrap: wrap;
+    }
+    .mobile-comparison-hint {
+      display: block;
+      padding: 12px;
+      color: var(--text-muted);
+    }
+    .contract-editor-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .release-builder-basics,
+    .release-builder-entry,
+    .release-overview-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .mobile-sidebar {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .mobile-list-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .mobile-list-toolbar > label {
+      display: flex;
+      flex: 1 1 120px;
+      min-width: 0;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .mobile-sort-field {
+      position: relative;
+    }
+    .mobile-sort-field::after {
+      content: "";
+      position: absolute;
+      right: 14px;
+      bottom: 20px;
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg);
+      pointer-events: none;
+    }
+    .mobile-list-toolbar select {
+      appearance: none;
+      height: 44px;
+      width: 100%;
+      padding: 8px 32px 8px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elev);
+      color: var(--text);
+    }
+    .mobile-list-toolbar > .mobile-list-selection {
+      flex: 1 1 100%;
+      flex-direction: row;
+      align-items: center;
+    }
+    .mobile-list-hint {
+      flex-basis: 100%;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .table-wrap.card-table td,
+    .table-wrap.card-table .cell-path,
+    .table-wrap.card-table .mono {
+      overflow-wrap: anywhere;
+      white-space: normal;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .table-wrap.card-table td.select-cell {
+      width: auto;
+    }
+    .table-wrap.card-table caption {
+      display: block;
+    }
+  }
+}
+
+/* These overrides belong to utilities: Modal's footprint is authored there. */
+@layer utilities {
+  @media (max-width: 768px) {
+    [data-slot="dialog-content"][data-mobile-fullscreen] {
+      /* Reset Tailwind offsets even when the CSS compiler folds translate into transform. */
+      --tw-translate-x: 0px;
+      --tw-translate-y: 0px;
+      top: var(--mobile-modal-top, 0px);
+      left: 0;
+      width: 100%;
+      max-width: 100%;
+      /* WebKit can briefly report the previous visual viewport after a resize. */
+      height: min(var(--mobile-modal-height, 100dvh), 100dvh);
+      max-height: min(var(--mobile-modal-height, 100dvh), 100dvh);
+      transform: none;
+      translate: 0px 0px;
+      animation: none;
+      border-radius: 0;
+      padding-top: env(safe-area-inset-top);
+      padding-right: env(safe-area-inset-right);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+    }
+    [data-mobile-fullscreen] > [data-slot="dialog-header"],
+    [data-mobile-fullscreen] > [data-slot="dialog-footer"] {
+      padding-top: 12px;
+      padding-bottom: 12px;
+    }
+    [data-mobile-fullscreen] > [data-modal-body] {
+      padding: 16px;
+      overscroll-behavior: contain;
+    }
+    [data-mobile-fullscreen] > [data-slot="dialog-close"] {
+      top: max(8px, env(safe-area-inset-top));
+      right: max(8px, env(safe-area-inset-right));
+    }
+    [data-slot="input"],
+    [data-slot="textarea"],
+    [data-slot="select-trigger"] {
+      font-size: 16px;
+    }
+    /* Preserve the 16px checkbox chrome while reserving a 44px touch area. */
+    [data-slot="checkbox"] {
+      margin: 14px;
+    }
+    [data-slot="checkbox"]::after {
+      inset: -14px;
+    }
+    [role="tablist"] {
+      height: auto;
+      flex-wrap: wrap;
+    }
+    [role="tab"] {
+      height: auto;
+      white-space: normal;
+    }
+    [data-slot="button"] {
+      white-space: normal;
+      height: auto;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+  }
 }

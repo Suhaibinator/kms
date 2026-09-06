@@ -49,7 +49,6 @@ const NAMESPACE: Namespace = {
 };
 
 const BINDING_KEY = "binding-key-current-0000000000001";
-const NEW_BINDING_KEY = "binding-key-replacement-0000000001";
 
 const SECRET: SecretMetadata = {
   env: NAMESPACE.env,
@@ -398,34 +397,43 @@ describe("new secret validation", () => {
     expect(createSecret).not.toHaveBeenCalled();
   });
 
-  it("sends an opaque binding key without coupling it to access-token generation", async () => {
-    let finish: (value: { version: number; revision: number }) => void = () => undefined;
-    const createSecret = vi.spyOn(api, "createSecret").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    await renderReadyForm();
+  it.each([false, true])(
+    "sends a binding key without coupling it to access-token generation (generated: %s)",
+    async (generated) => {
+      let finish: (value: { version: number; revision: number }) => void = () => undefined;
+      const createSecret = vi.spyOn(api, "createSecret").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      await renderReadyForm();
 
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /Bind this version to an application key/ }),
-    );
-    const input = screen.getByLabelText("Binding key");
-    const opaqueKey = `  ${"k".repeat(30)}`;
-    fireEvent.change(input, { target: { value: opaqueKey } });
-    fireEvent.submit(input.closest("form") as HTMLFormElement);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /Bind this version to an application key/ }),
+      );
+      const input = screen.getByLabelText("Binding key");
+      let opaqueKey = `  ${"k".repeat(30)}`;
+      if (generated) {
+        await generateBindingKey();
+        opaqueKey = (input as HTMLInputElement).value;
+        expect(opaqueKey).toMatch(/^[0-9a-f]{64}$/);
+      } else {
+        fireEvent.change(input, { target: { value: opaqueKey } });
+      }
+      fireEvent.submit(input.closest("form") as HTMLFormElement);
 
-    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
-    expect(createSecret.mock.calls[0][0]).toMatchObject({
-      binding_key: opaqueKey,
-      generate_access_token: false,
-    });
-    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
-    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
-    expect(input).toHaveValue("");
-    await act(async () => finish({ version: 1, revision: 1 }));
-  });
+      await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+      expect(createSecret.mock.calls[0][0]).toMatchObject({
+        binding_key: opaqueKey,
+        generate_access_token: false,
+      });
+      expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
+      expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
+      expect(input).toHaveValue("");
+      await act(async () => finish({ version: 1, revision: 1 }));
+    },
+  );
 
   it("creates only a new key and keeps the form usable after an existing-secret conflict", async () => {
     const createSecret = vi
@@ -736,10 +744,12 @@ describe("new secret value tools", () => {
 
   it("generates a random value and reveals it", async () => {
     await renderReadyForm();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Value is already base64" }));
     fireEvent.click(screen.getByRole("button", { name: "Generate…" }));
     const menu = await screen.findByRole("menu", { name: "Generate…" });
     fireEvent.click(within(menu).getByRole("menuitem", { name: "32 bytes, hex" }));
     const value = screen.getByRole("textbox", { name: "Value" }) as HTMLTextAreaElement;
+    expect(screen.getByRole("checkbox", { name: "Value is already base64" })).not.toBeChecked();
     expect(value.value).toMatch(/^[0-9a-f]{64}$/);
     expect(value).toHaveAttribute("data-masked", "false");
   });
@@ -819,28 +829,34 @@ describe("new secret version dialog", () => {
     expect(createSecret.mock.calls[0][0]).toMatchObject({ value_base64: "AQID" });
   });
 
-  it("chooses binding protection independently for the new version", async () => {
-    const createSecret = vi
-      .spyOn(api, "createSecret")
-      .mockResolvedValue({ version: 2, revision: 3 });
-    const dialog = await openNewVersion();
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
-      target: { value: "next value" },
-    });
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Bind only this new version/ }));
-    const key = within(dialog).getByLabelText("Binding key");
-    fireEvent.change(key, { target: { value: BINDING_KEY } });
-    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+  it.each([false, true])(
+    "chooses binding protection independently for the new version (generated: %s)",
+    async (generated) => {
+      const createSecret = vi
+        .spyOn(api, "createSecret")
+        .mockResolvedValue({ version: 2, revision: 3 });
+      const dialog = await openNewVersion();
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+        target: { value: "next value" },
+      });
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Bind only this new version/ }));
+      const key = within(dialog).getByLabelText("Binding key");
+      if (generated) await generateBindingKey();
+      else fireEvent.change(key, { target: { value: BINDING_KEY } });
+      const bindingKey = (key as HTMLInputElement).value;
+      expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("next value");
+      fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
 
-    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
-    expect(createSecret.mock.calls[0][0]).toMatchObject({
-      binding_key: BINDING_KEY,
-      generate_access_token: false,
-    });
-    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
-    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
-    expect(key).toHaveValue("");
-  });
+      await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+      expect(createSecret.mock.calls[0][0]).toMatchObject({
+        binding_key: bindingKey,
+        generate_access_token: false,
+      });
+      expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
+      expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
+      expect(key).toHaveValue("");
+    },
+  );
 
   it("preserves binding protection by default when the current version is bound", async () => {
     const createSecret = vi
@@ -914,47 +930,52 @@ describe("binding-key version actions", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
   }
 
-  it("binds and unbinds current into a new version without a cohort preview", async () => {
-    const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
-      current_version: 2,
-      previous_version: 1,
-      revision: 10,
-    });
-    const preview = vi.spyOn(api, "previewSecretBindingCohort");
-    const view = renderDetail(SECRET);
-    fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
-    let dialog = screen.getByRole("dialog", { name: "Bind · v1" });
-    const key = within(dialog).getByLabelText("New binding key");
-    fireEvent.change(key, { target: { value: BINDING_KEY } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
+  it.each([false, true])(
+    "binds and unbinds current into a new version without a cohort preview (generated: %s)",
+    async (generated) => {
+      const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
+        current_version: 2,
+        previous_version: 1,
+        revision: 10,
+      });
+      const preview = vi.spyOn(api, "previewSecretBindingCohort");
+      const view = renderDetail(SECRET);
+      fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
+      let dialog = screen.getByRole("dialog", { name: "Bind · v1" });
+      const key = within(dialog).getByLabelText("New binding key");
+      if (generated) await generateBindingKey();
+      else fireEvent.change(key, { target: { value: BINDING_KEY } });
+      const bindingKey = (key as HTMLInputElement).value;
+      fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
 
-    await waitFor(() =>
-      expect(bind).toHaveBeenCalledWith(
-        { env: "prod", app: "billing", key: "api-key" },
-        1,
-        BINDING_KEY,
-        { signal: expect.any(AbortSignal) },
-      ),
-    );
-    expect(key).toHaveValue("");
-    expect(preview).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(bind).toHaveBeenCalledWith(
+          { env: "prod", app: "billing", key: "api-key" },
+          1,
+          bindingKey,
+          { signal: expect.any(AbortSignal) },
+        ),
+      );
+      expect(key).toHaveValue("");
+      expect(preview).not.toHaveBeenCalled();
 
-    // Re-render a bound row to exercise the inverse exact-version operation.
-    view.unmount();
-    const unbind = vi.spyOn(api, "unbindSecret").mockResolvedValue({
-      current_version: 2,
-      previous_version: 1,
-      revision: 11,
-    });
-    renderBoundDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "Unbind" }));
-    dialog = screen.getByRole("dialog", { name: "Unbind · v1" });
-    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
-      target: { value: BINDING_KEY },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Unbind" }));
-    await waitFor(() => expect(unbind).toHaveBeenCalledTimes(1));
-  });
+      // Re-render a bound row to exercise the inverse exact-version operation.
+      view.unmount();
+      const unbind = vi.spyOn(api, "unbindSecret").mockResolvedValue({
+        current_version: 2,
+        previous_version: 1,
+        revision: 11,
+      });
+      renderBoundDetail();
+      fireEvent.click(await screen.findByRole("button", { name: "Unbind" }));
+      dialog = screen.getByRole("dialog", { name: "Unbind · v1" });
+      fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+        target: { value: BINDING_KEY },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unbind" }));
+      await waitFor(() => expect(unbind).toHaveBeenCalledTimes(1));
+    },
+  );
 
   it("rotates only current into one new version with its current-version CAS", async () => {
     const preview = vi.spyOn(api, "previewSecretBindingCohort");
@@ -970,8 +991,15 @@ describe("binding-key version actions", () => {
     const replacement = within(dialog).getByLabelText("New binding key");
     const confirmation = within(dialog).getByLabelText("Confirm new binding key");
     fireEvent.change(current, { target: { value: BINDING_KEY } });
-    fireEvent.change(replacement, { target: { value: NEW_BINDING_KEY } });
-    fireEvent.change(confirmation, { target: { value: NEW_BINDING_KEY } });
+    await generateBindingKey();
+    const generatedKey = (replacement as HTMLInputElement).value;
+    expect(generatedKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(current).toHaveValue(BINDING_KEY);
+    expect(confirmation).toHaveValue("");
+    fireEvent.change(confirmation, { target: { value: "mismatch" } });
+    expect(within(dialog).getByRole("button", { name: "Rotate binding key" })).toBeDisabled();
+    expect(rotate).not.toHaveBeenCalled();
+    fireEvent.change(confirmation, { target: { value: generatedKey } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
 
     await waitFor(() =>
@@ -979,7 +1007,7 @@ describe("binding-key version actions", () => {
         { env: "prod", app: "billing", key: "api-key" },
         1,
         BINDING_KEY,
-        NEW_BINDING_KEY,
+        generatedKey,
         { signal: expect.any(AbortSignal) },
       ),
     );
@@ -1237,3 +1265,8 @@ describe("binding-key version actions", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+async function generateBindingKey() {
+  fireEvent.click(screen.getByRole("button", { name: "Generate binding key" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "32 bytes, hex" }));
+}

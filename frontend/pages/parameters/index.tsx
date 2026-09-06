@@ -14,7 +14,16 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  ParameterWorkspace,
+  shouldOpenParameterWorkspace,
+} from "@/components/parameters/ParameterWorkspace";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -98,6 +107,7 @@ export default function ParametersPage() {
   const [prefixTouched, setPrefixTouched] = useState(false);
   const [prefix, setPrefix] = useState("");
 
+  const [parameterTarget, setParameterTarget] = useState<Parameter | null>(null);
   const [rows, setRows] = useState<Parameter[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadedScope, setLoadedScope] = useState("");
@@ -454,6 +464,12 @@ export default function ParametersPage() {
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
+          <MobileListToolbar
+            controller={sort}
+            selection={canBulkDelete ? selection : undefined}
+            selectionLabel="Select all parameters on this page"
+            hint={PAGE_SORT_HINT}
+          />
           <table className="data">
             <TableSummary
               shown={sortedRows.length}
@@ -483,7 +499,13 @@ export default function ParametersPage() {
                     <SelectRowCell selection={selection} id={p.key} label={`Select ${p.key}`} />
                   ) : null}
                   <td data-label="Key">
-                    <Link className="cell-path" href={links.parameterDetail(p)}>
+                    <Link
+                      className="cell-path"
+                      href={links.parameterDetail(p)}
+                      onClick={(event) => {
+                        if (shouldOpenParameterWorkspace(event)) setParameterTarget(p);
+                      }}
+                    >
                       {p.key}
                     </Link>
                   </td>
@@ -503,9 +525,16 @@ export default function ParametersPage() {
                   <td className="nowrap" data-label="Created">
                     {formatUnixMs(p.created_at_unix_ms)}
                   </td>
-                  <td>
+                  <td data-label="Actions">
                     <div className="row-actions">
-                      <ButtonLink variant="outline" size="sm" href={links.parameterDetail(p)}>
+                      <ButtonLink
+                        variant="outline"
+                        size="sm"
+                        href={links.parameterDetail(p)}
+                        onClick={(event) => {
+                          if (shouldOpenParameterWorkspace(event)) setParameterTarget(p);
+                        }}
+                      >
                         <Eye size={14} aria-hidden />
                         Details
                       </ButtonLink>
@@ -563,6 +592,7 @@ export default function ParametersPage() {
       />
 
       <Modal
+        mobileFullScreen
         open={createOpen}
         title="New parameter"
         description="Saving creates the parameter's first version and makes it current."
@@ -705,6 +735,12 @@ export default function ParametersPage() {
         completed={bulkDone}
         onConfirm={() => void onBulkDelete()}
         onCancel={() => setBulkOpen(false)}
+      />
+      <ParameterWorkspace
+        parameterRef={parameterTarget}
+        onClose={() => setParameterTarget(null)}
+        onChanged={() => void load(pageToken, ns, prefix)}
+        onDeleted={() => void load(pageToken, ns, prefix)}
       />
     </>
   );

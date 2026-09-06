@@ -138,7 +138,7 @@ export function TableSkeleton({
   rowHeight?: number | string;
 }) {
   return (
-    <div className="table-wrap" aria-busy="true">
+    <div className="table-wrap card-table" aria-busy="true">
       <span className="sr-only">Loading…</span>
       <table className="data">
         <thead>

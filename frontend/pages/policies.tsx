@@ -2,7 +2,12 @@ import { Copy, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   EmptyState,
   Field,
@@ -431,7 +436,8 @@ export default function PoliciesPage() {
           Create a policy to grant an identity access to parameters or secrets.
         </EmptyState>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap card-table">
+          <MobileListToolbar controller={sort} hint={PAGE_SORT_HINT} />
           <table className="data">
             <TableSummary
               shown={policies.length}
@@ -444,12 +450,18 @@ export default function PoliciesPage() {
             <tbody>
               {sort.apply(policies).map((p) => (
                 <tr key={p.name}>
-                  <td className="mono">{p.name}</td>
-                  <td className="mono">{p.subject}</td>
-                  <td>{p.allow?.length ?? 0}</td>
-                  <td>{p.deny?.length ?? 0}</td>
-                  <td className="nowrap">{formatUnixMs(p.updated_at_unix_ms)}</td>
-                  <td>
+                  <td data-label="Name" className="mono">
+                    {p.name}
+                  </td>
+                  <td data-label="Subject" className="mono">
+                    {p.subject}
+                  </td>
+                  <td data-label="Allow">{p.allow?.length ?? 0}</td>
+                  <td data-label="Deny">{p.deny?.length ?? 0}</td>
+                  <td data-label="Updated" className="nowrap">
+                    {formatUnixMs(p.updated_at_unix_ms)}
+                  </td>
+                  <td data-label="Actions">
                     <div className="row-actions">
                       <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
                         <Pencil size={14} aria-hidden />
@@ -483,6 +495,7 @@ export default function PoliciesPage() {
       />
 
       <Modal
+        mobileFullScreen
         open={draft !== null}
         wide
         title={draft?.editing ? `Edit policy: ${draft.name}` : "New policy"}

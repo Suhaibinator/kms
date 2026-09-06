@@ -9,9 +9,15 @@ interface CopyButtonProps {
   value: string | (() => string);
   label?: string;
   className?: string;
+  disabled?: boolean;
 }
 
-export default function CopyButton({ value, label = "Copy", className }: CopyButtonProps) {
+export default function CopyButton({
+  value,
+  label = "Copy",
+  className,
+  disabled,
+}: CopyButtonProps) {
   const toast = useToast();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
@@ -58,7 +64,14 @@ export default function CopyButton({ value, label = "Copy", className }: CopyBut
   }, [toast, value]);
 
   return (
-    <Button type="button" variant="outline" size="sm" className={className} onClick={onCopy}>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className={className}
+      disabled={disabled}
+      onClick={onCopy}
+    >
       {copied ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
       {copied ? "Copied" : label}
       <span className="sr-only" aria-live="polite">

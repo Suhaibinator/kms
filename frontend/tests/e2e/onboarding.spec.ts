@@ -127,7 +127,7 @@ async function installFake(page: Page): Promise<State> {
 
 test("first run: checklist → create wizard → application page with the setup panel", async ({
   page,
-}, testInfo) => {
+}) => {
   const state = await installFake(page);
   await page.goto("/");
 
@@ -138,7 +138,7 @@ test("first run: checklist → create wizard → application page with the setup
   await expect(steps.locator("[aria-current='step']")).toHaveText(/Create an application/);
   await expect(page.locator(".stat-strip")).toBeVisible();
 
-  if (testInfo.project.name === "mobile-chromium") {
+  if ((page.viewportSize()?.width ?? 1280) <= 768) {
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -170,7 +170,7 @@ test("first run: checklist → create wizard → application page with the setup
   await expect(panel.locator("summary")).toHaveText(/Setup · \d+ of \d+ done/);
   await expect(panel.locator("[aria-current='step']")).toHaveText(/Add an environment/);
 
-  if (testInfo.project.name === "mobile-chromium") {
+  if ((page.viewportSize()?.width ?? 1280) <= 768) {
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -181,8 +181,8 @@ test("first run: checklist → create wizard → application page with the setup
 
 test("the command palette opens with ⌘K, ranks the ship deep link first, and navigates", async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name === "mobile-chromium", "keyboard shortcut journey");
+}) => {
+  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "keyboard shortcut journey");
   const state = await installFake(page);
   state.applications.push({
     name: "gradethis",

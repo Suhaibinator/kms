@@ -2,7 +2,12 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -431,6 +436,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
+          <MobileListToolbar controller={sort} hint={PAGE_SORT_HINT} />
           <table className="data">
             <TableSummary
               shown={events.length}
@@ -491,7 +497,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
                       <td className="mono" data-label="Source IP">
                         {e.source_ip || <span className="faint">—</span>}
                       </td>
-                      <td>
+                      <td data-label="Actions">
                         {hasMeta ? (
                           <Button
                             variant="ghost"
@@ -507,7 +513,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
                     </tr>
                     {open && hasMeta ? (
                       <tr id={metaId}>
-                        <td colSpan={7}>
+                        <td data-label="Metadata" colSpan={7}>
                           <JsonView raw={prettyJson(e.metadata_json)} />
                           {e.request_id ? (
                             <div className="faint text-sm mt-2">

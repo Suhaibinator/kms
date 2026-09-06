@@ -11,7 +11,12 @@ import { SchemaRegistry } from "@/components/releases/SchemaRegistry";
 import { parseReleaseKey, releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver } from "@/components/releases/ViolationTable";
 import RollbackDialog from "@/components/ship/RollbackDialog";
-import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  headerLabels,
+  MobileListToolbar,
+  SortHeaderRow,
+  useSort,
+} from "@/components/SortableTable";
 import {
   Badge,
   Button,
@@ -528,6 +533,7 @@ export default function ReleasesPage() {
             </EmptyState>
           ) : (
             <div className="table-wrap card-table">
+              <MobileListToolbar controller={sort} hint={PAGE_SORT_HINT} />
               <table className="data">
                 <TableSummary
                   shown={releases.length}

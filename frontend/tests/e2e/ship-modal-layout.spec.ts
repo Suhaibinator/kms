@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 import { incidentState, mockConsole } from "./fakes/console-api";
 
 test("ship modal body does not scroll horizontally with a wide preview", async ({ page }) => {
-  test.skip(test.info().project.name !== "chromium", "desktop-only layout check");
+  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "desktop-only layout check");
   const state = incidentState();
   // Long aliases and keys, like a real app with many provider credentials,
   // make the preview table's min-content wider than the modal.
@@ -76,14 +76,14 @@ test("ship environment summary is anchored independently of field content", asyn
     };
   });
   expect(layout.alignItems).toBe(
-    testInfo.project.name === "mobile-chromium" ? "stretch" : "flex-start",
+    (page.viewportSize()?.width ?? 1280) <= 768 ? "stretch" : "flex-start",
   );
   expect(layout.field.left).toBeGreaterThanOrEqual(0);
   expect(layout.field.right).toBeLessThanOrEqual(layout.viewportWidth);
   expect(layout.summary.left).toBeGreaterThanOrEqual(0);
   expect(layout.summary.right).toBeLessThanOrEqual(layout.viewportWidth);
 
-  if (testInfo.project.name === "mobile-chromium") {
+  if ((page.viewportSize()?.width ?? 1280) <= 768) {
     expect(layout.summary.top).toBeGreaterThanOrEqual(layout.field.bottom);
     expect(layout.summary.top - layout.field.bottom).toBeLessThanOrEqual(32);
   } else {

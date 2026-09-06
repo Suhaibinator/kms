@@ -1,13 +1,15 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { type ReactNode, useCallback, useMemo } from "react";
+import { type ReactNode, useCallback, useId, useMemo } from "react";
+import type { BulkSelection } from "@/components/BulkSelection";
+import { Checkbox } from "@/components/ui";
 import { useQueryParams } from "@/lib/hooks";
 import {
   ariaSort,
   nextSort,
   parseSort,
-  type SortColumn,
   SORT_DIRECTION_KEY,
   SORT_KEY,
+  type SortColumn,
   type SortState,
   sortQuery,
   sortRows,
@@ -23,6 +25,7 @@ export interface SortController<T> {
   apply: (rows: readonly T[]) => T[];
   /** Cycles a column: unsorted → ascending → descending → unsorted. */
   toggle: (column: string) => void;
+  setSort: (state: SortState | null) => void;
 }
 
 /**
@@ -47,7 +50,18 @@ export function useSort<T>(pathname: string, columns: readonly SortColumn<T>[]):
 
   const apply = useCallback((rows: readonly T[]) => sortRows(rows, columns, sort), [columns, sort]);
 
-  return { sort, columns, apply, toggle };
+  const setSort = useCallback(
+    (state: SortState | null) =>
+      replaceQuery(
+        sortQuery(
+          state && columns.some((column) => column.id === state.column && column.value)
+            ? state
+            : null,
+        ),
+      ),
+    [columns, replaceQuery],
+  );
+  return { sort, columns, apply, toggle, setSort };
 }
 
 function SortHeaderCell<T>({
@@ -114,4 +128,75 @@ export function SortHeaderRow<T>({
 /** The header labels, for a `TableSkeleton` that must match the loaded table. */
 export function headerLabels<T>(columns: readonly SortColumn<T>[]): string[] {
   return columns.map((column) => column.label);
+}
+
+/** Alternate controls for card lists; the desktop table header shares this state. */
+export function MobileListToolbar<T>({
+  controller,
+  selection,
+  selectionLabel = "Select all on this page",
+  hint,
+}: {
+  controller: SortController<T>;
+  selection?: BulkSelection;
+  selectionLabel?: string;
+  hint?: string;
+}) {
+  const selectionId = useId();
+  return (
+    <fieldset className="mobile-list-toolbar" aria-label="List controls">
+      <label className="mobile-sort-field">
+        Sort by
+        <select
+          value={controller.sort?.column ?? ""}
+          onChange={(event) =>
+            controller.setSort(
+              event.target.value
+                ? { column: event.target.value, direction: controller.sort?.direction ?? "asc" }
+                : null,
+            )
+          }
+        >
+          <option value="">Default order</option>
+          {controller.columns
+            .filter((column) => column.value)
+            .map((column) => (
+              <option key={column.id} value={column.id}>
+                {column.label}
+              </option>
+            ))}
+        </select>
+      </label>
+      <label className="mobile-sort-field">
+        Direction
+        <select
+          disabled={!controller.sort}
+          value={controller.sort?.direction ?? "asc"}
+          onChange={(event) =>
+            controller.sort &&
+            controller.setSort({
+              column: controller.sort.column,
+              direction: event.target.value === "desc" ? "desc" : "asc",
+            })
+          }
+        >
+          <option value="asc">Ascending</option>
+          <option value="desc">Descending</option>
+        </select>
+      </label>
+      {hint ? <p className="mobile-list-hint">{hint}</p> : null}
+      {selection ? (
+        <label className="mobile-list-selection" htmlFor={selectionId}>
+          <Checkbox
+            id={selectionId}
+            checked={selection.all}
+            indeterminate={selection.some}
+            disabled={selection.selectable === 0}
+            onCheckedChange={(checked) => selection.setAll(Boolean(checked))}
+          />
+          {selectionLabel} ({selection.count} selected)
+        </label>
+      ) : null}
+    </fieldset>
+  );
 }

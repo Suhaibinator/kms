@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
 import { VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
 import { ApiError, api } from "@/lib/api";
 import type {
@@ -644,5 +645,110 @@ describe("new parameter version dialog", () => {
     // …but one click adopts it, keeping the edited value.
     expect(await within(dialog).findByRole("textbox", { name: "max" })).toHaveValue("4");
     expect(within(dialog).getByText("billing/billing@3")).toBeVisible();
+  });
+});
+
+describe("parameter workspace", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "parameterMetadata").mockResolvedValue({
+      ...PARAMETER_META,
+      metadata_json: '{"owner":"billing"}',
+    });
+    vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
+  });
+
+  it("saves in place, preserves metadata, and notifies its parent", async () => {
+    const onChanged = vi.fn();
+    const save = vi.spyOn(api, "putParameter").mockResolvedValue({ version: 3, revision: 9 });
+    render(<ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+    const editor = await screen.findByRole("dialog", { name: "New parameter version" });
+    expect(within(editor).getByRole("button", { name: "Save new version" })).toBeDisabled();
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Value" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save new version" }));
+    await waitFor(() =>
+      expect(onChanged).toHaveBeenCalledWith({ env: "prod", app: "billing", key: "retries" }),
+    );
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "4", metadata_json: '{\n  "owner": "billing"\n}' }),
+    );
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "/prod/billing/retries" })).toBeVisible();
+  });
+
+  it("keeps a failed save open with the draft intact", async () => {
+    const onChanged = vi.fn();
+    vi.spyOn(api, "putParameter").mockRejectedValue(new Error("offline"));
+    render(<ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+    const editor = await screen.findByRole("dialog", { name: "New parameter version" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Value" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save new version" }));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+    expect(within(editor).getByRole("textbox", { name: "Value" })).toHaveValue("4");
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("closes after deletion and notifies its parent without navigating", async () => {
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    vi.spyOn(api, "deleteParameter").mockResolvedValue({ revision: 9 });
+    render(<ParameterWorkspace parameterRef={PARAMETER} onClose={onClose} onDeleted={onDeleted} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const confirmation = await screen.findByRole("dialog", { name: "Delete parameter?" });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete parameter" }));
+    await waitFor(() =>
+      expect(onDeleted).toHaveBeenCalledWith({ env: "prod", app: "billing", key: "retries" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it("ignores a write response after the workspace is unmounted", async () => {
+    const onChanged = vi.fn();
+    let finish!: (value: { version: number; revision: number }) => void;
+    vi.spyOn(api, "putParameter").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const view = render(
+      <ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} onChanged={onChanged} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+    const editor = await screen.findByRole("dialog", { name: "New parameter version" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Value" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save new version" }));
+    view.unmount();
+    finish({ version: 3, revision: 9 });
+    await Promise.resolve();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+  });
+
+  it("aborts old loads and resets the editor when switching parameters", async () => {
+    let oldSignal: AbortSignal | undefined;
+    vi.mocked(api.getParameter).mockImplementation((ref, _version, _label, options) => {
+      if (ref.key === "retries") {
+        oldSignal = options?.signal;
+        return new Promise(() => {});
+      }
+      return Promise.resolve({ parameter: { ...PARAMETER, key: ref.key, value: "8" } });
+    });
+    const view = render(<ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} />);
+    await waitFor(() => expect(oldSignal).toBeDefined());
+    view.rerender(
+      <ParameterWorkspace parameterRef={{ ...PARAMETER, key: "other" }} onClose={vi.fn()} />,
+    );
+    expect(oldSignal?.aborted).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+    const editor = await screen.findByRole("dialog", { name: "New parameter version" });
+    expect(within(editor).getByRole("textbox", { name: "Value" })).toHaveValue("8");
   });
 });

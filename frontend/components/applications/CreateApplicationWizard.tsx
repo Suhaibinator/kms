@@ -299,6 +299,7 @@ export default function CreateApplicationWizard({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       title={created ? `${created.name} created` : "New application"}
       onClose={dismiss}

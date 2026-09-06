@@ -83,3 +83,46 @@ root quickstart to exercise the deployed routing behavior.
 
 All runtime data comes from the JSON API documented in
 [`docs/http-api.md`](../docs/http-api.md).
+
+## Responsive console
+
+The desktop layout remains the baseline. At 768px and below, navigation uses the
+existing drawer and forms stack with natural field heights. At 640px and below,
+ordinary lists render labeled cards. Sortable lists must also render
+`MobileListToolbar` beside the table, using the same sort controller and bulk
+selection as the desktop header. Every card cell needs a meaningful `data-label`,
+including cells rendered by child row components. Configuration matrices keep
+local horizontal scrolling for comparing environments.
+
+Creation and editing dialogs opt into `Modal`'s `mobileFullScreen` prop. It keeps
+one mounted editor across breakpoints, uses safe-area padding, and follows the
+visual viewport when an on-screen keyboard reduces the available height.
+Confirmation dialogs retain the compact inset layout. Mobile checkbox chrome
+remains compact; its reserved hit area is 44px.
+
+Browser tests now include desktop Chromium, Android Chromium, and iPhone WebKit:
+
+```bash
+npx playwright install chromium webkit
+npm run test:e2e
+```
+
+`mobile-console.spec.ts` covers populated/empty routes with long identifiers;
+`mobile-layout.spec.ts` covers breakpoint geometry, sorting and bulk selection,
+draft preservation, drawer cleanup, request failures, and simulated visual
+viewport changes. The desktop pixel baselines were captured on macOS in both
+themes at 1280px and 1440px; their snapshot test runs on macOS, while behavior and
+geometry tests run on every platform. Set `CAPTURE_QA=1` to save additional mobile
+screenshots in the Playwright output directory.
+
+For concurrent local test runs, isolate the server and output:
+
+```bash
+KMS_E2E_PORT=32190 KMS_E2E_DIST_DIR=.next/mobile-e2e \
+KMS_E2E_OUTPUT_DIR=.next/mobile-results npm run test:e2e
+```
+
+Real-device release checks should exercise iOS Safari and Android Chrome with
+the software keyboard open, portrait/landscape rotation, browser chrome changes,
+safe areas, pinch zoom, and nested discard confirmations. Playwright's WebKit
+project and simulated visual viewport changes do not replace these device checks.

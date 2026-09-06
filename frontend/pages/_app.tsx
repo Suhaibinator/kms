@@ -84,7 +84,7 @@ export default function App({ Component, pageProps }: AppProps) {
             collects, and _app renders above the page, so a fallback here would
             always beat the per-page one. Every page sets its own through
             PageHeader/PageTitle. */}
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="robots" content="noindex, nofollow" />
       </Head>
       <ThemeProvider>

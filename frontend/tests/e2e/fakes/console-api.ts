@@ -35,6 +35,9 @@ export interface FakeParameter {
   content_type: string;
   /** versions[i] is version i + 1. */
   versions: string[];
+  metadataJson?: string;
+  versionMetadata?: string[];
+  versionContentTypes?: string[];
 }
 
 export interface FakeSecret {
@@ -914,6 +917,49 @@ function handle(
       const version = Number(params.get("version") ?? parameter.versions.length);
       return { status: 200, body: { parameter: parameterOf(ns, parameter, version) } };
     }
+    case "GET /parameters/metadata": {
+      const parameter = ns?.parameters[params.get("key") ?? ""];
+      if (!ns || !parameter) return error(404, "not_found", "parameter not found");
+      return {
+        status: 200,
+        body: {
+          ...parameterOf(ns, parameter),
+          updated_at_unix_ms: parameter.versions.length,
+          versions: parameter.versions.map((_value, index) => ({
+            version: index + 1,
+            content_type: parameter.versionContentTypes?.[index] ?? parameter.content_type,
+            metadata_json: parameter.versionMetadata?.[index] ?? "{}",
+            state: "enabled",
+            created_by: "admin",
+            created_at_unix_ms: index + 1,
+          })),
+        },
+      };
+    }
+    case "PUT /parameters": {
+      const ns = nsFor(String(b.env));
+      if (!ns) return error(404, "not_found", "namespace not found");
+      const key = String(b.key);
+      const parameter = ns.parameters[key] ?? { key, content_type: "string", versions: [] };
+      parameter.versionMetadata ??= parameter.versions.map(() => parameter.metadataJson ?? "{}");
+      parameter.versionContentTypes ??= parameter.versions.map(() => parameter.content_type);
+      parameter.content_type = String(b.content_type);
+      parameter.metadataJson = String(b.metadata_json ?? "{}");
+      parameter.versions.push(String(b.value));
+      parameter.versionMetadata.push(parameter.metadataJson);
+      parameter.versionContentTypes.push(parameter.content_type);
+      ns.parameters[key] = parameter;
+      return {
+        status: 200,
+        body: { version: parameter.versions.length, revision: parameter.versions.length },
+      };
+    }
+    case "DELETE /parameters": {
+      const key = params.get("key") ?? "";
+      if (!ns?.parameters[key]) return error(404, "not_found", "parameter not found");
+      delete ns.parameters[key];
+      return { status: 200, body: { revision: 1 } };
+    }
     case "GET /secrets":
       if (!ns) return error(404, "not_found", "namespace not found");
       return {
@@ -1419,9 +1465,9 @@ function parameterOf(ns: FakeNamespace, parameter: FakeParameter, version?: numb
     app: ns.namespace.app,
     key: parameter.key,
     value: parameter.versions[v - 1] ?? "",
-    content_type: parameter.content_type,
+    content_type: parameter.versionContentTypes?.[v - 1] ?? parameter.content_type,
     version: v,
-    metadata_json: "{}",
+    metadata_json: parameter.versionMetadata?.[v - 1] ?? parameter.metadataJson ?? "{}",
     created_by: "admin",
     created_at_unix_ms: 1,
     labels: { current: parameter.versions.length },

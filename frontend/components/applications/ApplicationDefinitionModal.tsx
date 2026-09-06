@@ -104,6 +104,7 @@ export function ApplicationDefinitionModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       title={`Edit ${application.name}`}
       onClose={onClose}

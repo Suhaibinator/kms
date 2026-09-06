@@ -291,7 +291,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
                 No enabled admin is missing a client certificate or about to lose one.
               </EmptyState>
             ) : (
-              <div className="table-wrap">
+              <div className="table-wrap card-table">
                 <table className="data">
                   <thead>
                     <tr>
@@ -339,7 +339,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
             <h2 className="card-title">Identity certificates expiring</h2>
             {identityCerts && identityCerts.items.length > 0 ? (
               <>
-                <div className="table-wrap">
+                <div className="table-wrap card-table">
                   <table className="data">
                     <thead>
                       <tr>
@@ -385,7 +385,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
             <h2 className="card-title">Secret versions expiring</h2>
             {secretVersions && secretVersions.items.length > 0 ? (
               <>
-                <div className="table-wrap">
+                <div className="table-wrap card-table">
                   <table className="data">
                     <thead>
                       <tr>

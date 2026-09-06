@@ -690,10 +690,10 @@ describe("ApplicationsPage", () => {
         name: /Bind this version to an application key/,
       }),
     );
-    const bindingKey = "binding-key-00000000000000000001";
-    fireEvent.change(within(modal).getByLabelText("Binding key"), {
-      target: { value: bindingKey },
-    });
+    fireEvent.click(within(modal).getByRole("button", { name: "Generate binding key" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "32 bytes, hex" }));
+    const bindingKey = (within(modal).getByLabelText("Binding key") as HTMLInputElement).value;
+    expect(bindingKey).toMatch(/^[0-9a-f]{64}$/);
     fireEvent.click(
       within(modal).getByRole("checkbox", { name: /Generate a per-secret access token/ }),
     );

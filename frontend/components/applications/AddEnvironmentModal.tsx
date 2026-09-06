@@ -72,6 +72,7 @@ export function AddEnvironmentModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={open}
       title={`Add environment to ${app}`}
       onClose={onClose}

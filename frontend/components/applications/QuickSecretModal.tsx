@@ -1,3 +1,4 @@
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { JsonEditor } from "@/components/JsonEditor";
@@ -217,6 +218,7 @@ export function QuickSecretModal({
 
   return (
     <Modal
+      mobileFullScreen
       open={seedOpen}
       wide
       title={mintedToken ? "Save this access token now" : "New secret"}
@@ -368,16 +370,14 @@ export function QuickSecretModal({
               {bindVersion ? (
                 <Field
                   label="Binding key"
-                  hint="At least 32 UTF-8 bytes. Used only for this request."
+                  hint="At least 32 UTF-8 bytes. Save this key before submitting; KMS does not store it."
                   error={shownBindingKeyProblem}
                 >
-                  <Input
-                    className="font-mono"
-                    type="password"
+                  <SensitiveValueField
+                    controlLabel="binding key"
+                    placeholder="application binding key"
                     value={bindingKey}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(event) => setBindingKey(event.target.value)}
+                    onChange={setBindingKey}
                     onBlur={() => {
                       errors.touch("bindingKey");
                       if (bindingKeyProblem) setAdvancedOpen(true);
