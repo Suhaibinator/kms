@@ -276,6 +276,12 @@
     gap: var(--space-3);
     font-size: var(--text-sm);
   }
+  /* Keep all release columns visible even when aliases and keys are long. */
+  .ship-entries td[data-label="Alias"],
+  .ship-entries td[data-label="Key"] {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
   .ship-entries tr.ship-entry-changed td {
     background: var(--accent-soft);
   }

@@ -135,7 +135,7 @@ function digestOf(entries: ConfigurationReleaseEntry[]): string {
 export function incidentState(): ConsoleState {
   const overview = incidentJson as unknown as ApplicationOverview;
   const state: ConsoleState = {
-    application: { ...overview.application },
+    application: structuredClone(overview.application),
     namespaces: {},
     revision: 0,
     identity: { name: "admin", kind: "admin", auth_method: "token" },

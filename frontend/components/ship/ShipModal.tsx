@@ -513,7 +513,7 @@ export default function ShipModal({
       <Modal
         mobileFullScreen
         open={open}
-        wide
+        workspace
         title={title}
         onClose={handleClose}
         dismissible={phase !== "shipping"}
