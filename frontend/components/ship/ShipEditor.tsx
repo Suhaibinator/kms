@@ -38,6 +38,8 @@ export interface ShipEditorProps {
   onAddRow: (alias: string) => void;
   onRemoveRow: (alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
+  /** Opens a pinned secret's workspace in place; without it Manage navigates. */
+  onOpenSecret?: (env: string, key: string) => void;
   /** The Environment select's trigger — the step's first control, for the modal's `initialFocus`. */
   initialFocusRef?: Ref<HTMLElement>;
 }
@@ -243,10 +245,12 @@ function SecretPin({
   value,
   environment,
   app,
+  onOpen,
 }: {
   value: OverviewValue;
   environment: string;
   app: string;
+  onOpen?: (env: string, key: string) => void;
 }) {
   const pin =
     value.pinned_version !== undefined
@@ -265,6 +269,7 @@ function SecretPin({
         env={environment}
         app={app}
         keyName={value.key ?? value.alias}
+        onOpen={onOpen}
         className="ship-secret-pin-manage"
       >
         Manage
@@ -288,6 +293,7 @@ export function ShipEditor({
   onAddRow,
   onRemoveRow,
   onAddSecret,
+  onOpenSecret,
   initialFocusRef,
 }: ShipEditorProps) {
   const envSelectId = useId();
@@ -369,6 +375,7 @@ export function ShipEditor({
                 value={value}
                 environment={environment}
                 app={application.name}
+                onOpen={onOpenSecret}
               />
             ))}
           </ul>

@@ -131,6 +131,7 @@ function renderModal(overrides: Partial<ShipModalProps> = {}) {
     open: true,
     onClose: vi.fn(),
     onShipped: vi.fn(),
+    onRolledBack: vi.fn(),
     onAddSecret: vi.fn(),
     ...overrides,
   };
@@ -935,18 +936,27 @@ describe("ShipModal", () => {
       expect(within(dialog()).getByTestId("ship-preview")).toHaveAttribute("data-stale", "false"),
     );
     const confirm = within(dialog()).getByTestId("ship-confirm-env");
-    const form = confirm.closest("form") as HTMLFormElement;
-    expect(shipButton()).toHaveAttribute("type", "submit");
-    expect(shipButton()).toHaveAttribute("form", form.id);
+    expect(shipButton()).toHaveAttribute("type", "button");
 
     fireEvent.change(confirm, { target: { value: "pro" } });
-    fireEvent.submit(form);
+    fireEvent.keyDown(confirm, { key: "Enter" });
     expect(realShips()).toHaveLength(0);
 
     fireEvent.change(confirm, { target: { value: "prod" } });
-    fireEvent.submit(form);
+    fireEvent.keyDown(confirm, { key: "Enter" });
     await waitFor(() => expect(realShips()).toHaveLength(1));
     expect(realShips()[0]).toMatchObject({ environment: "prod", expected_active_version: base });
+  });
+
+  it("never ships on Enter inside a value editor", async () => {
+    const { props } = renderModal();
+    const editor = await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.keyDown(editor, { key: "Enter" });
+    fireEvent.keyPress(editor, { key: "Enter", charCode: 13 });
+    expect(realShips()).toHaveLength(0);
+    expect(props.onShipped).not.toHaveBeenCalled();
   });
 
   it("jumps from a previewed parameter alias to its editor row", async () => {
@@ -1069,7 +1079,7 @@ describe("ShipModal", () => {
       rolled_back_from: next,
       changed: true,
     });
-    renderModal();
+    const { props } = renderModal();
     await editRateLimits();
     await settlePreview();
     await waitFor(() => expect(shipButton()).toBeEnabled());
@@ -1111,5 +1121,8 @@ describe("ShipModal", () => {
     expect(await screen.findByTestId("ship-rolled-back")).toHaveTextContent(
       `${releaseName}@${base}`,
     );
+    // The page reloads for the rollback but must not celebrate the shipped release again.
+    expect(props.onRolledBack).toHaveBeenCalledWith("dev");
+    expect(props.onShipped).toHaveBeenCalledTimes(1);
   });
 });

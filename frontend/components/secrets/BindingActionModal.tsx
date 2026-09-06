@@ -227,18 +227,23 @@ export function BindingActionModal({
         onSaved();
         return;
       }
-      restoreCredentials();
+      const purge = action.kind === "purge" || action.kind === "purge-unbound";
       if (err instanceof ApiError && err.code === "aborted") {
-        if (action.kind === "purge") setCohortPreview(null);
-        else if (action.kind === "purge-unbound") setUnboundPreview(null);
+        // A purge abort returns to the preview stage, where the key field is
+        // not rendered; restoring it there would leave hidden dirty state.
+        if (purge) {
+          if (action.kind === "purge") setCohortPreview(null);
+          else setUnboundPreview(null);
+        } else restoreCredentials();
         toast.error(
           err,
-          action.kind === "purge" || action.kind === "purge-unbound"
+          purge
             ? "Version set changed — preview it again"
             : "Current version changed — reload and try again",
         );
       } else {
-        // The version set is unchanged, so the typed confirmation still holds.
+        // The version set is unchanged, so the typed key and confirmation still hold.
+        restoreCredentials();
         setPurgeText(typedPurgeText);
         toast.error(err, `${bindingActionVerb(action.kind)} failed`);
       }

@@ -110,7 +110,9 @@ export default function ShipModal({
   open,
   onClose,
   onShipped,
+  onRolledBack,
   onAddSecret,
+  onOpenSecret,
 }: ShipModalProps) {
   const [environment, setEnvironment] = useState("");
   const [rows, setRows] = useState<ShipRow[]>([]);
@@ -148,7 +150,6 @@ export default function ShipModal({
   // Whether this open has handed focus to the prefilled row yet.
   const focusedInitialRow = useRef(false);
   const confirmId = useId();
-  const formId = `${confirmId}-form`;
 
   const env = useMemo(
     () => environments.find((candidate) => candidate.namespace.env === environment) ?? null,
@@ -601,8 +602,8 @@ export default function ShipModal({
                 Cancel
               </Button>
               <Button
-                form={formId}
-                type="submit"
+                type="button"
+                onClick={() => void ship()}
                 variant={production ? "destructive-solid" : "default"}
                 disabled={!canShip}
                 loading={phase === "shipping"}
@@ -638,14 +639,7 @@ export default function ShipModal({
           ) : null}
 
           {phase === "compose" || phase === "shipping" ? (
-            <form
-              id={formId}
-              className="ship-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void ship();
-              }}
-            >
+            <div className="ship-form">
               <ShipEditor
                 application={application}
                 environments={environments}
@@ -661,6 +655,7 @@ export default function ShipModal({
                 onAddRow={addRow}
                 onRemoveRow={removeRow}
                 onAddSecret={onAddSecret}
+                onOpenSecret={onOpenSecret}
               />
               <ShipPreview
                 application={application.name}
@@ -705,10 +700,19 @@ export default function ShipModal({
                     disabled={disabled}
                     data-testid="ship-confirm-env"
                     onChange={(event) => setConfirmText(event.target.value)}
+                    // Enter here is the operator's "yes"; nowhere else in the
+                    // editor does Enter ship, so a stray keypress in a value
+                    // field cannot activate a release.
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void ship();
+                      }
+                    }}
                   />
                 </Field>
               ) : null}
-            </form>
+            </div>
           ) : null}
 
           {phase === "rejected" ? (
@@ -896,7 +900,7 @@ export default function ShipModal({
             setRollbackOpen(false);
             setRolledBack(rollback);
             // The environment moved again; let the page reload its overview.
-            if (result) onShipped(result, environment);
+            onRolledBack?.(environment);
           }}
         />
       ) : null}

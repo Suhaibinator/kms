@@ -12,7 +12,8 @@ import { ResourceLink } from "./ResourceLink";
 import { UnreleasedBadge } from "./ValueBadges";
 
 /** What the version chip's tooltip says about the active release's pin. */
-function pinTooltip(value: OverviewValue): string {
+function pinTooltip(value: OverviewValue, hasActiveRelease: boolean): string {
+  if (!hasActiveRelease) return "No release is active in this environment.";
   return value.pinned_version === undefined
     ? "Not in the active release."
     : `Active release pins v${value.pinned_version}`;
@@ -72,7 +73,7 @@ export function ValuesSection({
                   <Ident
                     kind="version"
                     value={String(value.current_version ?? 0)}
-                    tooltip={pinTooltip(value)}
+                    tooltip={pinTooltip(value, hasActive)}
                   />
                 ) : (
                   <AddResourceButton

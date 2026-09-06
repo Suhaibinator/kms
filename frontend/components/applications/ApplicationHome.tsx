@@ -209,7 +209,6 @@ export function ApplicationHome({
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
   // Ship is waiting for the secret; opening its workspace on top would hide the modal.
-  const [secretSeedFromShip, setSecretSeedFromShip] = useState(false);
   const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
@@ -297,11 +296,16 @@ export function ApplicationHome({
     if (rollback) replaceQuery({ rollback: "" });
   }
 
-  function openAddValue(environment: string, alias: string) {
-    const value = valueFor(environments, environment, alias);
+  /** Write one parameter by its physical key (a matrix cell). */
+  function openAddValueForKey(environment: string, key: string) {
     setRetryEnvironments(null);
     setWriteTargets([environment]);
-    setWriteRow({ key: value?.key ?? alias, kind: "parameter", environments: {} });
+    setWriteRow({ key, kind: "parameter", environments: {} });
+  }
+
+  /** Write the parameter a contract alias resolves to (a pipeline row or a finding). */
+  function openAddValue(environment: string, alias: string) {
+    openAddValueForKey(environment, valueFor(environments, environment, alias)?.key ?? alias);
   }
 
   function openWriteRow(row: ApplicationConfigurationRow) {
@@ -321,13 +325,12 @@ export function ApplicationHome({
   }
 
   /** Quick-add a secret for an alias: the key the alias resolves to, typed like a sibling environment's value. */
-  function openSecret(environment: string, alias: string, fromShip = false) {
+  function openSecret(environment: string, alias: string, then?: QuickSecretSeed["then"]) {
     const value = valueFor(environments, environment, alias);
     const contentType = environments
       .flatMap((candidate) => candidate.values)
       .find((candidate) => candidate.alias === alias && candidate.content_type)?.content_type;
-    setSecretSeedFromShip(fromShip);
-    setSecretSeed({ environment, key: value?.key ?? alias, contentType });
+    setSecretSeed({ environment, key: value?.key ?? alias, contentType, then });
   }
 
   function openExistingSecret(environment: string, key: string) {
@@ -685,8 +688,8 @@ export function ApplicationHome({
               }))}
               overview={environments}
               rows={overview.rows}
-              onAddSecret={openSecret}
-              onAddValue={openAddValue}
+              onAddSecret={(environment, key) => setSecretSeed({ environment, key })}
+              onAddValue={openAddValueForKey}
               onOpenSecret={openExistingSecret}
               onOpenParameter={openExistingParameter}
               onEdit={openWriteRow}
@@ -704,7 +707,9 @@ export function ApplicationHome({
         open={!archived && shipTarget !== null}
         onClose={closeShip}
         onShipped={onShipped}
-        onAddSecret={(environment, alias) => openSecret(environment, alias, true)}
+        onAddSecret={(environment, alias) => openSecret(environment, alias, "stay")}
+        onOpenSecret={openExistingSecret}
+        onRolledBack={() => void reload()}
       />
       <RollbackDialog
         namespace={{ env: rollbackEnv ?? "", app: application.name }}
@@ -840,8 +845,9 @@ export function ApplicationHome({
           }
         }}
         onCreated={(ref) => {
+          // A secret added for Ship returns to the modal that asked for it.
+          if (secretSeed?.then !== "stay") setSecretTarget(ref);
           setSecretSeed(null);
-          if (!secretSeedFromShip) setSecretTarget(ref);
           void reload();
         }}
       />

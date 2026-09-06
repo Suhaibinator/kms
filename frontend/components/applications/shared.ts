@@ -10,6 +10,8 @@ export interface QuickSecretSeed {
   key: string;
   /** Seeded from a sibling environment's value for the same alias, when known. */
   contentType?: string;
+  /** After creation: open the secret's workspace (default) or stay where the caller was. */
+  then?: "workspace" | "stay";
 }
 
 /** What the Add-environment form hands over when the user picks "Copy values from…". */
