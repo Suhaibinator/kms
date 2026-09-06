@@ -484,7 +484,9 @@ export function ReleaseBuilder({
       ) : loadError ? (
         <div className="danger-panel" role="alert">
           <div className="between">
-            <div>
+            {/* `.between` wraps on hypothetical main size, so `min-width: 0`
+                alone leaves Retry on a second line under a long error. */}
+            <div className="grow basis-80">
               <strong>Could not load the application contract</strong>
               <div className="text-sm mt-2">
                 {loadError instanceof Error ? loadError.message : String(loadError)}
@@ -538,7 +540,7 @@ export function ReleaseBuilder({
               </div>
 
               <div className="between mb-3 mt-4">
-                <div>
+                <div className="grow basis-80">
                   <h2 className="section-title">Release entries</h2>
                   <p className="text-sm faint">
                     Contract fields are fixed; choose which resource version supplies each alias.

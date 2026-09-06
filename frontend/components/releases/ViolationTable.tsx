@@ -99,7 +99,9 @@ export function ActivationFailurePanel({
   return (
     <section className="danger-panel mb-4" role="alert">
       <div className="between">
-        <div>
+        {/* `.between` wraps on hypothetical main size, so `min-width: 0` alone
+            leaves Dismiss on a second line under a long target name. */}
+        <div className="grow basis-80">
           <strong>
             {failure.operation === "Validation"
               ? `${failure.target} failed validation`

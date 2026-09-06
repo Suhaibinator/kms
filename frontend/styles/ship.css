@@ -3,8 +3,8 @@
    editor, preview, outcomes), .rollout-* (rollout panel), .conflict-* (CAS
    conflict panel), .rollback-* (rollback dialog). Colours come from the
    theme tokens only, so light and dark need no separate rules. Type sizes
-   follow the console scale: 14px section titles, 12.5px (--text-sm) copy,
-   11.5px (--text-xs) captions — no other size appears in this file. */
+   read the console scale and never a literal: --text-base section titles,
+   --text-sm copy, --text-xs captions — no other size appears in this file. */
 
 @layer components {
   /* --- Modal chrome ------------------------------------------------------ */
@@ -74,8 +74,8 @@
   }
   .ship-section-title {
     margin: 0;
-    /* 14px is the console's section-title size; it has no token yet (the type
-       scale is Lane H's, css 20). Keep this and .rollout-progress together. */
+    /* The console's section-title size. Keep this and .rollout-progress on
+       the same token; they read as one level of heading across the modal. */
     font-size: var(--text-base);
     font-weight: 700;
     color: var(--text);
@@ -491,7 +491,7 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    /* The section-title size (see .ship-section-title); 15px was off-scale. */
+    /* The section-title size (see .ship-section-title). */
     font-size: var(--text-base);
   }
   .rollout-tools {

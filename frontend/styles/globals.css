@@ -1558,31 +1558,6 @@
       flex-wrap: nowrap;
     }
   }
-  /* A wrapper around a row action is itself a flex item of .row-actions, and
-     unlike the buttons (which carry shrink-0) it would be the one shrinkable
-     item in the cell — collapsing under the whitespace-nowrap button inside it
-     and overlapping its neighbour. */
-  .row-action-group {
-    display: flex;
-    flex: none;
-    min-width: 0;
-  }
-  .action-unavailable {
-    display: flex;
-    flex: none;
-    min-width: 0;
-    max-width: 220px;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-1);
-  }
-  .action-unavailable-reason {
-    color: var(--warning);
-    font-size: var(--text-xs);
-    line-height: 1.35;
-    text-align: right;
-  }
-
   /* ---------- Sortable headers ----------
      The <th> keeps its own padding for unsortable columns; a sortable one hands
      it to the button so the whole cell is the hit target. */
@@ -1805,11 +1780,21 @@
     gap: var(--space-3);
     flex-wrap: wrap;
   }
-  /* Layout rule 2: both of these hold chips, mono strings and button clusters.
-     Without it a child keeps its max-content width — `.between`'s heading took
-     890px of a 979px row and pushed the page actions onto a second line, at the
-     left edge, at every viewport — and the ≤768px patch that used to supply it
-     only fixed the phone. */
+  /* Layout rule 2: both of these hold chips, mono strings and button clusters,
+     and without it a child keeps its max-content width and pushes its
+     neighbours out of the row.
+
+     It does NOT stop the row wrapping. `flex-wrap` decides on each item's
+     *hypothetical* main size, which is still max-content; `min-width: 0` only
+     governs how far an item shrinks once the line is formed. So a `.between`
+     whose first child is long text and whose second is a button still drops
+     the button to a second line, at the left edge — measured at 600px with an
+     85-character heading, the row was 75px tall against a 45px tallest child.
+
+     A caller with that shape has to give the leading child `grow` and a basis
+     (`grow basis-80`, 320px), which makes the row wrap only when it genuinely
+     cannot hold both. ApplicationHome, ViolationTable and ReleaseBuilder's two
+     error rows all do. */
   .row-wrap > *,
   .between > * {
     min-width: 0;
@@ -3544,18 +3529,12 @@
      so a five-crumb trail on a detail page wrapped to two lines through the
      whole 769-1023 band — the truncation started only at 768. Three crumbs
      here, two below 768 (the block near the bottom of this file, whose rule
-     stacks on top of this one). Same visually-hidden recipe as there. */
+     stacks on top of this one). Both apply the `sr-only` utility rather than
+     restating its nine declarations, so the two sites cannot fall out of step
+     with each other or with every `className="sr-only"` in the app. */
   @variant max-lg {
     .crumb:not(:nth-last-child(-n + 3)) {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
+      @apply sr-only;
     }
     .crumb:nth-last-child(3):not(:first-child)::before {
       content: "…";
@@ -3935,20 +3914,12 @@
     }
     /* Breadcrumbs keep the last two crumbs visible; earlier ones stay in the
        accessibility tree (visually hidden, not display:none) and the first
-       visible crumb carries an ellipsis in place of its separator. The
-       declarations are `.sr-only`'s, in full: the partial copy left out
-       padding, margin and border, so any future border on .crumb would paint a
-       1px sliver of a crumb that is meant to be invisible. */
+       visible crumb carries an ellipsis in place of its separator. It applies
+       the `sr-only` utility: the hand-rolled copy this replaced left out
+       padding, margin and border, so any future border on .crumb would have
+       painted a 1px sliver of a crumb that is meant to be invisible. */
     .crumb:not(:nth-last-child(-n + 2)) {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
+      @apply sr-only;
     }
     .crumb:nth-last-child(2):not(:first-child)::before {
       content: "…";
@@ -4136,13 +4107,6 @@
     .table-wrap.card-table .navigable-row-end {
       justify-content: flex-start;
     }
-    .table-wrap.card-table .action-unavailable {
-      align-items: flex-start;
-    }
-    .table-wrap.card-table .action-unavailable-reason {
-      text-align: left;
-    }
-
     .rule-row {
       padding: var(--space-3);
       background: var(--bg-elev);
