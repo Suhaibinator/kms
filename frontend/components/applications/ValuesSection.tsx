@@ -92,7 +92,9 @@ export function ValuesSection({
                 <UnreleasedBadge value={value} hasActiveRelease={hasActive} />
                 {value.present ? (
                   <span className="pipeline-row-actions">
-                    <CopyButton value={key} label="Copy key" />
+                    {/* Icon-only: the three actions together are 265.4px
+                        against a 266px column content box with the label. */}
+                    <CopyButton value={key} label="Copy key" size="icon-sm" />
                     <ResourceLink
                       kind={value.kind}
                       button

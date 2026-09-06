@@ -655,7 +655,10 @@ export function ApplicationHome({
           onValueChange={(value) => replaceQuery({ tab: value === "matrix" ? "matrix" : "" })}
           className="application-tabs"
         >
-          <TabsList variant="line" aria-label="Application views" className="mb-4">
+          {/* mb-2, not mb-4: the Tabs root is a flex column with gap-2, so the
+              margin stacks on top of it and mb-4 spent 24px against the page's
+              16px rhythm. */}
+          <TabsList variant="line" aria-label="Application views" className="mb-2">
             <TabsTrigger value="pipeline">Environments</TabsTrigger>
             <TabsTrigger value="matrix">Matrix</TabsTrigger>
           </TabsList>
@@ -680,7 +683,10 @@ export function ApplicationHome({
             />
           </TabsContent>
           <TabsContent value="matrix">
-            <div className="between mb-2">
+            {/* items-start: .between centres, which floats the two buttons
+                ~12px below the heading they belong to against the two-line
+                description beside them. */}
+            <div className="between mb-2 items-start">
               <div>
                 <h2 className="section-title">Configuration matrix</h2>
                 <div className="faint text-sm">

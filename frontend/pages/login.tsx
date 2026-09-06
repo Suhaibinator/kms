@@ -1,15 +1,15 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
+import { ClientCertificatePanel } from "@/components/ClientCertificatePanel";
 import { LogoMark } from "@/components/LogoMark";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
-import { Field, Input, PageTitle, Spinner } from "@/components/ui";
+import { Field, Input, PageTitle } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, getToken } from "@/lib/api";
 import { useQueryParam } from "@/lib/hooks";
 import { safeReturnTo } from "@/lib/returnTo";
-import { ClientCertificatePanel } from "@/components/ClientCertificatePanel";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -118,9 +118,10 @@ export default function LoginPage() {
             />
           </Field>
 
-          <Button type="submit" className="w-full" disabled={busy}>
-            {busy ? <Spinner /> : null}
-            {busy ? "Signing in…" : "Sign in"}
+          {/* `loading` also carries aria-busy and the disabled state, which the
+              hand-rolled label swap did not. */}
+          <Button type="submit" className="w-full" loading={busy}>
+            Sign in
           </Button>
         </form>
         <ClientCertificatePanel />

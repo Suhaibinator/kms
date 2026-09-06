@@ -132,11 +132,15 @@
   .pipeline-column-prod.pipeline-column-focused {
     box-shadow: 0 0 0 3px var(--warning-soft);
   }
+  /* The action button is the tallest thing in the head (icon-sm, 30px); the
+     min-height keeps every column's head the same height even when a column
+     has no status chip, so the descriptions below them line up. */
   .pipeline-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
+    min-height: var(--control-h-sm);
   }
   .pipeline-description {
     margin-top: calc(var(--space-2) * -1);
@@ -154,9 +158,12 @@
     text-transform: uppercase;
     color: var(--text-faint);
   }
+  /* Wider than .pipeline-row's own 8px row-gap: a row that wraps onto three
+     lines must still read as one alias, so the separation between two aliases
+     has to beat the separation inside one. */
   .pipeline-rows {
     display: grid;
-    gap: var(--space-1);
+    gap: var(--space-3);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -168,12 +175,17 @@
     gap: var(--space-2);
     min-height: var(--control-h-sm);
   }
-  /* Copy key / Manage / Edit & ship sit together at the row's far edge. */
+  /* Copy key / Manage / Edit & ship sit together at the row's far edge. The
+     group may wrap onto its own line but never past the column's content box:
+     Copy is icon-only (30px) so the three fit the 266px minimum column. */
   .pipeline-row-actions {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-1);
     margin-left: auto;
+    max-width: 100%;
+    min-width: 0;
   }
   .pipeline-release-meta {
     color: var(--text-faint);
@@ -189,10 +201,15 @@
   .pipeline-other-keys {
     color: var(--text-muted);
   }
+  /* Every sibling chip in the row clamps itself through .ident-tip; this one
+     renders its Ident with tooltip={false}, so the wrapper has to carry the
+     clamp or a long release name paints past the column border. */
   .pipeline-previous {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
+    min-width: 0;
+    max-width: 100%;
   }
   .pipeline-cta {
     display: flex;
@@ -263,6 +280,12 @@
     gap: var(--space-3);
     margin-bottom: var(--space-3);
   }
+  /* align-items: center centres the flex item's *margin* box, so .field's
+     block-flow margin would drop the Lifecycle select below the search input
+     beside it and stack 16px under the toolbar. */
+  .application-list-toolbar .field {
+    margin-bottom: 0;
+  }
   .application-list-filter {
     flex: 0 1 320px;
     min-width: 200px;
@@ -275,16 +298,18 @@
     display: block;
     color: var(--text);
   }
+  /* The version/type line, the drift badge and Copy are all nowrap; without a
+     wrap the cell's min-content width is their sum, which pins the whole
+     environment column at ~280px and puts the matrix into horizontal scroll. */
   .matrix-value-meta {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
   }
-  .matrix-value .matrix-copy {
-    height: calc(var(--control-h-sm) - var(--space-2));
-    padding: 0 var(--space-2);
-    font-size: var(--text-xs);
-  }
+  /* .matrix-copy's height and padding are utilities on the element itself
+     (ConfigurationMatrix.tsx): a component-layer rule cannot beat the Button
+     cva's own h-/px- utilities no matter how specific it is. */
 
   /* ---------- Contract editor ---------- */
 
@@ -292,26 +317,39 @@
     display: grid;
     gap: var(--space-3);
   }
+  /* One grid for the caption row and every alias row. Sizing the tracks per
+     row let each row resolve its own `fr` share — a row carrying a "from
+     artifact" badge came out ~38px narrower than the plain row above it, and
+     the captions landed over the wrong controls. Subgrid makes all of them
+     share the parent's tracks, so widths and captions agree by construction. */
+  .contract-editor-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
+    gap: var(--space-2);
+  }
   .contract-editor-rows {
     display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     gap: var(--space-2);
   }
   .contract-editor-row {
     display: grid;
-    grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--space-2);
   }
-  /* Column captions above the rows: the same grid as .contract-editor-row so
-     the labels line up with the inputs beneath them (aria-hidden; the inputs
-     carry their own labels). */
+  /* Column captions above the rows (aria-hidden; the inputs carry their own
+     labels). The inset is on the captions rather than the row, because a
+     subgrid item's own padding would shift its tracks off the parent's. */
   .contract-editor-head {
-    padding: 0 var(--space-1);
     color: var(--text-muted);
     font-size: var(--text-xs);
   }
+  /* Matches the text inset of Input (px-3) and SelectTrigger (pl-3) below. */
+  .contract-editor-head > span,
   .contract-editor-secret {
-    padding-left: var(--space-2);
+    padding-left: var(--space-3);
   }
   .contract-editor-origin {
     display: inline-flex;
@@ -351,11 +389,16 @@
   .wizard-env-row .field {
     margin-bottom: 0;
   }
+  /* The padding clears the sibling fields' label block; the min-height gives
+     `align-items: center` a box as tall as the 38px Input beside it, so the
+     chips and the remove button stay on the input's centre line whatever the
+     row currently holds. */
   .wizard-env-meta {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
+    min-height: calc(var(--label-offset) + var(--control-h));
     padding-top: var(--label-offset);
   }
   .wizard-env-meta .checkbox-row {
@@ -390,13 +433,6 @@
       grid-auto-flow: row;
       grid-auto-columns: auto;
       grid-template-columns: 1fr;
-    }
-    .contract-editor-row {
-      grid-template-columns: 1fr 1fr;
-    }
-    /* The rows wrap to two columns here, so the captions no longer align. */
-    .contract-editor-head {
-      display: none;
     }
     .wizard-env-row {
       grid-template-columns: 1fr;

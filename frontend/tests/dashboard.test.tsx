@@ -247,6 +247,64 @@ describe("DashboardPage", () => {
     expect(screen.queryByRole("button", { name: "New application" })).toBeNull();
   });
 
+  it("reserves the rows the loaded tables render, at the height they render at", async () => {
+    mocks.identity = client;
+    const pending = deferred<{ subscribers: unknown[]; current_revision: number }>();
+    mocks.subscribers.mockReturnValue(pending.promise);
+    // Eight audit events and eight subscribers: the page fetches page_size 8
+    // and renders subscribers.slice(0, 6), so the skeletons must reserve 8 and
+    // 6 rows, and 44px each — neither table has action buttons.
+    const events: AuditEvent[] = Array.from({ length: 8 }, (_, i) => ({
+      id: i + 1,
+      event_type: "parameter.write",
+      actor_identity: "root",
+      actor_type: "admin",
+      resource_type: "parameter",
+      resource_env: "prod",
+      resource_app: "billing",
+      resource_key: `p${i}`,
+      resource_version: 1,
+      resource_namespace_id: 1,
+      decision: "allow",
+      source_ip: "",
+      user_agent: "",
+      request_id: "",
+      created_at_unix_ms: 1,
+      metadata_json: "",
+    }));
+    mocks.listAudit.mockResolvedValue({ events, next_page_token: "" });
+
+    render(<DashboardPage />);
+    const skeletons = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll("[aria-busy='true']")).filter((node) =>
+        node.querySelector("tr.skeleton-row"),
+      );
+      if (found.length < 2) throw new Error("table skeletons not mounted");
+      return found;
+    });
+    const rowCounts = skeletons.map((node) => node.querySelectorAll("tr.skeleton-row").length);
+    expect(rowCounts).toEqual([8, 6]);
+    for (const node of skeletons) {
+      for (const row of node.querySelectorAll("tr.skeleton-row")) {
+        expect((row as HTMLElement).style.height).toBe("44px");
+      }
+    }
+
+    pending.resolve({
+      subscribers: Array.from({ length: 8 }, (_, i) => ({
+        client_name: `client-${i}`,
+        instance_id: `i${i}`,
+        remote_addr: "10.0.0.1",
+        last_heartbeat_unix_ms: 1,
+        last_acked_revision: 1,
+      })),
+      current_revision: 1,
+    });
+    await waitFor(() => expect(document.querySelector("[aria-busy='true']")).toBeNull());
+    const tables = Array.from(document.querySelectorAll("table.data"));
+    expect(tables.map((table) => table.querySelectorAll("tbody tr").length)).toEqual([8, 6]);
+  });
+
   it("shows the first-run checklist for an admin with no applications and no namespaces", async () => {
     render(<DashboardPage />);
     expect(
@@ -321,9 +379,14 @@ describe("DashboardPage", () => {
     const prodLink = within(gradethis).getByRole("link", { name: "prod: degraded (production)" });
     expect(prodLink).toHaveAttribute("href", links.application("gradethis", { env: "prod" }));
     expect(prodLink.querySelector(".status-dot")).toHaveClass("status-degraded", "status-prod");
+    // The production marker is a sibling of the ellipsised name, not a
+    // pseudo-element inside it, so a narrow card truncates the name and keeps
+    // the marker rather than the other way round.
+    expect(prodLink.querySelector(".fleet-env-prod-pill")).not.toBeNull();
     const devLink = within(gradethis).getByRole("link", { name: "dev: ready" });
     expect(devLink.querySelector(".status-dot")).toHaveClass("status-ready");
     expect(devLink.querySelector(".status-dot")).not.toHaveClass("status-prod");
+    expect(devLink.querySelector(".fleet-env-prod-pill")).toBeNull();
     // Release detail arrives after the grid has painted.
     await waitFor(() => {
       for (const label of readyReleases) {

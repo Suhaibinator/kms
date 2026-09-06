@@ -93,6 +93,30 @@ describe("LoginPage", () => {
     expect(mocks.toast.success).toHaveBeenCalledWith("Signed in", "Welcome, admin");
   });
 
+  it("keeps the submit label and marks the button busy while signing in", async () => {
+    let release!: (identity: { name: string; kind: string }) => void;
+    mocks.login.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    render(<LoginPage />);
+    submit("kms_admin_token");
+
+    // The label no longer swaps to "Signing in…": the Button's own loading
+    // state overlays the spinner and carries aria-busy and disabled, so the
+    // box keeps its width. (Spinner contributes "Loading" to the name.)
+    const button = screen.getByRole("button", { name: /Sign in$/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveTextContent("Sign in");
+    expect(screen.queryByText("Signing in…")).toBeNull();
+
+    release({ name: "admin", kind: "admin" });
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalled());
+  });
+
   it("ignores a returnTo that would leave the origin", async () => {
     // The parameter round-trips through a URL the visitor can edit, so an
     // off-origin value is dropped rather than followed.

@@ -56,6 +56,11 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
                 >
                   <StatusChip status={env.status} production={env.production} size="dot" />
                   <span className="fleet-env-name">{env.env}</span>
+                  {env.production ? (
+                    <span className="fleet-env-prod-pill" aria-hidden>
+                      prod
+                    </span>
+                  ) : null}
                 </Link>
                 <span className="fleet-env-release">
                   {active ? (

@@ -75,11 +75,19 @@ function Button({
       {...props}
     >
       {loading ? (
-        <Spinner className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+        // Decorative: the button already says aria-busy, and a labelled spinner
+        // would prepend "Loading" to the button's accessible name.
+        <Spinner
+          aria-hidden
+          aria-label={undefined}
+          role="presentation"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+        />
       ) : null}
       {/* `contents` keeps the icon and label as flex items (so their gap holds);
-          visibility inherits, so the label hides without changing width. */}
-      <span className={cn("contents", loading && "invisible")}>{children}</span>
+          opacity (not visibility) hides the label without changing the box or
+          removing it from the accessibility tree. */}
+      <span className={cn("contents", loading && "opacity-0")}>{children}</span>
     </ButtonPrimitive>
   );
 }

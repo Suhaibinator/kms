@@ -298,7 +298,14 @@ describe("EnvironmentPipeline", () => {
     const present = values.filter((value) => value.present);
     const secrets = values.filter((value) => value.kind === "secret");
     expect(within(prod).getAllByRole("img", { name: "Secret" })).toHaveLength(secrets.length);
-    expect(within(prod).getAllByRole("button", { name: "Copy key" })).toHaveLength(present.length);
+    const copyButtons = within(prod).getAllByRole("button", { name: "Copy key" });
+    expect(copyButtons).toHaveLength(present.length);
+    // Icon-only so the three row actions fit the column's 266px content box;
+    // the label stays the accessible name, visually hidden.
+    for (const button of copyButtons) {
+      expect(button).toHaveAttribute("data-size", "icon-sm");
+      expect(within(button).getByText("Copy key")).toHaveClass("sr-only");
+    }
     const app = incident.application.name;
     const secret = secrets[0];
     const manageSecret = within(prod).getByRole("link", {

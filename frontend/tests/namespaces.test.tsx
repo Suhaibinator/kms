@@ -172,6 +172,20 @@ describe("NamespacesPage", () => {
     );
   });
 
+  it("shows the namespace being edited as read-only, not as a disabled control", async () => {
+    mocks.namespaces.namespaces = [namespace("dev")];
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog");
+
+    // It is a display of what is being edited, so it has to stay legible and
+    // selectable; `disabled` greyed it out and took it off the tab order.
+    const field = within(modal).getByLabelText("Namespace");
+    expect(field).toHaveValue("dev/payments-api");
+    expect(field).toHaveAttribute("readonly");
+    expect(field).toBeEnabled();
+  });
+
   it("requires at least one auth method inline before saving", async () => {
     mocks.namespaces.namespaces = [namespace("dev")];
     render(<NamespacesPage />);

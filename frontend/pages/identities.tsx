@@ -916,6 +916,7 @@ export default function IdentitiesPage() {
         mobileFullScreen
         open={createOpen}
         wide
+        wizard
         title={
           createStep === 1
             ? identityMode === "application"
@@ -1599,6 +1600,7 @@ function CredentialsModal({
       mobileFullScreen
       open={credentials !== null}
       wide
+      wizard
       dismissible={false}
       title={
         stage === 3

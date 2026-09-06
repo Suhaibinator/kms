@@ -773,7 +773,6 @@ function RuleEditor({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
                   className="rule-remove"
                   onClick={() => duplicate(rule.id)}
                   aria-label={`Duplicate ${kind} rule ${i + 1}`}
@@ -784,7 +783,6 @@ function RuleEditor({
                 <Button
                   type="button"
                   variant="destructive"
-                  size="sm"
                   className="rule-remove"
                   onClick={() => remove(rule.id)}
                   aria-label={`Remove ${kind} rule ${i + 1}: ${operationName}`}

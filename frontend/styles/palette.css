@@ -107,6 +107,10 @@
     flex-shrink: 0;
     color: var(--text-faint);
   }
+  /* Reserves the glyph's 13px plus the row gap on unselected rows too. */
+  .palette-item-enter-idle {
+    visibility: hidden;
+  }
   .palette-foot {
     display: flex;
     gap: var(--space-4);

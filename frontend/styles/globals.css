@@ -19,6 +19,26 @@
    outside a layer would silently beat every utility, which is how `.mb-16` once
    came to mean 16px instead of 64px. Only the token blocks stay unlayered. */
 
+/* Layout rules of the system (from the Sep 2026 layout audit; every one of
+   these was a shipped defect once):
+   1. A scroller must not push: `overflow-*: auto` ships with `min-width: 0`
+      and, when it is a block rather than a flex/grid item, `contain: inline-size`.
+   2. A grid or flex container that can hold a table, a mono string or a code
+      block declares `> * { min-width: 0 }` where it is defined, not in a
+      per-feature patch list.
+   3. Boxes that hold text get `min-height`, never `height`; `height` is for
+      icons, dots and rules.
+   4. Control heights come from `--control-h` / `--control-h-sm`; a new literal
+      height means deleting one first.
+   5. Geometry on a shadcn primitive is set with props or utilities; a rule
+      here cannot reach it and becomes silent dead code.
+   6. A toolbar that bleeds into its container's padding with a negative
+      margin restores the same amount on both axes.
+   7. Spacing is `--space-*`; a raw px value needs a comment naming the optical
+      alignment that forced it.
+   8. A skeleton renders the loaded layout's structure (columns, toolbar,
+      description), not an approximation of it. */
+
 :root {
   color-scheme: light;
 
@@ -497,6 +517,10 @@
     gap: var(--space-2);
     flex-shrink: 0;
     flex-wrap: wrap;
+    /* justify-content applies per flex line, so once the actions wrap onto
+       their own line space-between leaves them at the far left. The auto
+       margin holds the right edge on every line. */
+    margin-left: auto;
   }
 
   /* ---------- Cards ---------- */
@@ -536,8 +560,11 @@
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   }
   /* Cap the stat row at three columns. auto-fit alone fits five across at the
-     1200px page width, which strands a lone sixth card on its own row. */
-  @media (min-width: 900px) {
+     1200px page width, which strands a lone sixth card on its own row. The
+     breakpoint measures the viewport but the grid is laid out in
+     `viewport − 236px sidebar − 64px page gutters`, so it has to clear
+     3 × 240px + 2 × 16px + 300px to keep the tracks at their intended width. */
+  @media (min-width: 1052px) {
     .card-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -626,13 +653,17 @@
     color: var(--text-muted);
     margin-bottom: var(--spacing);
   }
+  /* Must render identically to <Field>'s FieldDescription / FieldError, for the
+     same reason .field-label does: SchemaForm and the policy editor stack both
+     systems in one form, and 12px/--text-faint read as a different kind of text
+     beside 12.5px/--muted-foreground. */
   .field-hint {
-    font-size: 12px;
-    color: var(--text-faint);
+    font-size: var(--text-sm);
+    color: var(--muted-foreground);
     margin-top: var(--space-1);
   }
   .field-error {
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--danger);
     margin-top: var(--space-1);
   }
@@ -660,10 +691,13 @@
     gap: var(--space-3);
     min-width: 0;
   }
+  /* Not space-between: the caption's length changes with the mode, so pushing
+     the items apart left a growing hole between the toggle and the chips and
+     could change whether the row wraps at all. The summary keeps its own
+     margin-left: auto, so it still sits at the far edge. */
   .schema-form-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-3);
     flex-wrap: wrap;
   }
@@ -701,7 +735,10 @@
     outline: 2px solid var(--primary);
     outline-offset: -2px;
   }
+  /* Takes the slack in the toolbar row and wraps inside itself. */
   .schema-form-caption {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: var(--text-xs);
   }
   .schema-form-label {
@@ -769,6 +806,12 @@
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
     gap: var(--space-2);
+  }
+  /* The item is a .schema-form-group fieldset whose first line starts after its
+     own var(--space-3) padding; without the same drop the trash icon floats
+     above the group name it removes. */
+  .schema-form-list-item > [data-slot="button"] {
+    margin-top: var(--space-3);
   }
   .schema-form-list-item > .schema-form-group {
     margin: 0;
@@ -996,11 +1039,12 @@
     white-space: pre;
     overflow-wrap: normal;
   }
+  /* Always one line tall. The row only carries text while the editor is focused
+     or invalid, and collapsing it when empty grew the editor — and re-centred
+     its dialog — on every click into the textarea. */
   .json-editor-status {
+    min-height: 1lh;
     font-size: var(--text-xs);
-  }
-  .json-editor-status:empty {
-    display: none;
   }
   .json-editor-problem {
     color: var(--danger);
@@ -1050,8 +1094,9 @@
     flex: 1 1 110px;
     min-width: 110px;
   }
-  /* Bare action buttons have no label, so offset them by exactly one label
-     block while leaving the row itself top-aligned. */
+  /* Bare action buttons have no label, so they clear one label block to line
+     up with the labelled fields beside them. They are default-size buttons,
+     the same --control-h as those fields, so tops and bottoms both align. */
   .rule-row > .rule-remove {
     margin-top: var(--label-offset);
   }
@@ -1065,7 +1110,12 @@
 
   .table-wrap {
     /* A scroller must not push: as a block child it would still report the
-       table's min-content width upward and widen every ancestor. */
+       table's min-content width upward and widen every ancestor. It is also
+       the containing block for absolutely positioned descendants (sr-only
+       live regions, visually hidden headers); otherwise those sit at their
+       static position inside a wide table, outside the clip, and widen the
+       whole document. */
+    position: relative;
     min-width: 0;
     contain: inline-size;
     border: 1px solid var(--border);
@@ -1099,6 +1149,7 @@
   }
   [data-modal-body] {
     --modal-pad: var(--space-5);
+    position: relative;
     scrollbar-gutter: stable;
     background: var(--bg);
   }
@@ -1217,9 +1268,12 @@
   table.data th.num {
     text-align: right;
   }
-  table.namespace-table {
-    table-layout: fixed;
-  }
+  /* Automatic layout, deliberately: a fixed-layout table ignores content
+     minimums entirely, so between ~769px and ~1000px the uppercase headers
+     ("PARAMETERS" needs ~127px against the 11% these columns were given) ran
+     across their own column borders with no scrollbar to signal it. Under
+     automatic layout these widths stay preferences and the larger of the
+     preference and the content minimum wins. */
   .namespace-table .namespace-col-env {
     width: 12%;
   }
@@ -1232,11 +1286,20 @@
   .namespace-table .namespace-col-created {
     width: 190px;
   }
+  /* Edit (61) + gap (8) + icon-sm menu (30) + row gap (8) + chevron (18) +
+     cell padding (32) = 157px of content; the old 154px overflowed on any
+     font-metric variance. */
   .namespace-table .namespace-col-actions {
-    width: 154px;
+    width: 180px;
   }
   .namespace-table td[data-label="Description"] {
     overflow-wrap: anywhere;
+  }
+  /* Seven columns of nowrap uppercase headers do not fit a 1280px viewport
+     (sidebar and gutters leave ~978px); letting the two-word headers wrap
+     frees ~60px, so the table fits its wrapper instead of scrolling 5px. */
+  .namespace-table th .sort-button {
+    white-space: normal;
   }
   .cell-path {
     font-family: var(--mono);
@@ -1250,8 +1313,19 @@
     gap: var(--space-2);
     justify-content: flex-end;
   }
+  /* A wrapper around a row action is itself a flex item of .row-actions, and
+     unlike the buttons (which carry shrink-0) it would be the one shrinkable
+     item in the cell — collapsing under the whitespace-nowrap button inside it
+     and overlapping its neighbour. */
+  .row-action-group {
+    display: flex;
+    flex: none;
+    min-width: 0;
+  }
   .action-unavailable {
     display: flex;
+    flex: none;
+    min-width: 0;
     max-width: 220px;
     flex-direction: column;
     align-items: flex-end;
@@ -1411,6 +1485,14 @@
       margin-right: auto;
     }
   }
+  /* DialogFooter stacks with `flex-col-reverse`, so DOM order is painted bottom
+     to top. Every caller writes the note first; without this it lands under the
+     button it explains. The last-ordered item is the topmost one here. */
+  @media (max-width: 640px) {
+    .footer-note {
+      order: 99;
+    }
+  }
 
   /* ---------- Utility / misc ---------- */
 
@@ -1509,6 +1591,66 @@
   .json-view[data-wrap="off"] .json-view-body {
     white-space: pre;
     overflow-wrap: normal;
+  }
+
+  /* ---------- Collapsible JSON tree (components/JsonTree.tsx) ---------- */
+  .json-tree {
+    display: block;
+    --json-gutter: 0px;
+  }
+  /* Wide enough for the last line number of the fully expanded document. */
+  .json-tree[data-line-numbers] {
+    --json-gutter: calc(var(--json-gutter-chars, 2) * 1ch + var(--space-4));
+  }
+  /* Fixed columns so the caret slot, and therefore the code, lines up on every
+     row whether or not that row can be folded. */
+  .json-tree-line {
+    display: grid;
+    grid-template-columns: var(--json-gutter) var(--space-4) minmax(0, 1fr);
+    align-items: start;
+    min-height: 1lh;
+  }
+  /* The number lives in a pseudo-element: it stays out of `textContent` and
+     out of anything the operator selects and copies by hand. */
+  .json-tree-line::before {
+    content: "";
+    padding-right: var(--space-2);
+    text-align: right;
+    color: var(--syntax-line-no);
+    user-select: none;
+  }
+  .json-tree[data-line-numbers] .json-tree-line::before {
+    content: attr(data-line);
+  }
+  /* The wrapping cell: it must be allowed to shrink under its longest token. */
+  .json-tree-code {
+    min-width: 0;
+  }
+  /* Preflight makes a bare svg `display: block`, which would drop the caret
+     below the line box; inline-flex centres it in the slot instead. */
+  .json-tree-caret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-4);
+    height: 1lh;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-faint);
+    cursor: pointer;
+  }
+  .json-tree-caret:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  .json-tree-caret:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -1px;
+  }
+  .json-tree-summary {
+    color: var(--text-faint);
   }
 
   /* ---------- Side-by-side line diff (components/JsonDiff.tsx) ---------- */
@@ -1643,6 +1785,8 @@
     flex: 1 1 auto;
     min-width: 0;
   }
+  /* An `icon-sm` button (--control-h-sm) beside a --control-h input: half the
+     difference centres it on the control rather than on the row. */
   .value-input-toggle {
     margin-top: calc((var(--control-h) - var(--control-h-sm)) / 2);
     color: var(--text-faint);
@@ -1781,9 +1925,10 @@
     gap: var(--space-2) var(--space-3);
     flex-wrap: wrap;
   }
+  /* No `margin-left: auto`: the checkbox modifies the value beside it, and in a
+     680px body that pushed it ~350px away from the buttons it belongs with. */
   .value-secret-tools .checkbox-row {
     align-items: center;
-    margin-left: auto;
   }
   .value-restore-note {
     display: flex;
@@ -1932,6 +2077,27 @@
     flex-wrap: wrap;
     margin-bottom: var(--space-4);
   }
+  /* Both of these toolbars are the first child of a Tabs root, whose own gap-2
+     already carries 8px; 16px here would put 24px above the first card while
+     every other pair has 16px. */
+  .release-workspace-toolbar {
+    margin-bottom: var(--space-2);
+  }
+  /* Only for a `line` tab list, which draws a 2px indicator 5px below the
+     trigger and so needs a rule to sit on. `flex-end` puts the list's bottom on
+     that rule, the -1px laps the indicator over it, and the button row keeps
+     its own clearance. The builder's toolbar carries a `default` (pill) list
+     and a caption instead, and wants neither. */
+  .release-workspace-tabs {
+    align-items: flex-end;
+    border-bottom: 1px solid var(--border);
+  }
+  .release-workspace-tabs > .row-wrap {
+    margin-bottom: var(--space-2);
+  }
+  .release-workspace-tabs [role="tablist"] {
+    margin-bottom: -1px;
+  }
   .section-toolbar h2,
   .release-builder-entry .field,
   .release-builder-basics .field {
@@ -1970,11 +2136,17 @@
     align-items: center;
     min-height: var(--control-h);
     /* Match the labelled fields' line box plus their gap without making the
-       whole row bottom-align to validation text. */
-    margin-top: calc(1.375em + var(--space-1));
+       whole row bottom-align to validation text. The `em` form this replaced
+       agreed with the token only while both elements kept `text-sm`. */
+    margin-top: var(--label-offset);
   }
   .release-builder-entry > [data-slot="button"] {
-    margin-top: calc(1.375em + var(--space-1));
+    margin-top: var(--label-offset);
+  }
+  /* Holds the remove button's track open on a contract-owned row, whose fields
+     would otherwise share 38px more width than every other row's. */
+  .release-builder-entry-spacer {
+    width: var(--control-h);
   }
   /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
      can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */
@@ -1983,10 +2155,16 @@
     justify-content: space-between;
     gap: var(--space-4);
     align-items: center;
+    flex-wrap: wrap;
     padding: var(--space-4);
     background: var(--accent-soft);
     border: 1px solid var(--accent-border);
     border-radius: var(--radius-lg);
+  }
+  /* The summary ends in `app/name@version`, one unbreakable token. */
+  .release-builder-review > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .release-overview-grid {
     display: grid;
@@ -2073,9 +2251,14 @@
     .release-workspace-toolbar,
     .section-toolbar,
     .schema-viewer-meta,
-    .release-builder-review,
-    .release-copy-value {
+    .release-builder-review {
       align-items: stretch;
+      flex-direction: column;
+    }
+    /* Stacks like the toolbars, but does not stretch: `stretch` would blow the
+       compact Copy digest button out to the full width of the modal. */
+    .release-copy-value {
+      align-items: flex-start;
       flex-direction: column;
     }
     .release-workspace-toolbar [data-slot="tabs-list"] {
@@ -2143,6 +2326,12 @@
        the table does not resize when data arrives. Tables with taller rows pass
        TableSkeleton an explicit rowHeight instead. */
     height: calc(var(--space-3) * 2 + var(--control-h-sm));
+  }
+  @media (max-width: 768px) {
+    /* The touch floor lifts sm buttons to 44px, so real rows grow with them. */
+    .skeleton-row td {
+      height: calc(var(--space-3) * 2 + 44px);
+    }
   }
 
   .loading-block {
@@ -2503,12 +2692,8 @@
     border-color: var(--accent-border);
     background: var(--accent-soft);
   }
-  .auth-choice label {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
+  /* No `.auth-choice label` override: `.checkbox-row label` now stacks the
+     title over its hint everywhere, which is all this rule ever did. */
   .auth-choice-title {
     display: flex;
     align-items: center;
@@ -2526,7 +2711,8 @@
     max-height: 180px;
     overflow: auto;
     white-space: pre-wrap;
-    word-break: normal;
+    /* PEM base64 has no break opportunities, so the later .token-reveal
+       break-all (same element, same specificity) is what actually applies. */
   }
   .integration-snippets {
     margin-bottom: var(--space-4);
@@ -2585,8 +2771,22 @@
 
   .application-matrix th,
   .application-matrix td {
-    min-width: 160px;
     vertical-align: top;
+  }
+
+  /* Only the environment columns get the comparison floor. Applied to every
+     cell it also inflated Kind (needs 107px) and the trailing Edit column
+     (93px) by ~120px of empty space, which is what put a three-environment
+     matrix into horizontal scroll on a default desktop window. */
+  .application-matrix th.matrix-env,
+  .application-matrix td.matrix-env {
+    min-width: 160px;
+  }
+  /* The trailing action column carries one sm Button and nothing else. */
+  .application-matrix th.matrix-actions,
+  .application-matrix td.matrix-actions {
+    width: 1%;
+    white-space: nowrap;
   }
 
   .matrix-alias {
@@ -2600,25 +2800,50 @@
     align-items: center;
     margin-bottom: var(--space-3);
   }
+  /* `table.data tr:last-child td` drops the bottom border on the last row of
+     every row group, so with a tfoot present the totals row would otherwise be
+     glued to the last data row. The footer draws the rule itself. */
   .application-matrix tfoot td {
+    border-top: 1px solid var(--border);
     color: var(--text-muted);
     font-size: var(--text-sm);
   }
+  /* The sticky column paints over the row beneath it, so it has to repeat both
+     the header tint and the row hover itself. With border-collapse the borders
+     belong to the table and this cell's own stacking context covers them, so
+     the row rule is repainted inset and the frozen edge drawn outside. */
   .application-matrix .matrix-key {
     position: sticky;
     left: 0;
     z-index: 1;
     min-width: 210px;
     background: var(--surface);
+    /* Underscores are not break opportunities, so one long key would pin the
+       frozen column at its full min-content width on every row. */
+    overflow-wrap: anywhere;
+    box-shadow:
+      inset 0 -1px 0 var(--border),
+      1px 0 0 var(--border);
+  }
+  /* The totals row carries the rule above it instead of below it, and the
+     table's final row carries none — the same shape the other columns get
+     from `table.data tr:last-child td`. */
+  .application-matrix tfoot .matrix-key {
+    box-shadow:
+      inset 0 1px 0 var(--border),
+      1px 0 0 var(--border);
+  }
+  .application-matrix table:not(:has(tfoot)) tbody tr:last-child .matrix-key {
+    box-shadow: 1px 0 0 var(--border);
   }
   @media (max-width: 768px) {
-    /* Let environment values scroll into the full viewport without the key covering them. */
+    /* Stays sticky — scrolling values away from their key leaves nothing to
+       attach them to — but gives back most of its width on a phone. */
     .application-matrix .matrix-key {
-      position: static;
+      min-width: 110px;
+      max-width: 140px;
     }
   }
-  /* The sticky column paints over the row beneath it, so it has to repeat both
-     the header tint and the row hover itself. */
   .application-matrix th.matrix-key {
     background: var(--bg-elev);
   }
@@ -2682,7 +2907,10 @@
     justify-content: space-between;
     gap: var(--space-4);
     margin: calc(var(--modal-pad) * -1) calc(var(--modal-pad) * -1) var(--space-2);
-    padding: var(--space-3) var(--modal-pad) 0;
+    /* The extra --space-5 is .card's own inline padding: without it the tabs and
+       the Delete button line up with the cards' border rather than with their
+       content, and read as flush against the dialog edge. */
+    padding: var(--space-3) calc(var(--modal-pad) + var(--space-5)) 0;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
@@ -2709,8 +2937,9 @@
       align-items: stretch;
       flex-direction: column;
       gap: var(--space-2);
-      padding-top: var(--space-2);
-      padding-bottom: var(--space-3);
+      /* No card inset on a phone: 36px of indent on a 375px screen would push
+         the tab list into the middle of the dialog. */
+      padding: var(--space-2) var(--modal-pad) var(--space-3);
     }
 
     .secret-workspace-toolbar > .row-wrap {
@@ -2747,20 +2976,6 @@
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: var(--text-muted);
-  }
-
-  /* small inline chip for namespace bindings, cert state, etc. */
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: var(--bg-elev);
-    border: 1px solid var(--border);
     color: var(--text-muted);
   }
 
@@ -2967,13 +3182,17 @@
   .status-chip.status-prod {
     border-color: var(--warning);
   }
+  /* The halo separates the dot from the ground it sits on, so it has to be
+     that ground. Containers that are not the page ground declare --dot-halo
+     (.fleet-card, .fleet-env:hover); on the page itself — the dashboard's
+     ghost filter buttons — no halo is the correct halo. */
   .status-dot {
     display: inline-block;
     width: 10px;
     height: 10px;
     border-radius: 999px;
     background: var(--status-color, var(--text-faint));
-    box-shadow: 0 0 0 2px var(--surface);
+    box-shadow: 0 0 0 2px var(--dot-halo, transparent);
     vertical-align: middle;
   }
   .status-dot.status-prod {
@@ -3003,7 +3222,9 @@
     align-items: center;
     gap: var(--space-2);
     height: var(--control-h-sm);
-    margin: var(--space-3) var(--space-3) var(--space-1);
+    /* The side margin matches `.nav`'s inline padding, so the field's border
+       and the nav row highlight beneath it share one left edge. */
+    margin: var(--space-3) var(--space-2) var(--space-1);
     padding: 0 var(--space-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -3027,8 +3248,12 @@
 
   /* ---------- Client-identity strip under the top bar ---------- */
 
+  /* A sibling of .page, which is capped at 1200px and centred: a flat gutter
+     would start the strip's text ~180px left of the page content on a wide
+     monitor, so it tracks the same centring. */
   .identity-strip {
-    padding: var(--space-2) var(--space-7);
+    padding-block: var(--space-2);
+    padding-inline: max(var(--space-7), calc((100% - 1200px) / 2 + var(--space-7)));
     border-bottom: 1px solid var(--border);
     background: var(--accent-soft);
     color: var(--text-muted);
@@ -3175,8 +3400,9 @@
     .mobile-sidebar {
       overflow-y: auto;
     }
+    /* Clears the sheet close button: 44px at a 12px inset on this breakpoint. */
     .mobile-sidebar .sidebar-brand {
-      padding-right: 52px;
+      padding-right: 60px;
     }
 
     /* Larger touch targets inside the drawer. */
@@ -3228,8 +3454,10 @@
     }
 
     /* Sidebar search: a drawer tap target, like the nav links above it. */
+    /* (0,2,0) beats the 44px touch floor below, so the height has to be
+       restated here or the drawer search is the one 40px control in it. */
     .mobile-sidebar .nav-search {
-      min-height: 40px;
+      min-height: 44px;
       font-size: 14px;
     }
     /* The client-identity strip shares the page gutter. */
@@ -3320,7 +3548,14 @@
     .table-wrap.card-table thead {
       display: none;
     }
-    .table-wrap.card-table table.data,
+    /* A flex column rather than a block: `caption-side` needs a real table box,
+       which the card transform dissolves, so the summary is ordered last here
+       instead (see the caption rule at the end of this block). */
+    .table-wrap.card-table table.data {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+    }
     .table-wrap.card-table tbody,
     .table-wrap.card-table tr {
       display: block;
@@ -3607,9 +3842,11 @@
       flex-wrap: wrap;
       bottom: max(12px, env(safe-area-inset-bottom));
     }
+    /* [data-close-button] is sonner's toast dismiss bubble, which ships 20×20. */
     [data-slot="button"][data-size]:not([data-size="xs"]):not([data-size="icon-xs"]),
     [data-slot="dialog-close"],
     [data-slot="sheet-close"],
+    [data-close-button],
     [role="tab"],
     .sort-button,
     .nav-search,
@@ -3638,8 +3875,15 @@
       padding: 12px;
       color: var(--text-muted);
     }
+    /* The rows stack to one column here, so a caption row above them would name
+       the wrong controls. (The duplicate 768px rules in applications.css were
+       dead — same specificity, emitted earlier in the layer — and are gone.) */
+    .contract-editor-grid,
     .contract-editor-row {
       grid-template-columns: minmax(0, 1fr);
+    }
+    .contract-editor-head {
+      display: none;
     }
     .release-builder-basics,
     .release-builder-entry,
@@ -3713,8 +3957,11 @@
     .table-wrap.card-table td.select-cell {
       width: auto;
     }
+    /* The summary wears a border-top and an elevated ground: it is the list's
+       footer. `display: block` used to discard `caption-side: bottom` and strand
+       it above the first card; flex order puts it back at the bottom. */
     .table-wrap.card-table caption {
-      display: block;
+      order: 1;
     }
   }
 }

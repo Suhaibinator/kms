@@ -438,7 +438,14 @@ export default function NamespacesPage() {
         {editTarget ? (
           <form id={editFormId} onSubmit={onEdit}>
             <Field label="Namespace">
-              <Input className="font-mono" value={`${editTarget.env}/${editTarget.app}`} disabled />
+              {/* readOnly, not disabled: this is a display of what is being
+                  edited, so it has to stay legible and selectable. The muted
+                  ground is what says it cannot be typed in. */}
+              <Input
+                className="font-mono bg-muted"
+                value={`${editTarget.env}/${editTarget.app}`}
+                readOnly
+              />
             </Field>
             <Field label="Description" hint="Optional.">
               <Input

@@ -194,7 +194,7 @@ export function StatSkeleton({ label }: { label: string }) {
       <div className="stat-label">{label}</div>
       {/* Wrapped in .stat-value so the placeholder reserves the same line box
           the real number occupies and the card does not resize on arrival. */}
-      <div className="stat-value">
+      <div className="stat-value flex items-center" style={{ height: "1.25em" }}>
         <Skeleton width="60%" height={28} />
       </div>
       <div className="stat-sub">
