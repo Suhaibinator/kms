@@ -32,10 +32,31 @@ import (
 var ErrPurgeCleanupPending = errors.New("secret purge committed; database artifact cleanup is pending")
 
 // ErrRequiredAuditUnavailable identifies a failed audit insert that caused a
-// binding mutation transaction to roll back. Core uses the sentinel for
-// metrics and maps it to a fixed failed-precondition response; the underlying
-// database error is never exposed to clients.
+// mutation transaction to roll back — a binding mutation, or any destructive
+// removal applied through DeleteWithAudit. Core uses the sentinel for metrics
+// and maps it to a fixed failed-precondition response; the underlying database
+// error is never exposed to clients.
 var ErrRequiredAuditUnavailable = errors.New("required binding audit unavailable")
+
+// DestructiveKind identifies the resource a DestructiveMutation removes.
+type DestructiveKind string
+
+const (
+	DestructiveParameter     DestructiveKind = "parameter"
+	DestructiveSecret        DestructiveKind = "secret"
+	DestructiveSecretVersion DestructiveKind = "secret_version"
+	DestructiveNamespace     DestructiveKind = "namespace"
+	DestructivePolicy        DestructiveKind = "policy"
+	DestructiveApplication   DestructiveKind = "application"
+)
+
+// DestructiveMutation names one irreversible removal for DeleteWithAudit.
+type DestructiveMutation struct {
+	Kind    DestructiveKind
+	Ref     domain.Ref // parameter, secret, secret_version; namespace uses Ref.NS only
+	Version uint64     // secret_version
+	Name    string     // policy, application
+}
 
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
@@ -429,6 +450,17 @@ type Store interface {
 	// PoliciesForSubject returns all policies whose subject is the given
 	// identity name or "*".
 	PoliciesForSubject(ctx context.Context, subject string) ([]domain.Policy, error)
+
+	// --- destructive mutations -------------------------------------------
+
+	// DeleteWithAudit applies m and inserts audit in ONE transaction, so a
+	// removal can never commit without its audit row: if the audit insert fails
+	// the mutation rolls back and ErrRequiredAuditUnavailable is returned. The
+	// mutation's own refusals (not found, non-empty namespace, protected release
+	// reference) are returned unchanged. Returns the change-log revision for
+	// parameter and secret kinds and 0 for namespace, policy and application,
+	// which have no change-log entry.
+	DeleteWithAudit(ctx context.Context, m DestructiveMutation, audit domain.AuditEvent) (uint64, error)
 
 	// --- audit -----------------------------------------------------------
 

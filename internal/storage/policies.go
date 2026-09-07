@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -82,7 +84,15 @@ func (s *SQLStore) UpdatePolicy(ctx context.Context, p domain.Policy) (domain.Po
 
 // DeletePolicy removes a policy by name.
 func (s *SQLStore) DeletePolicy(ctx context.Context, name string) error {
-	res := s.db.WithContext(ctx).Where("name = ?", name).Delete(&policyModel{})
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return deletePolicyTx(tx, name)
+	})
+}
+
+// deletePolicyTx is the policy removal itself, scoped to the caller's open
+// transaction so DeleteWithAudit can commit it together with its audit row.
+func deletePolicyTx(tx *gorm.DB, name string) error {
+	res := tx.Where("name = ?", name).Delete(&policyModel{})
 	if res.Error != nil {
 		return res.Error
 	}

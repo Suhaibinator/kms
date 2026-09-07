@@ -478,29 +478,7 @@ func (s *SQLStore) ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyP
 func (s *SQLStore) DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, error) {
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, err := s.findSecret(tx, ref)
-		if err != nil {
-			return err
-		}
-		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, 0); err != nil {
-			return err
-		}
-		if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretLabelModel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretVersionModel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&secretModel{}, sec.ID).Error; err != nil {
-			return err
-		}
-		rev, err := appendChange(tx, &changeLogModel{
-			ResourceType: domain.ResourceSecret,
-			Env:          ref.NS.Env,
-			App:          ref.NS.App,
-			Key:          ref.Key,
-			ChangeType:   domain.ChangeDelete,
-		})
+		rev, err := s.deleteSecretTx(tx, ref)
 		if err != nil {
 			return err
 		}
@@ -511,6 +489,34 @@ func (s *SQLStore) DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, er
 		return 0, err
 	}
 	return revision, nil
+}
+
+// deleteSecretTx is the secret removal itself, scoped to the caller's open
+// transaction so DeleteWithAudit can commit it together with its audit row.
+func (s *SQLStore) deleteSecretTx(tx *gorm.DB, ref domain.Ref) (uint64, error) {
+	sec, err := s.findSecret(tx, ref)
+	if err != nil {
+		return 0, err
+	}
+	if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, 0); err != nil {
+		return 0, err
+	}
+	if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretLabelModel{}).Error; err != nil {
+		return 0, err
+	}
+	if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretVersionModel{}).Error; err != nil {
+		return 0, err
+	}
+	if err := tx.Delete(&secretModel{}, sec.ID).Error; err != nil {
+		return 0, err
+	}
+	return appendChange(tx, &changeLogModel{
+		ResourceType: domain.ResourceSecret,
+		Env:          ref.NS.Env,
+		App:          ref.NS.App,
+		Key:          ref.Key,
+		ChangeType:   domain.ChangeDelete,
+	})
 }
 
 // SetSecretVersionState enables/disables version (0 = all non-destroyed
@@ -578,40 +584,7 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, ref domain.Ref, ver
 	}
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, err := s.findSecret(tx, ref)
-		if err != nil {
-			return err
-		}
-		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, version); err != nil {
-			return err
-		}
-		var sv secretVersionModel
-		if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&sv).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
-			}
-			return err
-		}
-		if sv.State == domain.StateDestroyed {
-			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d already destroyed", ref, version)
-		}
-		if err := tx.Model(&secretVersionModel{}).Where("id = ?", sv.ID).Updates(map[string]any{
-			"ciphertext":    nil,
-			"encrypted_dek": nil,
-			"nonce":         nil,
-			"state":         domain.StateDestroyed,
-			"destroyed_at":  fmtTime(time.Now()),
-		}).Error; err != nil {
-			return err
-		}
-		rev, err := appendChange(tx, &changeLogModel{
-			ResourceType:  domain.ResourceSecret,
-			Env:           ref.NS.Env,
-			App:           ref.NS.App,
-			Key:           ref.Key,
-			ChangeType:    domain.ChangeDestroy,
-			VersionNumber: int64(version),
-		})
+		rev, err := s.destroySecretVersionTx(tx, ref, version)
 		if err != nil {
 			return err
 		}
@@ -622,6 +595,46 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, ref domain.Ref, ver
 		return 0, err
 	}
 	return revision, nil
+}
+
+// destroySecretVersionTx is the version destruction itself, scoped to the
+// caller's open transaction so DeleteWithAudit can commit it together with its
+// audit row. The version > 0 argument check stays with the public methods.
+func (s *SQLStore) destroySecretVersionTx(tx *gorm.DB, ref domain.Ref, version uint64) (uint64, error) {
+	sec, err := s.findSecret(tx, ref)
+	if err != nil {
+		return 0, err
+	}
+	if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, version); err != nil {
+		return 0, err
+	}
+	var sv secretVersionModel
+	if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&sv).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
+		}
+		return 0, err
+	}
+	if sv.State == domain.StateDestroyed {
+		return 0, domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d already destroyed", ref, version)
+	}
+	if err := tx.Model(&secretVersionModel{}).Where("id = ?", sv.ID).Updates(map[string]any{
+		"ciphertext":    nil,
+		"encrypted_dek": nil,
+		"nonce":         nil,
+		"state":         domain.StateDestroyed,
+		"destroyed_at":  fmtTime(time.Now()),
+	}).Error; err != nil {
+		return 0, err
+	}
+	return appendChange(tx, &changeLogModel{
+		ResourceType:  domain.ResourceSecret,
+		Env:           ref.NS.Env,
+		App:           ref.NS.App,
+		Key:           ref.Key,
+		ChangeType:    domain.ChangeDestroy,
+		VersionNumber: int64(version),
+	})
 }
 
 // PromoteSecretVersion points "current" at version and "previous" at the old

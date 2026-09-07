@@ -510,6 +510,38 @@ func (m *memStore) ListNamespaces(_ context.Context, _ storage.ListPage) ([]doma
 	return out, "", nil
 }
 
+// --- destructive mutations ---
+
+func (m *memStore) DeleteWithAudit(ctx context.Context, mut storage.DestructiveMutation, audit domain.AuditEvent) (uint64, error) {
+	var (
+		revision uint64
+		err      error
+	)
+	switch mut.Kind {
+	case storage.DestructiveParameter:
+		revision, err = m.DeleteParameter(ctx, mut.Ref)
+	case storage.DestructiveSecret:
+		revision, err = m.DeleteSecret(ctx, mut.Ref)
+	case storage.DestructiveSecretVersion:
+		revision, err = m.DestroySecretVersion(ctx, mut.Ref, mut.Version)
+	case storage.DestructiveNamespace:
+		err = m.DeleteNamespace(ctx, mut.Ref.NS)
+	case storage.DestructivePolicy:
+		err = m.DeletePolicy(ctx, mut.Name)
+	case storage.DestructiveApplication:
+		err = domain.Errorf(domain.ErrFailedPrecondition, "application management is unavailable")
+	default:
+		err = domain.Errorf(domain.ErrInvalidArgument, "unknown destructive mutation kind %q", mut.Kind)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := m.AppendAudit(ctx, audit); err != nil {
+		return 0, storage.ErrRequiredAuditUnavailable
+	}
+	return revision, nil
+}
+
 // --- audit ---
 
 func (m *memStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {

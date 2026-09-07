@@ -727,14 +727,15 @@ func (s *Service) DeleteSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return 0, err
 	}
-	revision, err := s.store.DeleteSecret(ctx, ref)
+	revision, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructiveSecret, Ref: ref},
+		s.buildRefEventWithNamespaceID(pr, "secret.delete", domain.ResourceSecret, ref, namespace.ID, 0, "allow", nil))
 	if err != nil {
-		if errors.Is(err, domain.ErrFailedPrecondition) {
+		if errors.Is(err, domain.ErrFailedPrecondition) && !errors.Is(err, errAuditUnavailable) {
 			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntrySecret, 0, "delete")
 		}
 		return 0, err
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "secret.delete", domain.ResourceSecret, ref, namespace.ID, 0, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }
@@ -776,14 +777,15 @@ func (s *Service) DestroySecretVersion(ctx context.Context, pr Principal, ref do
 	if err != nil {
 		return 0, err
 	}
-	revision, err := s.store.DestroySecretVersion(ctx, ref, version)
+	revision, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructiveSecretVersion, Ref: ref, Version: version},
+		s.buildRefEventWithNamespaceID(pr, "secret.destroy", domain.ResourceSecret, ref, namespace.ID, version, "allow", nil))
 	if err != nil {
-		if errors.Is(err, domain.ErrFailedPrecondition) {
+		if errors.Is(err, domain.ErrFailedPrecondition) && !errors.Is(err, errAuditUnavailable) {
 			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntrySecret, version, "destroy")
 		}
 		return 0, err
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "secret.destroy", domain.ResourceSecret, ref, namespace.ID, version, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }

@@ -150,14 +150,15 @@ func (s *Service) DeleteParameter(ctx context.Context, pr Principal, ref domain.
 	if err != nil {
 		return 0, err
 	}
-	revision, err := s.store.DeleteParameter(ctx, ref)
+	revision, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructiveParameter, Ref: ref},
+		s.buildRefEventWithNamespaceID(pr, "parameter.delete", domain.ResourceParameter, ref, namespace.ID, 0, "allow", nil))
 	if err != nil {
-		if errors.Is(err, domain.ErrFailedPrecondition) {
+		if errors.Is(err, domain.ErrFailedPrecondition) && !errors.Is(err, errAuditUnavailable) {
 			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntryParameter, 0, "delete")
 		}
 		return 0, err
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "parameter.delete", domain.ResourceParameter, ref, namespace.ID, 0, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }

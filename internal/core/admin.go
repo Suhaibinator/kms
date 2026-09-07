@@ -147,10 +147,11 @@ func (s *Service) DeleteNamespace(ctx context.Context, pr Principal, ref domain.
 	if err != nil {
 		return err
 	}
-	if err := s.store.DeleteNamespace(ctx, ref); err != nil {
+	if _, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructiveNamespace, Ref: domain.Ref{NS: ref}},
+		s.buildRefEventWithNamespaceID(pr, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref}, authorizedNamespace.ID, 0, "allow", nil)); err != nil {
 		return err
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref}, authorizedNamespace.ID, 0, "allow", nil)
 	return nil
 }
 
@@ -273,11 +274,12 @@ func (s *Service) DeletePolicy(ctx context.Context, pr Principal, name string) e
 	if err := s.requireAdmin(ctx, pr, "policy.write", domain.ResourcePolicy, name); err != nil {
 		return err
 	}
-	if err := s.store.DeletePolicy(ctx, name); err != nil {
+	if _, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructivePolicy, Name: name},
+		s.buildEvent(pr, "policy.write", domain.ResourcePolicy, domain.Ref{Key: name}, 0, "allow",
+			map[string]string{"action": "delete"})); err != nil {
 		return err
 	}
-	s.auditName(ctx, pr, "policy.write", domain.ResourcePolicy, name, "allow",
-		map[string]string{"action": "delete"})
 	return nil
 }
 

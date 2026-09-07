@@ -805,7 +805,7 @@ presented-but-invalid credential failure, authorization denial, KEK rotation,
 schema registration, release create/validate/activate/rollback, CAS conflict,
 release lifecycle acknowledgement, defaults verification (counts only), and
 blocked release-reference destruction is audited
-(`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`) into
+(`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`/`deleteWithAudit`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
 with no foreign key, so the history stays readable after a namespace is
@@ -856,10 +856,22 @@ Certificate issuance is audited on both paths: the refused online attempt as
 the audit write fails, the already-decrypted plaintext is explicitly zeroed
 (`crypto.Zero`) and the call returns `domain.ErrFailedPrecondition`
 ("audit unavailable") instead of the secret. Most other audit call sites
-(ordinary writes, denials, and admin actions) use the non-strict `Service.audit`, which
+(ordinary writes, denials, and non-destructive admin actions) use the non-strict `Service.audit`, which
 logs a failure loudly but does not block the underlying operation — the
 plan's requirement that "all secret reads are audited" (§28.9) is enforced
 by refusing to serve the read rather than by hoping the write succeeds.
+
+**Destructive mutations commit together with their audit row.** Parameter
+delete, secret delete, secret-version destroy, namespace delete, policy
+delete, and application delete all go through `Service.deleteWithAudit` →
+`Store.DeleteWithAudit` (`internal/storage/destructive.go`), which applies
+the removal and inserts its `allow` audit row in **one** storage
+transaction. If the audit row cannot be persisted the removal rolls back and
+the caller gets `domain.ErrFailedPrecondition` ("audit unavailable"): state,
+revision, and change log are exactly as before, and watchers are not woken.
+A destructive change therefore never succeeds without durable evidence of
+who made it. Like the binding-management audits below, these rows are
+mandatory even when general-purpose auditing is disabled.
 Binding-cohort and unbound-version previews similarly persist a mandatory
 sanitized allow audit before returning version data. Successful bind, unbind,
 and binding-key rotate operations write a fixed sanitized allow audit inside

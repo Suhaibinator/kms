@@ -195,6 +195,9 @@ func (f *fakeStore) ListParameters(context.Context, domain.NamespaceRef, string,
 	panic("unused")
 }
 func (f *fakeStore) DeleteParameter(context.Context, domain.Ref) (uint64, error) { panic("unused") }
+func (f *fakeStore) DeleteWithAudit(context.Context, storage.DestructiveMutation, domain.AuditEvent) (uint64, error) {
+	panic("unused")
+}
 func (f *fakeStore) CreateSecretVersion(context.Context, storage.CreateSecretParams) (uint64, uint64, error) {
 	panic("unused")
 }

@@ -1141,6 +1141,47 @@ func (f *fakeStore) PoliciesForSubject(_ context.Context, subject string) ([]dom
 	return out, nil
 }
 
+// --- destructive mutations ---
+
+// DeleteWithAudit models the real store's all-or-nothing behavior: an audit
+// insert that would fail rolls the whole thing back, so the resource is only
+// touched once the audit row is known to be writable.
+func (f *fakeStore) DeleteWithAudit(ctx context.Context, m storage.DestructiveMutation, audit domain.AuditEvent) (uint64, error) {
+	f.auditMu.RLock()
+	auditErr := f.auditErr
+	f.auditMu.RUnlock()
+	if auditErr != nil {
+		return 0, storage.ErrRequiredAuditUnavailable
+	}
+	var (
+		revision uint64
+		err      error
+	)
+	switch m.Kind {
+	case storage.DestructiveParameter:
+		revision, err = f.DeleteParameter(ctx, m.Ref)
+	case storage.DestructiveSecret:
+		revision, err = f.DeleteSecret(ctx, m.Ref)
+	case storage.DestructiveSecretVersion:
+		revision, err = f.DestroySecretVersion(ctx, m.Ref, m.Version)
+	case storage.DestructiveNamespace:
+		err = f.DeleteNamespace(ctx, m.Ref.NS)
+	case storage.DestructivePolicy:
+		err = f.DeletePolicy(ctx, m.Name)
+	case storage.DestructiveApplication:
+		err = domain.Errorf(domain.ErrFailedPrecondition, "application management is unavailable")
+	default:
+		err = domain.Errorf(domain.ErrInvalidArgument, "unknown destructive mutation kind %q", m.Kind)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := f.AppendAudit(ctx, audit); err != nil {
+		return 0, storage.ErrRequiredAuditUnavailable
+	}
+	return revision, nil
+}
+
 // --- audit ---
 
 func (f *fakeStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {
