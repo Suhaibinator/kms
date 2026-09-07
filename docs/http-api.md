@@ -42,6 +42,15 @@ Authorization: Bearer <token>
 Tokens are identity tokens (admin or client) minted by `parameter-store
 create-admin` or the identities API.
 
+The authenticated API and the login endpoint are **same-origin only**. A
+request a browser marks as started by another site — `Sec-Fetch-Site:
+cross-site` or `same-site`, or (for browsers without Fetch Metadata) an
+`Origin` naming another host or `null` — gets `403 permission_denied` before
+authentication or any rate-limit budget is consulted. Requests that carry
+neither header (the CLI, SDKs, curl) are unaffected, as are the three
+unauthenticated routes above. See
+[`security.md`](security.md#login-and-failed-authentication-rate-limiting).
+
 **An admin identity also needs a client certificate.** While
 `security.admin_require_client_cert` is enforced — the default whenever the
 server has TLS on — an admin-kind identity is admitted only when the request
@@ -896,8 +905,9 @@ namespace.
 - `POST /api/v1/auth/login` — no auth — body `{"token": "..."}` →
   `{"identity": {"name": "...", "kind": "admin|client"},
     "auth_method": "mtls|token"}`
-  A token is always required in the body; a certificate alone never signs
-  anyone in. `auth_method` reports how the caller was resolved — `mtls` when a
+  Requires `Content-Type: application/json` (`415` otherwise; `405` for any
+  other method), enforced before the login throttle is charged. A token is
+  always required in the body; a certificate alone never signs anyone in. `auth_method` reports how the caller was resolved — `mtls` when a
   chain-verified client certificate on this connection named the same identity
   as the token, `token` otherwise — and is `mtls` for every admin while the
   client-certificate requirement is enforced. Every failure is the same

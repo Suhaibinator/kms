@@ -47,6 +47,22 @@ func (s *namespaceSwapStore) DeleteNamespace(ctx context.Context, ref domain.Nam
 	return nil
 }
 
+// DeleteWithAudit mirrors the DeleteNamespace override: core now removes a
+// namespace through the transactional audit path, so the recreate hook has to
+// fire here to reproduce the ABA.
+func (s *namespaceSwapStore) DeleteWithAudit(ctx context.Context, m storage.DestructiveMutation, audit domain.AuditEvent) (uint64, error) {
+	revision, err := s.Store.DeleteWithAudit(ctx, m, audit)
+	if err != nil {
+		return 0, err
+	}
+	if m.Kind == storage.DestructiveNamespace && m.Ref.NS == s.target && s.afterDelete != nil {
+		if err := s.afterDelete(); err != nil {
+			return 0, err
+		}
+	}
+	return revision, nil
+}
+
 func newNamespaceIncarnationStore(t *testing.T) (*storage.SQLStore, domain.NamespaceRef, domain.Namespace) {
 	t.Helper()
 	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))

@@ -732,6 +732,40 @@ func (s *Service) auditRequiredStrict(ctx context.Context, ev domain.AuditEvent)
 	return nil
 }
 
+// errAuditUnavailable is the fixed response for a destructive mutation rolled
+// back because its mandatory audit row could not be persisted. A package-level
+// value so callers can tell it apart from the mutation's own precondition
+// refusals with errors.Is.
+var errAuditUnavailable = domain.Errorf(domain.ErrFailedPrecondition, "audit unavailable")
+
+// deleteWithAudit commits one destructive mutation together with its allow
+// audit row as a single storage transaction, so a removal can never become
+// durable without the evidence that it happened. The audit row is required
+// regardless of whether general-purpose auditing is enabled — the same rule the
+// binding-key mutations follow — and a failed insert rolls the removal back and
+// returns errAuditUnavailable. Every other error, including the mutation's own
+// refusals, is returned unchanged.
+func (s *Service) deleteWithAudit(ctx context.Context, m storage.DestructiveMutation, ev domain.AuditEvent) (uint64, error) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = s.now()
+	}
+	if ev.Metadata == "" {
+		ev.Metadata = "{}"
+	}
+	revision, err := s.store.DeleteWithAudit(ctx, m, ev)
+	if err != nil {
+		if errors.Is(err, storage.ErrRequiredAuditUnavailable) {
+			s.m().AuditWriteFailed()
+			s.log.Error("required audit append failed (destructive mutation rolled back)",
+				zap.String("event_type", ev.EventType), zap.String("kind", string(m.Kind)))
+			return 0, errAuditUnavailable
+		}
+		return 0, err
+	}
+	s.m().AuditEvent(ev.EventType, ev.Decision)
+	return revision, nil
+}
+
 func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
 	if !s.auditEnabled.Load() {
 		return nil

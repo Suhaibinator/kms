@@ -1119,6 +1119,38 @@ func (s *fakeStore) PoliciesForSubject(_ context.Context, subject string) ([]dom
 	return out, nil
 }
 
+// --- destructive mutations -------------------------------------------------
+
+func (s *fakeStore) DeleteWithAudit(ctx context.Context, m storage.DestructiveMutation, audit domain.AuditEvent) (uint64, error) {
+	var (
+		revision uint64
+		err      error
+	)
+	switch m.Kind {
+	case storage.DestructiveParameter:
+		revision, err = s.DeleteParameter(ctx, m.Ref)
+	case storage.DestructiveSecret:
+		revision, err = s.DeleteSecret(ctx, m.Ref)
+	case storage.DestructiveSecretVersion:
+		revision, err = s.DestroySecretVersion(ctx, m.Ref, m.Version)
+	case storage.DestructiveNamespace:
+		err = s.DeleteNamespace(ctx, m.Ref.NS)
+	case storage.DestructivePolicy:
+		err = s.DeletePolicy(ctx, m.Name)
+	case storage.DestructiveApplication:
+		err = domain.Errorf(domain.ErrFailedPrecondition, "application management is unavailable")
+	default:
+		err = domain.Errorf(domain.ErrInvalidArgument, "unknown destructive mutation kind %q", m.Kind)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := s.AppendAudit(ctx, audit); err != nil {
+		return 0, storage.ErrRequiredAuditUnavailable
+	}
+	return revision, nil
+}
+
 // --- audit -----------------------------------------------------------------
 
 func (s *fakeStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {

@@ -105,56 +105,62 @@ func (s *SQLStore) UpdateNamespace(ctx context.Context, ref domain.NamespaceRef,
 // A secrets store must not offer a recursive delete of live secrets.
 func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		id, err := resolveNamespaceID(tx, ref)
-		if err != nil {
-			return err
-		}
-		for _, check := range []struct {
-			table, what string
-		}{
-			{"parameters", "parameters"},
-			{"secrets", "secrets"},
-			{"identities", "bound identities"},
-		} {
-			var n int64
-			if err := tx.Table(check.table).Where("namespace_id = ?", id).Count(&n).Error; err != nil {
-				return err
-			}
-			if n > 0 {
-				return domain.Errorf(domain.ErrFailedPrecondition,
-					"namespace %s is not empty (%d %s)", ref, n, check.what)
-			}
-		}
-		// Releases are immutable while their environment exists, but they are not
-		// application-owned history. Retire all rows whose identity is scoped to
-		// this namespace before removing the namespace itself. Audit/change-log
-		// rows are denormalized and intentionally remain readable.
-		for _, model := range []any{
-			&releaseSubscriberConnectionModel{},
-			&releaseSubscriberStateModel{},
-			&configurationReleaseActivationModel{},
-			&configurationReleaseLabelModel{},
-		} {
-			if err := tx.Where("namespace_id = ?", id).Delete(model).Error; err != nil {
-				return err
-			}
-		}
-		if err := tx.Exec(`DELETE FROM configuration_release_entries
-			WHERE release_id IN (SELECT id FROM configuration_releases WHERE namespace_id = ?)`, id).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("namespace_id = ?", id).Delete(&configurationReleaseModel{}).Error; err != nil {
-			return err
-		}
-		res := tx.Where("id = ?", id).Delete(&namespaceModel{})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
-		}
-		return nil
+		return deleteNamespaceTx(tx, ref)
 	})
+}
+
+// deleteNamespaceTx is the namespace removal itself, scoped to the caller's
+// open transaction so DeleteWithAudit can commit it together with its audit row.
+func deleteNamespaceTx(tx *gorm.DB, ref domain.NamespaceRef) error {
+	id, err := resolveNamespaceID(tx, ref)
+	if err != nil {
+		return err
+	}
+	for _, check := range []struct {
+		table, what string
+	}{
+		{"parameters", "parameters"},
+		{"secrets", "secrets"},
+		{"identities", "bound identities"},
+	} {
+		var n int64
+		if err := tx.Table(check.table).Where("namespace_id = ?", id).Count(&n).Error; err != nil {
+			return err
+		}
+		if n > 0 {
+			return domain.Errorf(domain.ErrFailedPrecondition,
+				"namespace %s is not empty (%d %s)", ref, n, check.what)
+		}
+	}
+	// Releases are immutable while their environment exists, but they are not
+	// application-owned history. Retire all rows whose identity is scoped to
+	// this namespace before removing the namespace itself. Audit/change-log
+	// rows are denormalized and intentionally remain readable.
+	for _, model := range []any{
+		&releaseSubscriberConnectionModel{},
+		&releaseSubscriberStateModel{},
+		&configurationReleaseActivationModel{},
+		&configurationReleaseLabelModel{},
+	} {
+		if err := tx.Where("namespace_id = ?", id).Delete(model).Error; err != nil {
+			return err
+		}
+	}
+	if err := tx.Exec(`DELETE FROM configuration_release_entries
+		WHERE release_id IN (SELECT id FROM configuration_releases WHERE namespace_id = ?)`, id).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("namespace_id = ?", id).Delete(&configurationReleaseModel{}).Error; err != nil {
+		return err
+	}
+	res := tx.Where("id = ?", id).Delete(&namespaceModel{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
+	}
+	return nil
 }
 
 // ListNamespaces returns namespaces ordered by (env, app), each with its

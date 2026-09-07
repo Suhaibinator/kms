@@ -306,29 +306,7 @@ func (s *SQLStore) ListParameters(ctx context.Context, ns domain.NamespaceRef, k
 func (s *SQLStore) DeleteParameter(ctx context.Context, ref domain.Ref) (uint64, error) {
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		p, err := s.findParameter(tx, ref)
-		if err != nil {
-			return err
-		}
-		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntryParameter, 0); err != nil {
-			return err
-		}
-		if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterLabelModel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterVersionModel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&parameterModel{}, p.ID).Error; err != nil {
-			return err
-		}
-		rev, err := appendChange(tx, &changeLogModel{
-			ResourceType: domain.ResourceParameter,
-			Env:          ref.NS.Env,
-			App:          ref.NS.App,
-			Key:          ref.Key,
-			ChangeType:   domain.ChangeDelete,
-		})
+		rev, err := s.deleteParameterTx(tx, ref)
 		if err != nil {
 			return err
 		}
@@ -339,4 +317,32 @@ func (s *SQLStore) DeleteParameter(ctx context.Context, ref domain.Ref) (uint64,
 		return 0, err
 	}
 	return revision, nil
+}
+
+// deleteParameterTx is the parameter removal itself, scoped to the caller's
+// open transaction so DeleteWithAudit can commit it together with its audit row.
+func (s *SQLStore) deleteParameterTx(tx *gorm.DB, ref domain.Ref) (uint64, error) {
+	p, err := s.findParameter(tx, ref)
+	if err != nil {
+		return 0, err
+	}
+	if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntryParameter, 0); err != nil {
+		return 0, err
+	}
+	if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterLabelModel{}).Error; err != nil {
+		return 0, err
+	}
+	if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterVersionModel{}).Error; err != nil {
+		return 0, err
+	}
+	if err := tx.Delete(&parameterModel{}, p.ID).Error; err != nil {
+		return 0, err
+	}
+	return appendChange(tx, &changeLogModel{
+		ResourceType: domain.ResourceParameter,
+		Env:          ref.NS.Env,
+		App:          ref.NS.App,
+		Key:          ref.Key,
+		ChangeType:   domain.ChangeDelete,
+	})
 }

@@ -168,28 +168,34 @@ func (s *SQLStore) UpdateApplication(ctx context.Context, app domain.Application
 
 func (s *SQLStore) DeleteApplication(ctx context.Context, name string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var m applicationModel
-		if err := tx.Where("name = ?", name).First(&m).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "application %s", name)
-			}
-			return err
-		}
-		var count int64
-		if err := tx.Model(&namespaceModel{}).Where("app = ?", m.Name).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return domain.Errorf(domain.ErrFailedPrecondition, "application %s still has %d environments", name, count)
-		}
-		if err := tx.Model(&configurationSchemaModel{}).Where("application_name = ?", m.Name).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return domain.Errorf(domain.ErrFailedPrecondition, "application %s has schema history; archive it instead", name)
-		}
-		return tx.Delete(&m).Error
+		return deleteApplicationTx(tx, name)
 	})
+}
+
+// deleteApplicationTx is the application removal itself, scoped to the caller's
+// open transaction so DeleteWithAudit can commit it together with its audit row.
+func deleteApplicationTx(tx *gorm.DB, name string) error {
+	var m applicationModel
+	if err := tx.Where("name = ?", name).First(&m).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.Errorf(domain.ErrNotFound, "application %s", name)
+		}
+		return err
+	}
+	var count int64
+	if err := tx.Model(&namespaceModel{}).Where("app = ?", m.Name).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 0 {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s still has %d environments", name, count)
+	}
+	if err := tx.Model(&configurationSchemaModel{}).Where("application_name = ?", m.Name).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 0 {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s has schema history; archive it instead", name)
+	}
+	return tx.Delete(&m).Error
 }
 
 func (s *SQLStore) ArchiveApplication(ctx context.Context, name, actor string) (domain.Application, error) {

@@ -9,6 +9,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/metrics"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -257,20 +258,37 @@ func (s *server) handlePutApplicationParameter(w http.ResponseWriter, r *http.Re
 // supplying the certificate. Every failure is the same generic 401 so the
 // endpoint is not an oracle for which half was wrong.
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	meta := metaFrom(r.Context())
+	// serveAPI has already enforced the method and content type without
+	// charging anything. The body (bounded by decodeJSON) decides the
+	// admission class: a malformed body or one with no token is not an
+	// attempt — there is nothing to verify — and is charged to the
+	// credentialless class, so such requests are bounded but can never spend
+	// the verification budget shared with every other endpoint. Only a request
+	// that presents a token reaches that budget, and a drained credentialless
+	// class never stands in its way.
 	var body struct {
 		Token string `json:"token"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
-		s.writeError(w, r, err)
+		if s.admitCredentialless(w, meta.ip) {
+			s.writeError(w, r, err)
+		}
 		return
 	}
 	if strings.TrimSpace(body.Token) == "" {
 		// A certificate alone never signs anyone in; without a token there is
 		// nothing to verify.
-		s.writeError(w, r, domain.Errorf(domain.ErrUnauthenticated, "missing credentials"))
+		if s.admitCredentialless(w, meta.ip) {
+			s.writeError(w, r, domain.Errorf(domain.ErrUnauthenticated, "missing credentials"))
+		}
 		return
 	}
-	meta := metaFrom(r.Context())
+	if !s.loginLimiter.Allow(meta.ip) {
+		s.rateLimited(metrics.LimiterHTTPLogin)
+		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
+		return
+	}
 	pr, err := s.svc.ResolvePrincipal(r.Context(), core.CredentialInput{
 		Token:      body.Token,
 		PeerCert:   peerCertFromRequest(r),

@@ -71,6 +71,10 @@ type knownVal struct {
 	// last applied at. It fences stale writes: a reconcile read that raced a
 	// newer live event must not regress the key (defect M2).
 	rev uint64
+	// generation changes on every accepted stream/reconcile write, including
+	// unrevisioned events and reconciles at the same revision. Initialization
+	// captures it before reading to detect writes that overlap that read.
+	generation uint64
 }
 
 // watcher fires fn for every change in its namespace. The namespace is the unit
@@ -133,15 +137,32 @@ func newSubManager(c *Client) *subManager {
 	}
 }
 
-// registerParam seeds a parameter's known value and registers a handler that is
-// invoked whenever a new value arrives for its exact key, subscribing to the
-// key's namespace if it is not already subscribed.
-func (m *subManager) registerParam(r ref, initial string, handler func(newVal string, present bool)) {
+// registerParam registers a handler that is invoked whenever a new value
+// arrives for r's exact key, subscribing to the key's namespace if it is not
+// already subscribed, and seeds the key's known state.
+//
+// initial comes from a fresh unary read begun at readGeneration. A stream or
+// reconcile write that overlaps the read wins; otherwise the read seeds the
+// new handle. Existing revisioned known state is retained so its stale-write
+// fence survives and stream catch-up still notifies previously registered
+// handles. seed publishes under the manager lock before later events can
+// reach the newly registered handler.
+func (m *subManager) registerParam(r ref, initial string, readGeneration uint64, handler func(newVal string, present bool), seed func(value string, present bool)) {
 	m.mu.Lock()
 	changed := m.addNamespaceLocked(r.ns)
 	disp := r.display()
-	m.known[disp] = knownVal{value: initial, present: true}
+	kv, known := m.known[disp]
+	value, present := initial, true
+	if known && kv.generation != readGeneration {
+		value, present = kv.value, kv.present
+	} else if !known || kv.rev == 0 {
+		kv.value, kv.present = initial, true
+		m.known[disp] = kv
+	}
 	m.paramHandlers[disp] = append(m.paramHandlers[disp], handler)
+	if seed != nil {
+		seed(value, present)
+	}
 	wasStarted := m.started
 	m.ensureStartedLocked()
 	m.mu.Unlock()
@@ -149,6 +170,12 @@ func (m *subManager) registerParam(r ref, initial string, handler func(newVal st
 	if wasStarted && changed {
 		m.signalRestart()
 	}
+}
+
+func (m *subManager) paramGeneration(r ref) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.known[r.display()].generation
 }
 
 // registerWatcher adds a whole-namespace watcher.
@@ -459,13 +486,13 @@ func (m *subManager) setValue(path, value string, present bool, version, rev uin
 	var changed bool
 	if present {
 		changed = !had || prev.value != value || !prev.present
-		m.known[path] = knownVal{value: value, present: true, rev: newRev}
+		m.known[path] = knownVal{value: value, present: true, rev: newRev, generation: prev.generation + 1}
 	} else {
 		changed = had && prev.present
 		// Preserve a revisioned tombstone. Removing the entry would discard the
 		// stale-write fence and let a reconcile read captured before this delete
 		// resurrect the old value.
-		m.known[path] = knownVal{present: false, rev: newRev}
+		m.known[path] = knownVal{present: false, rev: newRev, generation: prev.generation + 1}
 	}
 	handlers := make([]func(string, bool), len(m.paramHandlers[path]))
 	copy(handlers, m.paramHandlers[path])

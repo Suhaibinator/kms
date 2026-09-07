@@ -256,22 +256,51 @@ func (p *ParameterValue) InitContext(ctx context.Context, client *Client) error 
 		r, haveRef = rr, true
 	}
 
+	var manager *subManager
+	var readGeneration uint64
+	if !p.Static && haveRef {
+		manager = client.subs()
+		readGeneration = manager.paramGeneration(r)
+	}
 	value, err := p.resolveFromStore(ctx, client, r, haveRef)
 	if err != nil {
 		return err
 	}
-	storeString(&st.value, value)
-	st.initialized = true
-
-	if !p.Static && haveRef {
-		client.subs().registerParam(r, value, p.applyUpdate)
+	if manager != nil {
+		// Publish the value through the subscription manager rather than
+		// directly: the shared stream may have advanced while the read was
+		// in flight, and registerParam seeds st.value with whichever
+		// state is authoritative under its lock, before any later event can
+		// reach applyUpdate. Storing the unary result first and registering
+		// afterwards would let a delayed read regress a value the stream had
+		// already moved on from.
+		manager.registerParam(r, value, readGeneration, p.applyUpdate, func(known string, present bool) {
+			switch {
+			case present:
+				value = known
+			case p.Default != "":
+				// The stream already saw the key deleted: same rule as
+				// applyUpdate — fall back to Default, else keep the last read.
+				value = p.Default
+			}
+			storeString(&st.value, value)
+		})
+	} else {
+		storeString(&st.value, value)
 	}
+	st.initialized = true
 	return nil
 }
 
 func (p *ParameterValue) resolveFromStore(ctx context.Context, client *Client, r ref, haveRef bool) (string, error) {
 	if haveRef {
-		v, err := client.getParameter(ctx, r, getOptions{})
+		read := client.getParameter
+		if !p.Static {
+			// The ordering fence is captured immediately before this read.
+			// A cache entry could predate it and cannot seed a live handle.
+			read = client.fetchParameter
+		}
+		v, err := read(ctx, r, getOptions{})
 		if err == nil {
 			return v, nil
 		}

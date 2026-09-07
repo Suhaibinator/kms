@@ -165,10 +165,14 @@ func RouteLabel(pattern string) string {
 
 // Transport-owned rate limiters. Core owns the rest (see core.Limiter*).
 const (
-	LimiterHTTPLogin   = "http_login"
-	LimiterHTTPAuth    = "http_auth"
-	LimiterSSEIdentity = "sse_identity"
-	LimiterSSEGlobal   = "sse_global"
+	LimiterHTTPLogin = "http_login"
+	LimiterHTTPAuth  = "http_auth"
+	// LimiterHTTPCredentialless is the admission class for API requests that
+	// present no credential at all (and logins with no token), kept apart from
+	// the two verification-failure limiters above.
+	LimiterHTTPCredentialless = "http_credentialless"
+	LimiterSSEIdentity        = "sse_identity"
+	LimiterSSEGlobal          = "sse_global"
 )
 
 // LimiterNames is the closed set of limiter label values, transport-owned and
@@ -177,6 +181,7 @@ const (
 var LimiterNames = []string{
 	LimiterHTTPLogin,
 	LimiterHTTPAuth,
+	LimiterHTTPCredentialless,
 	LimiterSSEIdentity,
 	LimiterSSEGlobal,
 	core.LimiterVerifyDefaultsRequests,

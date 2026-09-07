@@ -485,13 +485,50 @@ the same rules to activation replay and live events.
 The HTTP server throttles credential guessing with a per-IP token-bucket
 limiter (`internal/ratelimit`, the same bounded limiter that backs the
 [defaults verification budgets](#defaults-verification-oracle)), shared by
-two call sites: every request to `POST /api/v1/auth/login`, and every failed
-authentication on any other endpoint (`serveAPI`,
+two call sites: every login attempt on `POST /api/v1/auth/login` that
+carries a token, and every failed authentication of a *presented*
+credential on any other endpoint (`serveAPI`,
 `internal/server/httpserver/server.go`) — so an attacker can't dodge the
 throttle by hitting arbitrary API paths with bad credentials instead of
 the login endpoint. Each bucket allows a burst of 10 immediate attempts
 and refills at 5 per minute; once exhausted, further attempts from that
 key get `429 rate_limited` instead of being evaluated.
+
+Only traffic that actually exercises a credential spends that budget. Three
+gates run in front of it, in this order (`serveAPI` and `handleLogin`):
+
+- **Same-origin gate.** Every route that spends an admission budget — login
+  and every authenticated endpoint — is same-origin only. The console is
+  served from the same origin and machine clients send no browser headers,
+  so a request whose Fetch Metadata says another site started it
+  (`Sec-Fetch-Site: cross-site` or `same-site`) is refused with
+  `403 permission_denied` before the readiness check and before any bucket
+  is touched. `same-origin` and `none` (a typed URL or bookmark) pass, and so
+  does a request with no `Sec-Fetch-Site` at all — the CLI, the SDKs, curl
+  and probes. For a browser without Fetch Metadata the `Origin` header is
+  the fallback: an `Origin` naming a host other than the one the request
+  addressed (the `Host` header, or the first `X-Forwarded-Host` once
+  `security.trust_proxy_headers` is on), or the opaque `null`, is refused
+  the same way. The unauthenticated, budget-free routes (`/api/v1/health`,
+  `/api/v1/auth/connection`, `/api/v1/ca`) are not gated; CORS keeps their
+  responses unreadable to another site as before. Without this gate a page
+  anywhere on the web could make a victim's browser — or everyone behind
+  the victim's NAT — fire credentialless requests at a known KMS address
+  until the source IP's bucket was empty, even though every response is
+  unreadable to it.
+- **Login shape.** `POST /api/v1/auth/login` must be a POST with
+  `Content-Type: application/json`; the wrong method (`405`) or content type
+  (`415`) is refused without charging anything.
+- **Admission class.** A request that presents no credential at all — no
+  bearer token and no chain-verified client certificate, or a login whose
+  body is malformed or has no token — has nothing to verify. It is charged
+  to a separate per-IP *credentialless* class (burst 30, refilling 30 per
+  minute, reported under the `http_credentialless` limiter label) instead
+  of the verification budget, so a flood of requests with no usable
+  credential can never exhaust the bucket that throttles guessing, and a
+  drained verification bucket does not lock the credentialless class out
+  either. A presented-but-invalid credential (`Authorization: Bearer bad`)
+  is a verification failure and is charged as one.
 
 An admin request refused for presenting only one of the two required
 credentials (certificate or token, but not both) is a failed authentication
@@ -505,7 +542,8 @@ The bucket key is the caller's IP as resolved by `clientIP` — the real TCP
 peer address by default, or the first address in `X-Forwarded-For` if
 `security.trust_proxy_headers` is enabled (see
 [`operations.md`](operations.md#tls-and-mtls) for when that's safe to
-turn on). It is resolved once per request and reused as the source IP on
+turn on); the same setting makes the first `X-Forwarded-Host` the host a
+browser `Origin` is compared against, for proxies that rewrite `Host`. It is resolved once per request and reused as the source IP on
 every audit event the request produces (`auth.failure`, `authz.denial`,
 `secret.read`, and so on — see [Audit guarantees](#audit-guarantees)
 below), so the rate-limit key and the audited source IP are always
@@ -767,7 +805,7 @@ presented-but-invalid credential failure, authorization denial, KEK rotation,
 schema registration, release create/validate/activate/rollback, CAS conflict,
 release lifecycle acknowledgement, defaults verification (counts only), and
 blocked release-reference destruction is audited
-(`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`) into
+(`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`/`deleteWithAudit`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
 with no foreign key, so the history stays readable after a namespace is
@@ -818,10 +856,22 @@ Certificate issuance is audited on both paths: the refused online attempt as
 the audit write fails, the already-decrypted plaintext is explicitly zeroed
 (`crypto.Zero`) and the call returns `domain.ErrFailedPrecondition`
 ("audit unavailable") instead of the secret. Most other audit call sites
-(ordinary writes, denials, and admin actions) use the non-strict `Service.audit`, which
+(ordinary writes, denials, and non-destructive admin actions) use the non-strict `Service.audit`, which
 logs a failure loudly but does not block the underlying operation — the
 plan's requirement that "all secret reads are audited" (§28.9) is enforced
 by refusing to serve the read rather than by hoping the write succeeds.
+
+**Destructive mutations commit together with their audit row.** Parameter
+delete, secret delete, secret-version destroy, namespace delete, policy
+delete, and application delete all go through `Service.deleteWithAudit` →
+`Store.DeleteWithAudit` (`internal/storage/destructive.go`), which applies
+the removal and inserts its `allow` audit row in **one** storage
+transaction. If the audit row cannot be persisted the removal rolls back and
+the caller gets `domain.ErrFailedPrecondition` ("audit unavailable"): state,
+revision, and change log are exactly as before, and watchers are not woken.
+A destructive change therefore never succeeds without durable evidence of
+who made it. Like the binding-management audits below, these rows are
+mandatory even when general-purpose auditing is disabled.
 Binding-cohort and unbound-version previews similarly persist a mandatory
 sanitized allow audit before returning version data. Successful bind, unbind,
 and binding-key rotate operations write a fixed sanitized allow audit inside

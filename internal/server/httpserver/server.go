@@ -13,8 +13,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -39,10 +41,12 @@ type Config struct {
 	// Version is reported by the health endpoint and available to the UI.
 	Version string
 	// TrustProxyHeaders enables honoring X-Forwarded-For for the client IP used
-	// in rate limiting and audit records. Enable ONLY when the server sits
-	// behind a trusted reverse proxy that sets it; otherwise a client can spoof
-	// the header to evade the login/auth throttle and forge audit source IPs.
-	// Default false: the real TCP peer address is always used.
+	// in rate limiting and audit records, and X-Forwarded-Host as the host a
+	// browser's Origin header is compared against. Enable ONLY when the server
+	// sits behind a trusted reverse proxy that sets them; otherwise a client
+	// can spoof the headers to evade the login/auth throttle, forge audit
+	// source IPs, or pass the same-origin check. Default false: the real TCP
+	// peer address and the Host header are always used.
 	TrustProxyHeaders bool
 	// GRPCAddr is the advertised gRPC listen address, reported by the health
 	// endpoint so the console can show SDK connection details. Empty when the
@@ -84,14 +88,23 @@ type Config struct {
 const maxBodyBytes = 4 << 20
 
 type server struct {
-	svc          *core.Service
-	cfg          Config
-	log          *zap.Logger
+	svc *core.Service
+	cfg Config
+	log *zap.Logger
+	// loginLimiter is the per-IP budget for credential-verification failures:
+	// a login attempt that carries a token, or a request to any other endpoint
+	// that presents a credential which does not verify.
 	loginLimiter *ratelimit.Limiter
-	static       *staticHandler
-	apiMux       *http.ServeMux
-	stream       streamLimits
-	streams      streamRegistry
+	// credentiallessLimiter is the separate, per-IP admission class for
+	// requests with nothing to verify — no bearer token and no client
+	// certificate, or a login whose body is malformed or carries no token.
+	// Keeping them apart means traffic that never touches a credential cannot
+	// spend the budget that throttles guessing (see serveAPI).
+	credentiallessLimiter *ratelimit.Limiter
+	static                *staticHandler
+	apiMux                *http.ServeMux
+	stream                streamLimits
+	streams               streamRegistry
 }
 
 // New builds the HTTP server. The returned *http.Server has its Handler and
@@ -113,12 +126,13 @@ func New(svc *core.Service, cfg Config) (*http.Server, error) {
 // so tests can tune the server (stream limits) before taking its handler.
 func newServer(svc *core.Service, cfg Config) *server {
 	s := &server{
-		svc:          svc,
-		cfg:          cfg,
-		log:          svc.Logger(),
-		loginLimiter: ratelimit.New(5, 10),
-		stream:       defaultStreamLimits(),
-		streams:      newStreamRegistry(),
+		svc:                   svc,
+		cfg:                   cfg,
+		log:                   svc.Logger(),
+		loginLimiter:          ratelimit.New(5, 10),
+		credentiallessLimiter: ratelimit.New(30, 30),
+		stream:                defaultStreamLimits(),
+		streams:               newStreamRegistry(),
 	}
 	if cfg.FrontendEnabled && cfg.Frontend != nil {
 		s.static = newStaticHandler(cfg.Frontend)
@@ -161,15 +175,17 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// serveAPI applies the readiness gate, authentication, and rate limiting for
-// the JSON API, then dispatches to the route handlers.
+// serveAPI applies the same-origin gate, the readiness gate, authentication,
+// and rate limiting for the JSON API, then dispatches to the route handlers.
 func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r, s.cfg.TrustProxyHeaders)
 	requestID := requestIDFrom(r.Context())
 	ctx := context.WithValue(r.Context(), metaKey, reqMeta{ip: ip, ua: r.UserAgent(), requestID: requestID})
 	r = r.WithContext(ctx)
 
-	// Exempt routes: no auth, no readiness gate.
+	// Exempt routes: no auth, no readiness gate, no admission budget — and so
+	// no same-origin gate either. They answer any caller alike and CORS keeps
+	// their responses unreadable to another site.
 	switch r.URL.Path {
 	case "/api/v1/auth/connection":
 		s.handleConnection(w, r)
@@ -184,13 +200,34 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleCA(w, r)
 		return
-	case "/api/v1/auth/login":
-		if !s.loginLimiter.Allow(ip) {
-			s.rateLimited(metrics.LimiterHTTPLogin)
-			writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
+	}
+
+	// Everything below spends an admission budget, so it is same-origin only.
+	// The console is served from this origin and machine clients send neither
+	// Fetch Metadata nor Origin, so a request a browser marks as started by
+	// another site is refused here, before the readiness gate and before any
+	// budget is touched. Otherwise a page anywhere on the web could spend a
+	// victim's per-IP budgets with credentialless requests whose responses it
+	// can never read.
+	if crossSiteRequest(r, s.cfg.TrustProxyHeaders) {
+		writeErrorCode(w, http.StatusForbidden, "permission_denied", "cross-site request refused")
+		return
+	}
+
+	if r.URL.Path == "/api/v1/auth/login" {
+		// Method and content type are enforced before any budget is spent:
+		// neither says anything about a credential, so a request that fails
+		// them is not an attempt. handleLogin charges the admission class the
+		// body turns out to belong to.
+		if r.Method != http.MethodPost {
+			writeErrorCode(w, http.StatusMethodNotAllowed, "invalid_argument", "method not allowed")
 			return
 		}
-		s.apiMux.ServeHTTP(w, r) // enforces POST + handles login
+		if !hasJSONContentType(r) {
+			writeErrorCode(w, http.StatusUnsupportedMediaType, "invalid_argument", "Content-Type must be application/json")
+			return
+		}
+		s.apiMux.ServeHTTP(w, r)
 		return
 	}
 
@@ -199,11 +236,20 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	// Reserve from the failed-auth bucket before doing credential work. A
-	// successful authentication refunds the reservation; a failed one keeps it.
-	// This makes throttling effective even while the bucket is exhausted.
-	if !s.loginLimiter.Allow(ip) {
-		s.rateLimited(metrics.LimiterHTTPAuth)
+	// Reserve from the request's admission class before doing credential
+	// work, so an exhausted class avoids the authentication path entirely; a
+	// successful authentication refunds the reservation, a failed one keeps
+	// it. A request that presents a credential is charged to the
+	// verification-failure budget shared with login. One that presents none
+	// has nothing to verify and is charged to the separate credentialless
+	// class, so a flood of requests with no usable credential can never drain
+	// the budget that protects against guessing.
+	limiter, label := s.loginLimiter, metrics.LimiterHTTPAuth
+	if !credentialPresented(r) {
+		limiter, label = s.credentiallessLimiter, metrics.LimiterHTTPCredentialless
+	}
+	if !limiter.Allow(ip) {
+		s.rateLimited(label)
 		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
 		return
 	}
@@ -212,9 +258,18 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	s.loginLimiter.Refund(ip)
+	limiter.Refund(ip)
 	ctx = context.WithValue(r.Context(), principalKey, pr)
 	s.apiMux.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// credentialPresented reports whether r carries anything authenticate could
+// verify: a bearer token or a chain-verified client certificate. A missing or
+// malformed Authorization header ("Basic …", a bare "Bearer") counts as no
+// credential, which is exactly the traffic the credentialless class exists to
+// keep away from the verification budget.
+func credentialPresented(r *http.Request) bool {
+	return bearerToken(r) != "" || peerCertFromRequest(r) != nil
 }
 
 // authenticate resolves the request's credentials — the bearer token and any
@@ -355,6 +410,18 @@ func (s *server) rateLimited(limiter string) {
 	}
 }
 
+// admitCredentialless charges one request to the credentialless admission
+// class for ip. When the class is exhausted it writes the 429 itself and
+// reports false.
+func (s *server) admitCredentialless(w http.ResponseWriter, ip string) bool {
+	if s.credentiallessLimiter.Allow(ip) {
+		return true
+	}
+	s.rateLimited(metrics.LimiterHTTPCredentialless)
+	writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
+	return false
+}
+
 // skipLog suppresses logging for static assets, health probes, and scrapes.
 func (s *server) skipLog(r *http.Request) bool {
 	p := r.URL.Path
@@ -435,6 +502,62 @@ func clientIP(r *http.Request, trustProxy bool) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// crossSiteRequest reports whether the browser that sent r says the request
+// was started by another site. Browsers attach Fetch Metadata to every
+// request: Sec-Fetch-Site is "same-origin" for anything the console does and
+// "none" for a URL the user typed or a bookmark, while "cross-site" and
+// "same-site" mark a request some other page initiated — which this API never
+// serves, so the header decides when present. Browsers without Fetch Metadata
+// still send Origin on cross-origin and non-GET requests, so an Origin naming
+// another host, or the opaque "null" of a sandboxed frame, is refused too.
+// Requests carrying neither header (the CLI, the SDKs, curl, probes) are not
+// browser requests and pass.
+func crossSiteRequest(r *http.Request, trustProxy bool) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))) {
+	case "same-origin", "none":
+		return false
+	case "cross-site", "same-site":
+		return true
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return true // "null", or not an origin at all
+	}
+	return !strings.EqualFold(u.Host, requestHost(r, trustProxy))
+}
+
+// requestHost is the host the client addressed, as the Origin comparison in
+// crossSiteRequest needs it: the Host header, or the first X-Forwarded-Host
+// when the operator has declared a trusted proxy (trustProxy). A proxy that
+// rewrites Host to its upstream address would otherwise make every browser
+// Origin look foreign.
+func requestHost(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+			first := xfh
+			if before, _, ok := strings.Cut(xfh, ","); ok {
+				first = before
+			}
+			if v := strings.TrimSpace(first); v != "" {
+				return v
+			}
+		}
+	}
+	return r.Host
+}
+
+// hasJSONContentType reports whether r declares a JSON body. The login route
+// requires it so that a request which is not even shaped like a login is
+// refused before any admission budget is charged.
+func hasJSONContentType(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "application/json"
 }
 
 func bearerToken(r *http.Request) string {

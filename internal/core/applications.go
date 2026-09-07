@@ -192,14 +192,17 @@ func (s *Service) DeleteApplication(ctx context.Context, pr Principal, name stri
 	if err := s.requireAdmin(ctx, pr, "application.delete", domain.ResourceApplication, name); err != nil {
 		return err
 	}
-	store, err := s.applicationStore()
-	if err != nil {
+	if _, err := s.applicationStore(); err != nil {
 		return err
 	}
-	if err := store.DeleteApplication(ctx, name); err != nil {
+	// The removal and its audit row commit together through the base store;
+	// SQLStore satisfies both interfaces, so the application gate above is the
+	// only thing ApplicationStore is consulted for here.
+	if _, err := s.deleteWithAudit(ctx,
+		storage.DestructiveMutation{Kind: storage.DestructiveApplication, Name: name},
+		s.buildEvent(pr, "application.delete", domain.ResourceApplication, domain.Ref{Key: name}, 0, "allow", nil)); err != nil {
 		return err
 	}
-	s.auditName(ctx, pr, "application.delete", domain.ResourceApplication, name, "allow", nil)
 	return nil
 }
 

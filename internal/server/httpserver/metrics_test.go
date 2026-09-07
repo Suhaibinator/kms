@@ -212,7 +212,7 @@ func TestLoginAndAuthLimiterRefusalsAreCounted(t *testing.T) {
 		env.do(http.MethodGet, "/api/v1/whoami", nil, bad)
 	}
 	for range 3 {
-		env.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"name": "x", "token": "y"}, nil)
+		env.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": "y"}, nil)
 	}
 
 	body := scrapeText(t, m)
