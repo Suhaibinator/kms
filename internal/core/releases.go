@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"google.golang.org/protobuf/proto"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -1000,10 +1001,68 @@ func sanitizeSchemaErrors(err error) []domain.ReleaseValidationError {
 		if ptr == "/" {
 			ptr = ""
 		}
-		out = append(out, domain.ReleaseValidationError{Alias: alias, Code: domain.ReleaseValidationSchema, SchemaPointer: ptr, Message: "configuration value does not satisfy schema"})
+		out = append(out, domain.ReleaseValidationError{Alias: alias, Code: domain.ReleaseValidationSchema, SchemaPointer: ptr, Message: actionableSchemaMessage(e.ErrorKind)})
 	}
 	return out
 }
+
+// Only schema requirements are described here. Validator error strings may include
+// configuration values, so never expose Error(), Got, or nested validator errors.
+func actionableSchemaMessage(k jsonschema.ErrorKind) string {
+	quoted := func(names []string) string {
+		out := make([]string, 0, len(names))
+		for _, name := range names {
+			out = append(out, strconv.Quote(name))
+		}
+		return strings.Join(out, ", ")
+	}
+	switch rule := k.(type) {
+	case *kind.Required:
+		if len(rule.Missing) == 1 {
+			return "Add the missing required field " + quoted(rule.Missing) + "."
+		}
+		return "Add the missing required fields: " + quoted(rule.Missing) + "."
+	case *kind.DependentRequired:
+		return "Add required field(s) " + quoted(rule.Missing) + " when " + strconv.Quote(rule.Prop) + " is present."
+	case *kind.Dependency:
+		return "Add required field(s) " + quoted(rule.Missing) + " when " + strconv.Quote(rule.Prop) + " is present."
+	case *kind.Type:
+		return "Use a value of type " + strings.Join(rule.Want, " or ") + "."
+	case *kind.Minimum:
+		return "Use a value greater than or equal to " + rule.Want.RatString() + "."
+	case *kind.Maximum:
+		return "Use a value less than or equal to " + rule.Want.RatString() + "."
+	case *kind.ExclusiveMinimum:
+		return "Use a value greater than " + rule.Want.RatString() + "."
+	case *kind.ExclusiveMaximum:
+		return "Use a value less than " + rule.Want.RatString() + "."
+	case *kind.MultipleOf:
+		return "Use a multiple of " + rule.Want.RatString() + "."
+	case *kind.Format:
+		return "Use the " + strconv.Quote(rule.Want) + " format required by the target schema."
+	case *kind.MinLength:
+		return fmt.Sprintf("Use at least %d characters.", rule.Want)
+	case *kind.MaxLength:
+		return fmt.Sprintf("Use at most %d characters.", rule.Want)
+	case *kind.MinItems:
+		return fmt.Sprintf("Add items so the array contains at least %d.", rule.Want)
+	case *kind.MaxItems:
+		return fmt.Sprintf("Reduce the array to at most %d items.", rule.Want)
+	}
+	keyword := strings.Join(k.KeywordPath(), "/")
+	messages := map[string]string{
+		"enum":                 "Choose one of the values allowed by the target schema.",
+		"const":                "Use the constant value required by the target schema.",
+		"pattern":              "Use text matching the pattern in the target schema.",
+		"additionalProperties": "Remove fields that are not allowed by the target schema.",
+		"uniqueItems":          "Remove duplicate array items.",
+	}
+	if message, ok := messages[keyword]; ok {
+		return message
+	}
+	return "Review this field against the target schema; its validation rule was not satisfied."
+}
+
 func schemaErrorLeaves(e *jsonschema.ValidationError, out []*jsonschema.ValidationError) []*jsonschema.ValidationError {
 	if len(e.Causes) == 0 {
 		return append(out, e)

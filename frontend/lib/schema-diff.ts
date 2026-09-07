@@ -5,15 +5,33 @@ export interface SchemaDifference {
 
 /** Compare JSON Schema properties recursively; constraints are compared at
  * their owning field, so nested additions do not obscure their parent. */
-export function schemaDifferences(before: string, after: string): SchemaDifference[] {
-  const result: SchemaDifference[] = [];
-  function visit(a: unknown, b: unknown, path: string) {
+export interface StructuredSchemaDifference extends SchemaDifference {
+  segments: string[];
+}
+
+export function structuredSchemaDifferences(
+  before: string,
+  after: string,
+): StructuredSchemaDifference[] {
+  const result: StructuredSchemaDifference[] = [];
+  function visit(a: unknown, b: unknown, segments: string[]) {
+    const path = segments.join(".");
     if (a === undefined) {
-      result.push({ path, change: "added" });
+      result.push({ path, segments, change: "added" });
+      const properties =
+        b && typeof b === "object" ? (b as Record<string, unknown>).properties : undefined;
+      if (properties && typeof properties === "object" && !Array.isArray(properties))
+        for (const [key, value] of Object.entries(properties))
+          visit(undefined, value, [...segments, key]);
       return;
     }
     if (b === undefined) {
-      result.push({ path, change: "removed" });
+      result.push({ path, segments, change: "removed" });
+      const properties =
+        a && typeof a === "object" ? (a as Record<string, unknown>).properties : undefined;
+      if (properties && typeof properties === "object" && !Array.isArray(properties))
+        for (const [key, value] of Object.entries(properties))
+          visit(value, undefined, [...segments, key]);
       return;
     }
     const obj = (v: unknown): Record<string, unknown> =>
@@ -39,14 +57,25 @@ export function schemaDifferences(before: string, after: string): SchemaDifferen
       canonical(constraints(aa)) !== canonical(constraints(bb)) ||
       ((typeof a !== "object" || typeof b !== "object") && a !== b)
     )
-      result.push({ path: path || "(root)", change: "changed" });
-    for (const key of [...new Set([...Object.keys(ap), ...Object.keys(bp)])].sort())
-      visit(ap[key], bp[key], path ? `${path}.${key}` : key);
+      result.push({ path: path || "(root)", segments, change: "changed" });
+    const requiredA = new Set(Array.isArray(aa.required) ? aa.required : []);
+    const requiredB = new Set(Array.isArray(bb.required) ? bb.required : []);
+    for (const key of [...new Set([...Object.keys(ap), ...Object.keys(bp)])].sort()) {
+      const child = [...segments, key];
+      const start = result.length;
+      visit(ap[key], bp[key], child);
+      if (requiredA.has(key) !== requiredB.has(key) && result.length === start)
+        result.push({ path: child.join("."), segments: child, change: "changed" });
+    }
   }
   try {
-    visit(JSON.parse(before || "{}"), JSON.parse(after), "");
+    visit(JSON.parse(before || "{}"), JSON.parse(after), []);
   } catch {
-    return [{ path: "Schema document", change: "changed" }];
+    return [{ path: "Schema document", segments: [], change: "changed" }];
   }
   return result;
+}
+
+export function schemaDifferences(before: string, after: string): SchemaDifference[] {
+  return structuredSchemaDifferences(before, after).map(({ path, change }) => ({ path, change }));
 }

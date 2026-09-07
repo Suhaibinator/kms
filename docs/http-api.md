@@ -1305,8 +1305,9 @@ rules (a deny still wins).
   `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime","version":14}`
   → `{"valid":false,"errors":[{"alias":"rate_limits",
   "code":"schema_violation","schema_pointer":"/properties/rate_limits/type",
-  "message":"configuration value does not satisfy schema"}]}`. Error messages
-  are sanitized and never include values.
+  "message":"Use a value of type integer."}]}`. Error messages
+  describe schema requirements, including missing required field names and numeric
+  bounds. They are sanitized and never include submitted configuration values.
 - `POST /api/v1/releases/activate` with
   `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime",
   "version":14,"expected_current_version":13}` →

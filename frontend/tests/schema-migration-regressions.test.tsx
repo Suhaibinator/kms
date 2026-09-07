@@ -459,4 +459,108 @@ describe("SchemaMigrationModal regressions", () => {
     expect(warning).toHaveTextContent("will not activate or roll back until they are migrated");
     expect(warning).toHaveTextContent("The contract change applies globally");
   });
+  it("puts validation reasons above the preview table and jumps to the value without losing edits", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [registeredSchema(2, { rate_limits: { type: "integer" } })],
+      next_page_token: "",
+    });
+    mocks.getParameter.mockResolvedValue({ parameter: { value: "300", content_type: "integer" } });
+    mocks.migrateApplicationSchema.mockResolvedValue(
+      migrationResult({
+        valid: false,
+        validation: [
+          {
+            alias: "rate_limits",
+            code: "schema",
+            schema_pointer: "/minimum",
+            message: "Increase to the required minimum.",
+          },
+        ],
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("rate_limits value")).toHaveValue("300"),
+    );
+    fireEvent.change(within(dialog).getByLabelText("rate_limits value"), {
+      target: { value: "20" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Preview migration/ }));
+    const fix = await within(dialog).findByRole("button", { name: "rate_limits · Fix field" });
+    const reasons = within(dialog).getByRole("list", { name: "Validation problems" });
+    expect(
+      reasons.compareDocumentPosition(within(dialog).getByRole("table")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(fix);
+    const input = within(dialog).getByLabelText("rate_limits value");
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toHaveValue("20");
+    expect(input.closest("details")).toHaveAttribute("open");
+    fireEvent.change(input, { target: { value: "21" } });
+    expect(input.closest("details")).toHaveAttribute("open");
+    expect(input).toHaveFocus();
+  });
+
+  it("keeps rows stable during edits, filters by nested path, and preserves collapse choices across steps", async () => {
+    const old = registeredSchema(1, {
+      database: { type: "object" },
+      rate_limits: { type: "integer" },
+    });
+    const target = {
+      ...registeredSchema(2),
+      schema_json: JSON.stringify({
+        type: "object",
+        properties: {
+          database: {
+            type: "object",
+            properties: {
+              connection: { type: "object", properties: { timeout: { type: "integer" } } },
+            },
+          },
+          rate_limits: { type: "integer" },
+        },
+      }),
+    };
+    mocks.listSchemas.mockResolvedValue({ schemas: [target, old], next_page_token: "" });
+    mocks.getParameter.mockImplementation((ref: { key: string }) =>
+      Promise.resolve({
+        parameter: {
+          value: ref.key === "database" ? "{}" : "300",
+          content_type: ref.key === "database" ? "json" : "integer",
+        },
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    const rows = () =>
+      Array.from(dialog.querySelectorAll("details[id^=upgrade-field]")).map((node) => node.id);
+    const before = rows();
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("rate_limits value")).toHaveValue("300"),
+    );
+    fireEvent.change(within(dialog).getByLabelText("rate_limits value"), {
+      target: { value: "301" },
+    });
+    expect(rows()).toEqual(before);
+    fireEvent.change(within(dialog).getByLabelText("Search fields or schema paths"), {
+      target: { value: "database.connection.timeout" },
+    });
+    expect(rows()).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next change" }));
+    const database = within(dialog).getByLabelText("database value").closest("details")!;
+    expect(database).toHaveAttribute("open");
+    expect(database.querySelector("summary")).toHaveFocus();
+    database.open = false;
+    fireEvent(database, new Event("toggle"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
+    expect(within(dialog).getByLabelText("database value").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(within(dialog).getByLabelText("rate_limits value")).toHaveValue("301");
+  });
 });

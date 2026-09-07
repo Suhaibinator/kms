@@ -119,7 +119,9 @@ for (const width of [390, 1280]) {
     await expectNoPageOverflow(page);
 
     await dialog.getByRole("button", { name: /Edit values/ }).click();
-    await dialog.locator("summary").filter({ hasText: "renamed_rate_limits" }).click();
+    await expect(
+      dialog.locator("summary").filter({ hasText: "renamed_rate_limits" }),
+    ).toBeVisible();
     const value = dialog.getByRole("textbox", { name: "renamed_rate_limits value" });
     await expect(value).toHaveValue("300");
     await value.fill("500");
@@ -131,6 +133,7 @@ for (const width of [390, 1280]) {
     await expect(dialog).toContainText("renamed_rate_limits");
     const version = dialog.locator('td[data-label="Version"]');
     await expect(version).toHaveText("v3 → v4");
+    await version.scrollIntoViewIfNeeded();
     await expect(version).toBeInViewport();
     const previewGeometry = await dialog.locator(".table-wrap").evaluate((wrapper) => {
       const versionCell = wrapper.querySelector<HTMLElement>('td[data-label="Version"]');

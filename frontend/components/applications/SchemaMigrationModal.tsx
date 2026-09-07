@@ -10,7 +10,6 @@ import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { deriveContractFromSchema } from "@/lib/contract-derive";
 import type {
   Application,
-  ApplicationContractField,
   ConfigurationReleaseEntry,
   ConfigurationSchema,
   EnvironmentOverview,
@@ -19,22 +18,22 @@ import type {
 } from "@/lib/types";
 import { PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import { parseUpgradeDefaults, type UpgradeDefaults } from "@/lib/upgrade-defaults";
+import { structuredSchemaDifferences } from "@/lib/schema-diff";
+import {
+  upgradeFieldChanges,
+  removedUpgradeAliases,
+  orderUpgradeChanges,
+  type UpgradeDraftField,
+} from "@/lib/upgrade-field-changes";
+import {
+  UpgradeChangeNavigator,
+  UpgradeChangeLabels,
+  matchesUpgradeSearch,
+} from "./UpgradeChangeNavigator";
 import { SchemaComparison } from "./SchemaComparison";
 
 type Step = 0 | 1 | 2 | 3 | 4;
-type DraftField = ApplicationContractField & {
-  id: number;
-  fromAlias?: string;
-  key: string;
-  version?: number;
-  versionText: string;
-  value?: string;
-  originalValue?: string;
-  originalContentType?: string;
-  loaded?: boolean;
-  loading?: boolean;
-  loadError?: string;
-};
+type DraftField = UpgradeDraftField;
 
 function exactVersionError(field: DraftField): string | undefined {
   if (!field.versionText) {
@@ -83,6 +82,17 @@ export function SchemaMigrationModal({
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [fields, setFields] = useState<DraftField[]>([]);
+  const [focusedField, setFocusedField] = useState<number | null>(null);
+  const [fieldSearch, setFieldSearch] = useState("");
+  const [onlyChanged, setOnlyChanged] = useState(false);
+  const [fieldOrder, setFieldOrder] = useState<number[]>([]);
+  const [jumpTarget, setJumpTarget] = useState<{
+    id: number;
+    control: boolean;
+    tick: number;
+  } | null>(null);
+  const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
+  const [fieldProblems, setFieldProblems] = useState<SchemaMigrationResponse["validation"]>([]);
   const [derivationNotes, setDerivationNotes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -93,6 +103,7 @@ export function SchemaMigrationModal({
   const [sourceConflict, setSourceConflict] = useState(false);
   const [reloadingSource, setReloadingSource] = useState(false);
   const [sourceEntries, setSourceEntries] = useState<ConfigurationReleaseEntry[]>([]);
+  const stepTop = useRef<HTMLDivElement>(null);
   const nextID = useRef(1);
   const sessionKey = useRef("");
   const initializedDraft = useRef("");
@@ -107,6 +118,76 @@ export function SchemaMigrationModal({
   const newerSchemas = schemas.filter((schema) => schema.version > application.schema_version);
   const selectedSchema = newerSchemas.find((item) => item.version === schemaVersion);
   const production = selectedEnvironment?.production === true;
+  const currentSchema = schemas.find((schema) => schema.version === application.schema_version);
+  const schemaChanges = useMemo(
+    () =>
+      selectedSchema && (currentSchema || !application.schema_version)
+        ? structuredSchemaDifferences(
+            currentSchema?.schema_json ?? "{}",
+            selectedSchema.schema_json,
+          )
+        : [],
+    [selectedSchema, currentSchema, application.schema_version],
+  );
+  const changes = upgradeFieldChanges(
+    fields,
+    application.contract,
+    sourceEntries,
+    schemaChanges,
+    fieldProblems,
+  );
+  const changeById = new Map(changes.map((change) => [change.id, change]));
+  const removed = removedUpgradeAliases(fields, application.contract, sourceEntries);
+  const orderedFields = [...fields].sort((a, b) => {
+    const ai = fieldOrder.indexOf(a.id),
+      bi = fieldOrder.indexOf(b.id);
+    return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
+  });
+  const visibleFields = orderedFields.filter((field) => {
+    const change = changeById.get(field.id)!;
+    return (
+      focusedField === field.id ||
+      (matchesUpgradeSearch(change, fieldSearch) &&
+        (!onlyChanged || change.changed || jumpTarget?.id === field.id))
+    );
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Reorder only on step entry, never while typing or loading pins.
+  useEffect(() => {
+    setFieldOrder(orderUpgradeChanges(changes));
+    const body = stepTop.current?.closest<HTMLElement>("[data-modal-body]");
+    if (body) body.scrollTop = 0;
+  }, [step]);
+  function jumpToField(id: number, control = false) {
+    setFieldSearch("");
+    setExpandedRows((rows) => ({ ...rows, [id]: true }));
+    if (control) setStep(2);
+    setJumpTarget((last) => ({ id, control, tick: (last?.tick ?? 0) + 1 }));
+  }
+  useEffect(() => {
+    if (!jumpTarget) return;
+    const row = document.getElementById(`upgrade-field-${jumpTarget.id}`);
+    if (!row) return;
+    if (row instanceof HTMLDetailsElement) row.open = true;
+    const heading = row.querySelector<HTMLElement>("[data-field-heading]") ?? row;
+    const target = jumpTarget.control
+      ? (row.querySelector<HTMLElement>(
+          '[aria-invalid=true], [aria-label$=" value"]:not([disabled])',
+        ) ??
+        row.querySelector<HTMLElement>(
+          "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
+        ) ??
+        heading)
+      : heading;
+    const body = row.closest<HTMLElement>("[data-modal-body]");
+    if (body)
+      body.scrollTop += row.getBoundingClientRect().top - body.getBoundingClientRect().top - 12;
+    target.focus({ preventScroll: true });
+  }, [jumpTarget]);
+
+  const releaseProblems =
+    preview?.validation.filter(
+      (problem) => !fields.some((field) => field.alias === problem.alias),
+    ) ?? [];
   const affectedActiveEnvironments =
     preview?.affected_environments.filter((item) => item.active_version > 0) ?? [];
   const mismatchedSchemaEnvironments = affectedActiveEnvironments.filter(
@@ -229,6 +310,11 @@ export function SchemaMigrationModal({
       };
     });
     setFields(mapped);
+    setFieldProblems([]);
+    setExpandedRows({});
+    setJumpTarget(null);
+    setFieldSearch("");
+    setOnlyChanged(false);
   }, [
     open,
     environment,
@@ -296,6 +382,8 @@ export function SchemaMigrationModal({
   }, [open, step, fields, selectedEnvironment, environment, application.name, toast]);
 
   function update(id: number, patch: Partial<DraftField>) {
+    const alias = fields.find((field) => field.id === id)?.alias;
+    setFieldProblems((problems) => problems.filter((problem) => problem.alias !== alias));
     setPreview(null);
     setFields((current) =>
       current.map((field) => (field.id === id ? { ...field, ...patch } : field)),
@@ -351,6 +439,7 @@ export function SchemaMigrationModal({
       const result = await api.migrateApplicationSchema(application.name, request(false));
       if (generation !== loadGeneration.current || !open) return;
       setPreview(result);
+      setFieldProblems(result.validation);
       setStep(3);
     } catch (error) {
       if (generation === loadGeneration.current) {
@@ -509,6 +598,7 @@ export function SchemaMigrationModal({
         )
       }
     >
+      <div ref={stepTop} />
       {step < 4 ? (
         <ol className="migration-steps" aria-label="Migration progress">
           {stepLabels.map((label, index) => (
@@ -521,6 +611,57 @@ export function SchemaMigrationModal({
             </li>
           ))}
         </ol>
+      ) : null}
+      {step === 3 && preview ? (
+        <section aria-label="Validation result">
+          <div className={preview.valid ? "success-panel" : "danger-panel"}>
+            {preview.valid
+              ? "Backend validation passed."
+              : `Cannot ship yet: ${preview.validation.length || "one or more"} validation ${preview.validation.length === 1 ? "problem" : "problems"}. Fix the fields below, then preview again.`}
+          </div>
+          {preview.validation.length ? (
+            <ul className="stack" aria-label="Validation problems">
+              {preview.validation
+                .filter((problem) => fields.some((field) => field.alias === problem.alias))
+                .map((problem, index) => (
+                  <li className="card p-4 stack" key={`${problem.alias}-${problem.code}-${index}`}>
+                    {fields.some((field) => field.alias === problem.alias) ? (
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          jumpToField(
+                            fields.find((field) => field.alias === problem.alias)!.id,
+                            true,
+                          )
+                        }
+                      >
+                        {problem.alias} · Fix field
+                      </Button>
+                    ) : (
+                      <strong>Release-wide error</strong>
+                    )}
+                    <p>{problem.message}</p>
+                    {problem.schema_pointer && (
+                      <details>
+                        <summary className="cursor-pointer text-sm">Schema rule</summary>
+                        <code>{problem.schema_pointer}</code>
+                      </details>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          ) : null}
+          {releaseProblems.length > 0 && (
+            <section className="warning-panel" aria-label="Release-wide problems">
+              <strong>Release-wide problems</strong>
+              <ul>
+                {releaseProblems.map((problem, index) => (
+                  <li key={`${problem.code}-${index}`}>{problem.message}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </section>
       ) : null}
       {loading ? <Loading label="Loading registered schemas…" /> : null}
       {!loading && step === 0 ? (
@@ -675,6 +816,50 @@ export function SchemaMigrationModal({
           </section>
         </>
       )}
+      {step >= 1 && step <= 3 && (
+        <>
+          <UpgradeChangeNavigator
+            changes={fieldOrder
+              .map((id) => changeById.get(id))
+              .filter((c): c is NonNullable<typeof c> => Boolean(c))
+              .concat(changes.filter((c) => !fieldOrder.includes(c.id)))}
+            removed={removed}
+            search={fieldSearch}
+            onlyChanged={onlyChanged}
+            onSearch={(value) => {
+              setFocusedField(null);
+              setFieldSearch(value);
+            }}
+            onFilter={(value) => {
+              setFocusedField(null);
+              setOnlyChanged(value);
+            }}
+            onSort={() => setFieldOrder(orderUpgradeChanges(changes))}
+            onJump={jumpToField}
+            current={jumpTarget?.id ?? null}
+          />
+          {schemaChanges.some((d) => !d.segments.length) && (
+            <section className="info-panel" aria-label="Root schema changes">
+              Root schema constraints changed. See the schema comparison for details.
+            </section>
+          )}
+          {removed.length > 0 && (
+            <section className="card p-4" aria-label="Removed aliases">
+              <strong>Removed aliases</strong>
+              <ul>
+                {removed
+                  .filter((alias) => alias.toLowerCase().includes(fieldSearch.toLowerCase()))
+                  .map((alias) => (
+                    <li key={alias}>
+                      <span className="mono">{alias}</span> · removed from release
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
+          {!visibleFields.length && <p>No fields match this filter.</p>}
+        </>
+      )}
       {step === 1 ? (
         <div className="stack">
           <div className="info-panel">
@@ -694,12 +879,20 @@ export function SchemaMigrationModal({
               </div>
             </div>
           ) : null}
-          {fields.map((field) => (
+          {visibleFields.map((field) => (
             <div
-              className="migration-contract-row"
+              className={`migration-contract-row ${changeById.get(field.id)!.changed ? "border-l-4 border-l-primary" : ""}`}
+              id={`upgrade-field-${field.id}`}
               key={field.id}
+              onFocusCapture={() => setFocusedField(field.id)}
               data-testid={`migration-contract-${field.id}`}
             >
+              <div className="col-span-full">
+                <h3 data-field-heading tabIndex={-1}>
+                  {field.alias || "Unnamed field"}
+                </h3>
+                <UpgradeChangeLabels change={changeById.get(field.id)!} />
+              </div>
               <Field label="Alias">
                 <Input
                   aria-label="Alias"
@@ -834,19 +1027,20 @@ export function SchemaMigrationModal({
               </div>
             </div>
           ) : null}
-          {fields.map((field) => (
+          {visibleFields.map((field) => (
             <ValueDisclosure
+              id={`upgrade-field-${field.id}`}
+              onFocus={() => setFocusedField(field.id)}
+              remembered={expandedRows[field.id]}
+              onExpanded={(expanded) =>
+                setExpandedRows((rows) =>
+                  rows[field.id] === expanded ? rows : { ...rows, [field.id]: expanded },
+                )
+              }
               key={field.id}
-              expand={Boolean(
-                !field.fromAlias ||
-                  source === "artifact" ||
-                  Boolean(field.loadError) ||
-                  application.contract.find((f) => f.alias === field.fromAlias)?.content_type !==
-                    field.content_type ||
-                  preview?.validation.some((p) => p.alias === field.alias),
-              )}
+              expand={changeById.get(field.id)!.changed}
             >
-              <summary className="cursor-pointer">
+              <summary data-field-heading tabIndex={0} className="cursor-pointer">
                 <span className="mono">{field.alias}</span> · {field.kind} ·{" "}
                 {field.value !== undefined &&
                 (field.value !== field.originalValue ||
@@ -857,6 +1051,12 @@ export function SchemaMigrationModal({
                     : "new value needed"}{" "}
                 · Edit
               </summary>
+              <UpgradeChangeLabels change={changeById.get(field.id)!} />
+              {changeById.get(field.id)!.problems.map((problem, index) => (
+                <p role="alert" key={`${problem.code}-${index}`}>
+                  {problem.message}
+                </p>
+              ))}
               <div className="migration-value-row">
                 <div className="between">
                   <div>
@@ -954,9 +1154,6 @@ export function SchemaMigrationModal({
       ) : null}
       {step === 3 && preview ? (
         <div className="stack">
-          <div className={preview.valid ? "success-panel" : "danger-panel"}>
-            {preview.valid ? "Backend validation passed." : "Backend validation failed."}
-          </div>
           <dl className="kv">
             <dt>Schema</dt>
             <dd>v{preview.schema_version}</dd>
@@ -978,41 +1175,46 @@ export function SchemaMigrationModal({
                 </tr>
               </thead>
               <tbody>
-                {preview.entries.map((entry) => (
-                  <tr key={entry.alias}>
-                    <td className="mono" data-label="Alias">
-                      {entry.alias}
-                    </td>
-                    <td data-label="Change">{entry.source}</td>
-                    <td className="mono" data-label="Key">
-                      {entry.key}
-                    </td>
-                    <td data-label="Version">
-                      {entry.source === "removed" ? (
-                        `v${entry.from_version} → removed from release`
-                      ) : entry.source === "missing" ? (
-                        "Value required"
-                      ) : (
-                        <>
-                          {entry.from_version ? `v${entry.from_version} → ` : ""}v{entry.to_version}
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {visibleFields
+                  .flatMap((field) =>
+                    preview.entries.filter((entry) => entry.alias === field.alias),
+                  )
+                  .map((entry) => (
+                    <tr
+                      key={entry.alias}
+                      id={`upgrade-field-${fields.find((f) => f.alias === entry.alias)?.id}`}
+                      tabIndex={-1}
+                    >
+                      <td className="mono" data-label="Alias">
+                        {entry.alias}
+                        {changes.find((c) => c.alias === entry.alias) && (
+                          <UpgradeChangeLabels
+                            change={changes.find((c) => c.alias === entry.alias)!}
+                          />
+                        )}
+                      </td>
+                      <td data-label="Change">{entry.source}</td>
+                      <td className="mono" data-label="Key">
+                        {entry.key}
+                      </td>
+                      <td data-label="Version">
+                        {entry.source === "removed" ? (
+                          `v${entry.from_version} → removed from release`
+                        ) : entry.source === "missing" ? (
+                          "Value required"
+                        ) : (
+                          <>
+                            {entry.from_version ? `v${entry.from_version} → ` : ""}v
+                            {entry.to_version}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
-          {preview.validation.length ? (
-            <ul>
-              {preview.validation.map((problem) => (
-                <li key={`${problem.alias}-${problem.code}`}>
-                  <strong className="mono">{problem.alias || "Release"}</strong>
-                  {problem.schema_pointer ? ` · ${problem.schema_pointer}` : ""}: {problem.message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+
           {mismatchedSchemaEnvironments.length ||
           (preview.definition_changed && affectedActiveEnvironments.length) ? (
             <div className="warning-panel">
@@ -1088,16 +1290,42 @@ export function SchemaMigrationModal({
   );
 }
 
-function ValueDisclosure({ expand, children }: { expand: boolean; children: React.ReactNode }) {
-  const [expanded, setExpanded] = useState(expand);
+function ValueDisclosure({
+  expand,
+  children,
+  id,
+  remembered,
+  onExpanded,
+  onFocus,
+}: {
+  expand: boolean;
+  children: React.ReactNode;
+  id: string;
+  remembered?: boolean;
+  onExpanded: (expanded: boolean) => void;
+  onFocus: () => void;
+}) {
+  const [expanded, setExpanded] = useState(remembered ?? expand);
+  const mounted = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Restore an explicit user choice on mount; only new change signals auto-expand afterward.
   useEffect(() => {
-    if (expand) setExpanded(true);
+    if (((!mounted.current && remembered === undefined) || mounted.current) && expand)
+      setExpanded(true);
+    mounted.current = true;
   }, [expand]);
+  useEffect(() => {
+    if (remembered !== undefined) setExpanded(remembered);
+  }, [remembered]);
   return (
     <details
-      className="card p-4"
+      id={id}
+      onFocusCapture={onFocus}
+      className={`card p-4 ${expand ? "border-l-4 border-l-primary" : ""}`}
       open={expanded}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
+      onToggle={(event) => {
+        setExpanded(event.currentTarget.open);
+        onExpanded(event.currentTarget.open);
+      }}
     >
       {children}
     </details>
