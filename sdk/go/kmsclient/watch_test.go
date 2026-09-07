@@ -798,3 +798,131 @@ func TestWatchUnboundNamespaceErrors(t *testing.T) {
 		t.Fatalf("Watch on unbound client err = %v, want ErrNoNamespace", err)
 	}
 }
+
+// TestLateInitDoesNotRegressStreamedValue proves that a ParameterValue whose
+// initial unary read is delayed past a newer stream event for the same key
+// (the shared namespace stream having been started by another parameter) comes
+// up on the streamed value: neither the handle nor the manager's known
+// revision is rolled back to the older unary result.
+func TestLateInitDoesNotRegressStreamedValue(t *testing.T) {
+	c, srv := newTestClient(t, Config{})
+	srv.SetParameter(testNS, "first", "1")
+	srv.SetParameter(testNS, "rate", "V1")
+
+	// Another parameter in the namespace has already started the shared stream.
+	first := ParameterValue{Key: "first"}
+	if err := first.Init(c); err != nil {
+		t.Fatalf("Init first: %v", err)
+	}
+	sub, err := srv.WaitForSubscribe(waitTimeout)
+	if err != nil {
+		t.Fatalf("WaitForSubscribe: %v", err)
+	}
+
+	// While rate's unary read is in flight the stream delivers a newer value
+	// (V2 at revision 7) for the same key, and it is fully applied before the
+	// read returns. The server value stays V1, so the unary response is stale.
+	const path = "/prod/app/rate"
+	var once sync.Once
+	srv.SetGetParameterHook(func(display string) {
+		if display != path {
+			return
+		}
+		once.Do(func() {
+			sub.PushChange(7, testNS, "rate", "put", "V2", 7)
+			if !eventually(t, waitTimeout, func() bool {
+				kv, ok := knownForTest(c.subs(), path)
+				return ok && kv.rev == 7
+			}) {
+				t.Errorf("newer event did not apply before the unary read returned")
+			}
+		})
+	})
+
+	pv := ParameterValue{Key: "rate"}
+	changes := make(chan [2]string, 8)
+	pv.OnChange(func(old, new string) { changes <- [2]string{old, new} })
+	if err := pv.Init(c); err != nil {
+		t.Fatalf("Init rate: %v", err)
+	}
+	if got := pv.Get(); got != "V2" {
+		t.Fatalf("late unary result regressed the handle; Get = %q, want V2", got)
+	}
+	if kv, ok := knownForTest(c.subs(), path); !ok || kv.value != "V2" || !kv.present || kv.rev != 7 {
+		t.Fatalf("known state = %+v (ok=%v), want V2 present at revision 7", kv, ok)
+	}
+
+	// Initialisation never fires OnChange, and a later event still flows from
+	// the streamed value, not from the stale read.
+	select {
+	case ch := <-changes:
+		t.Fatalf("Init fired OnChange %v", ch)
+	case <-time.After(150 * time.Millisecond):
+	}
+	sub.PushChange(8, testNS, "rate", "put", "V3", 8)
+	if !eventually(t, waitTimeout, func() bool { return pv.Get() == "V3" }) {
+		t.Fatalf("value did not hot-reload after late init; Get = %q", pv.Get())
+	}
+	select {
+	case ch := <-changes:
+		if ch != [2]string{"V2", "V3"} {
+			t.Errorf("OnChange got %v, want [V2 V3]", ch)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("OnChange callback not fired")
+	}
+}
+
+// TestLateInitHonoursStreamedTombstone is the deletion half of the same
+// ordering: a delete the stream applied while the unary read was in flight
+// wins over the read, so the handle comes up on its Default and the known
+// tombstone keeps its revision.
+func TestLateInitHonoursStreamedTombstone(t *testing.T) {
+	c, srv := newTestClient(t, Config{})
+	srv.SetParameter(testNS, "first", "1")
+	srv.SetParameter(testNS, "rate", "V1")
+
+	first := ParameterValue{Key: "first"}
+	if err := first.Init(c); err != nil {
+		t.Fatalf("Init first: %v", err)
+	}
+	sub, err := srv.WaitForSubscribe(waitTimeout)
+	if err != nil {
+		t.Fatalf("WaitForSubscribe: %v", err)
+	}
+
+	const path = "/prod/app/rate"
+	var once sync.Once
+	srv.SetGetParameterHook(func(display string) {
+		if display != path {
+			return
+		}
+		once.Do(func() {
+			sub.PushChange(7, testNS, "rate", "delete", "", 1)
+			if !eventually(t, waitTimeout, func() bool {
+				kv, ok := knownForTest(c.subs(), path)
+				return ok && kv.rev == 7
+			}) {
+				t.Errorf("delete did not apply before the unary read returned")
+			}
+		})
+	})
+
+	pv := ParameterValue{Key: "rate", Default: "fallback"}
+	if err := pv.Init(c); err != nil {
+		t.Fatalf("Init rate: %v", err)
+	}
+	if got := pv.Get(); got != "fallback" {
+		t.Fatalf("Get = %q, want the Default after a streamed delete", got)
+	}
+	if kv, ok := knownForTest(c.subs(), path); !ok || kv.present || kv.rev != 7 {
+		t.Fatalf("known state = %+v (ok=%v), want a revision-7 tombstone", kv, ok)
+	}
+}
+
+func knownForTest(m *subManager, path string) (knownVal, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kv, ok := m.known[path]
+	return kv, ok
+}

@@ -260,12 +260,29 @@ func (p *ParameterValue) InitContext(ctx context.Context, client *Client) error 
 	if err != nil {
 		return err
 	}
-	storeString(&st.value, value)
-	st.initialized = true
-
 	if !p.Static && haveRef {
-		client.subs().registerParam(r, value, p.applyUpdate)
+		// Publish the value through the subscription manager rather than
+		// directly: the shared stream may already hold a newer revisioned
+		// value for this key, and registerParam seeds st.value with whichever
+		// state is authoritative under its lock, before any later event can
+		// reach applyUpdate. Storing the unary result first and registering
+		// afterwards would let a delayed read regress a value the stream had
+		// already moved on from.
+		client.subs().registerParam(r, value, p.applyUpdate, func(known string, present bool) {
+			switch {
+			case present:
+				value = known
+			case p.Default != "":
+				// The stream already saw the key deleted: same rule as
+				// applyUpdate — fall back to Default, else keep the last read.
+				value = p.Default
+			}
+			storeString(&st.value, value)
+		})
+	} else {
+		storeString(&st.value, value)
 	}
+	st.initialized = true
 	return nil
 }
 

@@ -133,15 +133,35 @@ func newSubManager(c *Client) *subManager {
 	}
 }
 
-// registerParam seeds a parameter's known value and registers a handler that is
-// invoked whenever a new value arrives for its exact key, subscribing to the
-// key's namespace if it is not already subscribed.
-func (m *subManager) registerParam(r ref, initial string, handler func(newVal string, present bool)) {
+// registerParam registers a handler that is invoked whenever a new value
+// arrives for r's exact key, subscribing to the key's namespace if it is not
+// already subscribed, and seeds the key's known state.
+//
+// initial is the value a unary read returned before registration, at no known
+// revision. If the shared stream — started earlier by another parameter or a
+// Watch in the namespace — has already applied a revisioned value or tombstone
+// for the key, that state is newer than any unary read issued before now and
+// is kept; otherwise initial seeds the known state at revision zero. Either
+// way seed receives the authoritative state while the manager lock is held,
+// so the caller's own copy is synchronised before any later stream event can
+// reach handler. Initialisation and subscription are therefore one ordered,
+// monotonic transition: a unary response delayed past a newer stream event
+// can never roll the consumer, or the known revision, back behind it.
+func (m *subManager) registerParam(r ref, initial string, handler func(newVal string, present bool), seed func(value string, present bool)) {
 	m.mu.Lock()
 	changed := m.addNamespaceLocked(r.ns)
 	disp := r.display()
-	m.known[disp] = knownVal{value: initial, present: true}
+	kv, known := m.known[disp]
+	if !known || kv.rev == 0 {
+		// Nothing revisioned is known for the key (rev 0 is only ever an
+		// earlier unrevisioned seed), so the unary read is the best state.
+		kv = knownVal{value: initial, present: true}
+		m.known[disp] = kv
+	}
 	m.paramHandlers[disp] = append(m.paramHandlers[disp], handler)
+	if seed != nil {
+		seed(kv.value, kv.present)
+	}
 	wasStarted := m.started
 	m.ensureStartedLocked()
 	m.mu.Unlock()
