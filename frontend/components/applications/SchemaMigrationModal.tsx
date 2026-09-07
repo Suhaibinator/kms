@@ -4,6 +4,7 @@ import { Modal } from "@/components/Modal";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { Badge, Button, Field, Input, Loading } from "@/components/ui";
+import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { deriveContractFromSchema } from "@/lib/contract-derive";
@@ -17,6 +18,8 @@ import type {
   SchemaMigrationResponse,
 } from "@/lib/types";
 import { PARAMETER_CONTENT_TYPES } from "@/lib/types";
+import { parseUpgradeDefaults, type UpgradeDefaults } from "@/lib/upgrade-defaults";
+import { SchemaComparison } from "./SchemaComparison";
 
 type Step = 0 | 1 | 2 | 3 | 4;
 type DraftField = ApplicationContractField & {
@@ -58,6 +61,12 @@ export function SchemaMigrationModal({
   onApplied,
 }: SchemaMigrationModalProps) {
   const toast = useToast();
+  const [source, setSource] = useState("active");
+  const [defaults, setDefaults] = useState<UpgradeDefaults | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [artifactError, setArtifactError] = useState("");
+  const [readingArtifact, setReadingArtifact] = useState(false);
+  const artifactGeneration = useRef(0);
   const [step, setStep] = useState<Step>(0);
   const [environment, setEnvironment] = useState("");
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
@@ -98,6 +107,7 @@ export function SchemaMigrationModal({
 
   useEffect(() => {
     if (!open) {
+      artifactGeneration.current += 1;
       loadGeneration.current += 1;
       sessionKey.current = "";
       initializedDraft.current = "";
@@ -110,6 +120,12 @@ export function SchemaMigrationModal({
     const initial = activeEnvironments.some((item) => item.namespace.env === initialEnvironment)
       ? (initialEnvironment ?? "")
       : (activeEnvironments[0]?.namespace.env ?? "");
+    setSource("active");
+    setDefaults(null);
+    setFileName("");
+    setArtifactError("");
+    setReadingArtifact(false);
+    artifactGeneration.current += 1;
     setStep(0);
     setEnvironment(initial);
     setSchemaVersion(initialSchemaVersion ?? 0);
@@ -158,7 +174,7 @@ export function SchemaMigrationModal({
 
   useEffect(() => {
     if (!open || !selectedEnvironment?.release.active || !selectedSchema) return;
-    const draftKey = `${environment}:${schemaVersion}`;
+    const draftKey = `${environment}:${schemaVersion}:${source}:${fileName}`;
     if (initializedDraft.current === draftKey) return;
     initializedDraft.current = draftKey;
     sourceIdentity.current = {
@@ -167,24 +183,41 @@ export function SchemaMigrationModal({
     };
     const entries = selectedEnvironment.release.active.entries;
     setSourceEntries(entries);
-    const suggested = deriveContractFromSchema(
-      selectedSchema?.schema_json ?? "{}",
-      application.contract,
-    ).contract;
+    if (source === "artifact" && (!defaults || defaults.schema_sha256 !== selectedSchema.digest))
+      return;
+    const suggested =
+      source === "artifact" && defaults
+        ? defaults.contract
+        : deriveContractFromSchema(selectedSchema?.schema_json ?? "{}", application.contract)
+            .contract;
     const mapped: DraftField[] = suggested.map((field) => {
       const entry = entries.find((candidate) => candidate.alias === field.alias);
+      const imported =
+        source === "artifact"
+          ? defaults?.parameters.find((p) => p.alias === field.alias)
+          : undefined;
       return {
         ...field,
         id: nextID.current++,
         fromAlias: entry?.alias,
         key: entry?.ref.key ?? field.alias,
         version: entry?.version,
-        loaded: field.kind === "secret" || !entry,
-        value: field.kind === "parameter" && !entry ? "" : undefined,
+        loaded: Boolean(imported) || field.kind === "secret" || !entry,
+        value: imported?.value ?? (field.kind === "parameter" && !entry ? "" : undefined),
       };
     });
     setFields(mapped);
-  }, [open, environment, application.contract, selectedEnvironment, selectedSchema, schemaVersion]);
+  }, [
+    open,
+    environment,
+    application.contract,
+    selectedEnvironment,
+    selectedSchema,
+    source,
+    defaults,
+    fileName,
+    schemaVersion,
+  ]);
 
   useEffect(() => {
     if (!open || step < 2 || !selectedEnvironment) return;
@@ -373,7 +406,7 @@ export function SchemaMigrationModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Migrate application schema"
+      title="Upgrade application schema"
       description={`${application.name} · ${environment || "choose an environment"}`}
       workspace
       wizard
@@ -400,7 +433,14 @@ export function SchemaMigrationModal({
             {step === 0 ? (
               <Button
                 onClick={() => setStep(1)}
-                disabled={!environment || !schemaVersion || loading}
+                disabled={
+                  !environment ||
+                  !schemaVersion ||
+                  loading ||
+                  readingArtifact ||
+                  (source === "artifact" &&
+                    (!defaults || defaults.schema_sha256 !== selectedSchema?.digest))
+                }
               >
                 Review contract
                 <ArrowRight size={15} />
@@ -438,7 +478,7 @@ export function SchemaMigrationModal({
                 loading={applying}
                 disabled={!preview?.valid || (production && confirmation !== environment)}
               >
-                Activate migration
+                Upgrade schema & ship to {environment}
               </Button>
             ) : null}
           </>
@@ -487,7 +527,15 @@ export function SchemaMigrationModal({
               className="native-select"
               aria-label="Target registered schema"
               value={schemaVersion}
-              onChange={(event) => setSchemaVersion(Number(event.target.value))}
+              onChange={(event) => {
+                setSchemaVersion(Number(event.target.value));
+                setDefaults(null);
+                setFileName("");
+                setArtifactError("");
+                artifactGeneration.current += 1;
+                setReadingArtifact(false);
+                setPreview(null);
+              }}
             >
               {schemas.map((schema) => (
                 <option key={schema.version} value={schema.version}>
@@ -496,6 +544,72 @@ export function SchemaMigrationModal({
               ))}
             </select>
           </Field>
+          <Field label="Starting values">
+            <select
+              className="native-select"
+              aria-label="Starting values"
+              value={source}
+              onChange={(event) => {
+                setSource(event.target.value);
+                setPreview(null);
+                initializedDraft.current = "";
+              }}
+            >
+              <option value="active">
+                Current release {application.release_name}@
+                {selectedEnvironment?.release.active?.version}
+              </option>
+              <option value="artifact">Import defaults file</option>
+            </select>
+          </Field>
+          {source === "artifact" && (
+            <Field
+              label="Defaults artifact"
+              htmlFor="migration-defaults"
+              hint="Use a kms-config-defaults/v1 JSON file matching the selected schema. The selected environment is the destination; the artifact profile describes its source."
+            >
+              <FileInput
+                id="migration-defaults"
+                fileName={fileName}
+                accept=".json,application/json"
+                disabled={readingArtifact || !selectedSchema}
+                onFile={(file) => {
+                  if (!file || !selectedSchema) return;
+                  const generation = ++artifactGeneration.current;
+                  setDefaults(null);
+                  setArtifactError("");
+                  setFileName(file.name);
+                  setReadingArtifact(true);
+                  initializedDraft.current = "";
+                  void (async () => {
+                    try {
+                      if (file.size > 4 * 1024 * 1024) throw new Error("Artifact exceeds 4 MiB.");
+                      const parsed = parseUpgradeDefaults(await file.text(), selectedSchema.digest);
+                      if (generation === artifactGeneration.current) {
+                        initializedDraft.current = "";
+                        setDefaults(parsed);
+                      }
+                    } catch (error) {
+                      if (generation === artifactGeneration.current)
+                        setArtifactError(validationMessage(error));
+                    } finally {
+                      if (generation === artifactGeneration.current) setReadingArtifact(false);
+                    }
+                  })();
+                }}
+              />
+              {defaults && (
+                <p>
+                  Source profile: {defaults.profile} · Destination: {environment}/{application.name}
+                </p>
+              )}
+              {artifactError && (
+                <p className="danger-panel" role="alert">
+                  {artifactError}
+                </p>
+              )}
+            </Field>
+          )}
           {schemas.length === 0 ? (
             <div className="info-panel">
               No other registered schema is available for this application.
@@ -503,6 +617,37 @@ export function SchemaMigrationModal({
           ) : null}
         </div>
       ) : null}
+      {step < 4 && (
+        <>
+          <SchemaComparison
+            current={schemas.find((s) => s.version === application.schema_version)}
+            target={selectedSchema}
+            currentVersion={application.schema_version}
+          />
+          <section className="info-panel text-sm stack" aria-label="Upgrade scope">
+            <p>
+              <strong>Application change:</strong> {application.name}’s shared schema pin and
+              contract change from v{application.schema_version} to v{schemaVersion || "…"}.
+            </p>
+            <p>
+              <strong>Environment change:</strong> A new release is created and activated in{" "}
+              <strong>{environment || "the environment you select"}</strong>, using{" "}
+              {source === "active"
+                ? `current release ${application.release_name}@${selectedEnvironment?.release.active?.version ?? "…"}`
+                : "the selected defaults artifact"}
+              . References for retained secret aliases are preserved.
+            </p>
+            <p>
+              Other environments keep their active releases. Their next ship must match the shared
+              definition; older-schema releases may no longer be eligible for activation or
+              rollback.
+            </p>
+            <p>
+              Validation failure leaves the definition, stored values, and active release unchanged.
+            </p>
+          </section>
+        </>
+      )}
       {step === 1 ? (
         <div className="stack">
           <div className="info-panel">
@@ -640,87 +785,111 @@ export function SchemaMigrationModal({
             </div>
           ) : null}
           {fields.map((field) => (
-            <section className="card migration-value-row" key={field.id}>
-              <div className="between">
-                <div>
-                  <strong className="mono">{field.alias}</strong> <Badge>{field.kind}</Badge>
-                  {field.fromAlias && field.fromAlias !== field.alias ? (
-                    <span className="faint text-sm">
-                      {" "}
-                      renamed from <span className="mono">{field.fromAlias}</span>
-                    </span>
-                  ) : null}
-                </div>
-                <span className="faint text-sm">
-                  {field.version ? `source v${field.version}` : "new"}
-                </span>
-              </div>
-              <div className="migration-form-grid">
-                <Field label="Resource key">
-                  <Input
-                    aria-label={`${field.alias} resource key`}
-                    value={field.key}
-                    onChange={(event) =>
-                      update(field.id, {
-                        key: event.target.value,
-                        loaded: field.kind === "secret" || !field.version,
-                        loading: false,
-                        loadError: undefined,
-                        value: field.version ? undefined : "",
-                        originalValue: undefined,
-                      })
-                    }
-                  />
-                </Field>
-                <Field
-                  label="Exact version"
-                  hint="Leave blank only when writing a new parameter value."
-                >
-                  <Input
-                    aria-label={`${field.alias} exact version`}
-                    inputMode="numeric"
-                    value={field.version ?? ""}
-                    onChange={(event) =>
-                      update(field.id, {
-                        version: event.target.value ? Number(event.target.value) : undefined,
-                        loaded: field.kind === "secret" || !event.target.value,
-                        loading: false,
-                        loadError: undefined,
-                        value: event.target.value ? undefined : "",
-                        originalValue: undefined,
-                      })
-                    }
-                  />
-                </Field>
-              </div>
-              {field.loadError ? (
-                <div className="danger-panel" role="alert">
-                  {field.loadError}. Change the key or version to retry.
-                </div>
-              ) : null}
-              {field.kind === "parameter" ? (
-                <Field
-                  label="Value"
-                  hint="Loaded from the active release's exact pin. Changes create a new version."
-                >
-                  <ParameterValueInput
-                    aria-label={`${field.alias} value`}
-                    contentType={field.content_type ?? "string"}
-                    value={field.value ?? ""}
-                    onChange={(value) => update(field.id, { value })}
-                    disabled={field.loading || Boolean(field.loadError)}
-                  />
-                </Field>
-              ) : (
-                <div className="info-panel">
-                  Secrets are references only. Choose an existing key and exact version in{" "}
-                  <span className="mono">
-                    {environment}/{application.name}
+            <details
+              className="card p-4"
+              key={field.id}
+              open={
+                !field.fromAlias ||
+                source === "artifact" ||
+                Boolean(field.loadError) ||
+                application.contract.find((f) => f.alias === field.fromAlias)?.content_type !==
+                  field.content_type ||
+                preview?.validation.some((p) => p.alias === field.alias)
+              }
+            >
+              <summary className="cursor-pointer">
+                <span className="mono">{field.alias}</span> · {field.kind} ·{" "}
+                {field.value !== undefined &&
+                (field.value !== field.originalValue ||
+                  field.content_type !== field.originalContentType)
+                  ? "edited value"
+                  : field.version
+                    ? `preserve v${field.version}`
+                    : "new value needed"}{" "}
+                · Edit
+              </summary>
+              <div className="migration-value-row">
+                <div className="between">
+                  <div>
+                    <strong className="mono">{field.alias}</strong> <Badge>{field.kind}</Badge>
+                    {field.fromAlias && field.fromAlias !== field.alias ? (
+                      <span className="faint text-sm">
+                        {" "}
+                        renamed from <span className="mono">{field.fromAlias}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="faint text-sm">
+                    {field.version ? `source v${field.version}` : "new"}
                   </span>
-                  .
                 </div>
-              )}
-            </section>
+                <div className="migration-form-grid">
+                  <Field label="Resource key">
+                    <Input
+                      aria-label={`${field.alias} resource key`}
+                      value={field.key}
+                      onChange={(event) =>
+                        update(field.id, {
+                          key: event.target.value,
+                          loaded: field.kind === "secret" || !field.version,
+                          loading: false,
+                          loadError: undefined,
+                          value: field.version ? undefined : "",
+                          originalValue: undefined,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Exact version"
+                    hint="Leave blank only when writing a new parameter value."
+                  >
+                    <Input
+                      aria-label={`${field.alias} exact version`}
+                      inputMode="numeric"
+                      value={field.version ?? ""}
+                      onChange={(event) =>
+                        update(field.id, {
+                          version: event.target.value ? Number(event.target.value) : undefined,
+                          loaded: field.kind === "secret" || !event.target.value,
+                          loading: false,
+                          loadError: undefined,
+                          value: event.target.value ? undefined : "",
+                          originalValue: undefined,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+                {field.loadError ? (
+                  <div className="danger-panel" role="alert">
+                    {field.loadError}. Change the key or version to retry.
+                  </div>
+                ) : null}
+                {field.kind === "parameter" ? (
+                  <Field
+                    label="Value"
+                    hint="Loaded from the active release's exact pin. Changes create a new version."
+                  >
+                    <ParameterValueInput
+                      aria-label={`${field.alias} value`}
+                      contentType={field.content_type ?? "string"}
+                      value={field.value ?? ""}
+                      onChange={(value) => update(field.id, { value })}
+                      disabled={field.loading || Boolean(field.loadError)}
+                    />
+                  </Field>
+                ) : (
+                  <div className="info-panel">
+                    Secrets are references only. Choose an existing key and exact version in{" "}
+                    <span className="mono">
+                      {environment}/{application.name}
+                    </span>
+                    .
+                  </div>
+                )}
+              </div>
+            </details>
           ))}
         </div>
       ) : null}
@@ -744,7 +913,7 @@ export function SchemaMigrationModal({
               <thead>
                 <tr>
                   <th>Alias</th>
-                  <th>Source</th>
+                  <th>Change</th>
                   <th>Key</th>
                   <th>Version</th>
                 </tr>
@@ -755,13 +924,20 @@ export function SchemaMigrationModal({
                     <td className="mono" data-label="Alias">
                       {entry.alias}
                     </td>
-                    <td data-label="Source">{entry.source}</td>
+                    <td data-label="Change">{entry.source}</td>
                     <td className="mono" data-label="Key">
                       {entry.key}
                     </td>
                     <td data-label="Version">
-                      {entry.from_version ? `v${entry.from_version} → ` : ""}
-                      {entry.to_version ? `v${entry.to_version}` : "—"}
+                      {entry.source === "removed" ? (
+                        `v${entry.from_version} → removed from release`
+                      ) : entry.source === "missing" ? (
+                        "Value required"
+                      ) : (
+                        <>
+                          {entry.from_version ? `v${entry.from_version} → ` : ""}v{entry.to_version}
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -772,7 +948,8 @@ export function SchemaMigrationModal({
             <ul>
               {preview.validation.map((problem) => (
                 <li key={`${problem.alias}-${problem.code}`}>
-                  <strong className="mono">{problem.alias}</strong>: {problem.message}
+                  <strong className="mono">{problem.alias || "Release"}</strong>
+                  {problem.schema_pointer ? ` · ${problem.schema_pointer}` : ""}: {problem.message}
                 </li>
               ))}
             </ul>

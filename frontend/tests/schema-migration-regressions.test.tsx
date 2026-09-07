@@ -130,7 +130,7 @@ describe("SchemaMigrationModal regressions", () => {
     const dialog = screen.getByRole("dialog");
     await reachPreview(dialog);
 
-    const activate = within(dialog).getByRole("button", { name: "Activate migration" });
+    const activate = within(dialog).getByRole("button", { name: /Upgrade schema & ship to/ });
     expect(activate).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText("Production confirmation"), {
       target: { value: prod.namespace.env },
@@ -167,7 +167,7 @@ describe("SchemaMigrationModal regressions", () => {
     await waitFor(() =>
       expect(within(dialog).getByText("Backend validation passed.")).toBeVisible(),
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "Activate migration" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Upgrade schema & ship to/ }));
     await waitFor(() =>
       expect(within(dialog).getByLabelText("renamed_password resource key")).toHaveValue(
         "db_password",
@@ -276,7 +276,7 @@ describe("SchemaMigrationModal regressions", () => {
         },
       }),
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "Activate migration" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Upgrade schema & ship to/ }));
     await waitFor(() =>
       expect(within(dialog).getByText("Schema migration activated")).toBeVisible(),
     );

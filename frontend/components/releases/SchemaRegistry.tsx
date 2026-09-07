@@ -92,7 +92,7 @@ function SchemaViewer({
                 variant="outline"
                 href={links.application(schema.application, { migrate: schema.version })}
               >
-                Migrate to schema
+                Set up an upgrade
               </ButtonLink>
             </div>
           </div>

@@ -44,6 +44,7 @@ import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
+  ConfigurationSchema,
   Finding,
   HealthResponse,
   ReleaseEntryKind,
@@ -113,7 +114,7 @@ function EnvironmentAction({
     return (
       <Button type="button" variant={variant} disabled={!only} onClick={() => only && onPick(only)}>
         {icon}
-        {label}
+        {only ? `${label} ${label === "Ship" ? "to" : "in"} ${only}…` : label}
       </Button>
     );
   }
@@ -146,7 +147,17 @@ function environmentItem(
 ): ActionMenuItem {
   if (environments.length <= 1) {
     const only = environments[0];
-    return { key, label, disabled: !only, onSelect: () => only && onPick(only) };
+    return {
+      key,
+      label: (
+        <>
+          {label}
+          {only ? ` ${key === "import-defaults" ? "to" : "in"} ${only}…` : ""}
+        </>
+      ),
+      disabled: !only,
+      onSelect: () => only && onPick(only),
+    };
   }
   return {
     key,
@@ -220,6 +231,31 @@ export function ApplicationHome({
   const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
+  const [latestSchema, setLatestSchema] = useState<ConfigurationSchema | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setLatestSchema(null);
+    void (async () => {
+      let token: string | undefined;
+      let latest: ConfigurationSchema | null = null;
+      do {
+        const page = await api.listSchemas(
+          overview.application.name,
+          overview.application.release_name,
+          token,
+        );
+        for (const schema of page.schemas)
+          if (!latest || schema.version > latest.version) latest = schema;
+        token = page.next_page_token || undefined;
+      } while (token && !cancelled);
+      if (!cancelled) setLatestSchema(latest);
+    })().catch(() => {
+      /* Upgrade dialog reports schema-loading failures. */
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [overview]);
   const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
   const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
   const [secretSaving, setSecretSaving] = useState(false);
@@ -606,14 +642,13 @@ export function ApplicationHome({
             >
               <RefreshCw size={15} aria-hidden />
             </Button>
-            <Button
-              type="button"
-              disabled={archived || environments.length === 0}
-              onClick={() => setShipTarget({ env: defaultShipEnv })}
-            >
-              <Send size={15} />
-              Ship
-            </Button>
+            <EnvironmentAction
+              label="Ship"
+              icon={<Send size={15} />}
+              variant="default"
+              environments={archived ? [] : focusEnv ? [focusEnv] : environmentNames}
+              onPick={(environment) => setShipTarget({ env: environment })}
+            />
             <EnvironmentAction
               label="Roll back"
               icon={<RotateCcw size={15} />}
@@ -647,6 +682,21 @@ export function ApplicationHome({
         overview={overview}
         onEdit={(prefill) => setDefinition({ prefill: prefill ?? null })}
         onDeriveSchema={() => setDeriveOpen(true)}
+        latestSchemaVersion={latestSchema?.version}
+        onUpgrade={
+          activeNames.length
+            ? () => {
+                setMigrationSchemaVersion(latestSchema?.version);
+                setMigrationEnv(
+                  focusEnv && activeNames.includes(focusEnv)
+                    ? focusEnv
+                    : activeNames.length === 1
+                      ? activeNames[0]
+                      : "",
+                );
+              }
+            : undefined
+        }
       />
       {environments.length === 0 ? (
         <EmptyState

@@ -498,7 +498,7 @@ describe("ApplicationsPage", () => {
     mocks.query = { app: ready.application.name, env: "prod" };
     mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ship to prod…" }));
     expect(await screen.findByRole("dialog", { name: "Ship" })).toHaveTextContent("prod:");
   });
 
@@ -507,6 +507,7 @@ describe("ApplicationsPage", () => {
     mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "prod" }));
     await screen.findByRole("dialog", { name: "Ship" });
     const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
     const active = env(ready, "prod").release.active;
@@ -552,7 +553,7 @@ describe("ApplicationsPage", () => {
     render(<ApplicationsPage />);
     await screen.findByRole("region", { name: "dev environment" });
     fireEvent.click(screen.getByRole("button", { name: "More for dev" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults to dev…" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Import defaults to dev")).toBeVisible();
   });
@@ -769,6 +770,7 @@ describe("ApplicationsPage", () => {
     mocks.createSecret.mockResolvedValue({ version: 1, revision: 9 });
     render(<ApplicationsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "prod" }));
     await screen.findByRole("dialog", { name: "Ship" });
     const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
     props.onAddSecret("prod", secret.alias);
