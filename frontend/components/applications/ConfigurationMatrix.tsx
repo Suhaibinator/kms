@@ -134,7 +134,7 @@ export function ConfigurationMatrix({
       <div className="matrix-toolbar">
         <Input
           type="search"
-          className="matrix-filter"
+          className="matrix-filter min-w-[200px]"
           placeholder="Filter keys"
           aria-label="Filter keys"
           value={filter}

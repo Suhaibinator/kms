@@ -32,7 +32,13 @@ export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTab
             <th>Code</th>
             <th>Schema pointer</th>
             <th>Message</th>
-            {actionable ? <th /> : null}
+            {/* The cells carry `data-label="Actions"`, which the card layout
+                shows; the desktop table needs the same name, unpainted. */}
+            {actionable ? (
+              <th>
+                <span className="sr-only">Actions</span>
+              </th>
+            ) : null}
           </tr>
         </thead>
         <tbody>
@@ -64,7 +70,7 @@ export function ViolationTable({ violations, resolveHref, onEdit }: ViolationTab
                         </Button>
                       ) : null}
                       {href ? (
-                        <Link href={href} className="ship-link text-sm">
+                        <Link href={href} className="text-link text-sm">
                           Open {violation.alias}
                         </Link>
                       ) : null}
@@ -93,7 +99,9 @@ export function ActivationFailurePanel({
   return (
     <section className="danger-panel mb-4" role="alert">
       <div className="between">
-        <div>
+        {/* `.between` wraps on hypothetical main size, so `min-width: 0` alone
+            leaves Dismiss on a second line under a long target name. */}
+        <div className="grow basis-80">
           <strong>
             {failure.operation === "Validation"
               ? `${failure.target} failed validation`

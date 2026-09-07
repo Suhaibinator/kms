@@ -63,6 +63,44 @@ test("policy validation stays below its control without shifting the rule row", 
   }
 });
 
+test("a long operation neither widens its column nor wraps the row", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1280) <= 768, "desktop policy layout check");
+  const dialog = await openPolicyRule(page);
+  const row = dialog.locator(".rule-row").first();
+  await row.getByRole("combobox", { name: "Operation" }).click();
+  await page.getByRole("option", { name: "configuration-release:validate" }).click();
+
+  // .rule-op has a definite basis, so a 30-character option cannot set the
+  // column's width from its content and push "Remove" onto a second line.
+  const controls = [
+    row.getByRole("combobox", { name: "Operation" }),
+    row.getByPlaceholder("gradethis"),
+    row.getByPlaceholder("prod"),
+    row.getByRole("button", { name: /Duplicate allow rule/ }),
+    row.getByRole("button", { name: /Remove allow rule/ }),
+  ];
+  const tops = await Promise.all(
+    controls.map((control) => control.evaluate((el) => el.getBoundingClientRect().top)),
+  );
+  for (const top of tops.slice(1)) expect(top).toBeCloseTo(tops[0], 0);
+  const op = await row.evaluate(
+    (element) => element.querySelector(".rule-op")?.getBoundingClientRect().width ?? 0,
+  );
+  expect(op).toBeCloseTo(180, 0);
+
+  // The unknown-namespace sentence is a row-level note across the full row,
+  // not a hint wrapping to five lines inside a 130px column.
+  await row.getByPlaceholder("gradethis").fill("nope");
+  await row.getByPlaceholder("prod").fill("alsonope");
+  const note = row.locator(".rule-note");
+  await expect(note).toBeVisible();
+  const widths = await row.evaluate((element) => ({
+    note: element.querySelector(".rule-note")?.getBoundingClientRect().width ?? 0,
+    row: element.getBoundingClientRect().width,
+  }));
+  expect(widths.note).toBeCloseTo(widths.row, 0);
+});
+
 test("policy rule validation remains coherent when controls stack", async ({ page }, testInfo) => {
   test.skip((page.viewportSize()?.width ?? 1280) > 768, "mobile policy layout check");
   const dialog = await openPolicyRule(page);

@@ -1,6 +1,13 @@
 import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
 import Head from "next/head";
-import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
+import {
+  type CSSProperties,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+  useId,
+} from "react";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { Badge as ShadcnBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -132,6 +139,12 @@ export function TableSkeleton({
   rowHeight,
   leading = 0,
   trailing = 0,
+  tableClassName,
+  colgroup,
+  toolbar = false,
+  toolbarHint = false,
+  toolbarSelection = false,
+  summary = false,
 }: {
   headers: string[];
   rows?: number;
@@ -143,6 +156,31 @@ export function TableSkeleton({
    *  matches and nothing shifts on arrival. */
   leading?: number;
   trailing?: number;
+  /** The loaded table's own class (`namespace-table`), which carries its
+   *  column widths and header wrapping. Without it the skeleton's header row
+   *  is 17px shorter than the one that replaces it. */
+  tableClassName?: string;
+  /** The loaded table's own `<colgroup>`. The class above only names the rules;
+   *  the widths they apply to live on the `<col>` elements, and without them
+   *  the skeleton's columns are wide enough that the uppercase headers never
+   *  wrap — a 41.75px header row against the loaded 59px. */
+  colgroup?: ReactNode;
+  /** Reserve the `MobileListToolbar` the loaded list renders below 640px;
+   *  without it the list jumps down by up to 198px on arrival. */
+  toolbar?: boolean;
+  /** Mirror the loaded `MobileListToolbar`'s own `hint` and `selection`: each
+   *  is a further full-width row of that toolbar, and a list that renders both
+   *  reserves 99px too little without them.
+   *
+   *  Pass the same values the loaded toolbar gets — `hint` verbatim, and for
+   *  the selection its `selectionLabel` (the skeleton adds the same
+   *  `(0 selected)` suffix, which is what the loaded row starts at). A bare
+   *  `true` reserves one line instead, which is 18px short wherever the real
+   *  sentence wraps to two in a 343px card. */
+  toolbarHint?: ReactNode;
+  toolbarSelection?: ReactNode;
+  /** Reserve the `TableSummary` caption the loaded list renders (34px). */
+  summary?: boolean;
 }) {
   const pad = (count: number, tag: "th" | "td", prefix: string) =>
     Array.from({ length: count }, (_, i) =>
@@ -155,12 +193,74 @@ export function TableSkeleton({
   return (
     <div className="table-wrap card-table" aria-busy="true">
       <span className="sr-only">Loading…</span>
-      <table className="data">
+      {/* The loaded toolbar's rows, as empty boxes: the fieldset's own gap and
+          padding then give it the loaded height. Each row is the element the
+          loaded toolbar uses, so it picks up the same rules.
+
+          The label placeholders are `1lh`, not a multiple of the font size: the
+          loaded label is a bare text node, so its box is exactly one line box,
+          and `1lh` is that box at whatever type the toolbar is set in. `1.5em`
+          matched only while the label was 13px and went 0.89px out the moment
+          the toolbar was retokenised to --text-sm. */}
+      {toolbar ? (
+        <fieldset className="mobile-list-toolbar" aria-hidden>
+          <span className="mobile-sort-field">
+            <Skeleton width="45%" height="1lh" />
+            <Skeleton height={44} />
+          </span>
+          <span className="mobile-sort-field">
+            <Skeleton width="45%" height="1lh" />
+            <Skeleton height={44} />
+          </span>
+          {/* The real sentence, not a bar: both of these are static chrome that
+              does not come from the request, so rendering the text the loaded
+              row will hold is both honest and the only way the placeholder
+              wraps onto the same number of lines. The fieldset is aria-hidden,
+              so nothing is announced twice. */}
+          {toolbarHint ? (
+            <p className="mobile-list-hint">{toolbarHint === true ? " " : toolbarHint}</p>
+          ) : null}
+          {/* The loaded row is a <label>, which picks up the toolbar's own
+              `display: flex`, 6px gap and --text-sm type from its element
+              selector; a placeholder that is not labelable has to restate them
+              or it lays out as a text line and reserves 6.5px too much.
+              `text-(length:--text-sm)`, not `text-sm`: the utility would set
+              Tailwind's own line-height with it (17.86px against the 1.5 this
+              row inherits), which is 1.81px per line on a label that wraps. */}
+          {toolbarSelection ? (
+            <span className="mobile-list-selection flex items-center gap-1.5 text-(length:--text-sm)">
+              <Skeleton width={16} height={16} />
+              {toolbarSelection === true ? (
+                <Skeleton width="60%" height="1lh" />
+              ) : (
+                <span>{toolbarSelection} (0 selected)</span>
+              )}
+            </span>
+          ) : null}
+        </fieldset>
+      ) : null}
+      {/* caption, then colgroup, then thead: the order the HTML table model
+          requires, and the order the loaded table renders. */}
+      <table className={cn("data", tableClassName)}>
+        {summary ? <caption className="table-summary">&nbsp;</caption> : null}
+        {colgroup}
         <thead>
           <tr>
             {pad(leading, "th", "l")}
+            {/* The loaded header is a `.sort-button` carrying the cell's whole
+                padding plus a 12px indicator, and that indicator is what tips a
+                two-word label onto a second line. A bare <th> never wraps, so
+                the skeleton's header row measured 41.75px against the loaded
+                59px on a table whose columns are narrow enough to wrap — with
+                `colgroup` and this shape together it lands on 59px exactly.
+                Both halves are needed; either alone changes nothing. */}
             {headers.map((h) => (
-              <th key={h}>{h}</th>
+              <th key={h} className="sortable">
+                <span className="sort-button">
+                  {h}
+                  <span className="sort-indicator size-3" aria-hidden />
+                </span>
+              </th>
             ))}
             {pad(trailing, "th", "t")}
           </tr>
@@ -170,7 +270,18 @@ export function TableSkeleton({
             <tr
               key={r}
               className="skeleton-row"
-              style={rowHeight === undefined ? undefined : { height: rowHeight }}
+              // Through the cell, not the <tr>: a row is at least as tall as
+              // its tallest cell, so an inline height on the row could only
+              // ever make it taller than `.skeleton-row td` — which is why
+              // rowHeight={44} produced a 54px row.
+              style={
+                rowHeight === undefined
+                  ? undefined
+                  : ({
+                      "--skeleton-row-h":
+                        typeof rowHeight === "number" ? `${rowHeight}px` : rowHeight,
+                    } as CSSProperties)
+              }
             >
               {pad(leading, "td", "l")}
               {headers.map((h, c) => (
@@ -280,8 +391,11 @@ export function Field({
   );
 
   return !isLabelableControl && !htmlFor ? (
+    // gap-1, like the labelled branch below: the two flavours land in one form
+    // (every SchemaForm list field is a fieldset) and gap-2 put their controls
+    // 3.56px apart from each other's.
     <FieldSet
-      className={cn(error ? "field field-invalid gap-2" : "field gap-2", className)}
+      className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       aria-describedby={describedBy}
       data-invalid={error ? true : undefined}
     >

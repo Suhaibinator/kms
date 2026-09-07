@@ -92,6 +92,11 @@ const COLUMNS: ReadonlyArray<SortColumn<Parameter>> = [
 
 const PAGE_SORT_HINT = "Sorts the rows loaded on this page, not the whole namespace.";
 
+/** Named once: the header checkbox, the mobile toolbar and the skeleton that
+ *  reserves that toolbar's row all have to say the same thing, and the
+ *  skeleton's placeholder only wraps to the loaded number of lines if it does. */
+const SELECT_ALL_LABEL = "Select all parameters on this page";
+
 export default function ParametersPage() {
   const toast = useToast();
   const { identity } = useAuth();
@@ -438,6 +443,10 @@ export default function ParametersPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
+          toolbar
+          toolbarHint={PAGE_SORT_HINT}
+          toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
+          summary
         />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
@@ -448,6 +457,10 @@ export default function ParametersPage() {
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
+          toolbar
+          toolbarHint={PAGE_SORT_HINT}
+          toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
+          summary
         />
       ) : rows.length === 0 ? (
         <EmptyState
@@ -473,7 +486,7 @@ export default function ParametersPage() {
           <MobileListToolbar
             controller={sort}
             selection={canBulkDelete ? selection : undefined}
-            selectionLabel="Select all parameters on this page"
+            selectionLabel={SELECT_ALL_LABEL}
             hint={PAGE_SORT_HINT}
           />
           <table className="data">
@@ -489,10 +502,7 @@ export default function ParametersPage() {
                 hint={PAGE_SORT_HINT}
                 before={
                   canBulkDelete ? (
-                    <SelectAllCell
-                      selection={selection}
-                      label="Select all parameters on this page"
-                    />
+                    <SelectAllCell selection={selection} label={SELECT_ALL_LABEL} />
                   ) : null
                 }
                 after={<th />}

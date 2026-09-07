@@ -13,6 +13,7 @@ import {
   Badge,
   EmptyState,
   PageHeader,
+  Skeleton,
   StatSkeleton,
   TableSkeleton,
   TableSummary,
@@ -204,7 +205,20 @@ export default function SubscribersPage() {
       </div>
 
       {initialLoading ? (
-        <TableSkeleton headers={headerLabels(COLUMNS)} rows={4} />
+        // The loaded list is one .ns-group per namespace, each with a heading
+        // block above its table; a bare table skeleton leaves that out and the
+        // list jumps down on arrival.
+        <div className="ns-group">
+          <div className="ns-group-title">
+            <span className="ns-group-name">
+              <Skeleton width="14ch" />
+            </span>
+            <span className="faint text-sm">
+              <Skeleton width="11ch" />
+            </span>
+          </div>
+          <TableSkeleton headers={headerLabels(COLUMNS)} rows={4} toolbar summary />
+        </div>
       ) : loadError && subscribers.length === 0 ? (
         <EmptyState
           icon={<Icon.subscribers size={20} />}

@@ -1057,10 +1057,12 @@ describe("ReleasesPage", () => {
     const digest = document.querySelector('td[data-label="Digest"]') as HTMLElement;
     expect(digest).toHaveTextContent("2222222222222222…");
     expect(digest).toHaveAttribute("title", releaseV2.digest);
-    // A block child of the overflow-x scroller would slide out of view with it.
+    // Inside the card, like every other list: the toolbar is `position: sticky;
+    // left: 0` below 640px, so the scroller cannot carry it out of view, and
+    // outside it read as a naked rule floating above a rounded card.
     const toolbar = document.querySelector(".mobile-list-toolbar") as HTMLElement;
-    expect(toolbar.closest(".table-wrap")).toBeNull();
-    expect(toolbar.nextElementSibling).toHaveClass("table-wrap");
+    expect(toolbar.parentElement).toHaveClass("table-wrap");
+    expect(toolbar.parentElement?.firstElementChild).toBe(toolbar);
   });
 
   it("heads the schema table's actions column on desktop as well as in the card view", async () => {

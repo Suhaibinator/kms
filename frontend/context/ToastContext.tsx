@@ -119,7 +119,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <Toaster theme={resolved} position="top-right" closeButton richColors />
+      {/* The offsets are answered by --toast-offset-top in globals.css (the
+          "Toasts" block): sonner writes --offset-top and --mobile-offset-top
+          as inline styles on its viewport, which no stylesheet rule can
+          outrank, and its own mobile block stops at 600px while the console's
+          top bar runs to 767. Passing a var() through the props is what lets
+          CSS move the layer off the top bar and off an open dialog's header. */}
+      <Toaster
+        theme={resolved}
+        position="top-right"
+        offset={{ top: "var(--toast-offset-top, 24px)" }}
+        mobileOffset={{ top: "var(--toast-offset-top, 16px)" }}
+        closeButton
+        richColors
+      />
     </ToastContext.Provider>
   );
 }

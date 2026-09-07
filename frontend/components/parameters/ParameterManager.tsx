@@ -50,6 +50,34 @@ import {
   validateValueSize,
 } from "@/lib/validation";
 
+/** Rows the loaded metadata list renders. The skeleton is the same `.kv` grid,
+ *  so it stacks to one column below 768px exactly as the loaded card does
+ *  rather than reserving one height for both. */
+const METADATA_ROWS = 6;
+
+/** Deterministic so the prerendered HTML and the client render agree. */
+const VALUE_WIDTHS = ["62%", "48%", "40%", "70%", "35%", "55%"];
+
+/* Bars rather than the real labels: the `.kv` geometry does not depend on the
+   text, and duplicating it would put a second "Content type" in the tree while
+   the page loads. */
+function KeyValueSkeleton({ rows }: { rows: number }) {
+  return (
+    <dl className="kv" aria-hidden>
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} style={{ display: "contents" }}>
+          <dt>
+            <Skeleton width="45%" />
+          </dt>
+          <dd>
+            <Skeleton width={VALUE_WIDTHS[index % VALUE_WIDTHS.length]} />
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /** The fields of the new-version form that carry their own validation. */
 type VersionField = "value" | "metadata";
 
@@ -446,9 +474,12 @@ export default function ParameterManager({
                 <div className="card-title">Current value</div>
                 <Skeleton height={72} />
               </div>
+              {/* The metadata list stacks to one column below 768px, so a single
+                  height under-reserved it there and shifted the page on arrival;
+                  the real labels let the `.kv` grid reserve itself. */}
               <div className="card">
                 <div className="card-title">Metadata</div>
-                <Skeleton height={140} />
+                <KeyValueSkeleton rows={METADATA_ROWS} />
               </div>
             </TabsContent>
           </Tabs>
@@ -471,9 +502,11 @@ export default function ParameterManager({
           <div className="card-title">Current value</div>
           <Skeleton height={72} />
         </div>
+        {/* Mirrors the loaded list rather than naming a height: `.kv` is two
+            columns at 1280 and one below 768px. */}
         <div className="card">
           <div className="card-title">Metadata</div>
-          <Skeleton height={140} />
+          <KeyValueSkeleton rows={METADATA_ROWS} />
         </div>
         <div className="card">
           <div className="card-title">Version history</div>

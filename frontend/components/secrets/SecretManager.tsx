@@ -58,6 +58,41 @@ import { validateBindingKey, validateMetadataJson } from "@/lib/validation";
 const REVEAL_SECONDS = 30;
 const REVEAL_RESPONSE_MISMATCH = "Reveal response did not match the requested secret version.";
 
+/** Rows the loaded metadata list renders. The skeleton is the same `.kv` grid,
+ *  so it stacks to one column below 768px exactly as the loaded card does
+ *  rather than reserving one height for both. */
+const METADATA_ROWS = 8;
+
+/** Deterministic so the prerendered HTML and the client render agree. */
+const VALUE_WIDTHS = ["62%", "48%", "40%", "70%", "35%", "55%", "45%", "58%"];
+
+/* Both notices are fixed copy, not loaded data, so the skeleton renders the
+   real text and reserves the exact height it will occupy — a literal cannot,
+   because the panels wrap to three lines at 1280 and six at 375. */
+const NON_ADMIN_NOTICE =
+  "Secret values can be revealed only by an administrator. Application identities may resolve them through the SDK with the exact-version credentials they require.";
+const REVEAL_NOTICE = `Revealing decrypts the selected version and records an audit event. A binding key, when required, is sent only in that request and is not stored by the console. The value auto-hides after ${REVEAL_SECONDS} seconds.`;
+
+/* Bars rather than the real labels: the `.kv` geometry does not depend on the
+   text, and duplicating it would put a second "Content type" in the tree while
+   the page loads. */
+function KeyValueSkeleton({ rows }: { rows: number }) {
+  return (
+    <dl className="kv" aria-hidden>
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} style={{ display: "contents" }}>
+          <dt>
+            <Skeleton width="45%" />
+          </dt>
+          <dd>
+            <Skeleton width={VALUE_WIDTHS[index % VALUE_WIDTHS.length]} />
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function localDatetimeValue(ms: number): string {
   const date = new Date(ms);
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -352,18 +387,31 @@ export default function SecretManager({
   // Header and card frames come straight from the URL, so they paint at once
   // and only the values fill in — no full-page spinner swap.
   if (!ready || (hasRef && (loadState === "idle" || loadState === "loading"))) {
-    // Heights track the loaded cards: eight KeyValue rows, and a warning panel
-    // above the version picker.
+    // Both cards mirror the loaded structure rather than naming a height: the
+    // metadata list stacks to one column below 768px and the notice wraps to
+    // twice as many lines there, so a literal that fits 1280 under-reserved by
+    // 267px on a phone and shifted the whole page on arrival.
     const metadataSkeleton = (
       <div className="card">
         <div className="card-title">Metadata</div>
-        <Skeleton height={160} />
+        <KeyValueSkeleton rows={METADATA_ROWS} />
       </div>
     );
     const valueSkeleton = (
       <div className="card">
         <div className="card-title">Secret value</div>
-        <Skeleton height={140} />
+        {!isAdmin ? (
+          <div className="warn-panel">{NON_ADMIN_NOTICE}</div>
+        ) : (
+          <div aria-hidden>
+            <div className="warn-panel mb-4">{REVEAL_NOTICE}</div>
+            <div className="row-wrap">
+              <span className="field-label">Version</span>
+              <Skeleton width={176} height="var(--control-h)" />
+              <Skeleton width={120} height="var(--control-h)" />
+            </div>
+          </div>
+        )}
       </div>
     );
     const versionsSkeleton = (
@@ -611,10 +659,7 @@ export default function SecretManager({
     <div className="card">
       <div className="card-title">Secret value</div>
       {!isAdmin ? (
-        <div className="warn-panel">
-          Secret values can be revealed only by an administrator. Application identities may resolve
-          them through the SDK with the exact-version credentials they require.
-        </div>
+        <div className="warn-panel">{NON_ADMIN_NOTICE}</div>
       ) : revealed ? (
         <div className="reveal-box">
           <div className="between mb-2">
@@ -675,11 +720,7 @@ export default function SecretManager({
         </div>
       ) : (
         <div>
-          <div className="warn-panel mb-4">
-            Revealing decrypts the selected version and records an audit event. A binding key, when
-            required, is sent only in that request and is not stored by the console. The value
-            auto-hides after {REVEAL_SECONDS} seconds.
-          </div>
+          <div className="warn-panel mb-4">{REVEAL_NOTICE}</div>
           <div className="row-wrap">
             <label className="field-label" htmlFor="reveal-version">
               Version

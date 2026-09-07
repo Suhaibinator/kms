@@ -715,10 +715,20 @@ function RuleEditor({
             const appWarning = unknownNamespaceWarning(rule, "app", namespaces, namespacesLoading);
             const envWarning = unknownNamespaceWarning(rule, "env", namespaces, namespacesLoading);
             const envListId = `${listId}-envs-${rule.id}`;
+            // The unknown-namespace sentences are row-level (.rule-note below),
+            // not hints inside the 110-130px App/Env columns where they wrapped
+            // to five lines. They keep their aria-describedby association: the
+            // ids are referenced from the control the sentence is about.
+            const appNoteId = `${listId}-app-note-${rule.id}`;
+            const envNoteId = `${listId}-env-note-${rule.id}`;
             return (
               <div key={rule.id} className="rule-row">
                 <div className="rule-op">
-                  <Field label="Operation" error={errorFor(rule, "operation")}>
+                  <Field
+                    label="Operation"
+                    error={errorFor(rule, "operation")}
+                    className="field-reserve"
+                  >
                     <AppSelect
                       value={rule.operation}
                       onValueChange={(operation) => update(rule.id, { operation })}
@@ -732,13 +742,10 @@ function RuleEditor({
                   </Field>
                 </div>
                 <div className="rule-app">
-                  <Field
-                    label="App"
-                    error={errorFor(rule, "app")}
-                    hint={appWarning ? <span className="text-warning">{appWarning}</span> : null}
-                  >
+                  <Field label="App" error={errorFor(rule, "app")} className="field-reserve">
                     <Input
                       className="font-mono"
+                      aria-describedby={appWarning ? appNoteId : undefined}
                       value={rule.app}
                       list={`${listId}-apps`}
                       autoComplete="off"
@@ -749,13 +756,10 @@ function RuleEditor({
                   </Field>
                 </div>
                 <div className="rule-env">
-                  <Field
-                    label="Env"
-                    error={errorFor(rule, "env")}
-                    hint={envWarning ? <span className="text-warning">{envWarning}</span> : null}
-                  >
+                  <Field label="Env" error={errorFor(rule, "env")} className="field-reserve">
                     <Input
                       className="font-mono"
+                      aria-describedby={envWarning ? envNoteId : undefined}
                       value={rule.env}
                       list={envListId}
                       autoComplete="off"
@@ -789,6 +793,13 @@ function RuleEditor({
                 >
                   Remove
                 </Button>
+                {appWarning || envWarning ? (
+                  <p className="rule-note">
+                    {appWarning ? <span id={appNoteId}>{appWarning}</span> : null}
+                    {appWarning && envWarning ? " " : null}
+                    {envWarning ? <span id={envNoteId}>{envWarning}</span> : null}
+                  </p>
+                ) : null}
               </div>
             );
           })}

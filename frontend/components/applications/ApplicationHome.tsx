@@ -687,7 +687,12 @@ export function ApplicationHome({
                 ~12px below the heading they belong to against the two-line
                 description beside them. */}
             <div className="between mb-2 items-start">
-              <div>
+              {/* .between wraps on hypothetical main size, which min-width: 0
+                  does not change: the description's 891px max-content left 89px
+                  for a 273px button pair, so the buttons dropped to a second
+                  line at the left edge at every width. A 320px basis wraps only
+                  when the row really cannot hold both. */}
+              <div className="grow basis-80">
                 <h2 className="section-title">Configuration matrix</h2>
                 <div className="faint text-sm">
                   Parameters show current values; secrets show metadata only. A bulk parameter

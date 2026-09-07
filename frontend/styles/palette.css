@@ -1,7 +1,7 @@
 /* Feature styles for the palette surfaces. Append only; every rule stays inside
    the layer so Tailwind utilities keep winning. */
 
-@layer components {
+@layer features {
   .palette {
     display: flex;
     flex-direction: column;
@@ -26,7 +26,7 @@
     border: 0;
     background: transparent;
     color: var(--text);
-    font-size: 14px;
+    font-size: var(--text-base);
     outline: none;
   }
   .palette-input::placeholder {
@@ -47,7 +47,7 @@
   .palette-empty {
     padding: var(--space-5) var(--space-3);
     color: var(--text-faint);
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     text-align: center;
   }
   /* "12 of 47 matches" sits between the list and the key hints, outside the
@@ -63,7 +63,7 @@
   .palette-group-label {
     padding: var(--space-1) var(--space-2);
     color: var(--text-faint);
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -76,7 +76,7 @@
     padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-sm);
     color: var(--text);
-    font-size: 13px;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
   .palette-item:hover {
@@ -101,7 +101,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-faint);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
   .palette-item-enter {
     flex-shrink: 0;
@@ -117,7 +117,7 @@
     padding: var(--space-2) var(--space-4);
     border-top: 1px solid var(--border);
     color: var(--text-faint);
-    font-size: 11.5px;
+    font-size: var(--text-xs);
   }
   .palette-foot > span {
     display: inline-flex;
@@ -125,20 +125,37 @@
     gap: var(--space-1);
   }
 
-  @media (max-width: 768px) {
+  @variant max-md {
     .palette {
       height: 100%;
       max-height: none;
     }
+    /* The dialog goes edge to edge here (max-md:inset-0 max-md:h-full) and the
+       document is viewport-fit=cover, so this is the one full-bleed surface in
+       the console that has to inset itself — .page, .mobile-topbar and
+       .mobile-sidebar all already do. */
+    .palette-input-row {
+      padding-top: env(safe-area-inset-top);
+      padding-left: max(var(--space-4), env(safe-area-inset-left));
+      padding-right: max(var(--space-4), env(safe-area-inset-right));
+    }
+    .palette-list,
+    .palette-more {
+      padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+    }
     /* 16px stops iOS zooming the field; 52/44px are the touch rows. */
     .palette-input {
       height: calc(var(--spacing) * 13);
-      font-size: 16px;
+      font-size: var(--text-touch);
     }
     .palette-item {
       min-height: calc(var(--spacing) * 11);
     }
+    /* The subtitle below is the row's only flexible item, and hiding it left
+       the ↵ glyph packed against the title with 284px of empty row after it.
+       The title takes the slack here instead. */
     .palette-item-title {
+      flex: 1;
       max-width: none;
     }
     .palette-item-sub {

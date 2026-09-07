@@ -17,6 +17,7 @@ import {
   Field,
   Input,
   PageHeader,
+  Skeleton,
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
@@ -52,6 +53,22 @@ const COLUMNS: ReadonlyArray<SortColumn<Namespace>> = [
 ];
 
 const TABLE_HEADERS = headerLabels(COLUMNS);
+
+/** One definition for the loaded table and its skeleton: these widths are what
+ *  make the header row wrap to two lines, and a skeleton without them comes up
+ *  17.25px short. The last column is the actions gutter, which is content-sized
+ *  by `table.data td:has(> .navigable-row-end)` and wants no preference. */
+const NAMESPACE_COLGROUP = (
+  <colgroup>
+    <col className="namespace-col-env" />
+    <col />
+    <col className="namespace-col-methods" />
+    <col className="namespace-col-count" />
+    <col className="namespace-col-count" />
+    <col className="namespace-col-created" />
+    <col />
+  </colgroup>
+);
 
 function AuthMethodBadges({ methods }: { methods: AuthMethod[] }) {
   if (!methods || methods.length === 0) {
@@ -285,7 +302,29 @@ export default function NamespacesPage() {
           The namespace list is unavailable. Check the connection and try again.
         </EmptyState>
       ) : loading && namespaces.length === 0 ? (
-        <TableSkeleton headers={TABLE_HEADERS} trailing={1} />
+        // The loaded page is one .ns-group per application, each with a heading
+        // block above its table; a bare table skeleton left that 51px out and
+        // the list jumped on arrival. The class and the colgroup matter too:
+        // together they carry the column widths and the header wrapping that
+        // make the loaded header row 17.25px taller than a default one.
+        <div className="ns-group">
+          <div className="ns-group-title">
+            <span className="ns-group-name">
+              <Skeleton width="8ch" />
+            </span>
+            <span className="faint text-sm">
+              <Skeleton width="12ch" />
+            </span>
+          </div>
+          <TableSkeleton
+            headers={TABLE_HEADERS}
+            trailing={1}
+            tableClassName="namespace-table"
+            colgroup={NAMESPACE_COLGROUP}
+            toolbar
+            summary
+          />
+        </div>
       ) : namespaces.length === 0 ? (
         <EmptyState
           icon={<Icon.namespace size={20} />}
@@ -309,15 +348,7 @@ export default function NamespacesPage() {
                 <table className="data namespace-table">
                   {/* The whole list is loaded, so "of" is the real total. */}
                   <TableSummary shown={group.list.length} noun="environments" />
-                  <colgroup>
-                    <col className="namespace-col-env" />
-                    <col />
-                    <col className="namespace-col-methods" />
-                    <col className="namespace-col-count" />
-                    <col className="namespace-col-count" />
-                    <col className="namespace-col-created" />
-                    <col className="namespace-col-actions" />
-                  </colgroup>
+                  {NAMESPACE_COLGROUP}
                   <thead>
                     <SortHeaderRow controller={sort} after={<th />} />
                   </thead>
@@ -345,10 +376,14 @@ export default function NamespacesPage() {
                             <AuthMethodBadges methods={ns.allowed_auth_methods} />
                           </td>
                           <td data-label="Parameters">
-                            <Link href={links.parameters(ns)}>{ns.parameter_count}</Link>
+                            <Link className="cell-count" href={links.parameters(ns)}>
+                              {ns.parameter_count}
+                            </Link>
                           </td>
                           <td data-label="Secrets">
-                            <Link href={links.secrets(ns)}>{ns.secret_count}</Link>
+                            <Link className="cell-count" href={links.secrets(ns)}>
+                              {ns.secret_count}
+                            </Link>
                           </td>
                           <td className="nowrap" data-label="Created">
                             {formatUnixMs(ns.created_at_unix_ms)}

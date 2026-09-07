@@ -119,7 +119,7 @@ export function ReleaseWorkspace({
     >
       {release && summary ? (
         <Tabs value={section} onValueChange={(value) => setSection(String(value))}>
-          <div className="release-workspace-toolbar release-workspace-tabs">
+          <div className="release-workspace-toolbar">
             <TabsList variant="line" aria-label="Release details">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="entries">Entries</TabsTrigger>

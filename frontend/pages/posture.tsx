@@ -7,6 +7,7 @@ import {
   Badge,
   EmptyState,
   PageHeader,
+  Skeleton,
   Spinner,
   StatSkeleton,
   TableSkeleton,
@@ -117,6 +118,17 @@ function When({ iso, now }: { iso: string; now: number }) {
   );
 }
 
+/** The fixed-window note above the admin table. Rendered by the skeleton too,
+ *  with the window elided, so the paragraph's lines are reserved either way. */
+function AdminCertNote({ window }: { window?: string }) {
+  return (
+    <p className="faint text-sm">
+      Fixed {window ?? "…"} look-ahead: an expired admin certificate is refused by the TLS handshake
+      itself, before the server can explain anything.
+    </p>
+  );
+}
+
 /** "Showing the first 200 of 412." — only when the server capped the list. */
 function TruncatedNotice({ shown, total }: { shown: number; total: number }) {
   return (
@@ -134,6 +146,10 @@ export default function PosturePage() {
   return <Posture initialWindow={windowFromQuery(values.window)} />;
 }
 
+/** The loaded page's structure, not a single table: four stats, the window
+ *  selector, and three cards with their own column lists. The one-card version
+ *  this replaces reserved 900px against a 1372px page at 1280, so everything
+ *  below the fold moved on arrival. */
 function PostureSkeleton() {
   return (
     <>
@@ -143,8 +159,27 @@ function PostureSkeleton() {
         <StatSkeleton label="Audit" />
         <StatSkeleton label="Metrics" />
       </div>
+      {/* The same row the selector renders: a caption and three buttons at
+          --control-h. A <div>, not the loaded <fieldset>, because there is
+          nothing here to label. */}
+      <div className="row-wrap mb-4 min-w-0" aria-hidden>
+        <span className="field-label">Expiring within</span>
+        {WINDOWS.map((option) => (
+          <Skeleton key={option.value} width="6.5ch" height="var(--control-h)" />
+        ))}
+      </div>
       <div className="card">
-        <TableSkeleton headers={headerLabels(IDENTITY_CERT_COLUMNS.columns)} rows={5} />
+        <h2 className="card-title">Admin certificates</h2>
+        <AdminCertNote />
+        <TableSkeleton headers={headerLabels(ADMIN_CERT_COLUMNS.columns)} rows={2} />
+      </div>
+      <div className="card">
+        <h2 className="card-title">Identity certificates expiring</h2>
+        <TableSkeleton headers={headerLabels(IDENTITY_CERT_COLUMNS.columns)} rows={2} />
+      </div>
+      <div className="card">
+        <h2 className="card-title">Secret versions expiring</h2>
+        <TableSkeleton headers={headerLabels(SECRET_COLUMNS.columns)} rows={2} />
       </div>
     </>
   );
@@ -332,11 +367,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
 
           <div className="card">
             <h2 className="card-title">Admin certificates</h2>
-            <p className="faint text-sm">
-              Fixed {humanDuration(posture.windows.admin_cert)} look-ahead: an expired admin
-              certificate is refused by the TLS handshake itself, before the server can explain
-              anything.
-            </p>
+            <AdminCertNote window={humanDuration(posture.windows.admin_cert)} />
             {adminRowCount === 0 ? (
               <EmptyState
                 icon={<Icon.identity size={20} />}

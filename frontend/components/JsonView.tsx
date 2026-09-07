@@ -67,6 +67,9 @@ export function JsonView({
   return (
     <div className={cn("json-view", className)} data-wrap={wrap ? "on" : "off"}>
       <div className="json-view-toolbar">
+        {/* One variant across the row: `ghost`, which reads better than four
+            boxed buttons directly above a code block. `CopyButton` defaults to
+            `outline` and opts in here. */}
         <div className="json-view-tools">
           {tools}
           {tree.tree ? (
@@ -100,7 +103,9 @@ export function JsonView({
           >
             <WrapText size={14} aria-hidden /> Wrap
           </Button>
-          {copyLabel !== false ? <CopyButton label={copyLabel} value={copyValue ?? raw} /> : null}
+          {copyLabel !== false ? (
+            <CopyButton variant="ghost" label={copyLabel} value={copyValue ?? raw} />
+          ) : null}
         </div>
         <span className="json-view-size faint text-xs">
           {lines} {lines === 1 ? "line" : "lines"} · {formatBytes(bytes)}

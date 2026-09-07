@@ -523,6 +523,12 @@ describe("parameter version history", () => {
     expect(diff).toHaveTextContent("+1 −1");
     expect(diff.querySelector('[data-op="del"].json-diff-text')?.textContent).toBe("2");
     expect(diff.querySelector('[data-op="add"].json-diff-text')?.textContent).toBe("3");
+    // `table-layout: fixed` takes its widths from `<col>` or the first row, and
+    // the header is two auto `colSpan={2}` cells — so without the colgroup the
+    // width on `.json-diff-num` is dead and the two line-number gutters take
+    // half the table.
+    const columns = [...diff.querySelectorAll("colgroup col")].map((col) => col.className);
+    expect(columns).toEqual(["json-diff-col-num", "", "json-diff-col-num", ""]);
     expect(within(row(2)).getByText("comparing")).toBeVisible();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Close compare" }));

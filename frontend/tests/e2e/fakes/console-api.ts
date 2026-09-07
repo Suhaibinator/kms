@@ -15,6 +15,8 @@ import type {
   EnvironmentOverview,
   EnvStatus,
   Finding,
+  Identity,
+  IdentityCert,
   Namespace,
   OverviewRollout,
   ReleaseSubscriberState,
@@ -91,6 +93,8 @@ export interface ConsoleState {
   namespaces: Record<string, FakeNamespace>;
   revision: number;
   identity: { name: string; kind: "admin" | "client"; auth_method: string };
+  /** The /identities list, so the identity and certificate modals are reachable. */
+  identities: Identity[];
   /** What instances report after an activation; default: every one applies. */
   onActivate?: (ctx: ActivationContext) => ReleaseSubscriberState[];
   /** Override validation for a candidate release (ship preview, validate, activate, rollback). */
@@ -137,6 +141,7 @@ export function incidentState(): ConsoleState {
     namespaces: {},
     revision: 0,
     identity: { name: "admin", kind: "admin", auth_method: "token" },
+    identities: [],
     log: [],
   };
   for (const env of overview.environments) {
@@ -217,7 +222,55 @@ export function incidentState(): ConsoleState {
     state.namespaces[env.namespace.env] = ns;
     state.revision = Math.max(state.revision, ns.activationRevision);
   }
+  state.identities = seedIdentities(state);
   return state;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Two identities per environment in the fixture: one carrying certificates
+ * (a valid one and one already expired, so the Certificates modal shows both
+ * states and its Revoke button) and one bearer-token identity, so the list has
+ * rows whose action clusters differ. Derived from the namespaces rather than
+ * written out, so the identity list follows the fixture.
+ */
+function seedIdentities(state: ConsoleState): Identity[] {
+  const base = now();
+  return Object.values(state.namespaces).flatMap((ns, index) => {
+    const { env, app } = ns.namespace;
+    const cert = (offsetDays: number, expiredDays: number): IdentityCert => ({
+      serial: `${(index + 1) * 1001}a2b3c4d5e6f7081920${offsetDays}`,
+      // A full SHA-256 digest: the width the certificate table and the revoke
+      // confirmation have to survive.
+      fingerprint: `sha256:${`${index}f8e7d6c5b4a3928170`.repeat(3)}5f4e3d`,
+      not_after_unix_ms: base + (offsetDays - expiredDays) * DAY_MS,
+      revoked_at_unix_ms: 0,
+      created_at_unix_ms: base - offsetDays * DAY_MS,
+    });
+    return [
+      {
+        // Short names on purpose: the Name column's share of a 978px table is
+        // ~77px of content, and a longer name wraps and makes the row taller
+        // than the guard's one-line budget for reasons that have nothing to do
+        // with the action cluster it is measuring.
+        name: `${env}-api`,
+        kind: "client" as const,
+        namespace: { env, app },
+        created_at_unix_ms: base - (index + 1) * 30 * DAY_MS,
+        has_token: false,
+        certs: [cert(30, 0), cert(400, 400)],
+      },
+      {
+        name: `${env}-job`,
+        kind: "client" as const,
+        namespace: { env, app },
+        created_at_unix_ms: base - (index + 1) * 15 * DAY_MS,
+        has_token: true,
+        certs: [],
+      },
+    ];
+  });
 }
 
 function instanceRow(
@@ -1426,6 +1479,27 @@ function handle(
           next_page_token: "",
         },
       };
+    case "GET /identities":
+      return { status: 200, body: { identities: state.identities, next_page_token: "" } };
+    case "POST /identities/revoke-cert": {
+      const target = state.identities.find((entry) => entry.name === b.name);
+      const revoked = target?.certs?.find((entry) => entry.serial === b.serial);
+      if (!revoked) return error(404, "not_found", "certificate not found");
+      revoked.revoked_at_unix_ms = now();
+      return { status: 200, body: {} };
+    }
+    case "POST /identities/revoke": {
+      const target = state.identities.find((entry) => entry.name === b.name);
+      if (!target) return error(404, "not_found", "identity not found");
+      target.disabled = true;
+      return { status: 200, body: {} };
+    }
+    case "POST /identities/rotate": {
+      const target = state.identities.find((entry) => entry.name === b.name);
+      if (!target) return error(404, "not_found", "identity not found");
+      target.has_token = true;
+      return { status: 200, body: { identity: target, token: `kms_${target.name}_rotated` } };
+    }
     case "GET /audit":
       return { status: 200, body: { events: [], next_page_token: "" } };
     case "GET /subscribers":

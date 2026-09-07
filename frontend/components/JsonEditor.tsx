@@ -290,7 +290,15 @@ export function JsonEditor({
           </span>
         ) : focused && !problem ? (
           <span className="faint json-editor-keys">
-            Tab inserts two spaces · Shift+Tab moves focus out · Ctrl+Enter submits
+            Tab inserts two spaces
+            {/* Below 640px all three clauses wrap to a second line, and the
+                status slot reserves one — so focusing the editor pushed
+                everything under it down 16px. The sr-only hint below keeps the
+                full text for assistive technology at every width. */}
+            <span className="json-editor-keys-more">
+              {" "}
+              · Shift+Tab moves focus out · Ctrl+Enter submits
+            </span>
           </span>
         ) : null}
       </div>

@@ -211,7 +211,12 @@ export function SchemaForm({
             type="button"
             variant="link"
             size="xs"
-            className="schema-form-reset"
+            // Geometry as utilities, not a .schema-form-reset rule: the size
+            // variant's h-6/px-2/text-xs are utilities and beat a component
+            // layer rule, so the link rendered as a 24px box on the hint's 17px
+            // text line and grew the line the moment a default was departed
+            // from. text-sm is the hint's own size.
+            className="ml-1 h-auto p-0 align-baseline text-sm"
             onClick={() => commit(field.path, field.schema.default)}
           >
             Reset to default

@@ -284,9 +284,13 @@ describe("DashboardPage", () => {
     });
     const rowCounts = skeletons.map((node) => node.querySelectorAll("tr.skeleton-row").length);
     expect(rowCounts).toEqual([8, 6]);
+    // Through the cell, not the row: a table row is at least as tall as its
+    // tallest cell, so an inline height on the <tr> could only ever make it
+    // taller than `.skeleton-row td` — rowHeight={44} produced a 54px row.
     for (const node of skeletons) {
       for (const row of node.querySelectorAll("tr.skeleton-row")) {
-        expect((row as HTMLElement).style.height).toBe("44px");
+        expect((row as HTMLElement).style.getPropertyValue("--skeleton-row-h")).toBe("44px");
+        expect((row as HTMLElement).style.height).toBe("");
       }
     }
 

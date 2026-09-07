@@ -665,7 +665,9 @@ describe("ShipModal", () => {
         release(preview);
       });
       await waitFor(() => expect(shipButton()).toBeEnabled());
-      expect(note()).toBeNull();
+      // The note keeps its line so the footer height never changes; nothing
+      // blocks Ship, so it is blank.
+      expect(note()?.textContent?.trim()).toBe("");
     });
 
     it("names the missing secret", async () => {
@@ -746,7 +748,7 @@ describe("ShipModal", () => {
         target: { value: "prod" },
       });
       expect(shipButton()).toBeEnabled();
-      expect(note()).toBeNull();
+      expect(note()?.textContent?.trim()).toBe("");
     });
   });
 
@@ -922,7 +924,7 @@ describe("ShipModal", () => {
     const summary = within(dialog()).getByTestId("ship-confirm-summary");
     const secrets = changedEntries.filter((entry) => entry.kind === "secret").length;
     expect(summary).toHaveTextContent(
-      `${changedEntries.length} ${changedEntries.length === 1 ? "alias changes" : "aliases change"} (${secrets} ${secrets === 1 ? "secret" : "secrets"})`,
+      `${changedEntries.length} ${changedEntries.length === 1 ? "alias" : "aliases"} changed (${secrets} ${secrets === 1 ? "secret" : "secrets"})`,
     );
     expect(summary).toHaveTextContent(`${releaseName}@${base} → @${next}`);
   });

@@ -129,3 +129,23 @@ test("a free-form entry keeps its empty resource picker closed across kind chang
   await expect(resource).toHaveText("No matching secrets");
   await expect(page.getByRole("listbox")).toHaveCount(0);
 });
+
+test("a stacked release entry has one gap between every field", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await mockConsole(page, incidentState());
+  await page.goto("/releases?app=gradethis&env=prod");
+  await page.getByRole("button", { name: "New release" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New release · prod/gradethis" });
+  await expect(dialog).toBeVisible();
+
+  // The unlabelled cells carry a --label-offset that lines them up with the
+  // labelled fields' controls while the entry is a row. Stacked there is no
+  // label beside them, and the offset used to survive as a 33px hole.
+  const gaps = await dialog.evaluate(() => {
+    const entry = document.querySelector(".release-builder-entry") as HTMLElement;
+    const boxes = [...entry.children].map((child) => child.getBoundingClientRect());
+    return boxes.slice(1).map((box, index) => Number((box.top - boxes[index].bottom).toFixed(2)));
+  });
+  expect(gaps.length).toBeGreaterThan(3);
+  for (const gap of gaps) expect(gap).toBeCloseTo(gaps[0], 1);
+});

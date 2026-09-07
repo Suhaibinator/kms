@@ -144,4 +144,84 @@ describe("TableSkeleton", () => {
     const { container } = render(<TableSkeleton headers={["A"]} rows={3} />);
     expect(container.querySelectorAll(".skeleton-row")).toHaveLength(3);
   });
+
+  // A skeleton renders the loaded layout's structure, not an approximation:
+  // the loaded list always has the mobile toolbar, the summary caption and its
+  // own table class, and each one it omits is a jump on arrival.
+  it("reserves the loaded list's toolbar, summary caption and table class", () => {
+    const { container } = render(
+      <TableSkeleton headers={["A"]} rows={1} tableClassName="namespace-table" toolbar summary />,
+    );
+    const table = container.querySelector("table");
+    expect(table).toHaveClass("data", "namespace-table");
+    expect(container.querySelectorAll("fieldset.mobile-list-toolbar")).toHaveLength(1);
+    // Two sort controls, matching MobileListToolbar's own.
+    expect(container.querySelectorAll(".mobile-sort-field")).toHaveLength(2);
+    expect(table?.querySelector("caption.table-summary")).not.toBeNull();
+  });
+
+  it("omits all three unless asked", () => {
+    const { container } = render(<TableSkeleton headers={["A"]} rows={1} />);
+    expect(container.querySelector("table")).toHaveClass("data");
+    expect(container.querySelector(".mobile-list-toolbar")).toBeNull();
+    expect(container.querySelector("caption")).toBeNull();
+    expect(container.querySelector("colgroup")).toBeNull();
+    expect(container.querySelector(".mobile-list-hint")).toBeNull();
+    expect(container.querySelector(".mobile-list-selection")).toBeNull();
+  });
+
+  // The loaded header is a sort button carrying the cell's padding and a 12px
+  // indicator; a bare <th> never wraps, so the two together are what make the
+  // skeleton's header row the same height as the one that replaces it.
+  it("renders its headers in the loaded sort-button shape", () => {
+    const { container } = render(<TableSkeleton headers={["Environment"]} rows={1} />);
+    const header = container.querySelector("th");
+    expect(header).toHaveClass("sortable");
+    expect(header?.querySelector(".sort-button")).toHaveTextContent("Environment");
+    expect(header?.querySelector(".sort-indicator")).not.toBeNull();
+  });
+
+  it("takes the loaded table's colgroup and the toolbar's own extra rows", () => {
+    const { container } = render(
+      <TableSkeleton
+        headers={["A"]}
+        rows={1}
+        toolbar
+        toolbarHint
+        toolbarSelection
+        colgroup={
+          <colgroup>
+            <col className="namespace-col-env" />
+          </colgroup>
+        }
+      />,
+    );
+    expect(container.querySelector("colgroup > col.namespace-col-env")).not.toBeNull();
+    expect(container.querySelector(".mobile-list-toolbar > .mobile-list-hint")).not.toBeNull();
+    expect(container.querySelector(".mobile-list-toolbar > .mobile-list-selection")).not.toBeNull();
+  });
+
+  // A bare `true` reserves one line, which is 18px short wherever the real
+  // sentence wraps to two in a 343px card. Given the loaded strings the
+  // placeholder wraps identically; the selection row carries the same
+  // `(0 selected)` suffix the loaded row starts at.
+  it("wraps its toolbar rows like the loaded ones when given their text", () => {
+    const { container } = render(
+      <TableSkeleton
+        headers={["A"]}
+        rows={1}
+        toolbar
+        toolbarHint="Sorts the rows loaded on this page, not the whole namespace."
+        toolbarSelection="Select all parameters on this page"
+      />,
+    );
+    expect(container.querySelector(".mobile-list-hint")).toHaveTextContent(
+      "Sorts the rows loaded on this page, not the whole namespace.",
+    );
+    expect(container.querySelector(".mobile-list-selection")).toHaveTextContent(
+      "Select all parameters on this page (0 selected)",
+    );
+    // Chrome, not data: the toolbar is hidden from assistive tech either way.
+    expect(container.querySelector(".mobile-list-toolbar")).toHaveAttribute("aria-hidden");
+  });
 });

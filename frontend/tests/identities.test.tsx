@@ -391,12 +391,15 @@ describe("identity onboarding", () => {
     fireEvent.click(within(certificateDialog).getByRole("button", { name: "Close" }));
     const tokenRow = screen.getByText("token-blocked").closest("tr");
     expect(tokenRow).not.toBeNull();
-    expect(
-      within(tokenRow as HTMLElement).getByRole("button", { name: "Rotate token" }),
-    ).toBeDisabled();
-    expect(
-      within(tokenRow as HTMLElement).getByText(/Rotation unavailable.*does not accept token/),
-    ).toBeVisible();
+    // Rotation lives behind the row's kebab, with the reason on the item.
+    fireEvent.click(
+      within(tokenRow as HTMLElement).getByRole("button", {
+        name: "More actions for token-blocked",
+      }),
+    );
+    const rotate = await screen.findByRole("menuitem", { name: /Rotate token/ });
+    expect(rotate).toHaveAttribute("aria-disabled", "true");
+    expect(rotate).toHaveTextContent(/Rotation unavailable.*does not accept token/);
     expect(rotateIdentity).not.toHaveBeenCalled();
   });
 
@@ -978,8 +981,9 @@ describe("identity list", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     const row = (await screen.findByText("second")).closest("tr") as HTMLElement;
 
-    fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
-    const confirm = screen.getByRole("dialog", { name: "Revoke identity?" });
+    fireEvent.click(within(row).getByRole("button", { name: "More actions for second" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Revoke identity" }));
+    const confirm = await screen.findByRole("dialog", { name: "Revoke identity?" });
     const revoke = within(confirm).getByRole("button", { name: "Revoke identity" });
     // Irreversible and fleet-affecting: the identity name must be typed first.
     expect(revoke).toBeDisabled();

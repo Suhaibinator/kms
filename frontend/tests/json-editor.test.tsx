@@ -118,6 +118,12 @@ describe("JsonEditor", () => {
     expect(screen.getByRole("status")).toHaveTextContent("");
     fireEvent.focus(textbox());
     expect(screen.getByRole("status")).toHaveTextContent(/Tab inserts two spaces/);
+    // Below 640px only the first clause is shown — the other two wrap to a
+    // second line in a 343px row, and the status slot reserves one. The rest
+    // lives in a span CSS hides there, so it stays in the accessible name.
+    expect(
+      screen.getByRole("status").querySelector(".json-editor-keys-more")?.textContent,
+    ).toContain("Shift+Tab moves focus out");
     // A problem takes the slot back; the hint returns once the JSON is whole.
     fireEvent.change(textbox(), { target: { value: "{" } });
     expect(screen.getByRole("status")).toHaveTextContent(/Unexpected end of input/);

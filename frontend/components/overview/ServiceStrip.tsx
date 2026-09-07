@@ -114,7 +114,7 @@ export default function ServiceStrip({
         </div>
         <div className="stat-sub">
           {countsFailed ? <span className="text-danger">not loaded · </span> : null}
-          <Link href="/namespaces">
+          <Link href="/namespaces" className="inline-flex items-center gap-1">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>
         </div>
@@ -127,7 +127,7 @@ export default function ServiceStrip({
         </div>
         <div className="stat-sub">
           {countsFailed ? <span className="text-danger">not loaded · </span> : null}
-          <Link href="/parameters">
+          <Link href="/parameters" className="inline-flex items-center gap-1">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>
         </div>
@@ -140,7 +140,7 @@ export default function ServiceStrip({
         </div>
         <div className="stat-sub">
           {countsFailed ? <span className="text-danger">not loaded · </span> : null}
-          <Link href="/secrets">
+          <Link href="/secrets" className="inline-flex items-center gap-1">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>
         </div>

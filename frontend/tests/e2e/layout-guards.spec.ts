@@ -27,6 +27,12 @@ async function desktop(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });
 }
 
+/** The centre of `locator` on the block axis, for alignment comparisons. */
+const centreY = async (locator: Locator) => {
+  const rect = await box(locator);
+  return rect.y + rect.height / 2;
+};
+
 test("the secret workspace keeps one width across tabs and never scrolls sideways", async ({
   page,
 }) => {
@@ -119,4 +125,94 @@ test("pipeline row actions stay inside their column and the matrix inside its wr
   );
   // With the fixture's two environments the table fits its wrapper outright.
   expect(await scrollsSideways(matrix)).toBe(false);
+});
+
+// The hand-written mobile block used to be inclusive (`max-width: 768px`) while
+// Tailwind's `max-md:`, which gates the drawer trigger, compiles to
+// `width < 48rem` against the initial 16px root — exclusive. At exactly 768.0
+// the sidebar was hidden and the trigger was not shown, so an iPad in portrait
+// had no way into the navigation at all. Both are exclusive now, so 768 is the
+// first desktop width.
+test("navigation is reachable on both sides of the 768px breakpoint", async ({ page }) => {
+  await mockConsole(page, incidentState());
+  await page.setViewportSize({ width: 767, height: 1024 });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+
+  for (const width of [768, 769]) {
+    await page.setViewportSize({ width, height: 1024 });
+    await expect(page.locator(".desktop-sidebar")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open navigation" })).toBeHidden();
+  }
+});
+
+// `[data-slot="checkbox"] { margin: 14px }` bought a touch target with layout:
+// under .checkbox-row's flex-start it dropped every box 14px below its own
+// label. The hit area is the box's absolutely positioned ::after instead.
+test("every checkbox sits beside the first line of its own label at 375", async ({ page }) => {
+  await mockConsole(page, incidentState());
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto("/secrets/new");
+  const rows = page.locator(".checkbox-row");
+  await expect(rows.first()).toBeVisible();
+  expect(await rows.count()).toBeGreaterThan(0);
+  for (const row of await rows.all()) {
+    const boxEl = row.locator('[data-slot="checkbox"]');
+    const label = row.locator("label");
+    // A label that stacks a title over a hint is measured on its first line.
+    const first = label.locator("> *").first();
+    const line = (await first.count()) > 0 ? first : label;
+    expect(Math.abs((await centreY(boxEl)) - (await centreY(line)))).toBeLessThan(2);
+    const boxRect = await box(boxEl);
+    const rowRect = await box(row);
+    // And in the row's own content column, not 14px into it.
+    expect(boxRect.x - rowRect.x).toBeLessThan(1);
+  }
+});
+
+// Automatic table layout hands the actions column whatever the text columns
+// leave; `flex-wrap: wrap` then turned a few pixels of shortfall into a second
+// line on every row (identities measured 130.5px rows at 1280).
+for (const [name, route] of [
+  ["identities", "/identities"],
+  ["releases", "/releases?app=gradethis&env=prod"],
+  ["namespaces", "/namespaces"],
+] as const) {
+  test(`${name} keeps its rows to one line of actions at 1280`, async ({ page }) => {
+    await desktop(page);
+    await mockConsole(page, incidentState());
+    await page.goto(route);
+    // Skeleton rows carry their own reserved height; measure the loaded table.
+    await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
+    const rows = page.locator("table.data tbody tr");
+    await expect(rows.first()).toBeVisible();
+    // In one evaluate: a per-row round trip re-resolves the locator and races
+    // any re-render between them.
+    const tall = await rows.evaluateAll((nodes) =>
+      nodes
+        .map((node) => ({
+          height: node.getBoundingClientRect().height,
+          text: (node.textContent ?? "").slice(0, 40),
+        }))
+        .filter((row) => row.height > 60),
+    );
+    expect(tall).toEqual([]);
+  });
+}
+
+// The ≤768px `[data-slot="button"] { height: auto }` reset had no replacement
+// height for the two smallest sizes, so `icon-xs` was the one control in the
+// app whose two dimensions disagreed (24×30 with a 10px radius).
+test("icon-xs buttons stay square at 375", async ({ page }) => {
+  await mockConsole(page, incidentState());
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto("/parameters");
+  await page.getByRole("button", { name: "New parameter" }).click();
+  const buttons = page.locator('[data-slot="button"][data-size="icon-xs"]');
+  await expect(page.getByRole("dialog")).toBeVisible();
+  for (const button of await buttons.all()) {
+    if (!(await button.isVisible())) continue;
+    const rect = await box(button);
+    expect(Math.abs(rect.width - rect.height)).toBeLessThan(1);
+  }
 });

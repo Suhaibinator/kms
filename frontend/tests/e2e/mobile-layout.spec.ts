@@ -26,7 +26,9 @@ for (const width of [320, 390, 400, 640, 641, 768, 769, 1280, 1440]) {
         return { height: r.height, top: r.top, bottom: r.bottom };
       }),
     );
-    if (width <= 768) {
+    // Exclusive, matching the stylesheet and Tailwind's `md`: 768 is the first
+    // width that renders the desktop filter row.
+    if (width < 768) {
       for (const field of bounds) expect(field.height).toBeLessThan(110);
       for (let i = 1; i < bounds.length; i++) {
         expect(bounds[i].top - bounds[i - 1].bottom).toBeGreaterThanOrEqual(0);
@@ -42,7 +44,8 @@ for (const width of [320, 390, 400, 640, 641, 768, 769, 1280, 1440]) {
       await page.screenshot({ path: info.outputPath("mobile-secrets.png"), fullPage: true });
     }
     const toolbar = page.getByRole("group", { name: "List controls" });
-    if (width <= 640) {
+    // Likewise exclusive: at exactly 640 the list is a table again.
+    if (width < 640) {
       await expect(toolbar).toBeVisible();
       for (const select of await toolbar.getByRole("combobox").all()) {
         expect((await select.boundingBox())?.height).toBeGreaterThanOrEqual(44);

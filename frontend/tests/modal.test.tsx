@@ -58,8 +58,10 @@ describe("Modal", () => {
     );
 
     const dialog = popupOf("Inspector");
-    expect(dialog).toHaveClass("h-[calc(100dvh-2rem)]");
-    expect(dialog).toHaveClass("sm:max-w-[min(1200px,calc(100vw-2rem))]");
+    // --space-4 × 2 = 32px, the page gutter. `2rem` resolved against the 14px
+    // root and was silently 28.
+    expect(dialog).toHaveClass("h-[calc(100dvh_-_var(--space-4)_*_2)]");
+    expect(dialog).toHaveClass("sm:max-w-[min(1200px,calc(100vw_-_var(--space-4)_*_2))]");
     expect(dialog).toHaveClass("overflow-hidden");
     expect(dialog).not.toHaveClass("overflow-y-auto");
     expect(bodyOf(dialog)).toHaveClass("overflow-y-auto");
@@ -161,6 +163,8 @@ describe("Modal", () => {
       </Modal>,
     );
     expect(within(popupOf("Edit")).getByRole("button", { name: "Dismiss dialog" })).toBeVisible();
+    // The header reserves the button's corner only where there is a button.
+    expect(popupOf("Edit").querySelector('[data-slot="dialog-header"]')).toHaveClass("pr-14");
 
     rerender(
       <Modal open dismissible={false} title="Edit" onClose={() => undefined}>
@@ -170,6 +174,9 @@ describe("Modal", () => {
     expect(
       within(popupOf("Edit")).queryByRole("button", { name: "Dismiss dialog" }),
     ).not.toBeInTheDocument();
+    // …and gives the 56px back to the title otherwise: these are the longest
+    // titles in the console.
+    expect(popupOf("Edit").querySelector('[data-slot="dialog-header"]')).not.toHaveClass("pr-14");
   });
 
   it("contains Escape inside a non-dismissible nested dialog", async () => {
