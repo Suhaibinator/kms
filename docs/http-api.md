@@ -596,11 +596,16 @@ exact-version parameter endpoint when building an editor.
 Apply resubmits the same candidate with `execute: true` and the preview's
 `plan_digest`. A valid apply atomically writes parameter changes, updates the
 application definition, creates the release, moves current/previous, and records
-an audit event. Its response additionally includes `release` (the standard
+the migration event plus standard `parameter.write`,
+`configuration_release.create`, and `configuration_release.activate` audit
+events in the same transaction. The events retain the request ID, source IP,
+and user agent without recording parameter or secret values. Its response
+additionally includes `release` (the standard
 release object) and `activation` (`activation_revision`, `previous_version`,
 `changed`). Invalid candidates return `valid: false`, `executed: false` with
-validation errors and no writes. Stale/missing plan digests return HTTP 409 and
-require another preview. Following an uncertain response, read active state
+validation errors and no writes. A missing apply digest returns HTTP 400
+(`invalid_argument`); a stale digest returns HTTP 409 and requires another
+preview. Following an uncertain response, read active state
 before retrying.
 
 The schema pin and contract are application-wide. Other environments keep their

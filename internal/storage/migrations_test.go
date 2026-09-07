@@ -38,15 +38,21 @@ func storageMigrationFixture(t *testing.T) (*SQLStore, ApplicationMigrationTrans
 	return st, ApplicationMigrationTransaction{Resources: resources, Namespace: ns, Snapshot: state.Digest, Contract: []domain.ApplicationContractField{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}, ExpectedActiveVersion: base.Version, Release: domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: "candidate", CreatedBy: "admin", Entries: []domain.ConfigurationReleaseEntry{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, Ref: r, Version: 2, ContentType: "string", Metadata: "{}", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("new")))}}}, Writes: []MigrationParameterWrite{{Alias: "renamed", Key: "config", Value: "new", ContentType: "string", Version: 2}}, Audit: domain.AuditEvent{EventType: "application.release.migrate", Decision: "allow"}}
 }
 func TestApplicationMigrationTransactionRollsBackEveryStage(t *testing.T) {
-	for _, table := range []string{"parameter_versions", "configuration_releases", "configuration_release_activations", "audit_events"} {
+	for _, table := range []string{"parameter_versions", "configuration_releases", "configuration_release_activations", "parameter.write", "configuration_release.create", "configuration_release.activate", "application.release.migrate"} {
 		t.Run(table, func(t *testing.T) {
 			ctx := context.Background()
 			st, in := storageMigrationFixture(t)
+			in.ResourceAudits = []domain.AuditEvent{
+				{EventType: "parameter.write", ResourceType: domain.ResourceParameter, ResourceVersion: 2, Decision: "allow"},
+				{EventType: "configuration_release.create", ResourceType: domain.ResourceConfigurationRelease, Decision: "allow"},
+				{EventType: "configuration_release.activate", ResourceType: domain.ResourceConfigurationRelease, Decision: "allow"},
+			}
 			before, _ := st.GetApplication(ctx, "app")
 			revision, _ := st.CurrentRevision(ctx)
 			failure := errors.New("injected transaction failure")
 			if err := st.db.Callback().Create().Before("gorm:create").Register("migration_failure", func(tx *gorm.DB) {
-				if tx.Statement.Table == table {
+				audit, isAudit := tx.Statement.Dest.(*auditEventModel)
+				if tx.Statement.Table == table || (isAudit && audit.EventType == table) {
 					_ = tx.AddError(failure)
 				}
 			}); err != nil {
@@ -71,6 +77,10 @@ func TestApplicationMigrationTransactionRollsBackEveryStage(t *testing.T) {
 			p, err := st.GetParameter(ctx, ref("dev", "app", "config"), 0, "")
 			if err != nil || p.Version != 1 || p.Value != "old" {
 				t.Fatalf("parameter leaked: %+v %v", p, err)
+			}
+			st.db.Model(&auditEventModel{}).Count(&count)
+			if count != 0 {
+				t.Fatalf("audit leaked: %d", count)
 			}
 			gotRevision, _ := st.CurrentRevision(ctx)
 			if revision != gotRevision {
@@ -139,5 +149,39 @@ func TestApplicationMigrationNamespaceIncarnationCAS(t *testing.T) {
 	st.db.Model(&parameterModel{}).Count(&count)
 	if count != 0 {
 		t.Fatal("parameter written into replacement namespace")
+	}
+}
+
+func TestApplicationMigrationPreservedParameterSnapshot(t *testing.T) {
+	ctx := context.Background()
+	st, in := storageMigrationFixture(t)
+	resources := []MigrationResource{{Kind: domain.ReleaseEntryParameter, Key: "config", Version: 1}}
+	before, err := st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = st.PutParameter(ctx, ref("dev", "app", "config"), "unused", "string", "{}", "other"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Digest != after.Digest {
+		t.Fatal("unused parameter version invalidated preserved pin")
+	}
+	if err := st.db.Model(&parameterVersionModel{}).Where("version_number = ?", 1).Update("metadata_json", `{"changed":true}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	after, err = st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Digest == after.Digest {
+		t.Fatal("pinned row mutation did not invalidate snapshot")
+	}
+	in.Resources, in.Snapshot = resources, before.Digest
+	if _, err = st.ApplyApplicationMigration(ctx, in); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("changed pinned row accepted: %v", err)
 	}
 }

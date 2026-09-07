@@ -38,6 +38,7 @@ type ApplicationMigrationTransaction struct {
 	Writes                []MigrationParameterWrite
 	ExpectedActiveVersion uint64
 	Audit                 domain.AuditEvent
+	ResourceAudits        []domain.AuditEvent
 }
 type ApplicationMigrationStore interface {
 	ApplicationMigrationSnapshot(context.Context, domain.NamespaceRef, ...MigrationResource) (MigrationSnapshot, error)
@@ -83,7 +84,11 @@ func migrationSnapshot(tx *gorm.DB, ns domain.NamespaceRef, resources ...Migrati
 	out := MigrationSnapshot{BaseDigest: hex.EncodeToString(h.Sum(nil)), ParameterNext: map[string]uint64{}}
 	for _, resource := range resources {
 		if resource.Kind == domain.ReleaseEntryParameter {
-			if err := hashQuery(`SELECT p.* FROM parameters p JOIN namespaces n ON n.id=p.namespace_id WHERE n.app=? AND n.env=? AND p.name=?`, ns.App, ns.Env, resource.Key); err != nil {
+			columns := "p.id,p.namespace_id,p.name"
+			if resource.Write {
+				columns = "p.*"
+			}
+			if err := hashQuery(`SELECT `+columns+` FROM parameters p JOIN namespaces n ON n.id=p.namespace_id WHERE n.app=? AND n.env=? AND p.name=?`, ns.App, ns.Env, resource.Key); err != nil {
 				return out, err
 			}
 			if resource.Version > 0 {
@@ -158,6 +163,14 @@ func (s *SQLStore) ApplyApplicationMigration(ctx context.Context, in Application
 		out, _, err = scoped.ActivateConfigurationRelease(ctx, in.Namespace, release.Name, release.Version, &in.ExpectedActiveVersion)
 		if err != nil {
 			return err
+		}
+		for _, event := range in.ResourceAudits {
+			if event.ResourceType == domain.ResourceConfigurationRelease {
+				event.ResourceVersion = release.Version
+			}
+			if err := appendAudit(tx, event); err != nil {
+				return err
+			}
 		}
 		in.Audit.ResourceVersion = release.Version
 		return appendAudit(tx, in.Audit)

@@ -24,6 +24,7 @@ type DraftField = ApplicationContractField & {
   fromAlias?: string;
   key: string;
   version?: number;
+  versionText: string;
   value?: string;
   originalValue?: string;
   originalContentType?: string;
@@ -31,6 +32,16 @@ type DraftField = ApplicationContractField & {
   loading?: boolean;
   loadError?: string;
 };
+
+function exactVersionError(field: DraftField): string | undefined {
+  if (!field.versionText) {
+    return field.kind === "parameter" ? undefined : "Enter an exact version for a secret.";
+  }
+  if (!/^[1-9]\d*$/.test(field.versionText)) {
+    return "Enter a positive whole number without signs, decimals, or exponents.";
+  }
+  return Number.isSafeInteger(Number(field.versionText)) ? undefined : "Version is too large.";
+}
 
 export interface SchemaMigrationModalProps {
   application: Application;
@@ -63,6 +74,7 @@ export function SchemaMigrationModal({
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [fields, setFields] = useState<DraftField[]>([]);
+  const [derivationNotes, setDerivationNotes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -85,6 +97,11 @@ export function SchemaMigrationModal({
   const selectedEnvironment = activeEnvironments.find((item) => item.namespace.env === environment);
   const selectedSchema = schemas.find((item) => item.version === schemaVersion);
   const production = selectedEnvironment?.production === true;
+  const affectedActiveEnvironments =
+    preview?.affected_environments.filter((item) => item.active_version > 0) ?? [];
+  const mismatchedSchemaEnvironments = affectedActiveEnvironments.filter(
+    (item) => item.schema_version !== preview?.schema_version,
+  );
   const contractValid =
     fields.length > 0 &&
     fields.every(
@@ -95,6 +112,7 @@ export function SchemaMigrationModal({
         ) &&
         (field.kind === "secret" || PARAMETER_CONTENT_TYPES.includes(field.content_type ?? "")),
     );
+  const valuesValid = fields.every((field) => !exactVersionError(field));
 
   useEffect(() => {
     if (!open) {
@@ -167,11 +185,12 @@ export function SchemaMigrationModal({
     };
     const entries = selectedEnvironment.release.active.entries;
     setSourceEntries(entries);
-    const suggested = deriveContractFromSchema(
+    const derived = deriveContractFromSchema(
       selectedSchema?.schema_json ?? "{}",
       application.contract,
-    ).contract;
-    const mapped: DraftField[] = suggested.map((field) => {
+    );
+    setDerivationNotes(derived.notes);
+    const mapped: DraftField[] = derived.contract.map((field) => {
       const entry = entries.find((candidate) => candidate.alias === field.alias);
       return {
         ...field,
@@ -179,6 +198,7 @@ export function SchemaMigrationModal({
         fromAlias: entry?.alias,
         key: entry?.ref.key ?? field.alias,
         version: entry?.version,
+        versionText: entry?.version ? String(entry.version) : "",
         loaded: field.kind === "secret" || !entry,
         value: field.kind === "parameter" && !entry ? "" : undefined,
       };
@@ -289,6 +309,7 @@ export function SchemaMigrationModal({
   }
 
   async function createPreview() {
+    if (!valuesValid) return;
     const generation = loadGeneration.current;
     setPreviewing(true);
     try {
@@ -420,6 +441,7 @@ export function SchemaMigrationModal({
                   sourceConflict ||
                   reloadingSource ||
                   !contractValid ||
+                  !valuesValid ||
                   fields.some(
                     (field) =>
                       field.kind === "parameter" &&
@@ -509,6 +531,19 @@ export function SchemaMigrationModal({
             Every target field is explicit. Rename an alias to carry its active pin; remove a row to
             remove it. New rows require a value or an exact existing resource pin.
           </div>
+          {derivationNotes.length ? (
+            <div className="warning-panel" role="note">
+              <AlertTriangle size={17} />
+              <div>
+                <strong>Suggested contract changes</strong>
+                <ul>
+                  {derivationNotes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
           {fields.map((field) => (
             <div
               className="migration-contract-row"
@@ -534,11 +569,13 @@ export function SchemaMigrationModal({
                       fromAlias,
                       key: entry?.ref.key ?? field.alias,
                       version: entry?.version,
+                      versionText: entry?.version ? String(entry.version) : "",
                       loaded: field.kind === "secret" || !entry,
                       loading: false,
                       loadError: undefined,
                       value: undefined,
                       originalValue: undefined,
+                      originalContentType: undefined,
                     });
                   }}
                 >
@@ -555,16 +592,23 @@ export function SchemaMigrationModal({
                   className="native-select"
                   aria-label="Kind"
                   value={field.kind}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const kind = event.target.value as "parameter" | "secret";
                     update(field.id, {
-                      kind: event.target.value as "parameter" | "secret",
-                      content_type:
-                        event.target.value === "secret"
-                          ? undefined
-                          : (field.content_type ?? "string"),
-                      value: undefined,
-                    })
-                  }
+                      kind,
+                      content_type: kind === "secret" ? undefined : "string",
+                      fromAlias: undefined,
+                      key: field.alias,
+                      version: undefined,
+                      versionText: "",
+                      loaded: kind === "parameter",
+                      loading: false,
+                      loadError: undefined,
+                      value: kind === "parameter" ? "" : undefined,
+                      originalValue: undefined,
+                      originalContentType: undefined,
+                    });
+                  }}
                 >
                   <option value="parameter">Parameter</option>
                   <option value="secret">Secret</option>
@@ -610,6 +654,7 @@ export function SchemaMigrationModal({
                   kind: "parameter",
                   content_type: "string",
                   key: "",
+                  versionText: "",
                   loaded: true,
                   value: "",
                 },
@@ -668,28 +713,38 @@ export function SchemaMigrationModal({
                         loadError: undefined,
                         value: field.version ? undefined : "",
                         originalValue: undefined,
+                        originalContentType: undefined,
                       })
                     }
                   />
                 </Field>
                 <Field
                   label="Exact version"
-                  hint="Leave blank only when writing a new parameter value."
+                  hint="Leave blank when writing a new parameter value. Secrets require an exact version."
+                  error={exactVersionError(field)}
                 >
                   <Input
                     aria-label={`${field.alias} exact version`}
                     inputMode="numeric"
-                    value={field.version ?? ""}
-                    onChange={(event) =>
+                    value={field.versionText}
+                    onChange={(event) => {
+                      const versionText = event.target.value;
+                      const parsed = /^[1-9]\d*$/.test(versionText)
+                        ? Number(versionText)
+                        : undefined;
+                      const version =
+                        parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
                       update(field.id, {
-                        version: event.target.value ? Number(event.target.value) : undefined,
-                        loaded: field.kind === "secret" || !event.target.value,
+                        versionText,
+                        version,
+                        loaded: field.kind === "secret" || !versionText,
                         loading: false,
                         loadError: undefined,
-                        value: event.target.value ? undefined : "",
+                        value: versionText ? undefined : "",
                         originalValue: undefined,
-                      })
-                    }
+                        originalContentType: undefined,
+                      });
+                    }}
                   />
                 </Field>
               </div>
@@ -777,20 +832,26 @@ export function SchemaMigrationModal({
               ))}
             </ul>
           ) : null}
-          {preview.affected_environments.length ? (
+          {mismatchedSchemaEnvironments.length ||
+          (preview.definition_changed && affectedActiveEnvironments.length) ? (
             <div className="warning-panel">
               <AlertTriangle size={17} />
               <div>
                 <strong>Global schema pin affects other environments</strong>
                 <div>
-                  Existing active releases in{" "}
-                  {preview.affected_environments
-                    .map(
-                      (item) =>
-                        `${item.environment} (release v${item.active_version}, schema v${item.schema_version})`,
-                    )
-                    .join(", ")}{" "}
-                  keep their old schema and may no longer validate for activation or rollback.
+                  {mismatchedSchemaEnvironments.length
+                    ? `Active releases in ${mismatchedSchemaEnvironments
+                        .map(
+                          (item) =>
+                            `${item.environment} (release v${item.active_version}, schema v${item.schema_version})`,
+                        )
+                        .join(
+                          ", ",
+                        )} keep their old schema and will not activate or roll back until they are migrated.`
+                    : ""}
+                  {preview.definition_changed
+                    ? " The contract change applies globally. Releases whose entries differ from the updated contract cannot activate or roll back until migrated."
+                    : ""}
                 </div>
               </div>
             </div>
