@@ -129,6 +129,19 @@ describe("LoginPage", () => {
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/"));
   });
 
+  it("ignores a returnTo that smuggles a second origin behind a control character", async () => {
+    // "/%09/evil.example" decodes to "/\t/evil.example"; the URL parser drops
+    // the tab and a naive slash check would hand "//evil.example" to the router.
+    mocks.query = { returnTo: "/\t/evil.example" };
+    mocks.login.mockResolvedValue({ name: "admin", kind: "admin" });
+
+    render(<LoginPage />);
+    submit("kms_admin_token");
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/"));
+    expect(mocks.replace).not.toHaveBeenCalledWith(expect.stringContaining("evil.example"));
+  });
+
   it("reports a rejected token as a sign-in failure", async () => {
     const error = new ApiError("invalid_credentials", "token not recognised", 401);
     mocks.login.mockRejectedValue(error);
