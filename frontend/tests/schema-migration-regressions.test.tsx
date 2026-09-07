@@ -120,6 +120,63 @@ describe("SchemaMigrationModal regressions", () => {
     mocks.migrateApplicationSchema.mockResolvedValue(migrationResult());
   });
 
+  it("uses target fields, prepares obsolete properties explicitly, and restores the original draft", async () => {
+    const target = registeredSchema(overview.application.schema_version + 1);
+    target.schema_json = JSON.stringify({
+      type: "object",
+      properties: {
+        database: {
+          type: "object",
+          additionalProperties: false,
+          required: ["urls"],
+          properties: {
+            urls: { type: "array", items: { type: "string" } },
+            host: { type: "string" },
+          },
+        },
+        rate_limits: { type: "integer" },
+      },
+    });
+    mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
+    const original = '{"host":"retained","old":"obsolete"}';
+    mocks.getParameter.mockImplementation((ref: { key: string }) =>
+      Promise.resolve({
+        parameter: {
+          value: ref.key === "database" ? original : "300",
+          content_type: ref.key === "database" ? "json" : "integer",
+        },
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    await waitFor(() =>
+      expect(within(dialog).getByRole("textbox", { name: "host" })).toHaveValue("retained"),
+    );
+    const editor = within(dialog)
+      .getByRole("group", { name: "database value", hidden: true })
+      .closest("details")!;
+    fireEvent.click(editor.querySelector("summary")!);
+    expect(within(dialog).queryByRole("textbox", { name: "old" })).toBeNull();
+    expect(within(dialog).getByText("Target schema v2")).toBeVisible();
+    const prepare = within(dialog).getByRole("region", { name: "Prepare database" });
+    expect(prepare).toHaveTextContent("Add: urls");
+    expect(prepare).toHaveTextContent("Remove: old");
+    fireEvent.click(within(prepare).getByRole("button", { name: "Prepare draft" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview migration" }));
+    await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
+    const request = mocks.migrateApplicationSchema.mock.calls[0][1] as SchemaMigrationRequest;
+    expect(request.changes.find((change) => change.alias === "database")?.value).toBe(
+      '{"host":"retained","urls":[]}',
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore pre-preparation value" }));
+    expect(within(dialog).getByRole("region", { name: "Prepare database" })).toHaveTextContent(
+      "Remove: old",
+    );
+    expect(within(dialog).getByRole("textbox", { name: "host" })).toHaveValue("retained");
+  });
+
   it("requires the production name and does not show success when execution is declined", async () => {
     const onApplied = vi.fn();
     render(
@@ -551,16 +608,20 @@ describe("SchemaMigrationModal regressions", () => {
     });
     expect(rows()).toHaveLength(1);
     fireEvent.click(within(dialog).getByRole("button", { name: "Next change" }));
-    const database = within(dialog).getByLabelText("database value").closest("details")!;
+    const database = within(dialog)
+      .getByRole("group", { name: "database value", hidden: true })
+      .closest("details")!;
     expect(database).toHaveAttribute("open");
     expect(database.querySelector("summary")).toHaveFocus();
     database.open = false;
     fireEvent(database, new Event("toggle"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
-    expect(within(dialog).getByLabelText("database value").closest("details")).not.toHaveAttribute(
-      "open",
-    );
+    expect(
+      within(dialog)
+        .getByRole("group", { name: "database value", hidden: true })
+        .closest("details"),
+    ).not.toHaveAttribute("open");
     expect(within(dialog).getByLabelText("rate_limits value")).toHaveValue("301");
   });
 });

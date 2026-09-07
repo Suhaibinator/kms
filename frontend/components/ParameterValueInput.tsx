@@ -22,6 +22,8 @@ export interface ParameterValueInputProps {
   schema?: JsonSchema | null;
   /** Chips shown beside the Form/JSON toggle when a pinned schema applies. */
   schemaLabel?: ReactNode;
+  preferForm?: boolean;
+  preserveExactNumbers?: boolean;
   /** Forwarded to the real control so a wrapping `Field` labels it. */
   id?: string;
   "aria-label"?: string;
@@ -91,6 +93,8 @@ export function ParameterValueInput({
   onChange,
   schema = null,
   schemaLabel,
+  preferForm,
+  preserveExactNumbers,
   id,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
@@ -213,17 +217,19 @@ export function ParameterValueInput({
         />
       );
     case "json": {
-      const effective = pinned ? schema : inferred;
-      if (effective && buildForm(effective)) {
+      const effective = schema ?? inferred;
+      if (effective) {
         return (
           <SchemaForm
             // A pinned schema arriving after an inferred one restarts the
             // editor so it opens on its fields.
-            key={pinned ? "pinned" : "inferred"}
+            key={schema ? "pinned" : "inferred"}
             {...aria}
             schema={effective}
-            captionSource={pinned ? "pinned" : "inferred"}
-            schemaLabel={pinned ? schemaLabel : undefined}
+            preferForm={preferForm}
+            preserveExactNumbers={preserveExactNumbers}
+            captionSource={schema ? "pinned" : "inferred"}
+            schemaLabel={schema ? schemaLabel : undefined}
             jsonLabel={ariaLabel}
             inputRef={inputRef}
             value={value}

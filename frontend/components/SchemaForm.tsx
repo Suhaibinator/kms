@@ -4,7 +4,7 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { Button, Checkbox, Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
-import { checkJson } from "@/lib/json-text";
+import { checkJson, tokenizeJson } from "@/lib/json-text";
 import {
   buildForm,
   describeConstraints,
@@ -49,6 +49,8 @@ export interface SchemaFormProps {
   captionSource?: "pinned" | "inferred";
   /** Shown beside the mode toggle, e.g. schema and alias chips. */
   schemaLabel?: ReactNode;
+  preferForm?: boolean;
+  preserveExactNumbers?: boolean;
 }
 
 type Mode = "form" | "json";
@@ -118,6 +120,8 @@ export function SchemaForm({
   "aria-required": ariaRequired,
   captionSource = "pinned",
   schemaLabel,
+  preferForm,
+  preserveExactNumbers,
   inputRef,
 }: SchemaFormProps) {
   const baseId = useId();
@@ -137,13 +141,27 @@ export function SchemaForm({
   );
   const root = useMemo(() => buildForm(schema), [schema]);
   const parsed = useMemo(() => parseText(value), [value]);
+  const exactJsonOnly = Boolean(
+    preserveExactNumbers &&
+      tokenizeJson(value).some(
+        (token) =>
+          token.kind === "number" &&
+          JSON.stringify(Number(value.slice(token.start, token.end))) !==
+            value.slice(token.start, token.end),
+      ),
+  );
   const formable =
-    root !== null && parsed.ok && (parsed.data === undefined || isJsonObject(parsed.data));
+    !exactJsonOnly &&
+    root !== null &&
+    parsed.ok &&
+    (parsed.data === undefined || isJsonObject(parsed.data));
   // The operator's last choice wins; otherwise a pinned schema opens on its
   // fields and an inferred one — a convenience — behind the JSON they know.
   const [mode, setModeState] = useState<Mode>(() => {
     if (!root || !formable) return "json";
-    return readStoredEditorMode() ?? (captionSource === "pinned" ? "form" : "json");
+    return preferForm
+      ? "form"
+      : (readStoredEditorMode() ?? (captionSource === "pinned" ? "form" : "json"));
   });
   const setMode = (next: Mode) => {
     setModeState(next);
@@ -156,10 +174,10 @@ export function SchemaForm({
 
   // A brand-new value starts from the schema's shape so required fields are visible.
   useEffect(() => {
-    if (effectiveMode === "form" && root && value.trim() === "") {
+    if (!disabled && effectiveMode === "form" && root && value.trim() === "") {
       onChange(serialize(initialValue(root)));
     }
-  }, [effectiveMode, root, value, onChange]);
+  }, [disabled, effectiveMode, root, value, onChange]);
 
   const data: JsonObject = parsed.ok && isJsonObject(parsed.data) ? parsed.data : {};
   const issues = useMemo(() => (root ? validateValue(schema, data) : []), [schema, root, data]);
@@ -256,13 +274,15 @@ export function SchemaForm({
           ? "This alias has no field-level schema; edit it as JSON."
           : !parsed.ok
             ? "Fix the JSON to use the form."
-            : !formable
-              ? "The form needs a JSON object; the value is something else."
-              : effectiveMode === "form"
-                ? captionSource === "inferred"
-                  ? "Fields inferred from the current value — no schema is pinned for this key."
-                  : "Fields from the pinned schema. Editing a field rewrites the JSON with standard formatting."
-                : "Switch to Form to edit by field."}
+            : exactJsonOnly
+              ? "Use JSON to preserve exact numeric precision and representation."
+              : !formable
+                ? "The form needs a JSON object; the value is something else."
+                : effectiveMode === "form"
+                  ? captionSource === "inferred"
+                    ? "Fields inferred from the current value — no schema is pinned for this key."
+                    : "Fields from the pinned schema. Editing a field rewrites the JSON with standard formatting."
+                  : "Switch to Form to edit by field."}
       </span>
       {showSummary ? (
         <span className="schema-form-summary" data-testid="schema-form-summary" role="status">

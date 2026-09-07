@@ -39,6 +39,7 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
                 ...properties,
                 database: {
                   type: "object",
+                  additionalProperties: false,
                   properties: {
                     client_id: { type: "string" },
                     go_auth_config: {
@@ -59,7 +60,7 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
                       ),
                     },
                   },
-                  required: ["client_id"],
+                  required: ["client_id", "go_auth_config"],
                 },
               },
             }),
@@ -130,9 +131,21 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   await search.fill("database.client_id");
   await expect(dialog.locator("details[id^=upgrade-field]")).toHaveCount(1);
   await dialog.getByRole("button", { name: "Next change", exact: true }).click();
-  const row = dialog.getByLabel("database value").locator("xpath=ancestor::details");
+  const row = dialog
+    .getByRole("group", { name: "database value", exact: true })
+    .locator("xpath=ancestor::details");
   await expect(row.locator("summary")).toBeFocused();
   await expect(row).toHaveAttribute("open");
+  await expect(row.getByText("Target schema v2")).toBeVisible();
+  await row.getByRole("button", { name: "Prepare draft", exact: true }).click();
+  await expect(row.getByRole("button", { name: "Restore pre-preparation value" })).toBeVisible();
+  await row
+    .getByRole("button", { name: "Add apple_oauth_additional_redirect_urls item", exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("target-schema-fields.png"),
+    animations: "disabled",
+  });
   await dialog.getByRole("button", { name: "Preview migration", exact: true }).click();
   const reasons = dialog.getByRole("list", { name: "Validation problems" });
   await expect(reasons).toContainText('"client_id"');
@@ -150,13 +163,13 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   );
   expect(beforeTable).toBe(true);
   await dialog.getByRole("button", { name: "database · Fix field" }).click();
-  const value = dialog.getByLabel("database value");
+  const value = dialog.getByRole("textbox", { name: "client_id", exact: true });
   await expect(value).toBeFocused();
   await expect(row).toHaveAttribute("open");
   const order = await dialog
     .locator("details[id^=upgrade-field]")
     .evaluateAll((elements) => elements.map((el) => el.id));
-  await value.fill('{"client_id":"client-123"}');
+  await value.fill("client-123");
   await expect(value).toBeFocused();
   await expect(row).toHaveAttribute("open");
   expect(

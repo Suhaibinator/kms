@@ -18,6 +18,8 @@ import type {
 } from "@/lib/types";
 import { PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import { parseUpgradeDefaults, type UpgradeDefaults } from "@/lib/upgrade-defaults";
+import { aliasSchema } from "@/lib/schema-form";
+import { prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
 import { structuredSchemaDifferences } from "@/lib/schema-diff";
 import {
   upgradeFieldChanges,
@@ -83,6 +85,7 @@ export function SchemaMigrationModal({
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [fields, setFields] = useState<DraftField[]>([]);
   const [focusedField, setFocusedField] = useState<number | null>(null);
+  const [beforePreparation, setBeforePreparation] = useState<Record<number, string>>({});
   const [fieldSearch, setFieldSearch] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [fieldOrder, setFieldOrder] = useState<number[]>([]);
@@ -171,7 +174,7 @@ export function SchemaMigrationModal({
     const heading = row.querySelector<HTMLElement>("[data-field-heading]") ?? row;
     const target = jumpTarget.control
       ? (row.querySelector<HTMLElement>(
-          '[aria-invalid=true], [aria-label$=" value"]:not([disabled])',
+          'input[aria-invalid=true], textarea[aria-invalid=true], input[aria-label$=" value"]:not([disabled]), textarea[aria-label$=" value"]:not([disabled]), .schema-form input:not([disabled]), .schema-form textarea:not([disabled])',
         ) ??
         row.querySelector<HTMLElement>(
           "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
@@ -310,6 +313,7 @@ export function SchemaMigrationModal({
       };
     });
     setFields(mapped);
+    setBeforePreparation({});
     setFieldProblems([]);
     setExpandedRows({});
     setJumpTarget(null);
@@ -1126,18 +1130,46 @@ export function SchemaMigrationModal({
                   </div>
                 ) : null}
                 {field.kind === "parameter" ? (
-                  <Field
-                    label="Value"
-                    hint="Loaded from the active release's exact pin. Changes create a new version."
-                  >
-                    <ParameterValueInput
-                      aria-label={`${field.alias} value`}
-                      contentType={field.content_type ?? "string"}
+                  <>
+                    <UpgradeValuePreparation
                       value={field.value ?? ""}
-                      onChange={(value) => update(field.id, { value })}
-                      disabled={field.loading || Boolean(field.loadError)}
+                      schemaJson={selectedSchema?.schema_json}
+                      alias={field.alias}
+                      disabled={!field.loaded || Boolean(field.loadError)}
+                      previous={beforePreparation[field.id]}
+                      onPrepare={(value) => {
+                        setBeforePreparation((previous) => ({
+                          ...previous,
+                          [field.id]: field.value ?? "",
+                        }));
+                        update(field.id, { value });
+                      }}
+                      onUndo={() => {
+                        update(field.id, { value: beforePreparation[field.id] });
+                        setBeforePreparation((previous) => {
+                          const next = { ...previous };
+                          delete next[field.id];
+                          return next;
+                        });
+                      }}
                     />
-                  </Field>
+                    <Field
+                      label="Value"
+                      hint="Loaded from the active release's exact pin. Changes create a new version."
+                    >
+                      <ParameterValueInput
+                        schema={aliasSchema(selectedSchema?.schema_json, field.alias)}
+                        schemaLabel={`Target schema v${schemaVersion}`}
+                        preferForm
+                        preserveExactNumbers
+                        aria-label={`${field.alias} value`}
+                        contentType={field.content_type ?? "string"}
+                        value={field.value ?? ""}
+                        onChange={(value) => update(field.id, { value })}
+                        disabled={!field.loaded || field.loading || Boolean(field.loadError)}
+                      />
+                    </Field>
+                  </>
                 ) : (
                   <div className="info-panel">
                     Secrets are references only. Choose an existing key and exact version in{" "}
@@ -1329,5 +1361,55 @@ function ValueDisclosure({
     >
       {children}
     </details>
+  );
+}
+
+function UpgradeValuePreparation({
+  value,
+  schemaJson,
+  alias,
+  disabled,
+  previous,
+  onPrepare,
+  onUndo,
+}: {
+  value: string;
+  schemaJson?: string;
+  alias: string;
+  disabled: boolean;
+  previous?: string;
+  onPrepare: (value: string) => void;
+  onUndo: () => void;
+}) {
+  const prepared = useMemo(
+    () => prepareUpgradeValue(value, aliasSchema(schemaJson, alias)),
+    [value, schemaJson, alias],
+  );
+  if (previous !== undefined)
+    return (
+      <div className="info-panel row-wrap">
+        <span>
+          Draft prepared for the target schema. Existing values were preserved where allowed.
+          Restoring also reverts any later edits.
+        </span>
+        <Button variant="outline" onClick={onUndo}>
+          Restore pre-preparation value
+        </Button>
+      </div>
+    );
+  if (!prepared.added.length && !prepared.removed.length) return null;
+  return (
+    <section className="info-panel stack" aria-label={`Prepare ${alias}`}>
+      <strong>Prepare this value for the target schema</strong>
+      <p>
+        Add required lists and schema defaults; remove fields the target schema forbids. Other
+        values stay unchanged.
+      </p>
+      {prepared.added.length > 0 && <p>Add: {prepared.added.join(", ")}</p>}
+      {prepared.removed.length > 0 && <p>Remove: {prepared.removed.join(", ")}</p>}
+      <Button disabled={disabled} onClick={() => onPrepare(prepared.value)}>
+        Prepare draft
+      </Button>
+    </section>
   );
 }

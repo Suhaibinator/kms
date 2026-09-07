@@ -442,3 +442,39 @@ describe("SchemaForm as a labelled control", () => {
     expect(screen.queryByTestId("schema-form-summary")).toBeNull();
   });
 });
+
+it("keeps precise numeric values in JSON during schema upgrades", () => {
+  const onChange = () => {
+    throw new Error("must not rewrite exact source");
+  };
+  render(
+    <SchemaForm
+      schema={{ type: "object", properties: { id: { type: "integer" }, name: { type: "string" } } }}
+      value={'{"id":9007199254740993,"name":"existing"}'}
+      onChange={onChange}
+      preferForm
+      preserveExactNumbers
+      jsonLabel="Exact value"
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Form" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "Exact value" })).toHaveValue(
+    '{"id":9007199254740993,"name":"existing"}',
+  );
+});
+
+it("does not initialize a value while its source is loading", () => {
+  const onChange = () => {
+    throw new Error("must wait for source");
+  };
+  render(
+    <SchemaForm
+      schema={{ type: "object", properties: { name: { type: "string", default: "new" } } }}
+      value=""
+      onChange={onChange}
+      disabled
+      preferForm
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "name" })).toBeDisabled();
+});
