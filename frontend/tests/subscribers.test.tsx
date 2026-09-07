@@ -66,6 +66,41 @@ describe("SubscribersPage", () => {
     expect(screen.getByText("up to date")).toBeVisible();
   });
 
+  it("shows release streams before an ACK and does not compare their lifecycle to the global revision", async () => {
+    const release: Subscriber = {
+      client_name: "release-client",
+      instance_id: "same-process",
+      identity: "client",
+      namespaces: [{ env: "prod", app: "app" }],
+      remote_addr: "127.0.0.1",
+      connected_at_unix_ms: Date.now(),
+      last_heartbeat_unix_ms: 0,
+      last_acked_revision: 0,
+      release_name: "runtime",
+    };
+    mocks.subscribers.mockResolvedValue({
+      subscribers: [
+        release,
+        {
+          ...release,
+          release_name: "other",
+          release_state: "rejected",
+          release_version: 2,
+          release_revision: 4,
+        },
+      ],
+      current_revision: 100,
+    });
+    render(<SubscribersPage />);
+    expect(await screen.findByText("Connected · awaiting lifecycle report")).toBeVisible();
+    expect(screen.getByText("rejected · v2 · revision 4")).toBeVisible();
+    expect(screen.getByText("all acknowledged")).toBeVisible();
+    expect(document.querySelectorAll("tr.stale")).toHaveLength(0);
+    expect(
+      screen.getByRole("link", { name: "Connected · awaiting lifecycle report" }),
+    ).toHaveAttribute("href", links.releases({ app: "app", env: "prod", name: "runtime" }));
+  });
+
   it("reorders every namespace table from a column header and records it in the URL", async () => {
     const subscriber = (client_name: string): Subscriber => ({
       client_name,

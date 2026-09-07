@@ -381,16 +381,21 @@ type ChangeLogEntry struct {
 }
 
 // Subscriber describes one live watch stream in the registry. Namespaces are
-// the (env, app) namespaces the stream is subscribed to; a subscriber receives
-// every change in each of them.
+// the (env, app) namespaces the stream is subscribed to. ReleaseName is set
+// for release streams; their lifecycle is separate from transport acknowledgements.
 type Subscriber struct {
-	ClientName        string
-	InstanceID        string
-	Identity          string
-	Namespaces        []NamespaceRef
-	RemoteAddr        string
-	ConnectedAt       time.Time
-	LastHeartbeat     time.Time
+	ReleaseName     string
+	ReleaseState    string
+	ReleaseVersion  uint64
+	ReleaseRevision uint64
+	ClientName      string
+	InstanceID      string
+	Identity        string
+	Namespaces      []NamespaceRef
+	RemoteAddr      string
+	ConnectedAt     time.Time
+	LastHeartbeat   time.Time
+	// LastAckedRevision is namespace transport receipt, not application of configuration.
 	LastAckedRevision uint64
 }
 

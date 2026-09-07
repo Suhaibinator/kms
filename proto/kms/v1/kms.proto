@@ -1066,7 +1066,11 @@ message Subscriber {
   string remote_addr = 5;
   int64 connected_at_unix_ms = 6;
   int64 last_heartbeat_unix_ms = 7;
-  uint64 last_acked_revision = 8;
+  uint64 last_acked_revision = 8; // namespace transport ACK only
+  string release_name = 9; // set for release streams
+  string release_state = 10; // empty until the first validated lifecycle ACK
+  uint64 release_version = 11;
+  uint64 release_revision = 12;
 }
 
 message ListSubscribersRequest {}

@@ -236,7 +236,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if !ok {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns))
 	}
-	reg := watch.ReleaseRegistration{Namespace: ns, NamespaceID: namespaceID, Name: regp.GetName(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
+	reg := watch.ReleaseRegistration{RemoteAddr: pr.RemoteAddr, Namespace: ns, NamespaceID: namespaceID, Name: regp.GetName(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
 	sub, err := h.s.hub.SubscribeRelease(ctx, reg)
 	if err != nil {
 		return h.s.mapErr(ctx, err)
@@ -305,11 +305,13 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")
 				return
 			}
-			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()})
+			ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()}
+			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
 			if err != nil {
 				recvErr <- err
 				return
 			}
+			sub.RecordAcknowledgement(ack)
 		}
 	}()
 	ticker := time.NewTicker(h.s.hub.HeartbeatInterval())

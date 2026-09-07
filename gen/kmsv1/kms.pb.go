@@ -8107,7 +8107,11 @@ type Subscriber struct {
 	RemoteAddr          string                 `protobuf:"bytes,5,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
 	ConnectedAtUnixMs   int64                  `protobuf:"varint,6,opt,name=connected_at_unix_ms,json=connectedAtUnixMs,proto3" json:"connected_at_unix_ms,omitempty"`
 	LastHeartbeatUnixMs int64                  `protobuf:"varint,7,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
-	LastAckedRevision   uint64                 `protobuf:"varint,8,opt,name=last_acked_revision,json=lastAckedRevision,proto3" json:"last_acked_revision,omitempty"`
+	LastAckedRevision   uint64                 `protobuf:"varint,8,opt,name=last_acked_revision,json=lastAckedRevision,proto3" json:"last_acked_revision,omitempty"` // namespace transport ACK only
+	ReleaseName         string                 `protobuf:"bytes,9,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`                      // set for release streams
+	ReleaseState        string                 `protobuf:"bytes,10,opt,name=release_state,json=releaseState,proto3" json:"release_state,omitempty"`                  // empty until the first validated lifecycle ACK
+	ReleaseVersion      uint64                 `protobuf:"varint,11,opt,name=release_version,json=releaseVersion,proto3" json:"release_version,omitempty"`
+	ReleaseRevision     uint64                 `protobuf:"varint,12,opt,name=release_revision,json=releaseRevision,proto3" json:"release_revision,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -8194,6 +8198,34 @@ func (x *Subscriber) GetLastHeartbeatUnixMs() int64 {
 func (x *Subscriber) GetLastAckedRevision() uint64 {
 	if x != nil {
 		return x.LastAckedRevision
+	}
+	return 0
+}
+
+func (x *Subscriber) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *Subscriber) GetReleaseState() string {
+	if x != nil {
+		return x.ReleaseState
+	}
+	return ""
+}
+
+func (x *Subscriber) GetReleaseVersion() uint64 {
+	if x != nil {
+		return x.ReleaseVersion
+	}
+	return 0
+}
+
+func (x *Subscriber) GetReleaseRevision() uint64 {
+	if x != nil {
+		return x.ReleaseRevision
 	}
 	return 0
 }
@@ -9611,7 +9643,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	" \x01(\tR\bdecision\"m\n" +
 	"\x17ListAuditEventsResponse\x12*\n" +
 	"\x06events\x18\x01 \x03(\v2\x12.kms.v1.AuditEventR\x06events\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd7\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xf3\x03\n" +
 	"\n" +
 	"Subscriber\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
@@ -9626,7 +9658,12 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"remoteAddr\x12/\n" +
 	"\x14connected_at_unix_ms\x18\x06 \x01(\x03R\x11connectedAtUnixMs\x123\n" +
 	"\x16last_heartbeat_unix_ms\x18\a \x01(\x03R\x13lastHeartbeatUnixMs\x12.\n" +
-	"\x13last_acked_revision\x18\b \x01(\x04R\x11lastAckedRevision\"\x18\n" +
+	"\x13last_acked_revision\x18\b \x01(\x04R\x11lastAckedRevision\x12!\n" +
+	"\frelease_name\x18\t \x01(\tR\vreleaseName\x12#\n" +
+	"\rrelease_state\x18\n" +
+	" \x01(\tR\freleaseState\x12'\n" +
+	"\x0frelease_version\x18\v \x01(\x04R\x0ereleaseVersion\x12)\n" +
+	"\x10release_revision\x18\f \x01(\x04R\x0freleaseRevision\"\x18\n" +
 	"\x16ListSubscribersRequest\"z\n" +
 	"\x17ListSubscribersResponse\x124\n" +
 	"\vsubscribers\x18\x01 \x03(\v2\x12.kms.v1.SubscriberR\vsubscribers\x12)\n" +

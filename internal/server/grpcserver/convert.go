@@ -301,6 +301,7 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 
 func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 	return &kmsv1.Subscriber{
+		ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceId:          s.InstanceID,
 		Identity:            s.Identity,

@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -10,6 +11,7 @@ import (
 
 // ReleaseRegistration is the immutable scope of one release stream.
 type ReleaseRegistration struct {
+	RemoteAddr       string
 	Namespace        domain.NamespaceRef
 	NamespaceID      int64
 	Name             string
@@ -38,18 +40,40 @@ type ReleaseBacklog struct {
 // activations, but it is never permanently dropped and is eventually offered
 // the latest active release.
 type ReleaseSubscription struct {
-	id        uint64
-	hub       *Hub
-	reg       ReleaseRegistration
-	events    chan ReleaseEvent
-	done      chan struct{}
-	closeOnce sync.Once
-	mu        sync.Mutex
-	ready     bool
-	closed    bool
-	pending   *domain.ChangeLogEntry
-	backlog   ReleaseBacklog
-	lastSent  uint64
+	id              uint64
+	hub             *Hub
+	reg             ReleaseRegistration
+	events          chan ReleaseEvent
+	done            chan struct{}
+	closeOnce       sync.Once
+	mu              sync.Mutex
+	ready           bool
+	closed          bool
+	pending         *domain.ChangeLogEntry
+	backlog         ReleaseBacklog
+	lastSent        uint64
+	connectedAt     time.Time
+	acknowledgement domain.ReleaseAcknowledgement
+}
+
+// RecordAcknowledgement records a validated lifecycle acknowledgement for the live registry.
+func (s *ReleaseSubscription) RecordAcknowledgement(a domain.ReleaseAcknowledgement) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a.ActivationRevision >= s.acknowledgement.ActivationRevision {
+		s.acknowledgement = domain.ReleaseAcknowledgement{State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision}
+	}
+}
+
+func (s *ReleaseSubscription) describe() domain.Subscriber {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return domain.Subscriber{
+		ClientName: s.reg.ClientName, InstanceID: s.reg.InstanceID, Identity: s.reg.Identity,
+		Namespaces: []domain.NamespaceRef{s.reg.Namespace}, RemoteAddr: s.reg.RemoteAddr, ConnectedAt: s.connectedAt,
+		ReleaseName: s.reg.Name, ReleaseState: s.acknowledgement.State,
+		ReleaseVersion: s.acknowledgement.ReleaseVersion, ReleaseRevision: s.acknowledgement.ActivationRevision,
+	}
 }
 
 func (s *ReleaseSubscription) Backlog() ReleaseBacklog {
@@ -130,7 +154,7 @@ func (h *Hub) SubscribeRelease(ctx context.Context, reg ReleaseRegistration) (*R
 	if current.ID != reg.NamespaceID {
 		return nil, domain.Errorf(domain.ErrAborted, "namespace %s changed during subscribe; retry", reg.Namespace)
 	}
-	sub := &ReleaseSubscription{hub: h, reg: reg, events: make(chan ReleaseEvent, 1), done: make(chan struct{})}
+	sub := &ReleaseSubscription{hub: h, reg: reg, connectedAt: h.now(), events: make(chan ReleaseEvent, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	h.nextID++
 	sub.id = h.nextID

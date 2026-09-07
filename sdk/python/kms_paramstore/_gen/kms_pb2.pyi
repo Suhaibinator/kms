@@ -1362,7 +1362,7 @@ class ListAuditEventsResponse(_message.Message):
     def __init__(self, events: _Optional[_Iterable[_Union[AuditEvent, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class Subscriber(_message.Message):
-    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision")
+    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision", "release_name", "release_state", "release_version", "release_revision")
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
@@ -1371,6 +1371,10 @@ class Subscriber(_message.Message):
     CONNECTED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     LAST_HEARTBEAT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     LAST_ACKED_REVISION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_STATE_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_REVISION_FIELD_NUMBER: _ClassVar[int]
     client_name: str
     instance_id: str
     identity: str
@@ -1379,7 +1383,11 @@ class Subscriber(_message.Message):
     connected_at_unix_ms: int
     last_heartbeat_unix_ms: int
     last_acked_revision: int
-    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ...) -> None: ...
+    release_name: str
+    release_state: str
+    release_version: int
+    release_revision: int
+    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ..., release_name: _Optional[str] = ..., release_state: _Optional[str] = ..., release_version: _Optional[int] = ..., release_revision: _Optional[int] = ...) -> None: ...
 
 class ListSubscribersRequest(_message.Message):
     __slots__ = ()

@@ -43,11 +43,15 @@ const COLUMNS: ReadonlyArray<SortColumn<Subscriber>> = [
   { id: "remote", label: "Remote address", value: (s) => s.remote_addr },
   { id: "connected", label: "Connected", value: (s) => s.connected_at_unix_ms },
   { id: "heartbeat", label: "Last heartbeat", value: (s) => s.last_heartbeat_unix_ms },
-  { id: "revision", label: "Applied revision", value: (s) => s.last_acked_revision },
+  {
+    id: "revision",
+    label: "Status",
+    value: (s) => (s.release_name ? (s.release_state ?? "connected") : s.last_acked_revision),
+  },
 ];
 
 // The namespace a subscriber is grouped under: its first watched namespace. A
-// client subscribes namespace-wide, so this is stable.
+// namespace stream can watch several scopes; a release stream watches one.
 function groupKey(s: Subscriber): string {
   const first = s.namespaces?.[0];
   return first ? formatNamespace(first) : "unscoped";
@@ -137,7 +141,9 @@ export default function SubscribersPage() {
     };
   }, [refresh]);
 
-  const staleCount = subscribers.filter((s) => s.last_acked_revision < currentRevision).length;
+  const staleCount = subscribers.filter(
+    (s) => !s.release_name && s.last_acked_revision < currentRevision,
+  ).length;
 
   const groups = useMemo(() => {
     const map = new Map<string, Subscriber[]>();
@@ -175,7 +181,7 @@ export default function SubscribersPage() {
           <>
             <StatSkeleton label="Current revision" />
             <StatSkeleton label="Connected" />
-            <StatSkeleton label="Behind latest" />
+            <StatSkeleton label="Namespace streams behind" />
           </>
         ) : (
           <>
@@ -190,11 +196,11 @@ export default function SubscribersPage() {
               <div className="stat-sub">active subscriptions</div>
             </div>
             <div className="stat">
-              <div className="stat-label">Behind latest</div>
+              <div className="stat-label">Namespace streams behind</div>
               <div className="stat-value">{staleCount}</div>
               <div className="stat-sub">
                 {staleCount === 0 ? (
-                  <span className="text-success">all applied</span>
+                  <span className="text-success">all acknowledged</span>
                 ) : (
                   <span className="text-warning">need to catch up</span>
                 )}
@@ -252,16 +258,27 @@ export default function SubscribersPage() {
                   <SortHeaderRow controller={sort} />
                 </thead>
                 <tbody>
-                  {sort.apply(list).map((s) => {
+                  {sort.apply(list).map((s, index) => {
                     const behind = currentRevision - s.last_acked_revision;
-                    const stale = behind > 0;
+                    const stale = !s.release_name && behind > 0;
                     return (
                       <tr
-                        key={s.instance_id || `${s.client_name}-${s.remote_addr}`}
+                        key={JSON.stringify([
+                          s.identity,
+                          s.client_name,
+                          s.instance_id,
+                          s.release_name,
+                          s.remote_addr,
+                          s.connected_at_unix_ms,
+                          index,
+                        ])}
                         className={stale ? "stale" : undefined}
                       >
                         <td data-label="Client">
                           {s.client_name}
+                          {s.release_name ? (
+                            <div className="faint text-sm">Release: {s.release_name}</div>
+                          ) : null}
                           {s.instance_id ? (
                             <div className="faint text-sm mono">{s.instance_id}</div>
                           ) : null}
@@ -313,12 +330,28 @@ export default function SubscribersPage() {
                         <td
                           data-label="Last heartbeat"
                           className="nowrap"
-                          title={formatUnixMs(s.last_heartbeat_unix_ms)}
+                          title={
+                            s.release_name
+                              ? "Release streams do not acknowledge transport heartbeats"
+                              : formatUnixMs(s.last_heartbeat_unix_ms)
+                          }
                         >
-                          {formatRelative(s.last_heartbeat_unix_ms)}
+                          {s.release_name ? "—" : formatRelative(s.last_heartbeat_unix_ms)}
                         </td>
-                        <td data-label="Applied revision">
-                          {stale ? (
+                        <td data-label="Status">
+                          {s.release_name ? (
+                            <Link
+                              href={links.releases({
+                                app: s.namespaces[0]?.app,
+                                env: s.namespaces[0]?.env,
+                                name: s.release_name,
+                              })}
+                            >
+                              {s.release_state
+                                ? `${s.release_state} · v${s.release_version} · revision ${s.release_revision}`
+                                : "Connected · awaiting lifecycle report"}
+                            </Link>
+                          ) : stale ? (
                             <Badge kind="warning">
                               v{s.last_acked_revision} · {behind} behind
                             </Badge>
