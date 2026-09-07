@@ -5,6 +5,7 @@ import { incidentState, mockConsole } from "./fakes/console-api";
 test("finds changed fields and fixes a validation problem in a large upgrade", async ({
   page,
 }, info) => {
+  await page.emulateMedia({ colorScheme: "dark" });
   await mockConsole(page, incidentState());
   const overview = structuredClone(ready);
   overview.environments = overview.environments.filter((e) => e.namespace.env === "dev");
@@ -38,7 +39,26 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
                 ...properties,
                 database: {
                   type: "object",
-                  properties: { client_id: { type: "string" } },
+                  properties: {
+                    client_id: { type: "string" },
+                    go_auth_config: {
+                      type: "object",
+                      properties: Object.fromEntries(
+                        [
+                          "apple",
+                          "discord",
+                          "facebook",
+                          "github",
+                          "google",
+                          "linkedin",
+                          "okta",
+                        ].map((provider) => [
+                          `${provider}_oauth_additional_redirect_urls`,
+                          { type: "array", items: { type: "string" } },
+                        ]),
+                      ),
+                    },
+                  },
                   required: ["client_id"],
                 },
               },
@@ -86,6 +106,25 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   const dialog = page.getByRole("dialog", { name: "Upgrade application schema" });
   await dialog.getByRole("button", { name: "Review contract", exact: true }).click();
   await expect(dialog.locator(".migration-contract-row").first()).toContainText("database");
+  await dialog.getByRole("region", { name: "Field changes" }).scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("change-toolbar-dark.png"),
+    animations: "disabled",
+  });
+  const contractCard = dialog.locator(".migration-contract-row").first();
+  await contractCard.scrollIntoViewIfNeeded();
+  const cardGeometry = await contractCard.evaluate((card) => {
+    const bounds = card.getBoundingClientRect();
+    const remove = card.querySelector("button")!.getBoundingClientRect();
+    return { deleteOffset: remove.top - bounds.top, overflow: card.scrollWidth - card.clientWidth };
+  });
+  expect(cardGeometry.deleteOffset).toBeLessThan(32);
+  expect(cardGeometry.overflow).toBeLessThanOrEqual(0);
+  await page.screenshot({
+    path: info.outputPath("contract-layout-dark.png"),
+    animations: "disabled",
+  });
+
   await dialog.getByRole("button", { name: "Edit values", exact: true }).click();
   const search = dialog.getByLabel("Search fields or schema paths");
   await search.fill("database.client_id");

@@ -881,13 +881,13 @@ export function SchemaMigrationModal({
           ) : null}
           {visibleFields.map((field) => (
             <div
-              className={`migration-contract-row ${changeById.get(field.id)!.changed ? "border-l-4 border-l-primary" : ""}`}
+              className={`migration-contract-row ${changeById.get(field.id)!.changed ? "upgrade-field-changed" : ""}`}
               id={`upgrade-field-${field.id}`}
               key={field.id}
               onFocusCapture={() => setFocusedField(field.id)}
               data-testid={`migration-contract-${field.id}`}
             >
-              <div className="col-span-full">
+              <div className="upgrade-contract-heading">
                 <h3 data-field-heading tabIndex={-1}>
                   {field.alias || "Unnamed field"}
                 </h3>
@@ -1320,7 +1320,7 @@ function ValueDisclosure({
     <details
       id={id}
       onFocusCapture={onFocus}
-      className={`card p-4 ${expand ? "border-l-4 border-l-primary" : ""}`}
+      className={`upgrade-value-card ${expand ? "upgrade-field-changed" : ""}`}
       open={expanded}
       onToggle={(event) => {
         setExpanded(event.currentTarget.open);

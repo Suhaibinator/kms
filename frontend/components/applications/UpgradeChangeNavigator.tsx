@@ -25,21 +25,33 @@ export function UpgradeChangeNavigator({
   const targets = changes.filter((c) => c.changed && matchesUpgradeSearch(c, search));
   const index = targets.findIndex((c) => c.id === current);
   return (
-    <section className="card p-4 stack" aria-label="Field changes">
-      <div className="row-wrap" aria-live="polite">
-        <span>Needs attention: {changes.filter((c) => c.attention).length}</span>
-        <span>Changed: {changes.filter((c) => c.changed).length}</span>
-        <span>Unchanged: {changes.filter((c) => !c.changed).length}</span>
-        <span>Removed: {removed.length}</span>
+    <section className="upgrade-change-navigator" aria-label="Field changes">
+      <div className="upgrade-change-counts" aria-live="polite">
+        <span>
+          <span>Needs attention</span>
+          <strong>{changes.filter((c) => c.attention).length}</strong>
+        </span>
+        <span>
+          <span>Changed</span>
+          <strong>{changes.filter((c) => c.changed).length}</strong>
+        </span>
+        <span>
+          <span>Unchanged</span>
+          <strong>{changes.filter((c) => !c.changed).length}</strong>
+        </span>
+        <span>
+          <span>Removed</span>
+          <strong>{removed.length}</strong>
+        </span>
       </div>
-      <div className="row-wrap">
+      <div className="upgrade-change-controls">
         <Input
           aria-label="Search fields or schema paths"
           placeholder="Search fields or schema paths…"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
         />
-        <label className="row-wrap">
+        <label className="upgrade-change-filter">
           <input
             type="checkbox"
             checked={onlyChanged}
@@ -95,27 +107,28 @@ export function matchesUpgradeSearch(change: UpgradeFieldChange, search: string)
 }
 export function UpgradeChangeLabels({ change }: { change: UpgradeFieldChange }) {
   return (
-    <div className="stack text-sm">
-      <div className="row-wrap">
+    <div className="upgrade-change-labels">
+      <div className="upgrade-change-badges">
         {change.labels.map((label) => (
           <span
             key={label}
             className={
               label === "Needs attention"
-                ? "text-destructive font-medium"
-                : "text-primary font-medium"
+                ? "upgrade-change-badge upgrade-change-badge-alert"
+                : "upgrade-change-badge"
             }
           >
             {label}
           </span>
         ))}
-        {!change.changed && <span className="faint">Unchanged</span>}
+        {!change.changed && <span className="upgrade-change-unchanged">Unchanged</span>}
       </div>
       {change.paths.length > 0 && (
-        <ul className="break-words">
+        <ul className="upgrade-change-paths">
           {change.paths.map((d) => (
             <li key={JSON.stringify(d.segments)}>
-              <span className="mono">{d.path}</span> · {d.change}
+              <span className="mono">{d.path}</span>
+              <span className="upgrade-change-path-kind">{d.change}</span>
             </li>
           ))}
         </ul>
