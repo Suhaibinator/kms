@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApplicationHome } from "@/components/applications/ApplicationHome";
 import type { ShipModalProps } from "@/components/applications/contracts";
 import { ApiError } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   isReady: true,
   push: vi.fn(async () => true),
   replace: vi.fn(async () => true),
+  listSchemas: vi.fn(),
   listApplications: vi.fn(),
   applicationOverview: vi.fn(),
   archiveApplication: vi.fn(),
@@ -63,6 +65,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     isAbortError: () => false,
     api: {
       ...actual.api,
+      listSchemas: mocks.listSchemas,
       listApplications: mocks.listApplications,
       applicationOverview: mocks.applicationOverview,
       archiveApplication: mocks.archiveApplication,
@@ -100,6 +103,7 @@ function env(overview: ApplicationOverview, name: string): EnvironmentOverview {
 
 describe("ApplicationsPage", () => {
   beforeEach(() => {
+    mocks.listSchemas.mockReset().mockResolvedValue({ schemas: [], next_page_token: "" });
     mocks.query = {};
     mocks.isReady = true;
     mocks.push.mockClear();
@@ -498,7 +502,7 @@ describe("ApplicationsPage", () => {
     mocks.query = { app: ready.application.name, env: "prod" };
     mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ship to prod…" }));
     expect(await screen.findByRole("dialog", { name: "Ship" })).toHaveTextContent("prod:");
   });
 
@@ -507,6 +511,7 @@ describe("ApplicationsPage", () => {
     mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "prod" }));
     await screen.findByRole("dialog", { name: "Ship" });
     const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
     const active = env(ready, "prod").release.active;
@@ -552,7 +557,7 @@ describe("ApplicationsPage", () => {
     render(<ApplicationsPage />);
     await screen.findByRole("region", { name: "dev environment" });
     fireEvent.click(screen.getByRole("button", { name: "More for dev" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults to dev…" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Import defaults to dev")).toBeVisible();
   });
@@ -769,6 +774,7 @@ describe("ApplicationsPage", () => {
     mocks.createSecret.mockResolvedValue({ version: 1, revision: 9 });
     render(<ApplicationsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Ship" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "prod" }));
     await screen.findByRole("dialog", { name: "Ship" });
     const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
     props.onAddSecret("prod", secret.alias);
@@ -871,5 +877,36 @@ describe("ApplicationsPage", () => {
       ),
     );
     expect(screen.getByRole("dialog", { name: "New secret" })).toBeInTheDocument();
+  });
+  it("keeps the latest schema across unrelated overview reloads and refreshes only schema inputs", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [{ version: 8 }],
+      next_page_token: "older-schemas",
+    });
+    const props = {
+      overview: ready,
+      loading: false,
+      reload: vi.fn(),
+      env: null,
+      ship: null,
+      tab: null,
+      rollback: null,
+    };
+    const view = render(<ApplicationHome {...props} />);
+    await screen.findByText(/Latest: v8/);
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(1);
+    view.rerender(<ApplicationHome {...props} overview={clone(ready)} />);
+    expect(screen.getByText(/Latest: v8/)).toBeVisible();
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(1);
+    mocks.listSchemas.mockReturnValue(new Promise(() => {}));
+    const changed = clone(ready);
+    changed.application.schema_version += 1;
+    view.rerender(<ApplicationHome {...props} overview={changed} />);
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Latest: v8/)).toBeVisible();
+    changed.application.name = "another-app";
+    view.rerender(<ApplicationHome {...props} overview={clone(changed)} />);
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(/Latest: v8/)).not.toBeInTheDocument();
   });
 });

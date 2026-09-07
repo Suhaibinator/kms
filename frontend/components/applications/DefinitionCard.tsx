@@ -51,8 +51,12 @@ export function DefinitionCard({
   overview,
   onEdit,
   onDeriveSchema,
+  onUpgrade,
+  latestSchemaVersion,
 }: {
   overview: ApplicationOverview;
+  onUpgrade?: () => void;
+  latestSchemaVersion?: number;
   /** Opens the definition modal, optionally with a derived contract prefilled. */
   onEdit: (prefill?: ContractEntry[]) => void;
   /** Register a schema derived from the contract and pin it. */
@@ -95,24 +99,46 @@ export function DefinitionCard({
               </Button>
             </div>
           )}
+          <p className="faint text-sm">
+            Current: {pinned ? `v${application.schema_version}` : "none"}
+            {latestSchemaVersion ? ` · Latest: v${latestSchemaVersion}` : ""}
+          </p>
+          {onUpgrade && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={application.archived_at_unix_ms > 0}
+              onClick={onUpgrade}
+            >
+              Upgrade schema…
+            </Button>
+          )}
         </div>
         <div>
           <span className="faint text-sm">Contract</span>
-          <div className="row-wrap">
-            {application.contract.length ? (
-              application.contract.map((field) => (
-                <span className="definition-alias" key={field.alias}>
-                  <Ident kind="alias" value={field.alias} tooltip={false} />
-                  <span className="faint text-xs">
-                    {field.kind}
-                    {field.content_type ? `/${field.content_type}` : ""}
+          <p className="text-sm">
+            {application.contract.filter((f) => f.kind === "parameter").length} parameters ·{" "}
+            {application.contract.filter((f) => f.kind === "secret").length} secrets
+          </p>
+          <details>
+            <summary className="text-sm cursor-pointer">View contract</summary>
+            <div className="row-wrap">
+              {application.contract.length ? (
+                application.contract.map((field) => (
+                  <span className="definition-alias" key={field.alias}>
+                    <Ident kind="alias" value={field.alias} tooltip={false} />
+                    <span className="faint text-xs">
+                      {field.kind}
+                      {field.content_type ? `/${field.content_type}` : ""}
+                    </span>
                   </span>
-                </span>
-              ))
-            ) : (
-              <span className="faint">No aliases</span>
-            )}
-          </div>
+                ))
+              ) : (
+                <span className="faint">No aliases</span>
+              )}
+            </div>
+          </details>
         </div>
       </div>
       <div className="definition-alignment">

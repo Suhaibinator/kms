@@ -287,7 +287,7 @@ describe("EnvironmentPipeline", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Connect SDK" }));
     expect(callbacks.onConnect).toHaveBeenCalledWith("prod");
     fireEvent.click(screen.getByRole("button", { name: "More for prod" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Import defaults to prod…" }));
     expect(callbacks.onImportDefaults).toHaveBeenCalledWith("prod");
   });
 

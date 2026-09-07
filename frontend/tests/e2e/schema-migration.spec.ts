@@ -103,10 +103,10 @@ for (const width of [390, 1280]) {
     await page.goto("/applications?app=gradethis&env=prod");
 
     await page.getByRole("button", { name: "More for prod" }).click();
-    await page.getByRole("menuitem", { name: "Migrate to schema" }).click();
-    const dialog = page.getByRole("dialog", { name: "Migrate application schema" });
+    await page.getByRole("menuitem", { name: "Upgrade schema in prod…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Upgrade application schema" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel("Source environment")).toHaveValue("prod");
+    await expect(dialog.getByLabel("Destination environment")).toHaveValue("prod");
     await expect(dialog.getByLabel("Target registered schema")).toHaveValue("2");
     await expectNoPageOverflow(page);
 
@@ -119,6 +119,7 @@ for (const width of [390, 1280]) {
     await expectNoPageOverflow(page);
 
     await dialog.getByRole("button", { name: /Edit values/ }).click();
+    await dialog.locator("summary").filter({ hasText: "renamed_rate_limits" }).click();
     const value = dialog.getByRole("textbox", { name: "renamed_rate_limits value" });
     await expect(value).toHaveValue("300");
     await value.fill("500");
@@ -149,7 +150,7 @@ for (const width of [390, 1280]) {
     await page.screenshot({ path: testInfo.outputPath(`schema-migration-preview-${width}.png`) });
     await expectNoPageOverflow(page);
 
-    const activate = dialog.getByRole("button", { name: "Activate migration" });
+    const activate = dialog.getByRole("button", { name: "Upgrade schema & ship to prod" });
     await expect(activate).toBeDisabled();
     await dialog.getByLabel("Production confirmation").fill("prod");
     await expect(activate).toBeEnabled();

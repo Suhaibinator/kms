@@ -73,6 +73,7 @@ export function EnvironmentColumn({
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
   const findings = useMemo(() => columnFindings(environment), [environment]);
+  const staleFindings = findings.filter((finding) => finding.code === "instance_stale");
   const otherKeys = useMemo(() => countOtherKeys(environment, rows), [environment, rows]);
   // `?env=` deep links land on the column: scroll it into view. Focus stays
   // where it is — the ring (.pipeline-column-focused) marks the target, and a
@@ -118,7 +119,7 @@ export function EnvironmentColumn({
               ? [
                   {
                     key: "import-defaults",
-                    label: "Import defaults",
+                    label: `Import defaults to ${ns.env}…`,
                     onSelect: () => callbacks.onImportDefaults?.(ns.env),
                   },
                 ]
@@ -127,7 +128,7 @@ export function EnvironmentColumn({
               ? [
                   {
                     key: "migrate-schema",
-                    label: "Migrate to schema",
+                    label: `Upgrade schema in ${ns.env}…`,
                     onSelect: () => callbacks.onMigrateSchema?.(ns.env),
                   },
                 ]
@@ -138,7 +139,19 @@ export function EnvironmentColumn({
       {ns.description ? (
         <div className="pipeline-description faint text-sm">{ns.description}</div>
       ) : null}
-      <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
+      <FindingList
+        findings={findings.filter((f) => f.code !== "instance_stale")}
+        onFix={callbacks.onFix}
+        className="pipeline-findings"
+      />
+      {findings.some((f) => f.code === "instance_stale") && (
+        <details className="info-panel text-sm">
+          <summary className="cursor-pointer">
+            {staleFindings.length} stale instances · View details
+          </summary>
+          <FindingList findings={staleFindings} onFix={callbacks.onFix} />
+        </details>
+      )}
       <ValuesSection
         environment={environment}
         otherKeys={otherKeys}
