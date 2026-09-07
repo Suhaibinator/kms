@@ -69,6 +69,36 @@ letters, digits, `_`, or `-`. Release client names and instance IDs are each
 limited to 128 bytes; acknowledgement diagnostics are accepted up to 1,024
 bytes but persisted only as a redaction marker.
 
+## Migrating an active release to a registered schema
+
+In the console, choose **Migrate to schema** from an application's environment
+actions or a registered schema's viewer. Select an environment with an active
+release, review the proposed contract, map renamed aliases, and edit any
+parameter values needed by the target schema. Schema properties suggest
+parameter fields; existing secret bindings remain explicit because JSON Schema
+does not describe secrets.
+
+Migration starts from the active release's exact resource versions, even when
+newer unreleased values exist. Unchanged parameters and secrets retain those
+pins. Only edited or new parameters receive new versions. Removed aliases do
+not delete their resources. New secret bindings select existing versions in
+the same environment; create missing secrets through normal secret management.
+
+The final preview validates the candidate and shows the application-wide
+definition change and other affected environments. **Review and activate**
+updates the application schema/contract, writes edited parameters, creates a
+release, and activates it in one transaction. Production environments require
+typing the environment name. A stale preview must be refreshed; failed
+validation or a transaction conflict leaves configuration unchanged.
+
+Only the selected environment receives a new release. The schema pin and
+contract belong to the application, so other environments keep their active
+releases but releases using the old definition cannot be reactivated or rolled
+back under the current contract checks. Migrate those environments separately,
+using the same registered schema. Registration itself remains independent and
+does not activate anything. Environments without an active release use the
+existing setup/import workflow.
+
 ## Optional schema registry
 
 `ConfigurationSchemaService` provides immutable `CreateSchema`, `GetSchema`,

@@ -29,6 +29,7 @@ export interface EnvironmentCallbacks {
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
   onImportDefaults?: (env: string) => void;
+  onMigrateSchema?: (env: string) => void;
   /** The empty-contract row's "Edit contract"; the contract is edited at the application. */
   onEditContract?: (env: string) => void;
   /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
@@ -119,6 +120,15 @@ export function EnvironmentColumn({
                     key: "import-defaults",
                     label: "Import defaults",
                     onSelect: () => callbacks.onImportDefaults?.(ns.env),
+                  },
+                ]
+              : []),
+            ...(callbacks.onMigrateSchema && environment.release.active
+              ? [
+                  {
+                    key: "migrate-schema",
+                    label: "Migrate to schema",
+                    onSelect: () => callbacks.onMigrateSchema?.(ns.env),
                   },
                 ]
               : []),

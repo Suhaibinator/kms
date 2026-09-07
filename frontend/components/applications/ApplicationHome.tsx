@@ -61,6 +61,7 @@ import { DeriveSchemaDialog } from "./DeriveSchemaDialog";
 import { EnvironmentPipeline } from "./EnvironmentPipeline";
 import { ImportDefaultsModal } from "./ImportDefaultsModal";
 import { QuickSecretModal } from "./QuickSecretModal";
+import { SchemaMigrationModal } from "./SchemaMigrationModal";
 import type { CloneSeed, QuickSecretSeed } from "./shared";
 import type { OverviewFreshness } from "./useApplicationOverview";
 
@@ -80,6 +81,8 @@ export interface ApplicationHomeProps {
   tab: string | null;
   /** `?rollback=1` opens Roll back for `?env`, or the environment menu. Each new value seeds once. */
   rollback: string | null;
+  /** `?migrate=<schema version>` opens schema migration from the registry. */
+  migrate?: string | null;
 }
 
 interface ShipTarget {
@@ -173,6 +176,7 @@ export function ApplicationHome({
   ship,
   tab,
   rollback,
+  migrate,
 }: ApplicationHomeProps) {
   const toast = useToast();
   const router = useRouter();
@@ -216,6 +220,8 @@ export function ApplicationHome({
   const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
+  const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
+  const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
   const [secretSaving, setSecretSaving] = useState(false);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
@@ -235,6 +241,7 @@ export function ApplicationHome({
   // the router update cannot re-seed from the still-present param.
   const seededShip = useRef<string | null>(null);
   const seededRollback = useRef<string | null>(null);
+  const seededMigration = useRef<string | null>(null);
   useEffect(() => {
     if (!ship) {
       seededShip.current = null;
@@ -255,7 +262,17 @@ export function ApplicationHome({
       if (target) setRollbackEnv(target);
       else if (activeNames.length > 1) setRollbackMenuOpen(true);
     }
-  }, [ship, rollback, focusEnv, defaultShipEnv, activeNames]);
+    if (!migrate) {
+      seededMigration.current = null;
+    } else if (seededMigration.current !== migrate) {
+      seededMigration.current = migrate;
+      const version = Number(migrate);
+      if (Number.isSafeInteger(version) && version > 0 && activeNames.length) {
+        setMigrationSchemaVersion(version);
+        setMigrationEnv(focusEnv && activeNames.includes(focusEnv) ? focusEnv : activeNames[0]);
+      }
+    }
+  }, [ship, rollback, migrate, focusEnv, defaultShipEnv, activeNames]);
 
   // Health only matters to the Connect SDK panel (endpoint + TLS warning).
   useEffect(() => {
@@ -677,6 +694,7 @@ export function ApplicationHome({
                 onRollback: setRollbackEnv,
                 onConnect: setConnectEnv,
                 onImportDefaults: setDefaultsEnv,
+                onMigrateSchema: setMigrationEnv,
                 onEditContract: () => setDefinition({ prefill: null }),
                 onFix,
               }}
@@ -746,6 +764,19 @@ export function ApplicationHome({
         onAddSecret={(environment, alias) => openSecret(environment, alias, "stay")}
         onOpenSecret={openExistingSecret}
         onRolledBack={() => void reload()}
+      />
+      <SchemaMigrationModal
+        application={application}
+        environments={environments}
+        initialEnvironment={migrationEnv ?? undefined}
+        initialSchemaVersion={migrationSchemaVersion}
+        open={!archived && migrationEnv !== null}
+        onClose={() => {
+          setMigrationEnv(null);
+          setMigrationSchemaVersion(undefined);
+          if (migrate) replaceQuery({ migrate: "" });
+        }}
+        onApplied={() => void reload()}
       />
       <RollbackDialog
         namespace={{ env: rollbackEnv ?? "", app: application.name }}

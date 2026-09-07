@@ -548,6 +548,66 @@ ordinary per-step events for the parameter writes,
 `configuration_release.create`, and `configuration_release.activate` are
 recorded as well.
 
+#### Migrate an active release to a schema
+
+`POST /api/v1/applications/{application}/schema-migration` is an admin-only
+preview/apply operation for one existing environment with an active release.
+It uses a registered schema in the application's release lineage.
+
+```json
+{
+  "environment": "dev",
+  "schema_version": 2,
+  "contract": [
+    {"alias": "database", "kind": "parameter", "content_type": "json"},
+    {"alias": "db_password", "kind": "secret"}
+  ],
+  "changes": [
+    {"alias": "database", "from_alias": "db", "value": "{\"pool\":8}", "content_type": "json"}
+  ],
+  "execute": false
+}
+```
+
+The contract is the complete desired application definition, not a patch.
+Unmentioned matching aliases carry their active release's exact pins.
+`from_alias` maps an active source alias to a target alias. A parameter `value`
+creates a version using the target contract's content type; optional `key`
+chooses its resource, otherwise the source key (or new alias) is used.
+`key` plus `version` selects an exact existing resource in the same namespace.
+Secrets accept references only. `metadata_json` optionally replaces release
+metadata; omission preserves source release metadata.
+
+Editors should also send `expected_source_version` and
+`expected_source_activation_revision` together, captured when loading their
+draft. A mismatch returns HTTP 409 even for a first preview, preventing a
+concurrent activation from silently replacing the source values being edited.
+
+Responses contain `plan_digest`, `valid`, `executed`, `definition_changed`,
+`release_name`, `source_version`, `source_activation_revision`, `schema_version`,
+`entries`, `validation`, and `affected_environments`. Entries show `alias`,
+`kind`, `key`, `from_version`, `to_version`, and `source` (preserved, edited,
+added, renamed, pinned, missing, or removed). Validation is an array of the
+usual sanitized release validation errors. Affected environment rows contain
+`environment`, `active_version`, and `schema_version`. Preview responses do not
+return resource values. Read parameter values through the existing authorized
+exact-version parameter endpoint when building an editor.
+
+Apply resubmits the same candidate with `execute: true` and the preview's
+`plan_digest`. A valid apply atomically writes parameter changes, updates the
+application definition, creates the release, moves current/previous, and records
+an audit event. Its response additionally includes `release` (the standard
+release object) and `activation` (`activation_revision`, `previous_version`,
+`changed`). Invalid candidates return `valid: false`, `executed: false` with
+validation errors and no writes. Stale/missing plan digests return HTTP 409 and
+require another preview. Following an uncertain response, read active state
+before retrying.
+
+The schema pin and contract are application-wide. Other environments keep their
+active releases, but old-definition releases cannot be validated/reactivated
+under the normal current-contract checks. Migrate each remaining environment
+separately. This endpoint neither registers schemas nor creates secrets.
+
 #### Clone an environment
 
 `POST /api/v1/applications/environments/clone` creates an additional

@@ -456,6 +456,12 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaVersion, rel.Entries, adopt); err != nil {
 		return nil, err
 	}
+	return s.validateReleaseValues(ctx, pr, rs, rel, overrides, authorizeEntries)
+}
+
+// validateReleaseValues validates values against the candidate schema. Callers
+// must first check either the stored or an explicit candidate definition.
+func (s *Service) validateReleaseValues(ctx context.Context, pr Principal, rs storage.ReleaseStore, rel domain.ConfigurationRelease, overrides map[string]releaseCandidateValue, authorizeEntries bool) ([]domain.ReleaseValidationError, error) {
 	validation := make([]domain.ReleaseValidationError, 0)
 	obj := map[string]any{}
 	for _, entry := range rel.Entries {

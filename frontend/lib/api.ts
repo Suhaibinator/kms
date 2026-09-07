@@ -16,6 +16,7 @@ import type {
   CloneEnvironmentResponse,
   ConfigurationRelease,
   ConfigurationSchema,
+  ConnectionResponse,
   CreateIdentityRequest,
   CreateIdentityResponse,
   CreateNamespaceRequest,
@@ -26,7 +27,6 @@ import type {
   DefaultsArtifactBody,
   FleetOverview,
   HealthResponse,
-  ConnectionResponse,
   Identity,
   IssueCertResponse,
   KeysResponse,
@@ -55,6 +55,8 @@ import type {
   RollbackRequest,
   RollbackResponse,
   RotateIdentityResponse,
+  SchemaMigrationRequest,
+  SchemaMigrationResponse,
   SecretBindingCohortResponse,
   SecretMetadata,
   SecretVersionSetResponse,
@@ -484,6 +486,15 @@ export const api = {
   // evaluated outcome is a 200 with `status`; only preflight errors throw.
   ship(req: ShipRequest): Promise<ShipResult> {
     return apiFetch("/applications/ship", { method: "POST", body: req });
+  },
+  migrateApplicationSchema(
+    application: string,
+    req: SchemaMigrationRequest,
+  ): Promise<SchemaMigrationResponse> {
+    return apiFetch(`/applications/${encodeURIComponent(application)}/schema-migration`, {
+      method: "POST",
+      body: req,
+    });
   },
   cloneEnvironment(req: CloneEnvironmentRequest): Promise<CloneEnvironmentResponse> {
     return apiFetch("/applications/environments/clone", { method: "POST", body: req });
