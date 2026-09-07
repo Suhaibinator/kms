@@ -200,13 +200,22 @@ func TestCredentiallessRequestsDoNotConsumeAuthBudget(t *testing.T) {
 	}
 	w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer " + e.adminToken})
 	mustStatus(t, w, http.StatusOK)
+}
+
+func TestExhaustedAuthBudgetDoesNotConsumeCredentiallessBudget(t *testing.T) {
+	e := newTestEnv(t)
 	// The reverse holds too: a drained verification budget does not lock the
 	// credentialless class, which reports under its own metrics label.
 	for range 10 {
-		e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
+		w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
+		mustStatus(t, w, http.StatusUnauthorized)
 	}
-	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
+	w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
 	mustStatus(t, w, http.StatusTooManyRequests)
+	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, nil)
+	mustStatus(t, w, http.StatusUnauthorized)
+	w = e.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": ""}, nil)
+	mustStatus(t, w, http.StatusUnauthorized)
 }
 
 // TestLoginShapeIsEnforcedBeforeAnyBudget: the wrong method, a non-JSON

@@ -139,6 +139,9 @@ if err := cfg.DBPassword.Init(client); err != nil { return err }
 ```
 
 `Init` is idempotent. Env-overridden values are pinned and never hot-reload.
+Live parameter initialization bypasses the read cache. Stream updates received
+while that read is in flight take precedence; older stream state does not
+replace the fresh read. Static parameters continue to use the read cache.
 
 ## Hot reload
 

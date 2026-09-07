@@ -32,6 +32,7 @@ function hasControlOrBackslash(value: string): boolean {
 export function safeReturnTo(value: string | null | undefined): string | null {
   if (!value) return null;
   if (value[0] !== "/") return null; // "http://…", "javascript:…"
+  if (value[1] === "/") return null; // reject every supplied authority, including BASE_ORIGIN
   if (hasControlOrBackslash(value)) return null; // "/\t/evil", "/\\evil"
   let url: URL;
   try {
@@ -41,7 +42,10 @@ export function safeReturnTo(value: string | null | undefined): string | null {
   }
   if (url.origin !== BASE_ORIGIN) return null; // "//evil" and every other escape
   const target = `${url.pathname}${url.search}${url.hash}`;
-  if (target === "/login" || target.startsWith("/login?")) return null; // no loop
+  // Dot segments can expose an authority when the returned path is parsed
+  // again: /a/..//host has this origin, but its pathname is //host.
+  if (target.startsWith("//")) return null;
+  if (url.pathname === "/login") return null; // no loop, including query/fragment forms
   return target;
 }
 

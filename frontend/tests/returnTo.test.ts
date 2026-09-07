@@ -4,6 +4,10 @@ import { loginHref, safeReturnTo } from "@/lib/returnTo";
 describe("safeReturnTo", () => {
   it.each([
     ["//evil.com", "protocol-relative URLs leave the origin"],
+    ["//return-to.invalid/path", "even the validation origin cannot be supplied as an authority"],
+    ["/a/..//evil.example", "dot segments must not produce a protocol-relative target"],
+    ["/%2e//evil.example", "encoded dot segments must not produce an authority"],
+    ["/a/%2e%2e///evil.example", "normalization must not expose multiple leading slashes"],
     ["/\\evil.com", "browsers normalise a backslash pair to //"],
     ["http://evil", "an absolute URL is off-origin by definition"],
     ["javascript:alert(1)", "a scheme that is not a path at all"],
@@ -11,6 +15,7 @@ describe("safeReturnTo", () => {
     [null, "no parameter supplied"],
     ["/login", "returning to the login page would loop"],
     ["/login?x=1", "same, with a query string"],
+    ["/login#section", "same, with a fragment"],
     ["/\t/evil.example", "URL parsing strips the tab, leaving //evil.example"],
     ["/\r/evil.example", "same with a carriage return"],
     ["/\n/evil.example", "same with a line feed"],

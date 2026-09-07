@@ -3,6 +3,7 @@ package kmsclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -925,4 +926,57 @@ func knownForTest(m *subManager, path string) (knownVal, bool) {
 	defer m.mu.Unlock()
 	kv, ok := m.known[path]
 	return kv, ok
+}
+
+// A stream value delivered before Init's read does not outrank that read.
+// Cover recreation after a tombstone as well as an ordinary update, with and
+// without a read cache, and keep an existing handle subscribed to the key.
+func TestLateInitUsesFreshReadAfterOlderStreamState(t *testing.T) {
+	for _, change := range []string{"put", "delete"} {
+		for _, ttl := range []time.Duration{0, time.Hour} {
+			t.Run(fmt.Sprintf("%s/cache=%s", change, ttl), func(t *testing.T) {
+				c, srv := newTestClient(t, Config{CacheTTL: ttl})
+				srv.SetParameter(testNS, "rate", "V1")
+				existing := ParameterValue{Key: "rate", Default: "fallback"}
+				if err := existing.Init(c); err != nil {
+					t.Fatal(err)
+				}
+				sub, err := srv.WaitForSubscribe(waitTimeout)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sub.PushChange(7, testNS, "rate", change, "V1", 7)
+				wantOld := "V1"
+				if change == "delete" {
+					wantOld = "fallback"
+				}
+				if !eventually(t, waitTimeout, func() bool {
+					kv, ok := knownForTest(c.subs(), "/prod/app/rate")
+					return ok && kv.rev == 7 && existing.Get() == wantOld
+				}) {
+					t.Fatal("older stream state was not applied")
+				}
+				// Commit a newer value without delivering its stream event yet.
+				srv.SetParameter(testNS, "rate", "V2")
+				late := ParameterValue{Key: "rate", Default: "fallback"}
+				if err := late.Init(c); err != nil {
+					t.Fatal(err)
+				}
+				if got := late.Get(); got != "V2" {
+					t.Fatalf("fresh read discarded: got %q, want V2", got)
+				}
+				if kv, _ := knownForTest(c.subs(), "/prod/app/rate"); kv.rev != 7 {
+					t.Fatalf("initialization changed the revision fence: %+v", kv)
+				}
+				// Initializing a second handle must not suppress delivery to the
+				// first when the stream catches up with the read.
+				sub.PushChange(8, testNS, "rate", "put", "V2", 8)
+				if !eventually(t, waitTimeout, func() bool {
+					return existing.Get() == "V2" && late.Get() == "V2"
+				}) {
+					t.Fatal("stream catch-up did not update both handles")
+				}
+			})
+		}
+	}
 }
