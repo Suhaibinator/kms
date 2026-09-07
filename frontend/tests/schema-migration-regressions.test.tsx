@@ -288,13 +288,73 @@ describe("SchemaMigrationModal regressions", () => {
     expect(within(dialog).getByText("Schema migration activated")).toBeVisible();
   });
 
-  it("includes the application's current schema in the target options", async () => {
+  it("offers only newer schemas as upgrade targets", async () => {
     mocks.listSchemas.mockResolvedValue({
       schemas: [registeredSchema(1), registeredSchema(2)],
       next_page_token: "",
     });
     render(<SchemaMigrationModal {...modalProps({ initialSchemaVersion: undefined })} />);
     const select = await screen.findByLabelText("Target registered schema");
-    expect(within(select).getByRole("option", { name: /v1/ })).toHaveValue("1");
+    expect(within(select).queryByRole("option", { name: /v1/ })).not.toBeInTheDocument();
+    expect(select).toHaveValue("2");
   });
+  it("blocks an upgrade when there is no newer registered schema", async () => {
+    mocks.listSchemas.mockResolvedValue({ schemas: [registeredSchema(1)], next_page_token: "" });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    await screen.findByText("No newer registered schema");
+    expect(screen.getByRole("button", { name: /Review contract/ })).toBeDisabled();
+  });
+
+  it.each(["validation", "load failure"])(
+    "keeps a retained row open while editing after %s",
+    async (reason) => {
+      mocks.listSchemas.mockResolvedValue({
+        schemas: [registeredSchema(2, { rate_limits: { type: "integer" } })],
+        next_page_token: "",
+      });
+      mocks.getParameter.mockResolvedValue({
+        parameter: { value: "300", content_type: "integer" },
+      });
+      if (reason === "load failure")
+        mocks.getParameter.mockRejectedValue(new Error("Pin unavailable"));
+      else
+        mocks.migrateApplicationSchema.mockResolvedValue(
+          migrationResult({
+            valid: false,
+            validation: [
+              {
+                alias: "rate_limits",
+                code: "invalid",
+                schema_pointer: "/properties/rate_limits",
+                message: "Too large",
+              },
+            ],
+          }),
+        );
+      render(<SchemaMigrationModal {...modalProps()} />);
+      const dialog = screen.getByRole("dialog");
+      await reachValues(dialog);
+      if (reason === "validation") {
+        const previewButton = within(dialog).getByRole("button", { name: /Preview migration/ });
+        await waitFor(() => expect(previewButton).toBeEnabled());
+        fireEvent.click(previewButton);
+        await screen.findByText(/Too large/);
+        fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+      } else await screen.findByRole("alert");
+      const input = within(dialog).getByLabelText(
+        reason === "validation" ? "rate_limits value" : "rate_limits resource key",
+      );
+      const row = input.closest("details")!;
+      await waitFor(() => expect(row).toHaveAttribute("open"));
+      input.focus();
+      fireEvent.change(input, {
+        target: { value: reason === "validation" ? "20" : "another_key" },
+      });
+      expect(row).toHaveAttribute("open");
+      expect(input).toHaveFocus();
+      row.open = false;
+      fireEvent(row, new Event("toggle"));
+      expect(row).not.toHaveAttribute("open");
+    },
+  );
 });

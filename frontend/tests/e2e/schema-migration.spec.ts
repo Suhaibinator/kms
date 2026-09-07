@@ -106,7 +106,7 @@ for (const width of [390, 1280]) {
     await page.getByRole("menuitem", { name: "Upgrade schema in prod…" }).click();
     const dialog = page.getByRole("dialog", { name: "Upgrade application schema" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel("Source environment")).toHaveValue("prod");
+    await expect(dialog.getByLabel("Destination environment")).toHaveValue("prod");
     await expect(dialog.getByLabel("Target registered schema")).toHaveValue("2");
     await expectNoPageOverflow(page);
 

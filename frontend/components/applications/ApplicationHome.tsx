@@ -232,30 +232,31 @@ export function ApplicationHome({
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
   const [latestSchema, setLatestSchema] = useState<ConfigurationSchema | null>(null);
+  const {
+    name: schemaApplication,
+    release_name: schemaRelease,
+    schema_version: pinnedSchema,
+  } = overview.application;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Clear registry data when its application or release identity changes.
+  useEffect(() => {
+    setLatestSchema(null);
+  }, [schemaApplication, schemaRelease]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A changed schema pin invalidates the registry lookup after an upgrade.
   useEffect(() => {
     let cancelled = false;
-    setLatestSchema(null);
-    void (async () => {
-      let token: string | undefined;
-      let latest: ConfigurationSchema | null = null;
-      do {
-        const page = await api.listSchemas(
-          overview.application.name,
-          overview.application.release_name,
-          token,
-        );
-        for (const schema of page.schemas)
-          if (!latest || schema.version > latest.version) latest = schema;
-        token = page.next_page_token || undefined;
-      } while (token && !cancelled);
-      if (!cancelled) setLatestSchema(latest);
-    })().catch(() => {
-      /* Upgrade dialog reports schema-loading failures. */
-    });
+    void api
+      .listSchemas(schemaApplication, schemaRelease)
+      .then((page) => {
+        if (!cancelled) setLatestSchema(page.schemas[0] ?? null);
+      })
+      .catch(() => {
+        /* Upgrade dialog reports schema-loading failures. */
+      });
     return () => {
       cancelled = true;
     };
-  }, [overview]);
+  }, [schemaApplication, schemaRelease, pinnedSchema]);
+
   const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
   const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
   const [secretSaving, setSecretSaving] = useState(false);

@@ -92,7 +92,8 @@ export function SchemaMigrationModal({
     [environments],
   );
   const selectedEnvironment = activeEnvironments.find((item) => item.namespace.env === environment);
-  const selectedSchema = schemas.find((item) => item.version === schemaVersion);
+  const newerSchemas = schemas.filter((schema) => schema.version > application.schema_version);
+  const selectedSchema = newerSchemas.find((item) => item.version === schemaVersion);
   const production = selectedEnvironment?.production === true;
   const contractValid =
     fields.length > 0 &&
@@ -153,8 +154,11 @@ export function SchemaMigrationModal({
     void loadAll()
       .then((available) => {
         if (generation !== loadGeneration.current) return;
+        const newer = available.filter((schema) => schema.version > application.schema_version);
         setSchemas(available);
-        setSchemaVersion((current) => current || available[0]?.version || 0);
+        setSchemaVersion((current) =>
+          newer.some((schema) => schema.version === current) ? current : newer[0]?.version || 0,
+        );
       })
       .catch((error) => {
         if (generation === loadGeneration.current) toast.error(error, "Could not load schemas");
@@ -166,6 +170,7 @@ export function SchemaMigrationModal({
     open,
     application.name,
     application.release_name,
+    application.schema_version,
     initialEnvironment,
     initialSchemaVersion,
     activeEnvironments,
@@ -435,7 +440,7 @@ export function SchemaMigrationModal({
                 onClick={() => setStep(1)}
                 disabled={
                   !environment ||
-                  !schemaVersion ||
+                  !selectedSchema ||
                   loading ||
                   readingArtifact ||
                   (source === "artifact" &&
@@ -502,12 +507,12 @@ export function SchemaMigrationModal({
       {!loading && step === 0 ? (
         <div className="migration-form-grid">
           <Field
-            label="Source environment"
-            hint="Only environments with an active release can be migrated."
+            label="Destination environment"
+            hint="The active release here is the migration baseline and will be replaced. Starting values can come from that release or a defaults file."
           >
             <select
               className="native-select"
-              aria-label="Source environment"
+              aria-label="Destination environment"
               value={environment}
               onChange={(event) => setEnvironment(event.target.value)}
             >
@@ -537,7 +542,10 @@ export function SchemaMigrationModal({
                 setPreview(null);
               }}
             >
-              {schemas.map((schema) => (
+              {newerSchemas.length === 0 ? (
+                <option value={0}>No newer registered schema</option>
+              ) : null}
+              {newerSchemas.map((schema) => (
                 <option key={schema.version} value={schema.version}>
                   v{schema.version} · {schema.digest.slice(0, 16)}…
                 </option>
@@ -785,17 +793,16 @@ export function SchemaMigrationModal({
             </div>
           ) : null}
           {fields.map((field) => (
-            <details
-              className="card p-4"
+            <ValueDisclosure
               key={field.id}
-              open={
+              expand={Boolean(
                 !field.fromAlias ||
-                source === "artifact" ||
-                Boolean(field.loadError) ||
-                application.contract.find((f) => f.alias === field.fromAlias)?.content_type !==
-                  field.content_type ||
-                preview?.validation.some((p) => p.alias === field.alias)
-              }
+                  source === "artifact" ||
+                  Boolean(field.loadError) ||
+                  application.contract.find((f) => f.alias === field.fromAlias)?.content_type !==
+                    field.content_type ||
+                  preview?.validation.some((p) => p.alias === field.alias),
+              )}
             >
               <summary className="cursor-pointer">
                 <span className="mono">{field.alias}</span> · {field.kind} ·{" "}
@@ -889,7 +896,7 @@ export function SchemaMigrationModal({
                   </div>
                 )}
               </div>
-            </details>
+            </ValueDisclosure>
           ))}
         </div>
       ) : null}
@@ -1020,5 +1027,21 @@ export function SchemaMigrationModal({
         </div>
       ) : null}
     </Modal>
+  );
+}
+
+function ValueDisclosure({ expand, children }: { expand: boolean; children: React.ReactNode }) {
+  const [expanded, setExpanded] = useState(expand);
+  useEffect(() => {
+    if (expand) setExpanded(true);
+  }, [expand]);
+  return (
+    <details
+      className="card p-4"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      {children}
+    </details>
   );
 }
