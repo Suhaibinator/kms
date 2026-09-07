@@ -171,7 +171,7 @@ log:
 | `KMS_SERVER_CERT_FILE` | `--server-cert-file` | `security.server_cert_file` |
 | `KMS_SERVER_KEY_FILE` | `--server-key-file` | `security.server_key_file` |
 | `KMS_CLIENT_CA_FILE` | `--client-ca-file` | `security.client_ca_file` — the CA the **server** verifies client certificates against, not a client's `--ca` trust bundle |
-| `KMS_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
+| `KMS_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP, and `X-Forwarded-Host` for the same-origin check; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
 | `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` — controls general-purpose auditing; binding-management mutation and cohort-preview audits remain mandatory and fail closed |
@@ -1969,7 +1969,12 @@ server uses the real TCP peer address — never a client-supplied header —
 for both the login/failed-auth rate-limit key and the source IP recorded
 in audit events (`clientIP`, `internal/server/httpserver/server.go`).
 Setting `security.trust_proxy_headers: true` makes it honor
-`X-Forwarded-For` instead (the first address in a comma-separated list).
+`X-Forwarded-For` instead (the first address in a comma-separated list),
+and likewise the first `X-Forwarded-Host` as the host a browser's `Origin`
+is compared against by the same-origin gate on the authenticated API — needed
+when the proxy rewrites `Host` to its upstream address, which would otherwise
+make every console request look cross-origin to older browsers that send no
+`Sec-Fetch-Site` header.
 Enable this **only** when the HTTP listener sits behind a trusted reverse
 proxy that sets `X-Forwarded-For` on every request and cannot itself be
 bypassed by a direct connection to the KMS process — otherwise a client

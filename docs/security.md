@@ -485,13 +485,50 @@ the same rules to activation replay and live events.
 The HTTP server throttles credential guessing with a per-IP token-bucket
 limiter (`internal/ratelimit`, the same bounded limiter that backs the
 [defaults verification budgets](#defaults-verification-oracle)), shared by
-two call sites: every request to `POST /api/v1/auth/login`, and every failed
-authentication on any other endpoint (`serveAPI`,
+two call sites: every login attempt on `POST /api/v1/auth/login` that
+carries a token, and every failed authentication of a *presented*
+credential on any other endpoint (`serveAPI`,
 `internal/server/httpserver/server.go`) — so an attacker can't dodge the
 throttle by hitting arbitrary API paths with bad credentials instead of
 the login endpoint. Each bucket allows a burst of 10 immediate attempts
 and refills at 5 per minute; once exhausted, further attempts from that
 key get `429 rate_limited` instead of being evaluated.
+
+Only traffic that actually exercises a credential spends that budget. Three
+gates run in front of it, in this order (`serveAPI` and `handleLogin`):
+
+- **Same-origin gate.** Every route that spends an admission budget — login
+  and every authenticated endpoint — is same-origin only. The console is
+  served from the same origin and machine clients send no browser headers,
+  so a request whose Fetch Metadata says another site started it
+  (`Sec-Fetch-Site: cross-site` or `same-site`) is refused with
+  `403 permission_denied` before the readiness check and before any bucket
+  is touched. `same-origin` and `none` (a typed URL or bookmark) pass, and so
+  does a request with no `Sec-Fetch-Site` at all — the CLI, the SDKs, curl
+  and probes. For a browser without Fetch Metadata the `Origin` header is
+  the fallback: an `Origin` naming a host other than the one the request
+  addressed (the `Host` header, or the first `X-Forwarded-Host` once
+  `security.trust_proxy_headers` is on), or the opaque `null`, is refused
+  the same way. The unauthenticated, budget-free routes (`/api/v1/health`,
+  `/api/v1/auth/connection`, `/api/v1/ca`) are not gated; CORS keeps their
+  responses unreadable to another site as before. Without this gate a page
+  anywhere on the web could make a victim's browser — or everyone behind
+  the victim's NAT — fire credentialless requests at a known KMS address
+  until the source IP's bucket was empty, even though every response is
+  unreadable to it.
+- **Login shape.** `POST /api/v1/auth/login` must be a POST with
+  `Content-Type: application/json`; the wrong method (`405`) or content type
+  (`415`) is refused without charging anything.
+- **Admission class.** A request that presents no credential at all — no
+  bearer token and no chain-verified client certificate, or a login whose
+  body is malformed or has no token — has nothing to verify. It is charged
+  to a separate per-IP *credentialless* class (burst 30, refilling 30 per
+  minute, reported under the `http_credentialless` limiter label) instead
+  of the verification budget, so a flood of requests with no usable
+  credential can never exhaust the bucket that throttles guessing, and a
+  drained verification bucket does not lock the credentialless class out
+  either. A presented-but-invalid credential (`Authorization: Bearer bad`)
+  is a verification failure and is charged as one.
 
 An admin request refused for presenting only one of the two required
 credentials (certificate or token, but not both) is a failed authentication
@@ -505,7 +542,8 @@ The bucket key is the caller's IP as resolved by `clientIP` — the real TCP
 peer address by default, or the first address in `X-Forwarded-For` if
 `security.trust_proxy_headers` is enabled (see
 [`operations.md`](operations.md#tls-and-mtls) for when that's safe to
-turn on). It is resolved once per request and reused as the source IP on
+turn on); the same setting makes the first `X-Forwarded-Host` the host a
+browser `Origin` is compared against, for proxies that rewrite `Host`. It is resolved once per request and reused as the source IP on
 every audit event the request produces (`auth.failure`, `authz.denial`,
 `secret.read`, and so on — see [Audit guarantees](#audit-guarantees)
 below), so the rate-limit key and the audited source IP are always

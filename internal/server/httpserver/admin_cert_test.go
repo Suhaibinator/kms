@@ -62,6 +62,7 @@ func (e *testEnv) request(t *testing.T, method, target, token string, body any, 
 			t.Fatalf("marshal body: %v", err)
 		}
 		req = httptest.NewRequest(method, target, bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
 	} else {
 		req = httptest.NewRequest(method, target, nil)
 	}
