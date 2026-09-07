@@ -333,3 +333,110 @@ func TestApplicationMigrationExpectedSource(t *testing.T) {
 		t.Fatalf("source ABA: %v", err)
 	}
 }
+
+func TestApplicationMigrationUnusedParameterVersionAfterPreview(t *testing.T) {
+	ctx := context.Background()
+	svc, _, in := migrationFixture(t)
+	pr := adminPrincipal()
+	preview, err := svc.MigrateApplicationRelease(ctx, pr, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = svc.PutParameter(ctx, pr, domain.Ref{NS: in.Namespace, Key: "database"}, `{"host":"unused-after-review"}`, "json", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	in.Execute, in.PlanDigest = true, preview.PlanDigest
+	result, err := svc.MigrateApplicationRelease(ctx, pr, in)
+	if err != nil || !result.Executed {
+		t.Fatalf("unused version invalidated exact pins: %+v %v", result, err)
+	}
+	for _, entry := range result.Release.Entries {
+		if entry.Alias == "db" && entry.Version != 1 {
+			t.Fatalf("preserved pin changed: %+v", entry)
+		}
+	}
+}
+
+func TestApplicationMigrationExecuteRequiresDigestBeforeSnapshot(t *testing.T) {
+	svc, st, in := migrationFixture(t)
+	wrapped := &migrationInterleavingStore{SQLStore: st}
+	svc.store = wrapped
+	in.Execute = true
+	if _, err := svc.MigrateApplicationRelease(context.Background(), adminPrincipal(), in); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("missing digest: %v", err)
+	}
+	if wrapped.snapshotCalls != 0 {
+		t.Fatal("missing digest read migration state")
+	}
+}
+
+func TestApplicationMigrationCorrelatedResourceAudits(t *testing.T) {
+	ctx := context.Background()
+	svc, st, in := migrationFixture(t)
+	pr := adminPrincipal()
+	pr.RequestID, pr.RemoteAddr, pr.UserAgent = "migration-request", "192.0.2.42", "migration-client"
+	preview, err := svc.MigrateApplicationRelease(ctx, pr, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readEvents := func() ([]domain.AuditEvent, error) {
+		all, _, err := st.ListAudit(ctx, domain.AuditFilter{}, storage.ListPage{Limit: 1000})
+		var selected []domain.AuditEvent
+		for _, event := range all {
+			if event.RequestID == pr.RequestID {
+				selected = append(selected, event)
+			}
+		}
+		return selected, err
+	}
+	events, err := readEvents()
+	if err != nil || len(events) != 0 {
+		t.Fatalf("preview emitted mutation audits: %+v %v", events, err)
+	}
+	in.Execute, in.PlanDigest = true, preview.PlanDigest
+	result, err := svc.MigrateApplicationRelease(ctx, pr, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err = readEvents()
+	if err != nil || len(events) != 4 {
+		t.Fatalf("migration audits: %+v %v", events, err)
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		if seen[event.EventType] {
+			t.Fatalf("duplicate audit: %+v", event)
+		}
+		seen[event.EventType] = true
+		if event.ActorIdentity != pr.Identity.Name || event.ActorType != pr.Identity.Kind || event.SourceIP != pr.RemoteAddr || event.UserAgent != pr.UserAgent || event.ResourceNamespaceID == 0 || event.ResourceEnv != in.Namespace.Env || event.ResourceApp != in.Namespace.App || event.Decision != "allow" || event.CreatedAt.IsZero() {
+			t.Fatalf("missing audit context: %+v", event)
+		}
+		expectedKey, expectedVersion := "runtime", result.Release.Version
+		if event.EventType == "parameter.write" {
+			expectedKey, expectedVersion = "rate_limits", uint64(2)
+		}
+		if event.ResourceKey != expectedKey || event.ResourceVersion != expectedVersion {
+			t.Fatalf("wrong resource: %+v", event)
+		}
+		var meta map[string]string
+		if err := json.Unmarshal([]byte(event.Metadata), &meta); err != nil {
+			t.Fatal(err)
+		}
+		if event.EventType == "application.release.migrate" && (meta["schema_version"] != "2" || meta["source_version"] != "1" || meta["source_activation_revision"] == "" || meta["previous_version"] != "1" || meta["parameter_write_count"] != "1") {
+			t.Fatalf("missing migration metadata: %+v", meta)
+		}
+		if event.EventType == "configuration_release.activate" && meta["previous_version"] != "1" {
+			t.Fatalf("missing activation metadata: %+v", meta)
+		}
+		for key := range meta {
+			if key != "operation" && key != "schema_version" && key != "source_version" && key != "source_activation_revision" && key != "previous_version" && key != "parameter_write_count" {
+				t.Fatalf("unexpected potentially sensitive metadata: %s", key)
+			}
+		}
+	}
+	for _, name := range []string{"parameter.write", "configuration_release.create", "configuration_release.activate", "application.release.migrate"} {
+		if !seen[name] {
+			t.Fatalf("missing %s", name)
+		}
+	}
+}

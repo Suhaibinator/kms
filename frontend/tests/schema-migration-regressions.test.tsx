@@ -357,4 +357,106 @@ describe("SchemaMigrationModal regressions", () => {
       expect(row).not.toHaveAttribute("open");
     },
   );
+
+  it.each(["abc", "1.5", "1e3", "-1", "9007199254740992"])(
+    "rejects invalid exact version text %s before previewing",
+    async (versionText) => {
+      render(<SchemaMigrationModal {...modalProps()} />);
+      const dialog = screen.getByRole("dialog");
+      await reachValues(dialog);
+      fireEvent.change(within(dialog).getByLabelText("new_setting exact version"), {
+        target: { value: versionText },
+      });
+
+      expect(within(dialog).getByText(/positive whole number|too large/)).toBeVisible();
+      expect(within(dialog).getByRole("button", { name: /Preview migration/ })).toBeDisabled();
+      expect(mocks.migrateApplicationSchema).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows a blank version for parameter writes and requires one for secrets", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [registeredSchema(2, { database: { type: "object" } })],
+      next_page_token: "",
+    });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    fireEvent.change(within(dialog).getByLabelText("database exact version"), {
+      target: { value: "" },
+    });
+    expect(within(dialog).queryByText(/exact version for a secret/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    const secretRow = within(dialog)
+      .getByDisplayValue("db_password")
+      .closest(".migration-contract-row");
+    if (!(secretRow instanceof HTMLElement)) throw new Error("secret row missing");
+    fireEvent.change(within(secretRow).getByLabelText("Source alias"), { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
+    expect(within(dialog).getByText(/exact version for a secret/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: /Preview migration/ })).toBeDisabled();
+  });
+
+  it("shows schema-derived removals and type changes during contract review", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [registeredSchema(2, { rate_limits: { type: "string" } })],
+      next_page_token: "",
+    });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachContract(dialog);
+
+    expect(within(dialog).getByRole("note")).toHaveTextContent(
+      "`rate_limits` changed from integer to string",
+    );
+    expect(within(dialog).getByRole("note")).toHaveTextContent(
+      "`database` is not a schema property and was dropped",
+    );
+  });
+
+  it("clears all source and loaded-value state when kind changes in either direction", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [registeredSchema(2, { database: { type: "object" } })],
+      next_page_token: "",
+    });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachContract(dialog);
+    const row = within(dialog).getByDisplayValue("database").closest(".migration-contract-row");
+    if (!(row instanceof HTMLElement)) throw new Error("database row missing");
+
+    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "secret" } });
+    expect(within(row).getByLabelText("Source alias")).toHaveValue("");
+    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "parameter" } });
+    expect(within(row).getByLabelText("Source alias")).toHaveValue("");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
+    expect(within(dialog).getByLabelText("database resource key")).toHaveValue("database");
+    expect(within(dialog).getByLabelText("database exact version")).toHaveValue("");
+    expect(within(dialog).getByLabelText("database value")).toHaveValue("");
+    expect(mocks.getParameter).not.toHaveBeenCalled();
+  });
+
+  it("warns only for different-schema environments using definite activation language", async () => {
+    mocks.migrateApplicationSchema.mockResolvedValue(
+      migrationResult({
+        affected_environments: [
+          { environment: "same", active_version: 3, schema_version: 2 },
+          { environment: "old", active_version: 4, schema_version: 1 },
+          { environment: "inactive", active_version: 0, schema_version: 1 },
+        ],
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachPreview(dialog);
+    const warning = within(dialog).getByText(
+      "Global schema pin affects other environments",
+    ).parentElement;
+    expect(warning).toHaveTextContent("old (release v4, schema v1)");
+    expect(warning).not.toHaveTextContent("same (release v3, schema v2)");
+    expect(warning).not.toHaveTextContent("inactive");
+    expect(warning).toHaveTextContent("will not activate or roll back until they are migrated");
+    expect(warning).toHaveTextContent("The contract change applies globally");
+  });
 });

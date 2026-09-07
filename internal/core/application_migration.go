@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strconv"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
@@ -21,6 +22,9 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	}
 	if err := s.requireAdmin(ctx, pr, "application.release.migrate", domain.ResourceApplication, in.Namespace.App); err != nil {
 		return empty, err
+	}
+	if in.Execute && in.PlanDigest == "" {
+		return empty, domain.Errorf(domain.ErrInvalidArgument, "plan_digest is required for execution")
 	}
 	ms, ok := s.store.(storage.ApplicationMigrationStore)
 	if !ok {
@@ -315,24 +319,33 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if !in.Execute {
 		return result, nil
 	}
-	if in.PlanDigest == "" || in.PlanDigest != result.PlanDigest {
+	if in.PlanDigest != result.PlanDigest {
 		return empty, domain.Errorf(domain.ErrAborted, "migration plan is stale; preview again")
 	}
 	if !result.Valid {
 		return result, nil
 	}
-	audit := domain.AuditEvent{
-		EventType:     "application.release.migrate",
-		ActorIdentity: pr.Identity.Name, ActorType: pr.Identity.Kind,
-		SourceIP: pr.RemoteAddr, UserAgent: pr.UserAgent, RequestID: pr.RequestID,
-		ResourceType: domain.ResourceConfigurationRelease, ResourceNamespaceID: namespace.ID,
-		ResourceEnv: in.Namespace.Env, ResourceApp: in.Namespace.App, ResourceKey: app.ReleaseName,
-		Decision: "allow", Metadata: `{"operation":"schema_migration"}`,
+	releaseRef := domain.Ref{NS: in.Namespace, Key: app.ReleaseName}
+	audit := s.buildRefEventWithNamespaceID(pr, "application.release.migrate", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", map[string]string{
+		"operation":                  "schema_migration",
+		"schema_version":             strconv.FormatUint(in.SchemaVersion, 10),
+		"source_version":             strconv.FormatUint(source.Release.Version, 10),
+		"source_activation_revision": strconv.FormatUint(source.ActivationRevision, 10),
+		"previous_version":           strconv.FormatUint(source.Release.Version, 10),
+		"parameter_write_count":      strconv.Itoa(len(writes)),
+	})
+	resourceAudits := make([]domain.AuditEvent, 0, len(writes)+2)
+	for _, w := range writes {
+		resourceAudits = append(resourceAudits, s.buildRefEventWithNamespaceID(pr, "parameter.write", domain.ResourceParameter, domain.Ref{NS: in.Namespace, Key: w.Key}, namespace.ID, w.Version, "allow", nil))
 	}
+	resourceAudits = append(resourceAudits,
+		s.buildRefEventWithNamespaceID(pr, "configuration_release.create", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", nil),
+		s.buildRefEventWithNamespaceID(pr, "configuration_release.activate", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", map[string]string{"previous_version": strconv.FormatUint(source.Release.Version, 10)}),
+	)
 	migrated, err := ms.ApplyApplicationMigration(ctx, storage.ApplicationMigrationTransaction{
 		Resources: resources, Namespace: in.Namespace, Snapshot: before.Digest,
 		Contract: candidateApp.Contract, Release: release, Writes: writes,
-		ExpectedActiveVersion: source.Release.Version, Audit: audit,
+		ExpectedActiveVersion: source.Release.Version, Audit: audit, ResourceAudits: resourceAudits,
 	})
 	if err != nil {
 		return empty, err

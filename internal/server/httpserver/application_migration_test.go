@@ -106,6 +106,13 @@ func TestApplicationMigrationHTTPValidationAndConflict(t *testing.T) {
 	w = e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusOK)
 	preview = decodeBody(t, w)
+	body["execute"] = true
+	w = e.admin(http.MethodPost, migrationHTTPPath, body)
+	mustStatus(t, w, http.StatusBadRequest)
+	if code := decodeBody(t, w)["error"].(map[string]any)["code"]; code != "invalid_argument" {
+		t.Fatalf("missing plan digest returned %v", code)
+	}
+	delete(body, "execute")
 	e.ship("dev", "rate_limits", "8", false)
 	body["expected_source_version"] = preview["source_version"]
 	body["expected_source_activation_revision"] = preview["source_activation_revision"]
@@ -138,4 +145,42 @@ func TestApplicationMigrationHTTPInputAndAuthorization(t *testing.T) {
 		}
 	}
 	mustStatus(t, e.admin(http.MethodGet, migrationHTTPPath, nil), http.StatusMethodNotAllowed)
+}
+
+func TestApplicationMigrationHTTPStandardAuditEvents(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.seedConsoleApp("dev")
+	e.ship("dev", "rate_limits", "7", false)
+	body := migrationHTTPBody(t, e)
+	body["changes"] = []map[string]any{{"alias": "rate_limits", "value": "11"}}
+	w := e.admin(http.MethodPost, migrationHTTPPath, body)
+	mustStatus(t, w, http.StatusOK)
+	body["execute"], body["plan_digest"] = true, decodeBody(t, w)["plan_digest"]
+	w = e.do(http.MethodPost, migrationHTTPPath, body, map[string]string{
+		"Authorization": "Bearer " + e.adminToken,
+		"User-Agent":    "migration-audit-test",
+	})
+	mustStatus(t, w, http.StatusOK)
+	requestID := w.Header().Get("X-Request-ID")
+	if requestID == "" {
+		t.Fatal("migration response missing request ID")
+	}
+	for _, eventType := range []string{"parameter.write", "configuration_release.create", "configuration_release.activate", "application.release.migrate"} {
+		w = e.admin(http.MethodGet, "/api/v1/audit?env=dev&app=gradethis&event_type="+eventType, nil)
+		mustStatus(t, w, http.StatusOK)
+		found := false
+		for _, raw := range decodeBody(t, w)["events"].([]any) {
+			event := raw.(map[string]any)
+			if event["request_id"] != requestID {
+				continue
+			}
+			found = true
+			if event["source_ip"] == "" || event["user_agent"] != "migration-audit-test" || event["resource_version"].(float64) == 0 {
+				t.Fatalf("migration audit context missing: %v", event)
+			}
+		}
+		if !found {
+			t.Fatalf("no correlated %s event for migration", eventType)
+		}
+	}
 }
