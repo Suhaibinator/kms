@@ -87,6 +87,7 @@ var RouteLabels = []string{
 	"GET /api/v1/applications/overview",
 	"POST /api/v1/applications/ship",
 	"POST /api/v1/applications/defaults",
+	"POST /api/v1/applications/{application}/schema-migration",
 	"POST /api/v1/applications/environments/clone",
 	"PUT /api/v1/applications/parameters",
 
@@ -237,6 +238,7 @@ var AuditEventTypes = []string{
 	"application.read",
 	"application.release.create",
 	"application.release.preview",
+	"application.release.migrate",
 	"application.ship",
 	"application.unarchive",
 	"application.update",

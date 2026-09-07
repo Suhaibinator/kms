@@ -34,7 +34,15 @@ export default function ApplicationsPage() {
   const toast = useToast();
   const request = useLatestRequest();
   const replaceQuery = useQueryReplace("/applications");
-  const { values: query, ready } = useQueryParams(["app", "env", "ship", "tab", "rollback", "new"]);
+  const { values: query, ready } = useQueryParams([
+    "app",
+    "env",
+    "ship",
+    "tab",
+    "rollback",
+    "migrate",
+    "new",
+  ]);
   const name = query.app ?? "";
   const [applications, setApplications] = useState<Application[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -201,6 +209,7 @@ export default function ApplicationsPage() {
       ship={query.ship}
       tab={query.tab}
       rollback={query.rollback}
+      migrate={query.migrate}
     />
   );
 }

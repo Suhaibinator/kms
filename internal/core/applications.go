@@ -147,7 +147,7 @@ func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domai
 		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application release name is immutable")
 	}
 	if app.SchemaVersion != current.SchemaVersion {
-		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by defaults apply --update-definition")
+		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by release schema migration or defaults apply --update-definition")
 	}
 	if err := s.validateApplicationSchema(ctx, app); err != nil {
 		return domain.Application{}, err

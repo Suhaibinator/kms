@@ -15,11 +15,13 @@ import {
   TableSkeleton,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useCursorPagination, useFieldErrors } from "@/lib/hooks";
+import { links } from "@/lib/links";
 import type { Application, ConfigurationSchema } from "@/lib/types";
 
 function schemaLabel(schema: ConfigurationSchema): string {
@@ -86,6 +88,12 @@ function SchemaViewer({
               </label>
               <CopyButton value={pretty} label="Copy JSON" />
               <CopyButton value={schema.digest} label="Copy digest" />
+              <ButtonLink
+                variant="outline"
+                href={links.application(schema.application, { migrate: schema.version })}
+              >
+                Migrate to schema
+              </ButtonLink>
             </div>
           </div>
           <pre className={`schema-code ${wrap ? "schema-code-wrap" : ""}`}>

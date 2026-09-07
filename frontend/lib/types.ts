@@ -626,6 +626,65 @@ export interface ConfigurationSchema {
   created_at_unix_ms: number;
 }
 
+export interface SchemaMigrationContractField extends ApplicationContractField {
+  /** Existing active-release alias that supplies this field; set for renames. */
+  from_alias?: string;
+}
+
+export interface SchemaMigrationChange {
+  alias: string;
+  from_alias?: string;
+  key?: string;
+  value?: string;
+  content_type?: string;
+  version?: number;
+}
+
+export interface SchemaMigrationRequest {
+  environment: string;
+  schema_version: number;
+  contract: ApplicationContractField[];
+  changes: SchemaMigrationChange[];
+  metadata_json?: string;
+  execute?: boolean;
+  plan_digest?: string;
+  expected_source_version?: number;
+  expected_source_activation_revision?: number;
+}
+
+export interface SchemaMigrationEntry {
+  alias: string;
+  kind: ReleaseEntryKind;
+  key: string;
+  from_version?: number;
+  to_version: number;
+  source: string;
+}
+
+export interface SchemaMigrationResponse {
+  plan_digest: string;
+  valid: boolean;
+  executed: boolean;
+  release_name: string;
+  source_version: number;
+  source_activation_revision: number;
+  schema_version: number;
+  entries: SchemaMigrationEntry[];
+  validation: ReleaseValidationError[];
+  release?: ConfigurationRelease;
+  activation?: {
+    activation_revision: number;
+    previous_version: number;
+    changed: boolean;
+  };
+  affected_environments: Array<{
+    environment: string;
+    active_version: number;
+    schema_version: number;
+  }>;
+  definition_changed: boolean;
+}
+
 export interface ActivateReleaseResponse {
   release: ConfigurationRelease;
   activation_revision: number;

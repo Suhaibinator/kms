@@ -34,6 +34,8 @@ export interface ApplicationLinkOptions {
   tab?: "matrix";
   /** Open the Roll back environment menu. */
   rollback?: boolean;
+  /** Open schema migration with this registered schema preselected. */
+  migrate?: number;
 }
 
 export const links = {
@@ -49,6 +51,7 @@ export const links = {
     }
     if (opts?.tab) params.push(`tab=${opts.tab}`);
     if (opts?.rollback) params.push("rollback=1");
+    if (opts?.migrate) params.push(`migrate=${opts.migrate}`);
     return `/applications?${params.join("&")}`;
   },
   namespaces: (): string => "/namespaces",
