@@ -229,7 +229,25 @@ func (e *loopbackTLSEnv) shutdown() {
 			_ = e.adminConn.Close()
 		}
 		if e.server != nil {
-			e.server.Stop()
+			// Watch handlers persist their disconnected state from a defer. An
+			// immediate Stop cancels those handlers but does not wait for their
+			// deferred SQLite writes to finish, so t.TempDir can race creation of
+			// a WAL sidecar while removing the database directory. All test-owned
+			// clients have already been closed by this cleanup's registration
+			// order, so graceful shutdown normally completes immediately. Keep a
+			// bounded forced-stop fallback in case a test leaks a stream.
+			stopped := make(chan struct{})
+			go func() {
+				e.server.GracefulStop()
+				close(stopped)
+			}()
+			select {
+			case <-stopped:
+			case <-time.After(2 * time.Second):
+				e.server.Stop()
+				<-stopped
+				e.t.Error("timed out waiting for loopback gRPC server graceful shutdown")
+			}
 		}
 		if e.listener != nil {
 			_ = e.listener.Close()
@@ -276,7 +294,9 @@ func (e *loopbackTLSEnv) shutdown() {
 			}
 		}
 		if e.store != nil {
-			_ = e.store.Close()
+			if err := e.store.Close(); err != nil {
+				e.t.Errorf("close loopback integration store: %v", err)
+			}
 		}
 	})
 }
