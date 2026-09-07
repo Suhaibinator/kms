@@ -604,7 +604,13 @@
        the top of the row. */
     align-items: center;
     gap: var(--space-2);
-    flex-shrink: 0;
+    /* Line-breaking in .page-header happens before shrinking, so the row only
+       ever shrinks once it is alone on its line. It must be allowed to then:
+       with flex-shrink: 0 a row wider than the page (768px with the sidebar,
+       "Ship to prod…" beside Roll back and More) kept its max-content width and
+       its own flex-wrap never got a chance to wrap the buttons. */
+    flex-shrink: 1;
+    min-width: 0;
     flex-wrap: wrap;
     /* justify-content applies per flex line, so once the actions wrap onto
        their own line space-between leaves them at the far left. The auto
@@ -4448,9 +4454,6 @@
     .table-wrap {
       min-width: 0;
       max-width: 100%;
-    }
-    .page-actions {
-      flex-shrink: 1;
     }
     .page,
     [data-modal-body] {
