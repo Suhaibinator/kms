@@ -126,7 +126,12 @@ test("full-screen editor follows visual viewport changes without losing its draf
   await page.setViewportSize({ width: 400, height: 800 });
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
-  await page.getByRole("link", { name: "New secret", exact: true }).first().click();
+  const newSecret = page.getByRole("link", { name: "New secret", exact: true }).first();
+  await expect(newSecret).toHaveAttribute(
+    "href",
+    "/secrets/new?env=prod&app=gradethis",
+  );
+  await newSecret.click();
   const editor = page
     .getByRole("dialog")
     .filter({ has: page.locator("[data-modal-body]") })
@@ -154,7 +159,12 @@ test("mobile editor stays within the viewport when visual viewport measurements 
   await page.setViewportSize({ width: 400, height: 800 });
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
-  await page.getByRole("link", { name: "New secret", exact: true }).first().click();
+  const newSecret = page.getByRole("link", { name: "New secret", exact: true }).first();
+  await expect(newSecret).toHaveAttribute(
+    "href",
+    "/secrets/new?env=prod&app=gradethis",
+  );
+  await newSecret.click();
   const editor = page.getByRole("dialog", { name: "New secret", exact: true });
   await editor.getByPlaceholder("stripe-api-key").fill("resize-draft");
   // Reproduce WebKit returning the old height while the layout viewport has shrunk.

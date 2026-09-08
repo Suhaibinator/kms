@@ -18,9 +18,17 @@ for (const entry of ["list", "application"] as const) {
         await expect(page).toHaveURL(/schema_version=1/);
       }
       const url = page.url();
-      await page
-        .getByRole(entry === "list" ? "link" : "button", { name: "New secret", exact: true })
-        .click();
+      const newSecret = page.getByRole(entry === "list" ? "link" : "button", {
+        name: "New secret",
+        exact: true,
+      });
+      if (entry === "list") {
+        await expect(newSecret).toHaveAttribute(
+          "href",
+          "/secrets/new?env=prod&app=gradethis",
+        );
+      }
+      await newSecret.click();
       const create = page.getByRole("dialog", { name: "New secret", exact: true });
       await expect(create).toBeVisible();
       if (entry === "application") {
