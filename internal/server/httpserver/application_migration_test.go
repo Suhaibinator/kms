@@ -65,8 +65,8 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active.Release.Version == source.Release.Version || active.Release.SchemaVersion == source.Release.SchemaVersion {
-		t.Fatal("migration did not activate a new schema/release")
+	if active.Release.Version != 1 || active.Release.SchemaVersion != 2 || active.ActivationRevision <= source.ActivationRevision {
+		t.Fatalf("migration did not activate destination release 1: %+v", active)
 	}
 	sourceAfter, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	if err != nil || sourceAfter.Release.Version != source.Release.Version || sourceAfter.ActivationRevision != source.ActivationRevision {
@@ -82,7 +82,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	// The same reviewed request cannot create a second release.
 	w = e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusConflict)
-	// A subsequent environment can migrate to the now-current app schema.
+	// A subsequent environment can migrate to the same destination schema.
 	body["environment"], body["execute"], body["plan_digest"] = "prod", false, ""
 	w = e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusOK)
@@ -117,7 +117,11 @@ func TestApplicationMigrationHTTPValidationAndConflict(t *testing.T) {
 		t.Fatalf("missing plan digest returned %v", code)
 	}
 	delete(body, "execute")
-	e.ship("dev", "rate_limits", "8", false)
+	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
+		"application": "gradethis", "environment": "dev", "schema_version": 1,
+		"changes": []map[string]any{{"alias": "rate_limits", "value": "8"}},
+	})
+	mustStatus(t, w, http.StatusOK)
 	body["expected_source_version"] = preview["source_version"]
 	body["expected_source_activation_revision"] = preview["source_activation_revision"]
 	mustStatus(t, e.admin(http.MethodPost, migrationHTTPPath, body), http.StatusConflict)
