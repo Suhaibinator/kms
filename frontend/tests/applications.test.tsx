@@ -397,7 +397,10 @@ describe("ApplicationsPage", () => {
     expect(within(context).getByText("db_password")).toHaveClass("ident-value");
     expect(within(context).getByRole("link", { name: overview.application.name })).toHaveAttribute(
       "href",
-      links.application(overview.application.name, { env: "prod" }),
+      links.application(overview.application.name, {
+        schemaVersion: overview.application.schema_version,
+        env: "prod",
+      }),
     );
   });
 
@@ -579,6 +582,66 @@ describe("ApplicationsPage", () => {
     expect(within(dialog).getByText(`dev/${ready.application.name}`)).toBeVisible();
     expect(within(dialog).getByLabelText("Defaults artifact")).toBeEnabled();
   });
+
+  it("discards definition drafts when a URL/history update selects another track", async () => {
+    mocks.query = { app: ready.application.name, schema_version: "1" };
+    mocks.applicationOverview.mockImplementation(async (_name, _env, _request, selected) => ({
+      ...clone(ready),
+      application: { ...ready.application, schema_version: selected },
+    }));
+    const view = render(<ApplicationsPage />);
+    await screen.findByRole("region", { name: "Definition" });
+    fireEvent.click(within(await openMore()).getByRole("menuitem", { name: "Edit definition" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "unsaved draft" },
+    });
+    mocks.query = { app: ready.application.name, schema_version: "0" };
+    view.rerender(<ApplicationsPage />);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByRole("region", { name: "Definition" });
+    fireEvent.click(within(await openMore()).getByRole("menuitem", { name: "Edit definition" }));
+    expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue(
+      ready.application.description,
+    );
+    expect(screen.getByText(/Selected schema track: v0/)).toBeVisible();
+  });
+
+  it.each([0, 1])(
+    "keeps v%i in matrix and resource context return links",
+    async (schemaVersion) => {
+      const overview = clone(ready);
+      overview.application.schema_version = schemaVersion;
+      render(
+        <ApplicationHome
+          overview={overview}
+          schemaVersion={schemaVersion}
+          loading={false}
+          reload={vi.fn()}
+          env="prod"
+          ship={null}
+          tab="matrix"
+          rollback={null}
+        />,
+      );
+      const table = screen.getByRole("table");
+      expect(within(table).getByRole("link", { name: "prod" })).toHaveAttribute(
+        "href",
+        links.application(overview.application.name, { schemaVersion, env: "prod" }),
+      );
+      const secretRow = Array.from(table.querySelectorAll("tbody tr")).find((row) =>
+        row.textContent?.includes("db_password"),
+      ) as HTMLElement;
+      const open = within(secretRow).getAllByRole("link", { name: /db_password/ });
+      fireEvent.click(open[0]);
+      const context = await screen.findByTestId("secret-context");
+      const href = within(context)
+        .getByRole("link", { name: overview.application.name })
+        .getAttribute("href");
+      expect(href).toContain(`schema_version=${schemaVersion}`);
+      expect(href).toContain("tab=matrix");
+      expect(href).toContain("env=");
+    },
+  );
 
   it("renders the matrix tab from the overview rows", async () => {
     mocks.query = { app: ready.application.name, tab: "matrix" };

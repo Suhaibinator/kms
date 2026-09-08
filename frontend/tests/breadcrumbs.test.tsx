@@ -5,6 +5,20 @@ import { PageHeader } from "@/components/ui";
 import { crumbs } from "@/lib/crumbs";
 
 describe("crumbs", () => {
+  it.each([0, 1, 2])(
+    "preserves schema v%i through release and environment breadcrumb returns",
+    (schemaVersion) => {
+      const trail = crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 1, schemaVersion);
+      expect(trail[1].href).toBe(`/applications?app=gradethis&schema_version=${schemaVersion}`);
+      expect(trail[2].href).toBe(
+        `/applications?app=gradethis&schema_version=${schemaVersion}&env=prod`,
+      );
+      expect(crumbs.environment({ env: "prod", app: "gradethis" }, schemaVersion)[1].href).toBe(
+        trail[1].href,
+      );
+    },
+  );
+
   it("builds the full trail for each level", () => {
     expect(crumbs.application("gradethis")).toEqual([
       { label: "Applications", href: "/applications" },

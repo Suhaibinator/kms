@@ -709,7 +709,9 @@ export default function ReleasesPage() {
       <PageHeader
         title="Configuration releases"
         subtitle="Build, validate, activate, and inspect immutable configuration manifests."
-        breadcrumbs={hasNS ? crumbs.environment({ env: ns.env, app: ns.app }) : undefined}
+        breadcrumbs={
+          hasNS ? crumbs.environment({ env: ns.env, app: ns.app }, schemaVersion) : undefined
+        }
         actions={
           activeTab === "releases" ? (
             <>

@@ -516,6 +516,7 @@ export function ApplicationHome({
           value={application.name}
           tooltip={false}
           href={links.application(application.name, {
+            schemaVersion,
             env: target.env,
             tab: tab === "matrix" ? "matrix" : undefined,
           })}
@@ -609,7 +610,7 @@ export function ApplicationHome({
   return (
     <div className="application-home">
       <PageHeader
-        breadcrumbs={crumbs.application(application.name)}
+        breadcrumbs={crumbs.application(application.name, schemaVersion)}
         title={
           <span className="row-wrap">
             <Ident kind="app" value={application.name} tooltip={false} />
@@ -820,6 +821,7 @@ export function ApplicationHome({
             </div>
             <ConfigurationMatrix
               app={application.name}
+              schemaVersion={schemaVersion}
               environments={environments.map((environment) => ({
                 env: environment.namespace.env,
                 production: environment.production,

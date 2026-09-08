@@ -34,6 +34,7 @@ export interface MatrixEnvironment {
 
 export interface ConfigurationMatrixProps {
   app: string;
+  schemaVersion?: number;
   environments: MatrixEnvironment[];
   /** The overview's per-environment contract values, for alias and pin lookup. */
   overview?: EnvironmentOverview[];
@@ -77,6 +78,7 @@ interface MatrixRow {
 
 export function ConfigurationMatrix({
   app,
+  schemaVersion,
   environments,
   overview,
   rows,
@@ -162,7 +164,7 @@ export function ConfigurationMatrix({
                       <Ident
                         kind="env"
                         value={env.env}
-                        href={links.application(app, { env: env.env })}
+                        href={links.application(app, { schemaVersion, env: env.env })}
                         production={env.production ?? isProductionEnvironment(env.env)}
                         tooltip={false}
                       />

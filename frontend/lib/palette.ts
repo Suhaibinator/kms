@@ -130,7 +130,11 @@ export function buildPaletteIndex({
         group: "Aliases",
         title: field.alias,
         subtitle: `Ship a change · ${nsLabel(ns)}`,
-        href: links.application(ns.app, { env: ns.env, ship: field.alias }),
+        href: links.application(ns.app, {
+          schemaVersion: app.schema_version,
+          env: ns.env,
+          ship: field.alias,
+        }),
         keywords: ["ship", "alias", field.kind, ns.env, ns.app],
         adminOnly: true,
       });

@@ -118,7 +118,7 @@ describe("palette index", () => {
       group: "Aliases",
       title: "rate_limits",
       subtitle: "Ship a change · prod/gradethis",
-      href: links.application("gradethis", { env: "prod", ship: "rate_limits" }),
+      href: links.application("gradethis", { schemaVersion: 1, env: "prod", ship: "rate_limits" }),
     });
     // The applications page opens the create wizard on `?new=1`.
     const newApplication = index.find((item) => item.id === "action:new-application");
@@ -243,7 +243,7 @@ describe("CommandPalette", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.push).toHaveBeenCalledWith(
-      links.application("gradethis", { env: "prod", ship: "rate_limits" }),
+      links.application("gradethis", { schemaVersion: 1, env: "prod", ship: "rate_limits" }),
     );
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });

@@ -17,17 +17,20 @@ function applications(): Crumb[] {
   return [{ label: "Applications", href: links.applications() }];
 }
 
-function application(name: string): Crumb[] {
+function application(name: string, schemaVersion?: number): Crumb[] {
   return [
     ...applications(),
-    { ident: { kind: "app", value: name }, href: links.application(name) },
+    { ident: { kind: "app", value: name }, href: links.application(name, { schemaVersion }) },
   ];
 }
 
-function environment(ns: NamespaceRef): Crumb[] {
+function environment(ns: NamespaceRef, schemaVersion?: number): Crumb[] {
   return [
-    ...application(ns.app),
-    { ident: { kind: "env", value: ns.env }, href: links.application(ns.app, { env: ns.env }) },
+    ...application(ns.app, schemaVersion),
+    {
+      ident: { kind: "env", value: ns.env },
+      href: links.application(ns.app, { schemaVersion, env: ns.env }),
+    },
   ];
 }
 
@@ -50,7 +53,7 @@ function secret(ref: ResourceRef): Crumb[] {
 function release(ns: NamespaceRef, name: string, version: number, schemaVersion: number): Crumb[] {
   const key = `${name}@${schemaVersion}:${version}`;
   return [
-    ...environment(ns),
+    ...environment(ns, schemaVersion),
     { label: "Releases", href: links.releases({ app: ns.app, env: ns.env, name, schemaVersion }) },
     {
       ident: { kind: "release", value: key },
