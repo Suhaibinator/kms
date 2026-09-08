@@ -11,15 +11,69 @@ const object = (v: unknown): v is JsonSchema =>
 /** Prepare a draft without parsing/re-encoding scalar values (including large numbers). */
 export function prepareUpgradeValue(
   value: string,
-  schema: JsonSchema | null,
+  schema: JsonSchema | string | null,
+  alias?: string,
 ): PreparedUpgradeValue {
   const result: PreparedUpgradeValue = { value, added: [], removed: [] };
   if (!schema || checkJson(value)) return result;
+  const defaults = new WeakMap<JsonSchema, string>();
+  if (typeof schema === "string") {
+    const source = schema;
+    if (checkJson(source)) return result;
+    try {
+      const parsed: unknown = JSON.parse(source);
+      if (!object(parsed)) return result;
+      const sourceTokens = tokenizeJson(source).filter((token) => token.kind !== "ws");
+      let position = 0;
+      // Associate each schema object's default with its original JSON slice,
+      // including nested objects/arrays and numbers JSON.parse cannot represent.
+      function collect(node: unknown): void {
+        const token = sourceTokens[position++];
+        const opening = source.slice(token.start, token.end);
+        if (opening === "{") {
+          while (source[sourceTokens[position].start] !== "}") {
+            const keyToken = sourceTokens[position++];
+            const key = JSON.parse(source.slice(keyToken.start, keyToken.end)) as string;
+            position++; // colon
+            const start = sourceTokens[position].start;
+            collect(object(node) ? node[key] : undefined);
+            if (key === "default" && object(node))
+              defaults.set(node, source.slice(start, sourceTokens[position - 1].end));
+            if (source[sourceTokens[position].start] === ",") position++;
+          }
+          position++;
+        } else if (opening === "[") {
+          let index = 0;
+          while (source[sourceTokens[position].start] !== "]") {
+            collect(Array.isArray(node) ? node[index++] : undefined);
+            if (source[sourceTokens[position].start] === ",") position++;
+          }
+          position++;
+        }
+      }
+      collect(parsed);
+      schema =
+        alias === undefined
+          ? parsed
+          : object(parsed.properties) && object(parsed.properties[alias])
+            ? parsed.properties[alias]
+            : null;
+    } catch {
+      return result;
+    }
+    if (!schema) return result;
+  }
   const tokens = tokenizeJson(value).filter((t) => t.kind !== "ws");
   let cursor = 0;
   function normalized(raw: unknown): JsonSchema | null {
     if (!object(raw)) return null;
     const s = unwrapNullable(raw) ?? raw;
+    if (s !== raw && Array.isArray(raw.anyOf)) {
+      const inner = raw.anyOf.find((branch) => object(branch) && branch.type !== "null");
+      const owner = object(inner) && "default" in inner ? inner : raw;
+      const exact = defaults.get(owner);
+      if (exact !== undefined) defaults.set(s, exact);
+    }
     return ["$ref", "oneOf", "anyOf", "allOf", "if", "then", "else", "not"].some((k) => k in s)
       ? null
       : s;
@@ -28,9 +82,11 @@ export function prepareUpgradeValue(
     const s = normalized(raw);
     if (!s) return undefined;
     if ("default" in s) {
+      const exact = defaults.get(s);
+      if (exact !== undefined) return exact;
       const safe = (v: unknown): boolean =>
         typeof v === "number"
-          ? Number.isFinite(v) && (!Number.isInteger(v) || Number.isSafeInteger(v))
+          ? false // Parsed schema numbers may already be rounded or underflowed; raw tokens are unavailable.
           : Array.isArray(v)
             ? v.every(safe)
             : object(v)

@@ -49,6 +49,7 @@ export function BulkParameterModal({
 }) {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [valueValid, setValueValid] = useState(true);
   const [contentType, setContentType] = useState("string");
   const [selected, setSelected] = useState<string[]>([]);
   // What the form opened with, so a dismissal only asks when something changed.
@@ -70,7 +71,7 @@ export function BulkParameterModal({
     const initial = initialEnvironments?.filter((environment) =>
       environments.includes(environment),
     );
-    setSelected(initial?.length ? initial : present.length ? present : environments);
+    setSelected(initial ?? (present.length ? present : environments));
     const first = present.length ? row.environments[present[0]] : undefined;
     setValue(first?.value ?? "");
     setContentType(first?.content_type ?? "string");
@@ -92,7 +93,11 @@ export function BulkParameterModal({
     [value, contentType],
   );
   // An existing key's input is disabled, so a legacy key cannot block an edit.
-  const blocking = firstError(row?.key ? null : keyProblem, valueProblem);
+  const blocking = firstError(
+    row?.key ? null : keyProblem,
+    valueProblem,
+    valueValid ? null : "Correct the invalid value fields before applying.",
+  );
   const schema = useMemo(
     () => (contentType === "json" ? aliasSchema(schemaJson, key.trim()) : null),
     [schemaJson, contentType, key],
@@ -110,6 +115,7 @@ export function BulkParameterModal({
   );
 
   const dirty =
+    !valueValid ||
     key !== opened.key ||
     contentType !== opened.contentType ||
     !valuesEquivalent(value, opened.value, contentType);
@@ -201,12 +207,14 @@ export function BulkParameterModal({
         </div>
         <Field label="Value" error={shown("value", valueProblem)}>
           <ParameterValueInput
+            key={row?.key ?? "new"}
             contentType={contentType}
             value={value}
             schema={schema}
             inputRef={valueRef}
             rows={7}
             onChange={setValue}
+            onValidityChange={setValueValid}
             onBlur={() => touch("value")}
             onSubmit={submit}
           />

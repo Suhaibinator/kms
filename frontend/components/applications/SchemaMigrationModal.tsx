@@ -8,6 +8,9 @@ import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { deriveContractFromSchema } from "@/lib/contract-derive";
+import { prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
+import { structuredSchemaDifferences } from "@/lib/schema-diff";
+import { aliasSchema } from "@/lib/schema-form";
 import type {
   Application,
   ConfigurationReleaseEntry,
@@ -18,21 +21,18 @@ import type {
 } from "@/lib/types";
 import { PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import { parseUpgradeDefaults, type UpgradeDefaults } from "@/lib/upgrade-defaults";
-import { aliasSchema } from "@/lib/schema-form";
-import { prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
-import { structuredSchemaDifferences } from "@/lib/schema-diff";
 import {
-  upgradeFieldChanges,
-  removedUpgradeAliases,
   orderUpgradeChanges,
+  removedUpgradeAliases,
   type UpgradeDraftField,
+  upgradeFieldChanges,
 } from "@/lib/upgrade-field-changes";
-import {
-  UpgradeChangeNavigator,
-  UpgradeChangeLabels,
-  matchesUpgradeSearch,
-} from "./UpgradeChangeNavigator";
 import { SchemaComparison } from "./SchemaComparison";
+import {
+  matchesUpgradeSearch,
+  UpgradeChangeLabels,
+  UpgradeChangeNavigator,
+} from "./UpgradeChangeNavigator";
 
 type Step = 0 | 1 | 2 | 3 | 4;
 type DraftField = UpgradeDraftField;
@@ -86,6 +86,9 @@ export function SchemaMigrationModal({
   const [fields, setFields] = useState<DraftField[]>([]);
   const [focusedField, setFocusedField] = useState<number | null>(null);
   const [beforePreparation, setBeforePreparation] = useState<Record<number, string>>({});
+  const [valuesOpened, setValuesOpened] = useState(false);
+  const [editorRevisions, setEditorRevisions] = useState<Record<number, number>>({});
+  const [fieldValidity, setFieldValidity] = useState<Record<number, boolean>>({});
   const [fieldSearch, setFieldSearch] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [fieldOrder, setFieldOrder] = useState<number[]>([]);
@@ -118,19 +121,23 @@ export function SchemaMigrationModal({
     [environments],
   );
   const selectedEnvironment = activeEnvironments.find((item) => item.namespace.env === environment);
-  const newerSchemas = schemas.filter((schema) => schema.version > application.schema_version);
+  const sourceSchemaVersion = selectedEnvironment?.release.active?.schema_version ?? 0;
+  const newerSchemas = schemas.filter(
+    (schema) =>
+      schema.version > sourceSchemaVersion && schema.version >= application.schema_version,
+  );
   const selectedSchema = newerSchemas.find((item) => item.version === schemaVersion);
   const production = selectedEnvironment?.production === true;
-  const currentSchema = schemas.find((schema) => schema.version === application.schema_version);
+  const currentSchema = schemas.find((schema) => schema.version === sourceSchemaVersion);
   const schemaChanges = useMemo(
     () =>
-      selectedSchema && (currentSchema || !application.schema_version)
+      selectedSchema && (currentSchema || !sourceSchemaVersion)
         ? structuredSchemaDifferences(
             currentSchema?.schema_json ?? "{}",
             selectedSchema.schema_json,
           )
         : [],
-    [selectedSchema, currentSchema, application.schema_version],
+    [selectedSchema, currentSchema, sourceSchemaVersion],
   );
   const changes = upgradeFieldChanges(
     fields,
@@ -197,6 +204,10 @@ export function SchemaMigrationModal({
     target.focus({ preventScroll: true });
   }, [jumpTarget]);
 
+  useEffect(() => {
+    if (step === 2) setValuesOpened(true);
+  }, [step]);
+
   const releaseProblems =
     preview?.validation.filter(
       (problem) => !fields.some((field) => field.alias === problem.alias),
@@ -216,7 +227,9 @@ export function SchemaMigrationModal({
         ) &&
         (field.kind === "secret" || PARAMETER_CONTENT_TYPES.includes(field.content_type ?? "")),
     );
-  const valuesValid = fields.every((field) => !exactVersionError(field));
+  const valuesValid = fields.every(
+    (field) => !exactVersionError(field) && fieldValidity[field.id] !== false,
+  );
 
   useEffect(() => {
     if (!open) {
@@ -266,7 +279,13 @@ export function SchemaMigrationModal({
     void loadAll()
       .then((available) => {
         if (generation !== loadGeneration.current) return;
-        const newer = available.filter((schema) => schema.version > application.schema_version);
+        const initialSourceVersion =
+          activeEnvironments.find((item) => item.namespace.env === initial)?.release.active
+            ?.schema_version ?? 0;
+        const newer = available.filter(
+          (schema) =>
+            schema.version > initialSourceVersion && schema.version >= application.schema_version,
+        );
         setSchemas(available);
         setSchemaVersion((current) =>
           newer.some((schema) => schema.version === current) ? current : newer[0]?.version || 0,
@@ -288,6 +307,17 @@ export function SchemaMigrationModal({
     activeEnvironments,
     toast,
   ]);
+
+  useEffect(() => {
+    if (!open || !schemas.length) return;
+    const eligible = schemas.filter(
+      (schema) =>
+        schema.version > sourceSchemaVersion && schema.version >= application.schema_version,
+    );
+    setSchemaVersion((current) =>
+      eligible.some((schema) => schema.version === current) ? current : (eligible[0]?.version ?? 0),
+    );
+  }, [open, schemas, sourceSchemaVersion, application.schema_version]);
 
   useEffect(() => {
     if (!open || !selectedEnvironment?.release.active || !selectedSchema) return;
@@ -323,6 +353,9 @@ export function SchemaMigrationModal({
       };
     });
     setFields(mapped);
+    setValuesOpened(false);
+    setEditorRevisions({});
+    setFieldValidity({});
     setBeforePreparation({});
     setFieldProblems([]);
     setExpandedRows({});
@@ -397,6 +430,7 @@ export function SchemaMigrationModal({
 
   function update(id: number, patch: Partial<DraftField>) {
     if (["key", "version", "fromAlias", "kind", "content_type"].some((key) => key in patch)) {
+      setEditorRevisions((current) => ({ ...current, [id]: (current[id] ?? 0) + 1 }));
       setBeforePreparation((previous) => {
         const next = { ...previous };
         delete next[id];
@@ -809,9 +843,9 @@ export function SchemaMigrationModal({
       {step < 4 && (
         <>
           <SchemaComparison
-            current={schemas.find((s) => s.version === application.schema_version)}
+            current={currentSchema}
             target={selectedSchema}
-            currentVersion={application.schema_version}
+            currentVersion={sourceSchemaVersion}
           />
           <section className="info-panel text-sm stack" aria-label="Upgrade scope">
             <p>
@@ -956,7 +990,7 @@ export function SchemaMigrationModal({
                       loaded: field.kind === "secret" || !entry,
                       loading: false,
                       loadError: undefined,
-                      value: undefined,
+                      value: field.kind === "parameter" && !entry ? "" : undefined,
                       originalValue: undefined,
                       originalContentType: undefined,
                     });
@@ -1049,8 +1083,12 @@ export function SchemaMigrationModal({
           </Button>
         </div>
       ) : null}
-      {step === 2 ? (
-        <div className="stack">
+      {valuesOpened || step === 2 ? (
+        <div
+          className="stack"
+          hidden={step !== 2}
+          style={step !== 2 ? { display: "none" } : undefined}
+        >
           {sourceConflict ? (
             <div className="warning-panel">
               <AlertTriangle size={17} />
@@ -1067,9 +1105,10 @@ export function SchemaMigrationModal({
               </div>
             </div>
           ) : null}
-          {visibleFields.map((field) => (
+          {orderedFields.map((field) => (
             <ValueDisclosure
-              id={`upgrade-field-${field.id}`}
+              hidden={!visibleFields.some((visible) => visible.id === field.id)}
+              id={step === 2 ? `upgrade-field-${field.id}` : `upgrade-value-draft-${field.id}`}
               onFocus={() => setFocusedField(field.id)}
               remembered={expandedRows[field.id]}
               onExpanded={(expanded) =>
@@ -1172,6 +1211,7 @@ export function SchemaMigrationModal({
                       schemaJson={selectedSchema?.schema_json}
                       alias={field.alias}
                       disabled={!field.loaded || Boolean(field.loadError)}
+                      invalidDraft={fieldValidity[field.id] === false}
                       previous={beforePreparation[field.id]}
                       onPrepare={(value) => {
                         setBeforePreparation((previous) => ({
@@ -1198,6 +1238,7 @@ export function SchemaMigrationModal({
                         schemaLabel={`Target schema v${schemaVersion}`}
                         resetKey={JSON.stringify([
                           field.id,
+                          editorRevisions[field.id] ?? 0,
                           field.key,
                           field.version,
                           beforePreparation[field.id] !== undefined,
@@ -1208,7 +1249,17 @@ export function SchemaMigrationModal({
                         contentType={field.content_type ?? "string"}
                         value={field.value ?? ""}
                         onChange={(value) => update(field.id, { value })}
-                        disabled={!field.loaded || field.loading || Boolean(field.loadError)}
+                        onValidityChange={(valid) => {
+                          setFieldValidity((current) =>
+                            current[field.id] === valid
+                              ? current
+                              : { ...current, [field.id]: valid },
+                          );
+                          if (!valid) setPreview(null);
+                        }}
+                        disabled={
+                          step !== 2 || !field.loaded || field.loading || Boolean(field.loadError)
+                        }
                       />
                     </Field>
                   </>
@@ -1365,6 +1416,7 @@ export function SchemaMigrationModal({
 }
 
 function ValueDisclosure({
+  hidden,
   expand,
   children,
   id,
@@ -1372,6 +1424,7 @@ function ValueDisclosure({
   onExpanded,
   onFocus,
 }: {
+  hidden: boolean;
   expand: boolean;
   children: React.ReactNode;
   id: string;
@@ -1392,6 +1445,7 @@ function ValueDisclosure({
   }, [remembered]);
   return (
     <details
+      hidden={hidden}
       id={id}
       onFocusCapture={onFocus}
       className={`upgrade-value-card ${expand ? "upgrade-field-changed" : ""}`}
@@ -1411,6 +1465,7 @@ function UpgradeValuePreparation({
   schemaJson,
   alias,
   disabled,
+  invalidDraft,
   previous,
   onPrepare,
   onUndo,
@@ -1419,12 +1474,13 @@ function UpgradeValuePreparation({
   schemaJson?: string;
   alias: string;
   disabled: boolean;
+  invalidDraft: boolean;
   previous?: string;
   onPrepare: (value: string) => void;
   onUndo: () => void;
 }) {
   const prepared = useMemo(
-    () => prepareUpgradeValue(value, aliasSchema(schemaJson, alias)),
+    () => prepareUpgradeValue(value, schemaJson ?? null, alias),
     [value, schemaJson, alias],
   );
   if (previous !== undefined)
@@ -1449,7 +1505,7 @@ function UpgradeValuePreparation({
       </p>
       {prepared.added.length > 0 && <p>Add: {prepared.added.join(", ")}</p>}
       {prepared.removed.length > 0 && <p>Remove: {prepared.removed.join(", ")}</p>}
-      <Button disabled={disabled} onClick={() => onPrepare(prepared.value)}>
+      <Button disabled={disabled || invalidDraft} onClick={() => onPrepare(prepared.value)}>
         Prepare draft
       </Button>
     </section>

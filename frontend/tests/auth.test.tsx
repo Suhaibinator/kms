@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { AppProps } from "next/app";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import App from "@/pages/_app";
 
 const mocks = vi.hoisted(() => ({
@@ -114,6 +115,7 @@ describe("AuthProvider session restore", () => {
     mocks.storeIdentity.mockClear();
     for (const fn of Object.values(mocks.toast)) fn.mockClear();
     latest = null;
+    resetNamespaceMemory();
     window.history.replaceState(null, "", "/");
   });
 
@@ -199,6 +201,23 @@ describe("AuthProvider session restore", () => {
     expect(screen.getByTestId("authenticated")).toHaveTextContent("true");
   });
 
+  it("clears namespace memory when a new identity signs in", async () => {
+    rememberNamespace({ env: "old", app: "session" });
+    mocks.login.mockResolvedValue({ identity: { name: "a", kind: "client" } });
+    mocks.whoami.mockResolvedValue({
+      name: "a",
+      kind: "client",
+      namespace: { env: "prod", app: "billing" },
+    });
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId("ready")).toHaveTextContent("true"));
+
+    await act(async () => {
+      await latest?.login("tok");
+    });
+    expect(lastNamespace()).toBeNull();
+  });
+
   it("still signs in when the follow-up whoami fails for a non-auth reason", async () => {
     mocks.login.mockResolvedValue({ identity: { name: "a", kind: "admin" } });
     mocks.whoami.mockRejectedValue(new ApiError("unavailable", "offline", 0));
@@ -248,6 +267,7 @@ describe("Protected redirects", () => {
       mocks.token = null;
     });
     for (const fn of Object.values(mocks.toast)) fn.mockClear();
+    resetNamespaceMemory();
     window.history.replaceState(null, "", "/");
   });
 
@@ -286,10 +306,12 @@ describe("Protected redirects", () => {
 
     renderApp();
     await waitFor(() => expect(screen.getByTestId("authenticated")).toHaveTextContent("true"));
+    rememberNamespace({ env: "prod", app: "billing" });
 
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
     expect(mocks.replace).toHaveBeenCalledTimes(1);
+    expect(lastNamespace()).toBeNull();
   });
 });

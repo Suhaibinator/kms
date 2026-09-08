@@ -19,6 +19,7 @@ import {
   storeIdentity,
   UNAUTHORIZED_EVENT,
 } from "@/lib/api";
+import { rememberNamespace } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
 
 interface AuthState {
@@ -85,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // The server actively refused this token: it is not a session any
           // more, so drop it along with the cached identity.
           clearToken();
+          rememberNamespace(null);
           setIdentity(null);
           setSession({ authenticated: false, signedOut: false });
           return;
@@ -107,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // apiFetch has already cleared the token by the time this fires; all that
     // is left is to report the session as gone. Redirecting is `Protected`'s job.
     const onUnauthorized = () => {
+      rememberNamespace(null);
       setIdentity(null);
       setSession({ authenticated: false, signedOut: false });
     };
@@ -121,6 +124,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (token: string): Promise<Identity> => {
     // Validate before persisting: login sends the token in the body, not the header.
     const res = await api.login(token);
+    // Namespace memory belongs to the previous identity until the new session
+    // establishes its own scope.
+    rememberNamespace(null);
     setToken(token);
     // Seed from the login response so the identity still records how it
     // authenticated (token, or cert + token) if the whoami below fails.
@@ -145,6 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     clearToken();
+    rememberNamespace(null);
     setIdentity(null);
     setSession({ authenticated: false, signedOut: true });
   }, []);

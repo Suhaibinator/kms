@@ -20,6 +20,7 @@ import type {
   ShipResult,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { validateParameterValue } from "@/lib/validation";
 import { ConflictPanel, type ShipConflict } from "./ConflictPanel";
 import {
   buildChanges,
@@ -28,6 +29,7 @@ import {
   driftCandidates,
   entryChanged,
   everActivated,
+  freezePreviewChanges,
   initialRows,
   makeRow,
   missingSecrets,
@@ -219,6 +221,7 @@ export default function ShipModal({
         .then(
           ({ parameter }) =>
             ({
+              loadError: undefined,
               value: parameter.value,
               originalValue: parameter.value,
               loaded: true,
@@ -231,7 +234,7 @@ export default function ShipModal({
         .then((patch) => {
           if (generation !== loadGeneration.current || !patch) return;
           loadingAliases.current.delete(alias);
-          prefilled.current.set(alias, patch.value ?? "");
+          if (patch.value !== undefined) prefilled.current.set(alias, patch.value);
           setRows((current) =>
             current.map((candidate) =>
               candidate.alias === alias && !candidate.loaded
@@ -271,7 +274,11 @@ export default function ShipModal({
       });
       if (!run.current) return;
       setPreview(response.preview);
-      setPreviewChanges(attempted);
+      setPreviewChanges(
+        response.preview.validation.valid
+          ? freezePreviewChanges(attempted, response.preview.entries, response.preview.base_version)
+          : attempted,
+      );
     } catch (error) {
       if (!run.current || isAbortError(error)) return;
       setPreview(null);
@@ -294,7 +301,14 @@ export default function ShipModal({
   }
 
   function patchRow(alias: string, patch: Partial<ShipRow>) {
-    setRows((current) => current.map((row) => (row.alias === alias ? { ...row, ...patch } : row)));
+    setRows((current) =>
+      current.map((row) =>
+        row.alias === alias &&
+        Object.entries(patch).some(([key, value]) => row[key as keyof ShipRow] !== value)
+          ? { ...row, ...patch }
+          : row,
+      ),
+    );
   }
 
   function addRow(alias: string) {
@@ -368,7 +382,9 @@ export default function ShipModal({
       (row) =>
         row.loaded &&
         row.reuseVersion === undefined &&
-        row.value !== (prefilled.current.get(row.alias) ?? ""),
+        ((row.draftValid === false &&
+          validateParameterValue(row.value, row.content_type) === null) ||
+          row.value !== (prefilled.current.get(row.alias) ?? "")),
     ) ||
       optIns.length > 0 ||
       confirmText !== "");

@@ -1008,8 +1008,9 @@ namespace.
 
 - `GET /api/v1/namespaces?page_size=&page_token=` →
   `{"namespaces": [Namespace], "next_page_token": ""}`
-  (each item includes `parameter_count` and `secret_count`, powering the
-  dashboard and per-namespace counts)
+  (each item includes `parameter_count`, `secret_count`, and `identity_count`,
+  the count of bound identities, including disabled identities). All three
+  counts must be zero before deletion can succeed; deletion rechecks them atomically.
 - `POST /api/v1/namespaces` — create:
   ```json
   { "env": "prod", "app": "gradethis", "description": "",
@@ -1045,7 +1046,9 @@ Listing is always namespace-scoped: `env` and `app` are required.
     "versions":[{"version","content_type","state","created_by",
       "created_at_unix_ms","metadata_json"}]}`
 - `PUT /api/v1/parameters` — `{"env","app","key","value","content_type","metadata_json"}` →
-  `{"version": 4, "revision": 99}`
+  `{"version": 4, "revision": 99}`. Optional `"create_only": true` rejects an existing key
+  with HTTP 409 (`already_exists`), atomically leaving its metadata, versions, labels,
+  and change log unchanged. Omitted or false preserves the usual append-version behavior.
 - `DELETE /api/v1/parameters?env=&app=&key=` → `{"revision": 100}`
 
 ### Secrets

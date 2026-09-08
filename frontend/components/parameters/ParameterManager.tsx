@@ -142,6 +142,7 @@ export default function ParameterManager({
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
+  const [valueValid, setValueValid] = useState(true);
   // The value the form opened with; a schema that arrives late may only take
   // over the editor while nothing has been typed yet.
   const [openedValue, setOpenedValue] = useState("");
@@ -182,6 +183,9 @@ export default function ParameterManager({
     () => firstError(validateValueSize(value), validateParameterValue(value, contentType)),
     [value, contentType],
   );
+  // Raw errors retain submit-to-focus feedback until touched. A form draft
+  // withheld from onChange already shows its own error and must block Save.
+  const invalidFormDraft = !valueValid && valueError === null;
   const metadataError = validateMetadataJson(metadataJson);
   const versionError = firstError(valueError, metadataError);
 
@@ -200,7 +204,9 @@ export default function ParameterManager({
     jsonEquivalent(metadataJson.trim() || "{}", meta?.metadata_json?.trim() || "{}");
   // Anything that would be lost by closing: an edit against the current
   // version, or — with no current version to compare to — any typed value.
-  const dirty = current !== null ? !unchanged : value.trim() !== "" || !isEmptyJson(metadataJson);
+  const dirty =
+    !valueValid ||
+    (current !== null ? !unchanged : value.trim() !== "" || !isEmptyJson(metadataJson));
 
   function markTouched(field: VersionField) {
     setTouched((t) => ({ ...t, [field]: true }));
@@ -274,6 +280,7 @@ export default function ParameterManager({
     const opened = type === "json" ? (formatJson(raw) ?? raw) : raw;
     const metadata = prefill?.metadataJson ?? meta?.metadata_json;
     setValue(opened);
+    setValueValid(true);
     setOpenedValue(opened);
     setVersionSchema(
       schemaLookup.status === "idle" || schemaLookup.status === "loading" ? null : schemaLookup,
@@ -294,7 +301,7 @@ export default function ParameterManager({
     setSubmitAttempted(true);
     // Every remaining problem now has an inline message next to its field;
     // move focus there so the button never looks dead.
-    if (versionError) {
+    if (versionError || !valueValid) {
       if (metadataError && !valueError) setMetadataOpen(true);
       requestFocus();
       return;
@@ -834,7 +841,7 @@ export default function ParameterManager({
             <Button
               onClick={saveVersion}
               loading={saving}
-              disabled={shownVersionError !== null || unchanged}
+              disabled={shownVersionError !== null || unchanged || invalidFormDraft}
             >
               Save new version
             </Button>
@@ -877,6 +884,7 @@ export default function ParameterManager({
               }
               rows={12}
               onChange={setValue}
+              onValidityChange={setValueValid}
               onBlur={() => markTouched("value")}
               onSubmit={() => void saveVersion()}
             />

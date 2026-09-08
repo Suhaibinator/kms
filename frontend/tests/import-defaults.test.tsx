@@ -155,6 +155,43 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenCalledTimes(2);
   });
 
+  it("resets opt-ins on artifact replacement so execution matches the preview", async () => {
+    mocks.importDefaults.mockResolvedValue(response());
+    const { onImported } = renderModal();
+    await uploadArtifact();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Update application definition/ }));
+    await screen.findByLabelText("Defaults import preview");
+    expect(mocks.importDefaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({ updateDefinition: true }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /Overwrite differing/ }));
+    await screen.findByLabelText("Defaults import preview");
+    const replacement = new File(["replacement artifact"], "replacement.json", {
+      type: "application/json",
+    });
+    fireEvent.change(screen.getByLabelText("Defaults artifact"), {
+      target: { files: [replacement] },
+    });
+    await screen.findByLabelText("Defaults import preview");
+    expect(screen.getByRole("checkbox", { name: /Update application definition/ })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(screen.getByRole("checkbox", { name: /Overwrite differing/ })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    const previewRequest = mocks.importDefaults.mock.calls.at(-1)?.[0];
+    expect(previewRequest).toMatchObject({ overwrite: false, updateDefinition: false });
+    fireEvent.click(screen.getByRole("button", { name: "Import defaults" }));
+    await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
+    expect(mocks.importDefaults).toHaveBeenLastCalledWith({
+      ...previewRequest,
+      execute: true,
+      planDigest: "plan-create",
+    });
+  });
+
   it("requires the exact environment name before importing to production", async () => {
     mocks.importDefaults.mockResolvedValue(response());
     renderModal({ environment: "prod", production: true });

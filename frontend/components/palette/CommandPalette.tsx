@@ -30,49 +30,67 @@ import { cn } from "@/lib/utils";
 
 export type { CommandPaletteProps };
 
-// The application list is fetched on first open and kept for the session;
-// namespaces come from the shared useNamespaces cache. A different token
-// (re-login) invalidates the cache.
-let cachedApplications: { token: string | null; applications: Application[] } | null = null;
+// A same-session snapshot makes reopening instant, then every open refreshes
+// all pages so application mutations are reflected without mutation plumbing.
+let cachedApplications: {
+  sessionKey: string;
+  applications: Application[];
+} | null = null;
 
 /** Test hook: forget the cached application list. */
 export function resetPaletteCache(): void {
   cachedApplications = null;
 }
 
-function useApplications(enabled: boolean): Application[] {
-  const [applications, setApplications] = useState<Application[]>(
-    () => cachedApplications?.applications ?? [],
+function useApplications(enabled: boolean, identityName: string | undefined): Application[] {
+  const token = getToken();
+  const sessionKey = enabled ? `${token ?? ""}\u0000${identityName ?? ""}` : "";
+  const [snapshot, setSnapshot] = useState<{ sessionKey: string; applications: Application[] }>(
+    () =>
+      cachedApplications?.sessionKey === sessionKey
+        ? cachedApplications
+        : { sessionKey, applications: [] },
   );
   useEffect(() => {
     if (!enabled) return;
-    const token = getToken();
-    if (cachedApplications && cachedApplications.token === token) {
-      setApplications(cachedApplications.applications);
-      return;
-    }
     const controller = new AbortController();
-    api
-      .listApplications(200, undefined, { signal: controller.signal })
-      .then((res) => {
-        const list = res.applications ?? [];
-        cachedApplications = { token, applications: list };
-        setApplications(list);
-      })
-      .catch((err: unknown) => {
-        if (isAbortError(err)) return;
-        // The palette still works for pages and environments; nothing to surface.
-      });
-    return () => controller.abort();
-  }, [enabled]);
-  return applications;
+    let current = true;
+
+    async function refresh() {
+      const applications: Application[] = [];
+      const seenTokens = new Set<string>();
+      let pageToken: string | undefined;
+      do {
+        const res = await api.listApplications(200, pageToken, { signal: controller.signal });
+        applications.push(...(res.applications ?? []));
+        pageToken = res.next_page_token || undefined;
+        if (pageToken && seenTokens.has(pageToken)) break;
+        if (pageToken) seenTokens.add(pageToken);
+      } while (pageToken);
+
+      if (!current || getToken() !== token) return;
+      const next = { sessionKey, applications };
+      cachedApplications = next;
+      setSnapshot(next);
+    }
+
+    void refresh().catch((err: unknown) => {
+      if (isAbortError(err)) return;
+      // The palette still works for pages and environments; nothing to surface.
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [enabled, sessionKey, token]);
+  return enabled && snapshot.sessionKey === sessionKey ? snapshot.applications : [];
 }
 
 function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcuts?: () => void }) {
   const router = useRouter();
   const { identity } = useAuth();
   const isAdmin = identity?.kind === "admin";
-  const applications = useApplications(isAdmin);
+  const applications = useApplications(isAdmin, identity?.name);
   const { namespaces } = useNamespaces();
   const index = useMemo(
     () => buildPaletteIndex({ applications, namespaces, isAdmin }),
@@ -82,7 +100,7 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
   // The namespace the operator last worked in (or the one a client identity
   // is bound to) scopes the "Search parameters/secrets for …" fall-throughs.
   const remembered = useLastNamespace();
-  const scope = remembered ?? identity?.namespace ?? null;
+  const scope = identity?.kind === "client" ? (identity.namespace ?? null) : remembered;
 
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -97,13 +115,14 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
     [ranked, capped, query, scope],
   );
   const groups = useMemo(() => groupResults(results), [results]);
+  const orderedResults = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   // Reset the highlight whenever the result set changes.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `results` is the trigger.
-  useEffect(() => setActive(0), [results]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `orderedResults` is the trigger.
+  useEffect(() => setActive(0), [orderedResults]);
 
   useEffect(() => {
     const node = listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`);
@@ -124,15 +143,15 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (results.length === 0 && event.key !== "Escape") return;
+    if (orderedResults.length === 0 && event.key !== "Escape") return;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        setActive((current) => (current + 1) % results.length);
+        setActive((current) => (current + 1) % orderedResults.length);
         break;
       case "ArrowUp":
         event.preventDefault();
-        setActive((current) => (current - 1 + results.length) % results.length);
+        setActive((current) => (current - 1 + orderedResults.length) % orderedResults.length);
         break;
       case "Home":
         event.preventDefault();
@@ -140,11 +159,11 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
         break;
       case "End":
         event.preventDefault();
-        setActive(results.length - 1);
+        setActive(orderedResults.length - 1);
         break;
       case "Enter": {
         event.preventDefault();
-        const item = results[active];
+        const item = orderedResults[active];
         if (item) navigate(item);
         break;
       }
@@ -174,7 +193,7 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
           aria-expanded="true"
           aria-controls={listId}
           aria-autocomplete="list"
-          aria-activedescendant={results.length > 0 ? optionId(active) : undefined}
+          aria-activedescendant={orderedResults.length > 0 ? optionId(active) : undefined}
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}

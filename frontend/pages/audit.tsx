@@ -187,6 +187,8 @@ function AuditLog({ initial }: { initial: QueryValues }) {
   const now = useNow();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadedScope, setLoadedScope] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const { begin } = useLatestRequest();
 
   const [form, setForm] = useState<FilterForm>(() => formFromQuery(initial));
@@ -266,7 +268,9 @@ function AuditLog({ initial }: { initial: QueryValues }) {
   const load = useCallback(
     async (token: string, filters: AuditFilters) => {
       const run = begin();
+      const scope = JSON.stringify([token, filters]);
       setLoading(true);
+      setLoadError(null);
       try {
         const res = await api.listAudit(
           { ...filters, page_size: PAGE_SIZE, page_token: token || undefined },
@@ -275,16 +279,23 @@ function AuditLog({ initial }: { initial: QueryValues }) {
         if (!run.current) return;
         const list = res.events ?? [];
         setEvents(list);
+        setLoadedScope(scope);
         lastRowCount = Math.max(5, list.length);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        if (run.current && !isAbortError(err)) toast.error(err, "Failed to load audit events");
+        if (run.current && !isAbortError(err)) {
+          setLoadError(err instanceof Error ? err.message : "The audit log did not respond.");
+          toast.error(err, "Failed to load audit events");
+        }
       } finally {
         if (run.current) setLoading(false);
       }
     },
     [begin, setNextToken, toast],
   );
+
+  const requestedScope = JSON.stringify([paging.pageToken, applied]);
+  const eventsMatchScope = loadedScope === requestedScope;
 
   useEffect(() => {
     void load(paging.pageToken, applied);
@@ -426,7 +437,16 @@ function AuditLog({ initial }: { initial: QueryValues }) {
         </Button>
       </form>
 
-      {loading ? (
+      {loadError ? (
+        <div className="danger-panel mb-4" role="alert">
+          <strong>Could not load audit events.</strong> {loadError}
+          {eventsMatchScope && events.length > 0
+            ? " Showing the last successful results for this query."
+            : " No results are available for the current query."}
+        </div>
+      ) : null}
+
+      {loading && !eventsMatchScope ? (
         <TableSkeleton
           headers={TABLE_HEADERS}
           rows={lastRowCount}
@@ -435,7 +455,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
           toolbarHint={PAGE_SORT_HINT}
           summary
         />
-      ) : events.length === 0 ? (
+      ) : !eventsMatchScope ? null : events.length === 0 ? (
         <EmptyState
           icon={<Icon.audit size={20} />}
           title="No audit events"
@@ -549,14 +569,14 @@ function AuditLog({ initial }: { initial: QueryValues }) {
       )}
 
       <Pagination
-        hasNext={paging.hasNext}
+        hasNext={eventsMatchScope && paging.hasNext}
         onNext={nextPage}
         hasPrevious={paging.hasPrevious}
         onPrevious={previousPage}
         onReset={firstPage}
         showReset={paging.page > 1}
         page={paging.page}
-        count={loading ? undefined : events.length}
+        count={loading || !eventsMatchScope ? undefined : events.length}
         loading={loading}
         noun="events"
       />

@@ -280,3 +280,15 @@ describe("inferSchema", () => {
     expect(inferSchema(null)).toBeNull();
   });
 });
+
+it.each([
+  '{"x":"\\q"}',
+  '{"x":"\\u12xy"}',
+  '{"x":"\\u12"}',
+  '{"x":"raw\ttab"}',
+  '{"x":"raw\u0000null"}',
+])("rejects invalid string syntax without accepting it for formatting: %s", (text) => {
+  expect(checkJson(text)).not.toBeNull();
+  expect(formatJson(text)).toBeNull();
+  expect(minifyJson(text)).toBeNull();
+});

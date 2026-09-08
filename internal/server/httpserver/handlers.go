@@ -482,6 +482,7 @@ func (s *server) handleParameterMetadata(w http.ResponseWriter, r *http.Request)
 func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
+		CreateOnly   bool   `json:"create_only"`
 		Value        string `json:"value"`
 		ContentType  string `json:"content_type"`
 		MetadataJSON string `json:"metadata_json"`
@@ -490,7 +491,11 @@ func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	version, revision, err := s.svc.PutParameter(r.Context(), principalFrom(r.Context()),
+	put := s.svc.PutParameter
+	if body.CreateOnly {
+		put = s.svc.CreateParameter
+	}
+	version, revision, err := put(r.Context(), principalFrom(r.Context()),
 		body.ref(), body.Value, body.ContentType, body.MetadataJSON)
 	if err != nil {
 		s.writeError(w, r, err)

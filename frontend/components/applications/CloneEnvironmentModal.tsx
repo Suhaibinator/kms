@@ -39,7 +39,7 @@ const ACTION_TONE: Record<
 /**
  * Create (or attach) an environment by copying another environment's
  * parameter values. Secret values are never copied: they come back as
- * `needs_value` with an Add secret button each. A production target asks for
+ * `needs_value` with an Add secret button each. Uncopied parameters offer Add value. A production target asks for
  * its name to be typed before anything is written.
  */
 export default function CloneEnvironmentModal({
@@ -50,11 +50,13 @@ export default function CloneEnvironmentModal({
   onCreated,
   seed,
   onAddSecret,
+  onAddParameter,
 }: CloneEnvironmentModalProps & {
   /** Prefill from the Add-environment form's "Copy values from…" choice. */
   seed?: CloneSeed | null;
-  /** Add secret for a `needs_value` item; the caller closes this modal. */
+  /** Open recovery after completing the clone and refreshing the overview. */
   onAddSecret?: (env: string, alias: string) => void;
+  onAddParameter?: (env: string, key: string) => void;
 }) {
   const toast = useToast();
   const formId = useId();
@@ -70,6 +72,7 @@ export default function CloneEnvironmentModal({
   const [opened, setOpened] = useState({ source: "", target: "", description: "", token: false });
   const { touch, markAllTouched, reset, shown } = useFieldErrors<"target" | "source">();
   const { formRef, requestFocus } = useFocusFirstInvalid();
+  const completed = useRef(false);
   const sourceRef = useRef<HTMLButtonElement>(null);
   const targetRef = useRef<HTMLInputElement>(null);
 
@@ -90,6 +93,7 @@ export default function CloneEnvironmentModal({
     setConfirming(false);
     setBusy(false);
     setResult(null);
+    completed.current = false;
     reset();
   }, [open, seed, environments, reset]);
 
@@ -144,6 +148,16 @@ export default function CloneEnvironmentModal({
     }
   }
 
+  function close() {
+    if (result) {
+      if (completed.current) return;
+      completed.current = true;
+      onCreated(result);
+    } else {
+      onClose();
+    }
+  }
+
   const hasSecrets = contractSecrets(application).length > 0;
   const sourceOptions = environments.map((environment) => ({
     value: environment.namespace.env,
@@ -156,14 +170,14 @@ export default function CloneEnvironmentModal({
         mobileFullScreen
         open={open}
         title={result ? `${result.namespace.env} created from ${source}` : "Copy an environment"}
-        onClose={onClose}
+        onClose={close}
         dismissible={!busy}
         dirty={dirty && !busy}
         initialFocus={opened.source ? targetRef : sourceRef}
         wide
         footer={(close) =>
           result ? (
-            <Button type="button" onClick={() => onCreated(result)}>
+            <Button type="button" onClick={close}>
               Done
             </Button>
           ) : (
@@ -228,10 +242,16 @@ export default function CloneEnvironmentModal({
                         ) : null}
                       </td>
                       <td data-label="Actions">
-                        {item.action === "needs_value" && onAddSecret ? (
+                        {item.action === "needs_value" &&
+                        (item.kind === "secret" ? onAddSecret : onAddParameter) ? (
                           <AddResourceButton
-                            kind="secret"
-                            onClick={() => onAddSecret(result.namespace.env, item.alias)}
+                            kind={item.kind}
+                            onClick={() => {
+                              close();
+                              if (item.kind === "secret")
+                                onAddSecret?.(result.namespace.env, item.alias);
+                              else onAddParameter?.(result.namespace.env, item.key);
+                            }}
                           />
                         ) : null}
                       </td>

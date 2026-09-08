@@ -192,6 +192,18 @@ describe("AppShell", () => {
     );
   });
 
+  it("uses a client's binding instead of namespace memory from another identity", () => {
+    rememberNamespace({ env: "staging", app: "reports" });
+    mocks.identity = client;
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+    const parameters = within(desktopNav()).getByRole("link", { name: "Parameters" });
+    expect(parameters).toHaveAttribute("href", "/parameters?env=prod&app=gradethis");
+  });
+
   it("opens the command palette from the search button and toggles it with ⌘K / Ctrl+K", () => {
     render(
       <AppShell>

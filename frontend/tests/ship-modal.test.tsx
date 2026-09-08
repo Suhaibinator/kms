@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShipModalProps } from "@/components/applications/contracts";
-import { PREVIEW_DEBOUNCE_MS, SHIP_MODE_STORAGE_KEY } from "@/components/ship/model";
+import { VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
+import {
+  freezePreviewChanges,
+  PREVIEW_DEBOUNCE_MS,
+  SHIP_MODE_STORAGE_KEY,
+} from "@/components/ship/model";
 import ShipModal from "@/components/ship/ShipModal";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
@@ -175,6 +180,7 @@ describe("ship editor rows", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     window.localStorage.removeItem(SHIP_MODE_STORAGE_KEY);
+    window.localStorage.removeItem(VALUE_EDITOR_MODE_STORAGE_KEY);
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.getParameter.mockResolvedValue({
       parameter: {
@@ -293,6 +299,7 @@ describe("ShipModal", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     window.localStorage.removeItem(SHIP_MODE_STORAGE_KEY);
+    window.localStorage.removeItem(VALUE_EDITOR_MODE_STORAGE_KEY);
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.getParameter.mockResolvedValue({
       parameter: {
@@ -814,6 +821,179 @@ describe("ShipModal", () => {
         document.activeElement as HTMLElement,
       ),
     );
+  });
+
+  it("blocks shipping a visible invalid field draft even when the last committed JSON is valid", async () => {
+    mocks.getParameter.mockResolvedValue({ parameter: { value: '{"per_minute":3}' } });
+    renderModal({
+      application: {
+        ...app,
+        contract: app.contract.map((field) =>
+          field.alias === "rate_limits" ? { ...field, content_type: "json" } : field,
+        ),
+      },
+      schemaJson: JSON.stringify({
+        type: "object",
+        properties: {
+          rate_limits: { type: "object", properties: { per_minute: { type: "number" } } },
+        },
+      }),
+    });
+    const row = within(dialog()).getByTestId("ship-row-rate_limits");
+    await within(row).findByRole("button", { name: "Form" });
+    fireEvent.click(within(row).getByRole("button", { name: "Form" }));
+    const field = within(row).getByRole("textbox", { name: "per_minute" });
+    fireEvent.change(field, { target: { value: "4" } });
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    const count = dryRuns().length;
+    fireEvent.change(field, { target: { value: "4e" } });
+    await settlePreview();
+    expect(field).toHaveValue("4e");
+    expect(shipButton()).toBeDisabled();
+    expect(dryRuns()).toHaveLength(count);
+    fireEvent.change(field, { target: { value: "5" } });
+    await settlePreview();
+    expect(shipButton()).toBeEnabled();
+  });
+
+  it.each([false, true])(
+    "Revert clears an invalid local draft (preceded by a valid edit: %s)",
+    async (editFirst) => {
+      mocks.getParameter.mockResolvedValue({ parameter: { value: '{"per_minute":3}' } });
+      renderModal({
+        application: {
+          ...app,
+          contract: app.contract.map((field) =>
+            field.alias === "rate_limits" ? { ...field, content_type: "json" } : field,
+          ),
+        },
+        schemaJson: JSON.stringify({
+          type: "object",
+          properties: {
+            rate_limits: { type: "object", properties: { per_minute: { type: "number" } } },
+          },
+        }),
+      });
+      const row = within(dialog()).getByTestId("ship-row-rate_limits");
+      fireEvent.click(await within(row).findByRole("button", { name: "Form" }));
+      const field = within(row).getByRole("textbox", { name: "per_minute" });
+      if (editFirst) fireEvent.change(field, { target: { value: "4" } });
+      fireEvent.change(field, { target: { value: "4e" } });
+      expect(shipButton()).toBeDisabled();
+      const revert = within(row).getByRole("button", { name: "Revert rate_limits" });
+      expect(revert).toBeEnabled();
+      fireEvent.click(revert);
+      expect(field).toHaveValue("3");
+      expect(within(row).queryByText("must be a number")).toBeNull();
+      expect(row).toHaveAttribute("data-changed", "false");
+      await settlePreview();
+      expect(shipButton()).toBeEnabled();
+      expect(dryRuns().at(-1)?.changes).toContainEqual({
+        alias: "rate_limits",
+        value: '{"per_minute":3}',
+        content_type: "json",
+      });
+    },
+  );
+
+  it("keeps a failed string prefill blocked until retry succeeds without inventing a changed value", async () => {
+    mocks.getParameter.mockRejectedValueOnce(new Error("Connection unavailable"));
+    renderModal({
+      application: {
+        ...app,
+        contract: app.contract.map((field) =>
+          field.alias === "rate_limits" ? { ...field, content_type: "string" } : field,
+        ),
+      },
+    });
+    const retry = await within(dialog()).findByRole("button", {
+      name: "Retry loading rate_limits",
+    });
+    await settlePreview();
+    expect(dryRuns()).toHaveLength(0);
+    expect(shipButton()).toBeDisabled();
+    expect(within(dialog()).getByTestId("ship-row-rate_limits")).toHaveAttribute(
+      "data-changed",
+      "false",
+    );
+    expect(within(dialog()).queryByRole("textbox", { name: "rate_limits value" })).toBeNull();
+    mocks.getParameter.mockResolvedValue({ parameter: { value: "existing string" } });
+    fireEvent.click(retry);
+    expect(await within(dialog()).findByRole("textbox", { name: "rate_limits value" })).toHaveValue(
+      "existing string",
+    );
+    await settlePreview();
+    expect(dryRuns()[0].changes).toContainEqual({
+      alias: "rate_limits",
+      value: "existing string",
+      content_type: "string",
+    });
+    expect(within(dialog()).getByTestId("ship-row-rate_limits")).toHaveAttribute(
+      "data-changed",
+      "false",
+    );
+  });
+
+  it("pins the previewed secret even if current rotates before shipping and a transport retry", async () => {
+    let currentSecret = 2;
+    let attempts = 0;
+    mocks.ship.mockImplementation(async (request: ShipRequest) => {
+      if (request.dry_run)
+        return {
+          ...preview,
+          preview: {
+            ...preview.preview,
+            entries: preview.preview.entries.map((entry) =>
+              entry.alias === secretAlias
+                ? { ...entry, change: "pinned", to_version: currentSecret }
+                : entry,
+            ),
+          },
+        };
+      attempts += 1;
+      const selector = request.changes.find((change) => change.alias === secretAlias);
+      expect(selector).toEqual({ alias: secretAlias, version: 2 });
+      if (attempts === 1) throw new Error("Temporary connection failure");
+      return activated;
+    });
+    renderModal({
+      environments: [
+        {
+          ...dev,
+          values: dev.values.map((value) =>
+            value.alias === secretAlias
+              ? { ...value, current_version: 2, pinned_version: 1 }
+              : value,
+          ),
+        },
+      ],
+    });
+    await editRateLimits();
+    await settlePreview();
+    const drift = within(dialog()).getByTestId("ship-drift");
+    fireEvent.click(within(drift).getByText(secretAlias).closest("label") as HTMLElement);
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    currentSecret = 3;
+    fireEvent.click(shipButton());
+    await within(dialog()).findByText("Temporary connection failure");
+    fireEvent.click(shipButton());
+    await waitFor(() => expect(realShips()).toHaveLength(2));
+  });
+
+  it("freezes implicit current selectors for the first release without replacing new writes", () => {
+    expect(
+      freezePreviewChanges(
+        [{ alias: "rate_limits", value: "new", content_type: "string" }],
+        preview.preview.entries,
+        0,
+      ),
+    ).toEqual([
+      { alias: "rate_limits", value: "new", content_type: "string" },
+      { alias: "database", version: 1 },
+      { alias: "db_password", version: 1 },
+    ]);
   });
 
   it("lists unreleased changes as opt-ins that pin the current label", async () => {

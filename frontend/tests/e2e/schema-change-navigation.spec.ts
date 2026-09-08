@@ -130,7 +130,8 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   await dialog.getByRole("button", { name: "Edit values", exact: true }).click();
   const search = dialog.getByLabel("Search fields or schema paths");
   await search.fill("database.client_id");
-  await expect(dialog.locator("details[id^=upgrade-field]")).toHaveCount(1);
+  // Filtered editors stay mounted to preserve incomplete drafts.
+  await expect(dialog.locator("details[id^=upgrade-field]:visible")).toHaveCount(1);
   await dialog.getByRole("button", { name: "Next change", exact: true }).click();
   const row = dialog
     .getByRole("group", { name: "database value", exact: true })

@@ -33,6 +33,8 @@ import type { AuthMethod, Identity, Namespace } from "@/lib/types";
 
 const MAX_IDENTITY_PAGES = 10;
 
+type IdentityScanStatus = "loading" | "complete" | "incomplete" | "error";
+
 function sameMethods(a: readonly AuthMethod[], b: readonly AuthMethod[]): boolean {
   return a.length === b.length && a.every((method) => b.includes(method));
 }
@@ -146,9 +148,11 @@ export default function NamespacesPage() {
   const editFormId = useId();
   const descriptionRef = useRef<HTMLInputElement>(null);
   // Identities bound anywhere, loaded when the editor opens so removing an
-  // auth method can say which of them it breaks. null = could not be checked.
-  const [identities, setIdentities] = useState<Identity[] | null>(null);
-  const [identitiesLoading, setIdentitiesLoading] = useState(false);
+  // auth method can say which of them it breaks. Keep completeness separate:
+  // partial or failed scans must never be interpreted as zero impact.
+  const [identities, setIdentities] = useState<Identity[]>([]);
+  const [identityScanStatus, setIdentityScanStatus] = useState<IdentityScanStatus>("loading");
+  const [identityScanRetry, setIdentityScanRetry] = useState(0);
   const identitiesRun = useRef(0);
   const [confirmRemoval, setConfirmRemoval] = useState(false);
 
@@ -183,47 +187,50 @@ export default function NamespacesPage() {
 
   useEffect(() => {
     if (!editTarget) return;
+    // Reading the retry generation makes an explicit retry start a fresh scan.
+    void identityScanRetry;
     const controller = new AbortController();
     const run = ++identitiesRun.current;
-    setIdentities(null);
-    setIdentitiesLoading(true);
+    setIdentities([]);
+    setIdentityScanStatus("loading");
     void (async () => {
       try {
         const all: Identity[] = [];
         let token: string | undefined;
+        let complete = false;
         for (let page = 0; page < MAX_IDENTITY_PAGES; page += 1) {
           const res = await api.listIdentities(200, token, { signal: controller.signal });
           all.push(...(res.identities ?? []));
           token = res.next_page_token || undefined;
-          if (!token) break;
+          if (!token) {
+            complete = true;
+            break;
+          }
         }
         if (run !== identitiesRun.current) return;
         setIdentities(all);
+        setIdentityScanStatus(complete ? "complete" : "incomplete");
       } catch {
-        // Unknown is shown as such; the save is still allowed.
-        if (run === identitiesRun.current) setIdentities(null);
-      } finally {
-        if (run === identitiesRun.current) setIdentitiesLoading(false);
+        if (run === identitiesRun.current) setIdentityScanStatus("error");
       }
     })();
     return () => {
       identitiesRun.current += 1;
       controller.abort();
     };
-  }, [editTarget]);
+  }, [editTarget, identityScanRetry]);
 
   const removedMethods = editTarget
     ? (editTarget.allowed_auth_methods ?? []).filter((method) => !editMethods.includes(method))
     : [];
-  const affected =
-    editTarget && identities
-      ? removedMethods
-          .map((method) => ({
-            method,
-            identities: identitiesRelyingOn(identities, editTarget, method),
-          }))
-          .filter((entry) => entry.identities.length > 0)
-      : [];
+  const affected = editTarget
+    ? removedMethods
+        .map((method) => ({
+          method,
+          identities: identitiesRelyingOn(identities, editTarget, method),
+        }))
+        .filter((entry) => entry.identities.length > 0)
+    : [];
   const affectedNames = [
     ...new Set(affected.flatMap((entry) => entry.identities.map((i) => i.name))),
   ];
@@ -242,7 +249,7 @@ export default function NamespacesPage() {
     editErrors.markAllTouched();
     if (methodsError) return;
     // Removing a method identities rely on is a fleet-affecting change: confirm first.
-    if (affectedCount > 0) {
+    if (removedMethods.length > 0 && (identityScanStatus !== "complete" || affectedCount > 0)) {
       setConfirmRemoval(true);
       return;
     }
@@ -354,9 +361,10 @@ export default function NamespacesPage() {
                   </thead>
                   <tbody>
                     {sort.apply(group.list).map((ns) => {
-                      const total = ns.parameter_count + ns.secret_count;
+                      const identityCount = ns.identity_count ?? 0;
+                      const total = ns.parameter_count + ns.secret_count + identityCount;
                       const canDelete = total === 0;
-                      const deleteReason = `Namespace holds ${ns.parameter_count} parameter(s) and ${ns.secret_count} secret(s). Empty it before deleting.`;
+                      const deleteReason = `Namespace holds ${ns.parameter_count} parameter(s), ${ns.secret_count} secret(s), and ${identityCount} bound ${identityCount === 1 ? "identity" : "identities"}. Remove these dependencies before deleting.`;
                       const deleteReasonId = `delete-reason-${ns.env}-${ns.app}`;
                       return (
                         <tr key={`${ns.env}/${ns.app}`} className="navigable-row">
@@ -407,6 +415,15 @@ export default function NamespacesPage() {
                                     </Button>
                                   }
                                   items={[
+                                    ...(identityCount > 0
+                                      ? [
+                                          {
+                                            key: "identities",
+                                            label: "Manage bound identities",
+                                            href: links.identities({ env: ns.env, app: ns.app }),
+                                          },
+                                        ]
+                                      : []),
                                     {
                                       key: "delete",
                                       label: canDelete ? (
@@ -497,15 +514,32 @@ export default function NamespacesPage() {
               }}
               error={shownMethodsError}
             />
-            {removedMethods.length > 0 && identitiesLoading ? (
+            {removedMethods.length > 0 && identityScanStatus === "loading" ? (
               <p className="faint text-sm" role="status">
-                Checking identities…
+                Checking identities… You can continue, but impact is unknown until this finishes.
               </p>
             ) : null}
-            {removedMethods.length > 0 && !identitiesLoading && identities === null ? (
-              <p className="faint text-sm" role="status">
-                Could not check which identities rely on the removed method.
-              </p>
+            {removedMethods.length > 0 && identityScanStatus === "error" ? (
+              <div className="warn-panel text-sm" role="status">
+                Could not check which identities rely on the removed method. Impact is unknown.{" "}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIdentityScanRetry((value) => value + 1)}
+                >
+                  Retry identity check
+                </Button>
+              </div>
+            ) : null}
+            {removedMethods.length > 0 && identityScanStatus === "incomplete" ? (
+              <div className="warn-panel text-sm" role="status">
+                Checked the first 2,000 identities, but more exist. The impact list is incomplete.{" "}
+                <Link href={links.identities({ env: editTarget.env, app: editTarget.app })}>
+                  Review bound identities
+                </Link>
+                .
+              </div>
             ) : null}
             {affected.map((entry) => (
               <div key={entry.method} className="warn-panel text-sm" role="status">
@@ -528,15 +562,36 @@ export default function NamespacesPage() {
         title="Remove authentication method?"
         danger
         message={
-          <>
-            Saving removes {removedMethods.map(methodLabel).join(" and ")} authentication from{" "}
-            <span className="mono">{editTarget ? `${editTarget.env}/${editTarget.app}` : ""}</span>.{" "}
-            {affectedCount} {affectedCount === 1 ? "identity stops" : "identities stop"}{" "}
-            authenticating on the next RPC: <span className="mono">{affectedNames.join(", ")}</span>
-            .
-          </>
+          identityScanStatus === "complete" ? (
+            <>
+              Saving removes {removedMethods.map(methodLabel).join(" and ")} authentication from{" "}
+              <span className="mono">
+                {editTarget ? `${editTarget.env}/${editTarget.app}` : ""}
+              </span>
+              . {affectedCount} {affectedCount === 1 ? "identity stops" : "identities stop"}{" "}
+              authenticating on the next RPC:{" "}
+              <span className="mono">{affectedNames.join(", ")}</span>.
+            </>
+          ) : (
+            <>
+              Saving removes {removedMethods.map(methodLabel).join(" and ")} authentication from{" "}
+              <span className="mono">
+                {editTarget ? `${editTarget.env}/${editTarget.app}` : ""}
+              </span>
+              .{" "}
+              {identityScanStatus === "loading"
+                ? "The identity check is still running, so the number of credentials this disables is unknown."
+                : identityScanStatus === "incomplete"
+                  ? "More than 2,000 identities exist, so the number of credentials this disables is unknown."
+                  : "The identity check failed, so the number of credentials this disables is unknown."}
+            </>
+          )
         }
-        confirmLabel={`Save and break ${affectedCount} ${affectedCount === 1 ? "identity" : "identities"}`}
+        confirmLabel={
+          identityScanStatus === "complete"
+            ? `Save and break ${affectedCount} ${affectedCount === 1 ? "identity" : "identities"}`
+            : "Save with unknown impact"
+        }
         busy={editSaving}
         onConfirm={() => void saveEdit()}
         onCancel={() => setConfirmRemoval(false)}

@@ -263,7 +263,7 @@ function LiveSubscribers({
               <tr>
                 <th>Client</th>
                 <th>Last heartbeat</th>
-                <th>Applied revision</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -280,12 +280,39 @@ function LiveSubscribers({
                     <td
                       data-label="Last heartbeat"
                       className="nowrap"
-                      title={formatUnixMs(s.last_heartbeat_unix_ms)}
+                      title={
+                        s.release_name
+                          ? "Release streams report lifecycle status instead of transport heartbeats"
+                          : formatUnixMs(s.last_heartbeat_unix_ms)
+                      }
                     >
-                      {formatRelative(s.last_heartbeat_unix_ms, now)}
+                      {s.release_name ? "—" : formatRelative(s.last_heartbeat_unix_ms, now)}
                     </td>
-                    <td data-label="Applied revision">
-                      {behind > 0 ? (
+                    <td data-label="Status">
+                      {s.release_name ? (
+                        <Badge
+                          kind={
+                            s.release_state === "applied"
+                              ? "success"
+                              : s.release_state === "rejected"
+                                ? "danger"
+                                : "neutral"
+                          }
+                        >
+                          {s.release_state
+                            ? [
+                                s.release_name,
+                                s.release_state,
+                                s.release_version === undefined ? null : `v${s.release_version}`,
+                                s.release_revision === undefined
+                                  ? null
+                                  : `revision ${s.release_revision}`,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")
+                            : `${s.release_name} · awaiting lifecycle report`}
+                        </Badge>
+                      ) : behind > 0 ? (
                         <Badge kind="warning">{behind} behind</Badge>
                       ) : (
                         <Badge kind="success">up to date</Badge>
@@ -440,7 +467,7 @@ export default function DashboardPage() {
   }, [load]);
 
   const staleCount = data.subscribers.filter(
-    (s) => s.last_acked_revision < data.currentRevision,
+    (s) => !s.release_name && s.last_acked_revision < data.currentRevision,
   ).length;
 
   const statusCounts = useMemo(() => {

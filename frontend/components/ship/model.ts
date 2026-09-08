@@ -43,6 +43,8 @@ export interface ShipRow {
   /** The editor has been prefilled with the current value (or there was none). */
   loaded: boolean;
   loadError?: string;
+  /** False while a field editor holds an invalid local draft. */
+  draftValid?: boolean;
   /** A version written by an earlier attempt; shipped as a pin until the row is edited. */
   reuseVersion?: number;
   /** The value the editor was prefilled with, for Revert and Show diff. */
@@ -129,7 +131,9 @@ export function addableAliases(application: Application, rows: readonly ShipRow[
 /** The editor's validation message for a row, or null when it parses. */
 export function rowError(row: ShipRow): string | null {
   if (row.reuseVersion !== undefined) return null;
+  if (row.loadError) return `Could not load the current value: ${row.loadError}`;
   if (!row.loaded) return "Loading the current value…";
+  if (row.draftValid === false) return "Fix the invalid field above.";
   return validateParameterValue(row.value, row.content_type) ?? validateValueSize(row.value);
 }
 
@@ -140,7 +144,8 @@ export function rowError(row: ShipRow): string | null {
  * contract's content type now rejects, which is worth seeing at once.
  */
 export function shownRowError(row: ShipRow): string | null {
-  if (row.touched || (!row.missing && row.loaded && !row.loadError)) return rowError(row);
+  if (row.loadError || row.touched || (!row.missing && row.loaded && !row.loadError))
+    return rowError(row);
   return null;
 }
 
@@ -209,6 +214,32 @@ export function buildChanges(rows: readonly ShipRow[], optIns: readonly string[]
   );
   for (const alias of optIns) changes.push({ alias, label: "current" });
   return changes;
+}
+
+/** Resolve mutable selectors once; execution must pin exactly what was previewed. */
+export function freezePreviewChanges(
+  changes: readonly ShipChange[],
+  entries: readonly ShipPreviewEntry[],
+  baseVersion: number,
+): ShipChange[] {
+  const pins = new Map(entries.map((entry) => [entry.alias, entry.to_version]));
+  const frozen = changes.map((change) => {
+    if (!change.label) return change;
+    const version = pins.get(change.alias);
+    if (!version) throw new Error(`Preview did not resolve ${change.alias}; preview again.`);
+    return { alias: change.alias, version };
+  });
+  // With no active release, omitted aliases implicitly select current too.
+  if (baseVersion === 0) {
+    const explicit = new Set(changes.map((change) => change.alias));
+    for (const entry of entries) {
+      if (explicit.has(entry.alias) || entry.change === "missing") continue;
+      if (!entry.to_version)
+        throw new Error(`Preview did not resolve ${entry.alias}; preview again.`);
+      frozen.push({ alias: entry.alias, version: entry.to_version });
+    }
+  }
+  return frozen;
 }
 
 /** A stable identity for a change set, used to tell a preview from the edits after it. */

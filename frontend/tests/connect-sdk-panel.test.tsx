@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import ConnectSdkPanel, { ENDPOINT_STORAGE_KEY } from "@/components/onboarding/ConnectSdkPanel";
+import ConnectSdkPanel, {
+  ENDPOINT_STORAGE_KEY,
+  isWildcardEndpoint,
+} from "@/components/onboarding/ConnectSdkPanel";
 import { goSnippet, MTLS_RUNBOOK_URL, tsSnippet } from "@/lib/sdk-snippets";
 import type { HealthResponse } from "@/lib/types";
 
@@ -90,9 +93,10 @@ describe("ConnectSdkPanel", () => {
     expect(snippet()).toContain('Endpoint:  "kms.prod.internal:8443"');
     expect(snippet()).toContain('candidate.Parameter("rate_limits")');
     expect(screen.getByRole("button", { name: "Copy Go snippet" })).toBeVisible();
-    // The endpoint is read-only when the server reports it.
-    expect(screen.queryByLabelText("gRPC endpoint")).toBeNull();
-    expect(screen.getByText("kms.prod.internal:8443")).toBeVisible();
+    expect(screen.getByLabelText("gRPC endpoint")).toHaveAttribute(
+      "placeholder",
+      "kms.prod.internal:8443",
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
     expect(snippet()).toContain('createReleaseLoader({ name: "runtime" })');
@@ -139,6 +143,15 @@ describe("ConnectSdkPanel", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("allows a destination override even when health is unavailable", () => {
+    render(
+      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={null} />,
+    );
+    const input = screen.getByLabelText("gRPC endpoint");
+    fireEvent.change(input, { target: { value: "kms.reachable:8443" } });
+    expect(snippet()).toContain("kms.reachable:8443");
+  });
+
   it("lets the operator type the endpoint when health has none, remembering it per browser", () => {
     window.localStorage.setItem(ENDPOINT_STORAGE_KEY, "remembered:9443");
     render(
@@ -169,6 +182,33 @@ describe("ConnectSdkPanel", () => {
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(window.localStorage.getItem(ENDPOINT_STORAGE_KEY)).toBeNull();
+  });
+
+  it("never generates a wildcard destination and persists an IPv6 override", () => {
+    expect(isWildcardEndpoint("0.0.0.0:8443")).toBe(true);
+    expect(isWildcardEndpoint("[::]:8443")).toBe(true);
+    expect(isWildcardEndpoint("[2001:db8::10]:8443")).toBe(false);
+
+    const { unmount } = render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={{ ...health, grpc_addr: "[::]:8443" }}
+      />,
+    );
+    expect(snippet()).not.toContain("[::]:8443");
+    const input = screen.getByLabelText("gRPC endpoint");
+    fireEvent.change(input, { target: { value: "[2001:db8::10]:9443" } });
+    fireEvent.blur(input);
+    expect(snippet()).toContain("[2001:db8::10]:9443");
+    unmount();
+
+    render(
+      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+    );
+    expect(screen.getByLabelText("gRPC endpoint")).toHaveValue("[2001:db8::10]:9443");
+    expect(snippet()).toContain("[2001:db8::10]:9443");
   });
 
   it("lists the three usual failures", () => {

@@ -18,6 +18,7 @@ export interface ParameterValueInputProps {
   contentType: string;
   value: string;
   onChange: (value: string) => void;
+  onValidityChange?: (valid: boolean) => void;
   /** The alias's pinned sub-schema; only consulted for json values. */
   schema?: JsonSchema | null;
   /** Chips shown beside the Form/JSON toggle when a pinned schema applies. */
@@ -92,6 +93,7 @@ export function ParameterValueInput({
   contentType,
   value,
   onChange,
+  onValidityChange,
   schema = null,
   schemaLabel,
   preferForm,
@@ -111,6 +113,13 @@ export function ParameterValueInput({
 }: ParameterValueInputProps) {
   const pinned = contentType === "json" && schema !== null && buildForm(schema) !== null;
   const inferred = useInferredSchema(value, contentType === "json" && !pinned);
+  const hasSchemaEditor = contentType === "json" && Boolean(schema ?? inferred);
+  const valid = validateParameterValue(value, contentType) === null;
+  const validityCallback = useRef(onValidityChange);
+  validityCallback.current = onValidityChange;
+  useEffect(() => {
+    if (!hasSchemaEditor) validityCallback.current?.(valid);
+  }, [hasSchemaEditor, valid]);
   // A one-line string opens in a single-line input; the operator can widen it,
   // and a value that already holds a line break has no single-line form.
   const [multiline, setMultiline] = useState(false);
@@ -239,6 +248,7 @@ export function ParameterValueInput({
             disabled={disabled}
             rows={rows}
             onChange={onChange}
+            onValidityChange={onValidityChange}
             onBlur={onBlur}
             onSubmit={onSubmit}
           />
@@ -320,7 +330,7 @@ export function ParameterValueInput({
       );
     }
     default: {
-      const needsTextarea = multiline || value.includes("\n");
+      const needsTextarea = multiline || /[\r\n]/.test(value);
       const toggle = (
         <Button
           type="button"
@@ -329,7 +339,7 @@ export function ParameterValueInput({
           className="value-input-toggle"
           aria-label={needsTextarea ? "Edit on one line" : "Edit on several lines"}
           aria-pressed={needsTextarea}
-          disabled={disabled || value.includes("\n")}
+          disabled={disabled || /[\r\n]/.test(value)}
           onClick={() => setMultiline((current) => !current)}
         >
           {needsTextarea ? (

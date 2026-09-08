@@ -72,6 +72,15 @@ func (s *Service) GetParameter(ctx context.Context, pr Principal, ref domain.Ref
 
 // PutParameter writes a new immutable version and moves the current label.
 func (s *Service) PutParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string) (version, revision uint64, err error) {
+	return s.putParameter(ctx, pr, ref, value, contentType, metadata, false)
+}
+
+// CreateParameter writes the first version only; existing keys are rejected atomically.
+func (s *Service) CreateParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string) (uint64, uint64, error) {
+	return s.putParameter(ctx, pr, ref, value, contentType, metadata, true)
+}
+
+func (s *Service) putParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string, createOnly bool) (version, revision uint64, err error) {
 	if err := validateRef(ref); err != nil {
 		return 0, 0, err
 	}
@@ -94,7 +103,15 @@ func (s *Service) PutParameter(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return 0, 0, err
 	}
-	version, revision, err = s.store.PutParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
+	if createOnly {
+		store, ok := s.store.(storage.ParameterCreateStore)
+		if !ok {
+			return 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "store does not support create-only parameter writes")
+		}
+		version, revision, err = store.CreateParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
+	} else {
+		version, revision, err = s.store.PutParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
+	}
 	if err != nil {
 		return 0, 0, err
 	}

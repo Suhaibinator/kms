@@ -222,6 +222,7 @@ export function ApplicationHome({
   const [environmentSaving, setEnvironmentSaving] = useState(false);
   const [cloneSeed, setCloneSeed] = useState<CloneSeed | null>(null);
   const [cloneOpen, setCloneOpen] = useState(false);
+  const cloneRefresh = useRef<Promise<void> | null>(null);
   const [definition, setDefinition] = useState<{ prefill: ContractEntry[] | null } | null>(null);
   const [deriveOpen, setDeriveOpen] = useState(false);
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
@@ -895,13 +896,13 @@ export function ApplicationHome({
         onCreated={(result) => {
           setCloneOpen(false);
           replaceQuery({ env: result.namespace.env });
-          void reload();
+          cloneRefresh.current = reload();
         }}
-        onAddSecret={(environment, alias) => {
-          setCloneOpen(false);
-          replaceQuery({ env: environment });
-          void reload();
-          openSecret(environment, alias);
+        onAddSecret={(environment, alias) => openSecret(environment, alias)}
+        onAddParameter={async (environment, key) => {
+          // The target must be in the overview before opening the environment picker.
+          await cloneRefresh.current;
+          openAddValueForKey(environment, key);
         }}
       />
       <ApplicationDefinitionModal

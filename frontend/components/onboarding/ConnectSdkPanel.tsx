@@ -36,6 +36,18 @@ function storeEndpoint(value: string): void {
   }
 }
 
+/** Listener wildcard addresses accept inbound traffic but cannot be dialed by a client. */
+export function isWildcardEndpoint(value: string): boolean {
+  const endpoint = value.trim();
+  if (endpoint === "::") return true;
+  const host = endpoint.startsWith("[")
+    ? endpoint.slice(1, endpoint.indexOf("]"))
+    : endpoint.includes(":")
+      ? endpoint.slice(0, endpoint.lastIndexOf(":"))
+      : endpoint;
+  return host === "" || host === "0.0.0.0" || host === "::";
+}
+
 const TROUBLESHOOTING: Array<{ title: string; detail: string }> = [
   {
     title: "Identity not bound to this namespace",
@@ -66,11 +78,10 @@ export default function ConnectSdkPanel({
   health,
 }: ConnectSdkPanelProps) {
   const serverEndpoint = health?.grpc_addr?.trim() ?? "";
-  const editable = health !== null && !serverEndpoint;
   const [typed, setTyped] = useState("");
   useEffect(() => {
-    if (editable) setTyped(readStoredEndpoint());
-  }, [editable]);
+    setTyped(readStoredEndpoint());
+  }, []);
 
   const commitEndpoint = () => {
     const trimmed = typed.trim();
@@ -78,7 +89,9 @@ export default function ConnectSdkPanel({
     storeEndpoint(trimmed);
   };
 
-  const endpoint = serverEndpoint || typed;
+  const reportedEndpoint =
+    serverEndpoint && !isWildcardEndpoint(serverEndpoint) ? serverEndpoint : "";
+  const endpoint = typed.trim() || reportedEndpoint;
   const tls = health?.tls_enabled !== false;
   const input: SnippetInput = useMemo(
     () => ({
@@ -124,36 +137,33 @@ export default function ConnectSdkPanel({
         </div>
       ) : null}
 
-      {editable ? (
-        <Field
-          label="gRPC endpoint"
-          hint="The server did not report its listener address. Enter the host:port clients should dial; it is remembered in this browser."
-          htmlFor="connect-endpoint"
-          className="connect-endpoint"
-        >
-          <Input
-            id="connect-endpoint"
-            className="font-mono"
-            placeholder={ENDPOINT_PLACEHOLDER}
-            value={typed}
-            spellCheck={false}
-            onChange={(event) => setTyped(event.target.value)}
-            // Persist a settled value, not every keystroke: a half-typed
-            // `kms.inter` must not be what the next session reloads.
-            onBlur={commitEndpoint}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") commitEndpoint();
-            }}
-          />
-        </Field>
-      ) : (
-        <div className="connect-endpoint-row">
-          <span className="connect-endpoint-label">gRPC endpoint</span>
-          <code className="connect-endpoint-value">
-            {serverEndpoint || (health === null ? "loading…" : ENDPOINT_PLACEHOLDER)}
-          </code>
-        </div>
-      )}
+      <Field
+        label="gRPC endpoint"
+        hint={
+          !serverEndpoint
+            ? "Enter the reachable host:port clients should dial; it is remembered in this browser."
+            : isWildcardEndpoint(serverEndpoint)
+              ? "The server reported a wildcard listener, which clients cannot dial. Enter a reachable host:port; it is remembered in this browser."
+              : "Enter the host:port clients should dial. Leave blank to use the reported address; an override is remembered in this browser."
+        }
+        htmlFor="connect-endpoint"
+        className="connect-endpoint"
+      >
+        <Input
+          id="connect-endpoint"
+          className="font-mono"
+          placeholder={reportedEndpoint || ENDPOINT_PLACEHOLDER}
+          value={typed}
+          spellCheck={false}
+          onChange={(event) => setTyped(event.target.value)}
+          // Persist a settled value, not every keystroke: a half-typed
+          // `kms.inter` must not be what the next session reloads.
+          onBlur={commitEndpoint}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitEndpoint();
+          }}
+        />
+      </Field>
 
       <Tabs defaultValue="go" className="connect-tabs">
         <TabsList aria-label="SDK language">

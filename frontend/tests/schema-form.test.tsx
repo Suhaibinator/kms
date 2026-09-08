@@ -579,3 +579,192 @@ it("exposes null for type unions and disables array state changes with the edito
   expect(screen.getByRole("combobox", { name: "urls state" })).toBeDisabled();
   expect(screen.getByRole("combobox", { name: "urls state" })).toHaveValue("null");
 });
+
+describe("safe form drafts", () => {
+  function DraftHarness({
+    initial = '{"replicas":3}',
+    resetKey = "a",
+    formSchema = schema,
+  }: {
+    initial?: string;
+    resetKey?: string;
+    formSchema?: JsonSchema;
+  }) {
+    const [value, setValue] = useState(initial);
+    const [valid, setValid] = useState(true);
+    return (
+      <>
+        <SchemaForm
+          schema={formSchema}
+          value={value}
+          onChange={setValue}
+          onValidityChange={setValid}
+          resetKey={resetKey}
+        />
+        <button disabled={!valid}>Save draft</button>
+        <pre data-testid="out">{value}</pre>
+      </>
+    );
+  }
+
+  it.each(["9223372036854775807", "1e400", "0.123456789123456789", "1e-400"])(
+    "universally keeps %s in the raw editor",
+    (number) => {
+      const initial = `{"id":${number},"name":"old"}`;
+      render(<DraftHarness initial={initial} />);
+      expect(screen.getByRole("button", { name: "Form" })).toBeDisabled();
+      expect(screen.getByRole("textbox", { name: "Value" })).toHaveValue(initial);
+      expect(screen.getByTestId("out")).toHaveTextContent(initial);
+    },
+  );
+
+  it("blocks save for retained incomplete numbers through mode switches and restores", () => {
+    const view = render(<DraftHarness />);
+    fireEvent.change(screen.getByLabelText(/replicas/), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText(/replicas/), { target: { value: "4e" } });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ replicas: 4 });
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Form" }));
+    expect(screen.getByLabelText(/replicas/)).toHaveValue("4e");
+    view.rerender(<DraftHarness resetKey="restored" />);
+    expect(screen.getByLabelText(/replicas/)).toHaveValue("4");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+  });
+
+  it("lets an explicit JSON replacement resolve a retained invalid draft", () => {
+    render(<DraftHarness />);
+    fireEvent.change(screen.getByLabelText(/replicas/), { target: { value: "4e" } });
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value: '{"replicas":5}' },
+    });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Form" }));
+    expect(screen.getByLabelText(/replicas/)).toHaveValue("5");
+  });
+
+  it("blocks new rounded number drafts without changing the committed number", () => {
+    render(<DraftHarness />);
+    fireEvent.change(screen.getByLabelText(/replicas/), {
+      target: { value: "9223372036854775807" },
+    });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ replicas: 3 });
+  });
+
+  it("blocks empty numeric list drafts until repaired or removed", () => {
+    render(
+      <DraftHarness
+        initial='{"counts":[3]}'
+        formSchema={{
+          type: "object",
+          properties: { counts: { type: "array", items: { type: "number" } } },
+        }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("counts item 1"), { target: { value: "" } });
+    fireEvent.blur(screen.getByLabelText("counts item 1"));
+    expect(screen.getByLabelText("counts item 1")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove counts item 1" }));
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+    expect(out()).toEqual({ counts: [] });
+  });
+
+  it("blocks invalid and precision-losing raw property drafts", () => {
+    render(<DraftHarness initial='{"custom":3}' />);
+    const input = screen.getByLabelText("custom");
+    fireEvent.change(input, { target: { value: '{"x":"\\q"}' } });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ custom: 3 });
+    fireEvent.change(input, { target: { value: "9223372036854775807" } });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ custom: 3 });
+    fireEvent.change(input, { target: { value: "5" } });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+  });
+
+  it("reports malformed JSON in the whole-value editor without crashing", () => {
+    render(<DraftHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value: '{"x":"\\q"}' },
+    });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Value" })).toHaveValue('{"x":"\\q"}');
+  });
+
+  it("preserves newlines in string fields and list items during editing", () => {
+    render(
+      <DraftHarness initial={JSON.stringify({ name: "line1\nline2", tags: ["tag1\ntag2"] })} />,
+    );
+    const name = screen.getByLabelText(/name/);
+    const tag = screen.getByLabelText("tags item 1");
+    expect(name.tagName).toBe("TEXTAREA");
+    expect(tag.tagName).toBe("TEXTAREA");
+    expect(name).toHaveValue("line1\nline2");
+    expect(tag).toHaveValue("tag1\ntag2");
+    fireEvent.change(name, { target: { value: "line1\nline2!" } });
+    fireEvent.change(tag, { target: { value: "tag1\ntag2!" } });
+    expect(out()).toEqual({ name: "line1\nline2!", tags: ["tag1\ntag2!"] });
+  });
+});
+
+describe("raw schema numeric provenance", () => {
+  it.each([
+    '"default":9007199254740993',
+    '"default":0.123456789123456789',
+    '"default":1e-400',
+    '"enum":[1,9007199254740993]',
+  ])("keeps unsafe parsed numeric constants in JSON mode: %s", (constant) => {
+    const raw = `{"properties":{"app":{"type":"object","properties":{"n":{"type":"number",${constant}}}}}}`;
+    const pinned = aliasSchema(raw, "app");
+    if (!pinned) throw new Error("Expected alias schema");
+    render(<Harness initial='{"n":1}' schema={pinned} />);
+    expect(screen.getByRole("button", { name: "Form" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Reset to default" })).not.toBeInTheDocument();
+    expect(out()).toEqual({ n: 1 });
+  });
+
+  it.each([
+    '{"type":"array","items":{"type":"number","enum":[1,9007199254740993]}}',
+    '{"anyOf":[{"type":"number"},{"type":"null"}],"default":9007199254740993}',
+    '{"type":"object","default":{"nested":9007199254740993}}',
+  ])("protects nested constants: %s", (field) => {
+    const pinned = aliasSchema(
+      `{"properties":{"app":{"type":"object","properties":{"n":${field}}}}}`,
+      "app",
+    );
+    if (!pinned) throw new Error("Expected alias schema");
+    render(<Harness initial="{}" schema={pinned} />);
+    expect(screen.getByRole("button", { name: "Form" })).toBeDisabled();
+    expect(out()).toEqual({});
+  });
+
+  it("keeps ordinary defaults functional despite unsafe constants in a sibling alias", () => {
+    const pinned = aliasSchema(
+      '{"properties":{"unsafe":{"default":9007199254740993},"app":{"type":"object","properties":{"n":{"type":"number","default":2}}}}}',
+      "app",
+    );
+    if (!pinned) throw new Error("Expected alias schema");
+    render(<Harness initial='{"n":1}' schema={pinned} />);
+    fireEvent.change(screen.getByLabelText("n"), { target: { value: "4e" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+    expect(screen.getByLabelText("n")).toHaveValue("2");
+    expect(screen.queryByText("must be a number")).not.toBeInTheDocument();
+    expect(out()).toEqual({ n: 2 });
+  });
+
+  it("keeps ordinary numeric enum choices functional", async () => {
+    const pinned = aliasSchema(
+      '{"properties":{"app":{"type":"object","properties":{"n":{"type":"number","enum":[1,2.5]}}}}}',
+      "app",
+    );
+    if (!pinned) throw new Error("Expected alias schema");
+    render(<Harness initial='{"n":1}' schema={pinned} />);
+    await chooseSelectOption(screen.getByRole("combobox", { name: "n" }), "2.5");
+    expect(out()).toEqual({ n: 2.5 });
+  });
+});

@@ -424,4 +424,29 @@ describe("audit events", () => {
     await waitFor(() => expect(listAudit).toHaveBeenCalledTimes(2));
     expect(listAudit.mock.calls[1][0]).toEqual(listAudit.mock.calls[0][0]);
   });
+
+  it("does not present old events as results for a failed new filter", async () => {
+    vi.mocked(api.listAudit)
+      .mockResolvedValueOnce({ events: [event(1)], next_page_token: "" })
+      .mockRejectedValueOnce(new Error("audit offline"));
+    render(<AuditPage />);
+    expect(await screen.findByText("secret.read")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "other-client" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(await screen.findByText(/No results are available for the current query/)).toBeVisible();
+    expect(screen.queryByText("secret.read")).toBeNull();
+    expect(screen.queryByText("No events match the current filters.")).toBeNull();
+  });
+
+  it("retains same-query events with an explicit stale marker after refresh fails", async () => {
+    vi.mocked(api.listAudit)
+      .mockResolvedValueOnce({ events: [event(1)], next_page_token: "" })
+      .mockRejectedValueOnce(new Error("audit offline"));
+    render(<AuditPage />);
+    expect(await screen.findByText("secret.read")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText(/last successful results for this query/)).toBeVisible();
+    expect(screen.getByText("secret.read")).toBeVisible();
+  });
 });

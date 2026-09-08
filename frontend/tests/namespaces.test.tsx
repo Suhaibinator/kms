@@ -37,6 +37,7 @@ function namespace(
   counts: {
     parameters?: number;
     secrets?: number;
+    identities?: number;
     methods?: Namespace["allowed_auth_methods"];
   } = {},
 ): Namespace {
@@ -49,6 +50,7 @@ function namespace(
     created_at_unix_ms: 1,
     parameter_count: counts.parameters ?? 0,
     secret_count: counts.secrets ?? 0,
+    identity_count: counts.identities ?? 0,
   };
 }
 
@@ -169,7 +171,24 @@ describe("NamespacesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "More for dev/payments-api" }));
     const remove = await screen.findByRole("menuitem", { name: /Delete environment/ });
     expect(remove).toHaveAttribute("aria-disabled", "true");
-    expect(remove).toHaveTextContent(/holds 3 parameter\(s\) and 2 secret\(s\)/);
+    expect(remove).toHaveTextContent(
+      /holds 3 parameter\(s\), 2 secret\(s\), and 0 bound identities/,
+    );
+    expect(mocks.deleteNamespace).not.toHaveBeenCalled();
+  });
+
+  it("blocks deletion for bound identities and links to the place that resolves them", async () => {
+    mocks.namespaces.namespaces = [namespace("dev", { identities: 2 })];
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "More for dev/payments-api" }));
+
+    expect(await screen.findByRole("menuitem", { name: /Delete environment/ })).toHaveTextContent(
+      "2 bound identities",
+    );
+    expect(screen.getByRole("menuitem", { name: "Manage bound identities" })).toHaveAttribute(
+      "href",
+      "/identities?env=dev&app=payments-api",
+    );
     expect(mocks.deleteNamespace).not.toHaveBeenCalled();
   });
 
@@ -287,6 +306,70 @@ describe("NamespacesPage", () => {
     fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(mocks.updateNamespace).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("dialog", { name: "Remove authentication method?" })).toBeNull();
+  });
+
+  it("confirms unknown impact while the identity check is still loading", async () => {
+    mocks.namespaces.namespaces = [namespace("dev", { methods: ["mtls", "token"] })];
+    mocks.listIdentities.mockReturnValue(new Promise(() => {}));
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog", { name: "Edit dev/payments-api" });
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /Token/ }));
+    expect(within(modal).getByText(/impact is unknown until this finishes/i)).toBeVisible();
+
+    fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
+    const confirm = await screen.findByRole("dialog", { name: "Remove authentication method?" });
+    expect(confirm).toHaveTextContent(/identity check is still running/i);
+    expect(within(confirm).getByRole("button", { name: "Save with unknown impact" })).toBeEnabled();
+    expect(mocks.updateNamespace).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed identity impact unknown and lets the user retry", async () => {
+    mocks.namespaces.namespaces = [namespace("dev", { methods: ["mtls", "token"] })];
+    mocks.listIdentities
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ identities: [], next_page_token: "" });
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog", { name: "Edit dev/payments-api" });
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /Token/ }));
+
+    expect(await within(modal).findByText(/impact is unknown/i)).toBeVisible();
+    fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Remove authentication method?" }),
+    ).toHaveTextContent(/identity check failed/i);
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Remove authentication method?" })).getByRole(
+        "button",
+        { name: "Cancel" },
+      ),
+    );
+    fireEvent.click(within(modal).getByRole("button", { name: "Retry identity check" }));
+    await waitFor(() => expect(mocks.listIdentities).toHaveBeenCalledTimes(2));
+  });
+
+  it("treats the 2,000-identity scan cap as incomplete impact", async () => {
+    mocks.namespaces.namespaces = [namespace("dev", { methods: ["mtls", "token"] })];
+    mocks.listIdentities.mockImplementation(async (_limit, token) => ({
+      identities: [],
+      next_page_token: token ? `${token}-next` : "page-2",
+    }));
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog", { name: "Edit dev/payments-api" });
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /Token/ }));
+
+    expect(await within(modal).findByText(/first 2,000 identities/i)).toBeVisible();
+    expect(mocks.listIdentities).toHaveBeenCalledTimes(10);
+    expect(within(modal).getByRole("link", { name: "Review bound identities" })).toHaveAttribute(
+      "href",
+      "/identities?env=dev&app=payments-api",
+    );
+    fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
+    const confirm = await screen.findByRole("dialog", { name: "Remove authentication method?" });
+    expect(confirm).toHaveTextContent(/More than 2,000 identities exist/i);
+    expect(within(confirm).getByRole("button", { name: "Save with unknown impact" })).toBeEnabled();
   });
 
   it("asks before discarding an edited namespace", async () => {

@@ -1,5 +1,14 @@
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, type Ref, useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Button, Checkbox, Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
@@ -19,6 +28,7 @@ import {
   type JsonSchema,
   parseNumberDraft,
   pathKey,
+  schemaNeedsExactJson,
   setAt,
   validateValue,
 } from "@/lib/schema-form";
@@ -30,6 +40,8 @@ export interface SchemaFormProps {
   /** The value as JSON text — the single source of truth shared with the JSON editor. */
   value: string;
   onChange: (text: string) => void;
+  /** False while any visible or retained local draft cannot be committed. */
+  onValidityChange?: (valid: boolean) => void;
   disabled?: boolean;
   /** Accessible name for the raw JSON editor and, in form mode, the field group. */
   jsonLabel?: string;
@@ -52,6 +64,7 @@ export interface SchemaFormProps {
   /** Changes when the parent intentionally replaces the draft, e.g. restore or source pin. */
   resetKey?: string;
   preferForm?: boolean;
+  /** @deprecated Exact numeric text is always protected. */
   preserveExactNumbers?: boolean;
 }
 
@@ -90,7 +103,53 @@ function parseText(text: string): { ok: true; data: unknown } | { ok: false; err
       error: `must be valid JSON (line ${problem.line}, col ${problem.column}: ${problem.message})`,
     };
   }
-  return { ok: true, data: JSON.parse(text) };
+  try {
+    return { ok: true, data: JSON.parse(text) };
+  } catch {
+    return { ok: false, error: "must be valid JSON" };
+  }
+}
+
+function needsExactJson(text: string): boolean {
+  return tokenizeJson(text).some(
+    (token) =>
+      token.kind === "number" &&
+      JSON.stringify(Number(text.slice(token.start, token.end))) !==
+        text.slice(token.start, token.end),
+  );
+}
+
+function parseFormText(text: string): ReturnType<typeof parseText> {
+  const parsed = parseText(text);
+  return parsed.ok && needsExactJson(text)
+    ? {
+        ok: false,
+        error: "Use the JSON editor for the whole value to preserve exact numeric text.",
+      }
+    : parsed;
+}
+
+// Compare decimal values without rounding; harmless spellings such as 1.0 and
+// 1e2 remain usable, while digits lost by Number are never silently committed.
+function decimalKey(text: string): string {
+  const [mantissa, exponent = "0"] = text.toLowerCase().replace(/^\+/, "").split("e");
+  const fraction = mantissa.split(".")[1]?.length ?? 0;
+  const digits = mantissa.replace(".", "").replace(/^(-?)0+/, "$1");
+  const trimmed = digits.replace(/0+$/, "");
+  if (trimmed === "" || trimmed === "-") return "0";
+  return `${trimmed}e${BigInt(exponent) - BigInt(fraction) + BigInt(digits.length - trimmed.length)}`;
+}
+
+function parseFormNumber(text: string, integer: boolean): ReturnType<typeof parseNumberDraft> {
+  const result = parseNumberDraft(text, integer);
+  if (
+    !result.error &&
+    result.value !== undefined &&
+    decimalKey(text.trim()) !== decimalKey(String(result.value))
+  ) {
+    return { value: undefined, error: "Use JSON to preserve this number's exact precision." };
+  }
+  return result;
 }
 
 function fieldLabel(field: FormField): string {
@@ -110,6 +169,7 @@ export function SchemaForm({
   schema,
   value,
   onChange,
+  onValidityChange,
   disabled = false,
   jsonLabel = "Value",
   rows = 7,
@@ -124,7 +184,6 @@ export function SchemaForm({
   schemaLabel,
   preferForm,
   resetKey,
-  preserveExactNumbers,
   inputRef,
 }: SchemaFormProps) {
   const baseId = useId();
@@ -144,15 +203,7 @@ export function SchemaForm({
   );
   const root = useMemo(() => buildForm(schema), [schema]);
   const parsed = useMemo(() => parseText(value), [value]);
-  const exactJsonOnly = Boolean(
-    preserveExactNumbers &&
-      tokenizeJson(value).some(
-        (token) =>
-          token.kind === "number" &&
-          JSON.stringify(Number(value.slice(token.start, token.end))) !==
-            value.slice(token.start, token.end),
-      ),
-  );
+  const exactJsonOnly = needsExactJson(value) || schemaNeedsExactJson(schema);
   const formable =
     !exactJsonOnly &&
     root !== null &&
@@ -170,13 +221,22 @@ export function SchemaForm({
     setModeState(next);
     storeEditorMode(next);
   };
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, { text: string; error: string | null }>>({});
   // Keep local incomplete number/JSON text while typing, but discard it on an
   // explicit parent restore/source replacement. Expansion and mode stay intact.
   useEffect(() => {
     void resetKey;
     setDrafts({});
   }, [resetKey]);
+  const valid =
+    parsed.ok && value.trim() !== "" && !Object.values(drafts).some((draft) => draft.error);
+  // Inline parent callbacks often change identity after patching a row. Notify
+  // only for validity changes, avoiding callback-driven update loops.
+  const validityCallback = useRef(onValidityChange);
+  validityCallback.current = onValidityChange;
+  useEffect(() => {
+    validityCallback.current?.(valid);
+  }, [valid]);
   // Object groups the operator folded; a group with a problem inside stays open.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const effectiveMode: Mode = mode === "form" && formable ? "form" : "json";
@@ -203,11 +263,11 @@ export function SchemaForm({
   function commit(path: string[], next: unknown) {
     onChange(serialize(setAt(data, path, next)));
   }
-  function setDraft(key: string, text: string | undefined) {
+  function setDraft(key: string, text: string | undefined, error: string | null = null) {
     setDrafts((current) => {
       const copy = { ...current };
       if (text === undefined) delete copy[key];
-      else copy[key] = text;
+      else copy[key] = { text, error };
       return copy;
     });
   }
@@ -244,7 +304,17 @@ export function SchemaForm({
             // text line and grew the line the moment a default was departed
             // from. text-sm is the hint's own size.
             className="ml-1 h-auto p-0 align-baseline text-sm"
-            onClick={() => commit(field.path, field.schema.default)}
+            onClick={() => {
+              const key = pathKey(field.path);
+              setDrafts((current) =>
+                Object.fromEntries(
+                  Object.entries(current).filter(
+                    ([draftKey]) => draftKey !== key && !draftKey.startsWith(`${key} `),
+                  ),
+                ),
+              );
+              commit(field.path, field.schema.default);
+            }}
           >
             Reset to default
           </Button>
@@ -277,6 +347,11 @@ export function SchemaForm({
           JSON
         </button>
       </fieldset>
+      {Object.values(drafts).some((draft) => draft.error) && effectiveMode === "json" ? (
+        <span role="alert">
+          Fix the incomplete Form fields, or edit JSON to replace those drafts.
+        </span>
+      ) : null}
       {schemaLabel ? <span className="schema-form-label">{schemaLabel}</span> : null}
       <span className="schema-form-caption faint">
         {root === null
@@ -310,15 +385,18 @@ export function SchemaForm({
           id={id}
           aria-label={jsonLabel}
           aria-describedby={ariaDescribedBy}
-          aria-invalid={ariaInvalid}
+          aria-invalid={ariaInvalid || !valid}
           aria-required={ariaRequired}
           inputRef={inputRef}
           rows={rows}
           value={value}
           disabled={disabled}
-          onChange={onChange}
+          onChange={(next) => {
+            setDrafts({});
+            onChange(next);
+          }}
           onBlur={onBlur}
-          onSubmit={onSubmit}
+          onSubmit={valid ? onSubmit : undefined}
         />
       </div>
     );
@@ -328,11 +406,11 @@ export function SchemaForm({
   const extras = extraKeys(rootField, data);
   // A key no JSON path can produce, so the extras draft never collides with a field.
   const extrasKey = "\0extras";
-  const extrasDraft = drafts[extrasKey];
+  const extrasDraft = drafts[extrasKey]?.text;
   const extrasValue = Object.fromEntries(extras.map((key) => [key, data[key]]));
   const extrasText =
     extrasDraft ?? (extras.length === 0 ? "" : JSON.stringify(extrasValue, null, 2));
-  const extrasParsed = extrasDraft === undefined ? null : parseText(extrasDraft);
+  const extrasParsed = extrasDraft === undefined ? null : parseFormText(extrasDraft);
   const extrasError =
     extrasParsed && !extrasParsed.ok
       ? extrasParsed.error
@@ -469,7 +547,8 @@ export function SchemaForm({
         }
         const long =
           (typeof field.schema.maxLength === "number" && field.schema.maxLength > 200) ||
-          field.schema.format === "kms-base64";
+          field.schema.format === "kms-base64" ||
+          /[\r\n]/.test(text);
         const maxLength =
           typeof field.schema.maxLength === "number" ? field.schema.maxLength : undefined;
         return (
@@ -503,10 +582,10 @@ export function SchemaForm({
         );
       }
       case "number": {
-        const draft = drafts[key];
+        const draft = drafts[key]?.text;
         const text = draft ?? (typeof current === "number" ? String(current) : "");
         const draftProblem =
-          draft === undefined ? null : parseNumberDraft(draft, Boolean(field.integer)).error;
+          draft === undefined ? null : parseFormNumber(draft, Boolean(field.integer)).error;
         const error = errorFor(field, draftProblem);
         const hint = hintFor(field, current);
         if (field.enumValues) {
@@ -548,12 +627,12 @@ export function SchemaForm({
               spellCheck={false}
               onChange={(event) => {
                 const next = event.target.value;
-                setDraft(key, next);
-                const result = parseNumberDraft(next, Boolean(field.integer));
+                const result = parseFormNumber(next, Boolean(field.integer));
+                setDraft(key, next, result.error);
                 if (!result.error) commit(field.path, result.value);
               }}
               onBlur={() => {
-                if (draft !== undefined && !parseNumberDraft(draft, Boolean(field.integer)).error) {
+                if (draft !== undefined && !parseFormNumber(draft, Boolean(field.integer)).error) {
                   setDraft(key, undefined);
                 }
                 onBlur?.();
@@ -696,8 +775,13 @@ export function SchemaForm({
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
                 const itemKey = pathKey([...field.path, String(index)]);
-                const itemDraft = drafts[itemKey];
-                const itemError = issueByPath.get(itemKey)?.join("; ") ?? null;
+                const itemDraft = drafts[itemKey]?.text;
+                const itemError =
+                  drafts[itemKey]?.error ?? issueByPath.get(itemKey)?.join("; ") ?? null;
+                const ItemInput =
+                  field.item === "string" && typeof item === "string" && /[\r\n]/.test(item)
+                    ? Textarea
+                    : Input;
                 const setItem = (next: unknown) =>
                   commit(
                     field.path,
@@ -736,7 +820,7 @@ export function SchemaForm({
                         }
                       />
                     ) : (
-                      <Input
+                      <ItemInput
                         className="font-mono"
                         aria-label={`${label} item ${index + 1}`}
                         aria-invalid={itemError ? true : undefined}
@@ -757,18 +841,20 @@ export function SchemaForm({
                         onChange={(event) => {
                           const next = event.target.value;
                           if (field.item === "number") {
-                            setDraft(itemKey, next);
-                            const result = parseNumberDraft(next, Boolean(field.integer));
+                            const result = parseFormNumber(next, Boolean(field.integer));
+                            setDraft(
+                              itemKey,
+                              next,
+                              result.error ??
+                                (result.value === undefined ? "must be a number" : null),
+                            );
                             if (!result.error && result.value !== undefined) setItem(result.value);
                           } else {
                             setItem(next);
                           }
                         }}
                         onBlur={() => {
-                          if (
-                            itemDraft !== undefined &&
-                            !parseNumberDraft(itemDraft, Boolean(field.integer)).error
-                          ) {
+                          if (itemDraft !== undefined && !drafts[itemKey]?.error) {
                             setDraft(itemKey, undefined);
                           }
                           onBlur?.();
@@ -814,9 +900,9 @@ export function SchemaForm({
         );
       }
       default: {
-        const draft = drafts[key];
+        const draft = drafts[key]?.text;
         const text = draft ?? (current === undefined ? "" : JSON.stringify(current, null, 2));
-        const draftResult = draft === undefined ? null : parseText(draft);
+        const draftResult = draft === undefined ? null : parseFormText(draft);
         const draftProblem = draftResult && !draftResult.ok ? draftResult.error : null;
         const error = errorFor(field, draftProblem);
         return (
@@ -838,12 +924,12 @@ export function SchemaForm({
               value={text}
               disabled={disabled}
               onChange={(next) => {
-                setDraft(key, next);
-                const result = parseText(next);
+                const result = parseFormText(next);
+                setDraft(key, next, result.ok ? null : result.error);
                 if (result.ok) commit(field.path, result.data);
               }}
               onBlur={() => {
-                if (draft !== undefined && parseText(draft).ok) setDraft(key, undefined);
+                if (draft !== undefined && parseFormText(draft).ok) setDraft(key, undefined);
                 onBlur?.();
               }}
             />
@@ -868,7 +954,7 @@ export function SchemaForm({
       data-mode="form"
       aria-describedby={ariaDescribedBy}
       data-required={ariaRequired ? "true" : undefined}
-      data-invalid={ariaInvalid ? "true" : undefined}
+      data-invalid={ariaInvalid || !valid ? "true" : undefined}
     >
       <legend className="sr-only">{jsonLabel}</legend>
       {toolbar}
@@ -898,8 +984,16 @@ export function SchemaForm({
             value={extrasText}
             disabled={disabled}
             onChange={(next) => {
-              setDraft(extrasKey, next);
-              const result = parseText(next);
+              const result = parseFormText(next);
+              setDraft(
+                extrasKey,
+                next,
+                !result.ok
+                  ? result.error
+                  : result.data !== undefined && !isJsonObject(result.data)
+                    ? "must be a JSON object"
+                    : null,
+              );
               if (!result.ok) return;
               if (result.data !== undefined && !isJsonObject(result.data)) return;
               const kept: JsonObject = {};

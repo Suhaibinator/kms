@@ -88,6 +88,7 @@ function RowCard({
   const original = row.originalValue ?? captured.current;
   const changed = original !== undefined && rowChanged({ ...row, originalValue: original });
   const [showDiff, setShowDiff] = useState(false);
+  const [resetGeneration, setResetGeneration] = useState(0);
   const bodyId = useId();
   const editing = row.reuseVersion === undefined && row.loaded;
   return (
@@ -122,9 +123,10 @@ function RowCard({
                   variant="ghost"
                   size="sm"
                   aria-label={`Revert ${row.alias}`}
-                  disabled={disabled || !changed}
+                  disabled={disabled || (!changed && row.draftValid !== false)}
                   onClick={() => {
                     onChange({ value: original, touched: true, reuseVersion: undefined });
+                    setResetGeneration((generation) => generation + 1);
                     setShowDiff(false);
                   }}
                 >
@@ -174,6 +176,19 @@ function RowCard({
             Edit value
           </Button>
         </div>
+      ) : row.loadError ? (
+        <div className="info-panel" role="alert">
+          <p>Could not load the current value: {row.loadError}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={() => onChange({ loaded: false, loadError: undefined })}
+          >
+            Retry loading {row.alias}
+          </Button>
+        </div>
       ) : !row.loaded ? (
         <div className="faint text-sm ship-row-loading" role="status">
           Loading the current value…
@@ -217,6 +232,8 @@ function RowCard({
               contentType={row.content_type}
               value={row.value}
               schema={schema}
+              resetKey={String(resetGeneration)}
+              onValidityChange={(valid) => onChange({ draftValid: valid })}
               disabled={disabled}
               aria-label={`${row.alias} value`}
               rows={6}

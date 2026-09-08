@@ -85,3 +85,37 @@ it("uses tuple prefix schemas before applying the trailing item schema", () => {
   expect(prepared.value).toBe('[{"name":"db"},{"port":8080}]');
   expect(prepared.removed).toEqual(["1.old"]);
 });
+
+it("skips parsed numeric defaults whose original precision cannot be established", () => {
+  for (const token of ["0.123456789123456789", "1e-400", "9007199254740993", "1e400"]) {
+    const schema = JSON.parse(
+      `{"type":"object","properties":{"number":{"default":${token}},"nested":{"default":{"numbers":[${token}]}},"safe":{"default":"retained"}}}`,
+    );
+    expect(prepareUpgradeValue("{}", schema)).toEqual({
+      value: '{"safe":"retained"}',
+      added: ["safe"],
+      removed: [],
+    });
+  }
+});
+
+it("copies exact numeric default tokens from the registered schema, including nested and nullable defaults", () => {
+  const source = `{"type":"object","properties":{"config":{"type":"object","properties":{
+    "precise":{"default":0.123456789123456789},
+    "underflow":{"default":1e-400},
+    "nested":{"default":{"numbers":[9007199254740993,1e400,42]}},
+    "nullable":{"anyOf":[{"type":"number","default":1.00000000000000001},{"type":"null"}]},
+    "wrapped":{"default":2.00000000000000001,"anyOf":[{"type":"number"},{"type":"null"}]},
+    "integer":{"default":5}
+  }}}}`;
+  const prepared = prepareUpgradeValue("{}", source, "config");
+  expect(prepared.value).toBe(
+    '{"precise":0.123456789123456789,"underflow":1e-400,"nested":{"numbers":[9007199254740993,1e400,42]},"wrapped":2.00000000000000001,"integer":5}',
+  );
+  expect(
+    prepareUpgradeValue(
+      "{}",
+      '{"type":"object","required":["nullable"],"properties":{"nullable":{"anyOf":[{"type":"number","default":1.00000000000000001},{"type":"null"}]}}}',
+    ).value,
+  ).toBe('{"nullable":1.00000000000000001}');
+});

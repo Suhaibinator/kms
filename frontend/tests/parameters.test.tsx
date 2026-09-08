@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ParameterManager from "@/components/parameters/ParameterManager";
 import { api } from "@/lib/api";
 import { lastNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Namespace, Parameter } from "@/lib/types";
@@ -332,4 +333,178 @@ describe("parameters page", () => {
       { shallow: true, scroll: false },
     );
   });
+});
+
+describe("parameters list navigation", () => {
+  it("keeps rows when Filter or Clear does not change the scope", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    render(<ParametersPage />);
+    await screen.findByText(ALPHA.key);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByText(ALPHA.key)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText(ALPHA.key)).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    await screen.findByText(ALPHA.key);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByText(ALPHA.key)).toBeVisible();
+  });
+
+  it("follows same-page navigation and history when query fields change or disappear", async () => {
+    const list = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    const view = render(<ParametersPage />);
+    await screen.findByText(ALPHA.key);
+    mocks.router.query = { env: "dev", app: "other", key_prefix: "new" };
+    view.rerender(<ParametersPage />);
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(
+        { env: "dev", app: "other" },
+        "new",
+        100,
+        undefined,
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Key prefix")).toHaveValue("new");
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    view.rerender(<ParametersPage />);
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(
+        { env: NAMESPACE.env, app: NAMESPACE.app },
+        undefined,
+        100,
+        undefined,
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Key prefix")).toHaveValue("");
+    mocks.router.query = {};
+    view.rerender(<ParametersPage />);
+    expect(await screen.findByText("Choose an environment")).toBeVisible();
+  });
+});
+
+it("uses create-only writes and retains the draft when the key already exists", async () => {
+  vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+  const put = vi
+    .spyOn(api, "putParameter")
+    .mockRejectedValue(new Error("Parameter already exists"));
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+  render(<ParametersPage />);
+  await screen.findByText(ALPHA.key);
+  fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+  const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Key" }), {
+    target: { value: ALPHA.key },
+  });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+    target: { value: "replacement" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save parameter" }));
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      expect.objectContaining({ key: ALPHA.key, value: "replacement", create_only: true }),
+    ),
+  );
+  await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+  expect(dialog).toBeVisible();
+  expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("replacement");
+});
+
+it("blocks creation while a visible numeric form draft is incomplete", async () => {
+  vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+  vi.spyOn(api, "applicationOverview").mockRejectedValue(new Error("No pinned schema"));
+  const put = vi.spyOn(api, "putParameter").mockResolvedValue({ version: 1, revision: 1 });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+  render(<ParametersPage />);
+  await screen.findByText(ALPHA.key);
+  fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+  const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+  const key = within(dialog).getByRole("textbox", { name: "Key" });
+  fireEvent.change(key, { target: { value: "new-config" } });
+  await chooseSelectOption(within(dialog).getByLabelText("Content type"), "json");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+    target: { value: '{"count":3}' },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Form" }));
+  const count = within(dialog).getByRole("textbox", { name: "count" });
+  fireEvent.change(count, { target: { value: "4" } });
+  fireEvent.change(count, { target: { value: "4e" } });
+  expect(within(dialog).getByRole("button", { name: "Save parameter" })).toBeDisabled();
+  fireEvent.submit(key.closest("form") as HTMLFormElement);
+  expect(put).not.toHaveBeenCalled();
+  fireEvent.change(count, { target: { value: "4e2" } });
+  await waitFor(() =>
+    expect(within(dialog).getByRole("button", { name: "Save parameter" })).toBeEnabled(),
+  );
+  fireEvent.submit(key.closest("form") as HTMLFormElement);
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      expect.objectContaining({ value: '{"count":400}', create_only: true }),
+    ),
+  );
+});
+
+it("blocks new-version writes while a numeric form draft is incomplete", async () => {
+  const current = { ...ALPHA, content_type: "json", value: '{"count":3}' };
+  vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: current });
+  vi.spyOn(api, "parameterMetadata").mockResolvedValue({
+    ...current,
+    updated_at_unix_ms: 1,
+    versions: [],
+  });
+  vi.spyOn(api, "applicationOverview").mockRejectedValue(new Error("No pinned schema"));
+  const put = vi.spyOn(api, "putParameter").mockResolvedValue({ version: 2, revision: 2 });
+  render(<ParameterManager resourceRef={ALPHA} />);
+  fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+  const dialog = await screen.findByRole("dialog", { name: "New parameter version" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Form" }));
+  const count = within(dialog).getByRole("textbox", { name: "count" });
+  fireEvent.change(count, { target: { value: "4" } });
+  fireEvent.change(count, { target: { value: "4e" } });
+  expect(within(dialog).getByRole("button", { name: "Save new version" })).toBeDisabled();
+  fireEvent.submit(count.closest("form") as HTMLFormElement);
+  expect(put).not.toHaveBeenCalled();
+  fireEvent.change(count, { target: { value: "4e2" } });
+  await waitFor(() =>
+    expect(within(dialog).getByRole("button", { name: "Save new version" })).toBeEnabled(),
+  );
+  fireEvent.submit(count.closest("form") as HTMLFormElement);
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ value: '{"count":400}' })),
+  );
+});
+
+it("preserves a newer filter draft when an internal URL replacement settles late", async () => {
+  const list = vi
+    .spyOn(api, "listParameters")
+    .mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+  const view = render(<ParametersPage />);
+  await screen.findByText(ALPHA.key);
+  const input = screen.getByLabelText("Key prefix");
+  fireEvent.change(input, { target: { value: "db" } });
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.change(input, { target: { value: "db/cache" } });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "db" };
+  view.rerender(<ParametersPage />);
+  expect(input).toHaveValue("db/cache");
+  await waitFor(() =>
+    expect(list).toHaveBeenLastCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      "db",
+      100,
+      undefined,
+      expect.anything(),
+    ),
+  );
+  // A real navigation to another applied scope still replaces the draft.
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "external" };
+  view.rerender(<ParametersPage />);
+  expect(input).toHaveValue("external");
 });

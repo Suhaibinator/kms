@@ -223,7 +223,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const shortcutLabel = useShortcutLabel();
-  const namespace = useLastNamespace();
+  const rememberedNamespace = useLastNamespace();
+  const namespace =
+    identity?.kind === "client" ? (identity.namespace ?? null) : rememberedNamespace;
   const visibleNav = useMemo(
     () =>
       NAV.map((group) => ({
