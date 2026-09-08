@@ -87,7 +87,13 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 	pr := principalFrom(ctx)
 	ns := nsRefFromQuery(r)
 	name := r.URL.Query().Get("name")
-	snapshot, err := s.svc.GetReleaseRolloutSnapshot(ctx, pr, ns, name)
+	schemaVersion, err := parseSchemaVersion(r, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	track := domain.ReleaseTrack{Namespace: ns, Name: name, SchemaVersion: *schemaVersion}
+	snapshot, err := s.svc.GetReleaseRolloutSnapshot(ctx, pr, track)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -136,7 +142,7 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	wake, unsubscribe := s.svc.SubscribeReleaseSubscribers(ns, name)
+	wake, unsubscribe := s.svc.SubscribeReleaseSubscribers(track)
 	defer unsubscribe()
 	keepAlive := time.NewTicker(s.stream.keepAlive)
 	defer keepAlive.Stop()
@@ -154,7 +160,7 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 		if err := s.svc.ReauthorizeWatch(ctx, pr); err != nil {
 			return err
 		}
-		snap, err := s.svc.GetReleaseRolloutSnapshot(ctx, pr, ns, name)
+		snap, err := s.svc.GetReleaseRolloutSnapshot(ctx, pr, track)
 		if err != nil {
 			return err
 		}

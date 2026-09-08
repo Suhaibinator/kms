@@ -26,8 +26,13 @@ func (s *server) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	schemaVersion, err := parseSchemaVersion(r, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	release, err := s.svc.GetConfigurationRelease(r.Context(), principalFrom(r.Context()),
-		nsRefFromQuery(r), r.URL.Query().Get("name"), version)
+		domain.ReleaseTrack{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: *schemaVersion}, version)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -36,8 +41,13 @@ func (s *server) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetActiveRelease(w http.ResponseWriter, r *http.Request) {
+	schemaVersion, err := parseSchemaVersion(r, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	active, err := s.svc.GetActiveConfigurationRelease(r.Context(), principalFrom(r.Context()),
-		nsRefFromQuery(r), r.URL.Query().Get("name"))
+		domain.ReleaseTrack{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: *schemaVersion})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -49,8 +59,13 @@ func (s *server) handleGetActiveRelease(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleListReleases(w http.ResponseWriter, r *http.Request) {
+	schemaVersion, err := parseSchemaVersion(r, false)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	items, next, err := s.svc.ListConfigurationReleases(r.Context(), principalFrom(r.Context()),
-		nsRefFromQuery(r), r.URL.Query().Get("name"), listPage(r))
+		domain.ReleaseFilter{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: schemaVersion}, listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -67,16 +82,21 @@ func (s *server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleValidateRelease(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Namespace namespaceRefDTO `json:"namespace"`
-		Name      string          `json:"name"`
-		Version   uint64          `json:"version"`
+		Namespace     namespaceRefDTO `json:"namespace"`
+		Name          string          `json:"name"`
+		Version       uint64          `json:"version"`
+		SchemaVersion *uint64         `json:"schema_version"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	if body.SchemaVersion == nil {
+		s.writeError(w, r, invalidArg("schema_version is required"))
+		return
+	}
 	errorsOut, err := s.svc.ValidateConfigurationRelease(r.Context(), principalFrom(r.Context()),
-		domain.NamespaceRef{Env: body.Namespace.Env, App: body.Namespace.App}, body.Name, body.Version)
+		domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: body.Namespace.Env, App: body.Namespace.App}, Name: body.Name, SchemaVersion: *body.SchemaVersion}, body.Version)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -90,14 +110,19 @@ func (s *server) handleActivateRelease(w http.ResponseWriter, r *http.Request) {
 		Namespace              namespaceRefDTO `json:"namespace"`
 		Name                   string          `json:"name"`
 		Version                uint64          `json:"version"`
+		SchemaVersion          *uint64         `json:"schema_version"`
 		ExpectedCurrentVersion *uint64         `json:"expected_current_version"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	if body.SchemaVersion == nil {
+		s.writeError(w, r, invalidArg("schema_version is required"))
+		return
+	}
 	active, changed, err := s.svc.ActivateConfigurationRelease(r.Context(), principalFrom(r.Context()),
-		domain.NamespaceRef{Env: body.Namespace.Env, App: body.Namespace.App}, body.Name, body.Version,
+		domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: body.Namespace.Env, App: body.Namespace.App}, Name: body.Name, SchemaVersion: *body.SchemaVersion}, body.Version,
 		body.ExpectedCurrentVersion)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -143,8 +168,13 @@ func (s *server) handleListConfigurationSchemas(w http.ResponseWriter, r *http.R
 }
 
 func (s *server) handleListReleaseSubscribers(w http.ResponseWriter, r *http.Request) {
+	schemaVersion, err := parseSchemaVersion(r, false)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	items, next, revision, err := s.svc.ListReleaseSubscribers(r.Context(), principalFrom(r.Context()),
-		nsRefFromQuery(r), r.URL.Query().Get("name"), listPage(r))
+		domain.ReleaseFilter{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: schemaVersion}, listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -163,14 +193,19 @@ func (s *server) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 		Env                    string  `json:"env"`
 		App                    string  `json:"app"`
 		Name                   string  `json:"name"`
+		SchemaVersion          *uint64 `json:"schema_version"`
 		ExpectedCurrentVersion *uint64 `json:"expected_current_version"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	if body.SchemaVersion == nil {
+		s.writeError(w, r, invalidArg("schema_version is required"))
+		return
+	}
 	result, err := s.svc.RollbackConfigurationRelease(r.Context(), principalFrom(r.Context()),
-		domain.NamespaceRef{Env: body.Env, App: body.App}, body.Name, body.ExpectedCurrentVersion)
+		domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: body.Env, App: body.App}, Name: body.Name, SchemaVersion: *body.SchemaVersion}, body.ExpectedCurrentVersion)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

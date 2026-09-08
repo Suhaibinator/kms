@@ -18,6 +18,7 @@ type applicationMigrationChangeDTO struct {
 type applicationMigrationRequestDTO struct {
 	Environment                      string                            `json:"environment"`
 	SchemaVersion                    uint64                            `json:"schema_version"`
+	SourceSchemaVersion              uint64                            `json:"source_schema_version"`
 	Contract                         []domain.ApplicationContractField `json:"contract"`
 	Changes                          []applicationMigrationChangeDTO   `json:"changes"`
 	MetadataJSON                     string                            `json:"metadata_json"`
@@ -37,7 +38,7 @@ func (d applicationMigrationRequestDTO) toDomain(application string) domain.Appl
 	}
 	return domain.ApplicationReleaseMigrationInput{
 		Namespace:     domain.NamespaceRef{App: application, Env: d.Environment},
-		SchemaVersion: d.SchemaVersion, Contract: d.Contract, Changes: changes,
+		SchemaVersion: d.SchemaVersion, SourceSchemaVersion: d.SourceSchemaVersion, Contract: d.Contract, Changes: changes,
 		Metadata: d.MetadataJSON, Execute: d.Execute, PlanDigest: d.PlanDigest,
 		ExpectedSourceVersion: d.ExpectedSourceVersion, ExpectedSourceActivationRevision: d.ExpectedSourceActivationRevision,
 	}

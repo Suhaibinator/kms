@@ -61,6 +61,23 @@ func parseVersion(s string) (uint64, error) {
 	return v, nil
 }
 
+// parseSchemaVersion parses a schema track selector. Exact operations require
+// the query parameter to be present even for the schema-free track (0).
+func parseSchemaVersion(r *http.Request, required bool) (*uint64, error) {
+	raw, present := r.URL.Query()["schema_version"]
+	if !present || len(raw) == 0 || raw[0] == "" {
+		if required {
+			return nil, invalidArg("schema_version is required")
+		}
+		return nil, nil
+	}
+	value, err := strconv.ParseUint(raw[0], 10, 64)
+	if err != nil {
+		return nil, invalidArg("schema_version must be a non-negative integer")
+	}
+	return &value, nil
+}
+
 // parseUnixMS parses a Unix-millisecond timestamp query param; empty or 0 means
 // the zero time.
 func parseUnixMS(s string) (time.Time, error) {

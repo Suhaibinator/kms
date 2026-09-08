@@ -45,7 +45,12 @@ func environmentsFromQuery(values []string) []string {
 // summary.
 func (s *server) handleApplicationOverview(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	opts := core.OverviewOptions{Environments: environmentsFromQuery(q["env"]), InsecureListener: s.insecureListener(r)}
+	schemaVersion, err := parseSchemaVersion(r, false)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	opts := core.OverviewOptions{Environments: environmentsFromQuery(q["env"]), InsecureListener: s.insecureListener(r), SchemaVersion: schemaVersion}
 	if name := q.Get("name"); name != "" {
 		overview, err := s.svc.GetApplicationOverview(r.Context(), principalFrom(r.Context()), name, opts)
 		if err != nil {
@@ -85,7 +90,7 @@ func (s *server) handleCloneEnvironment(w http.ResponseWriter, r *http.Request) 
 	}
 	result, err := s.svc.CloneApplicationEnvironment(r.Context(), principalFrom(r.Context()), domain.CloneEnvironmentInput{
 		Application: body.Application, SourceEnv: body.SourceEnv, TargetEnv: body.TargetEnv, CopyValues: body.CopyValues,
-		AuthMethods: authMethodsFromStrings(body.AuthMethods), Description: body.Description,
+		AuthMethods: authMethodsFromStrings(body.AuthMethods), Description: body.Description, SchemaVersion: body.SchemaVersion,
 	})
 	if err != nil {
 		s.writeError(w, r, err)

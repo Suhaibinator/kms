@@ -66,6 +66,11 @@ func defaultsQueryBool(r *http.Request, name string) (bool, error) {
 // body. Query parameters select the existing namespace and preview/execute
 // mode; values are never reflected in the response.
 func (s *server) handleApplicationDefaults(w http.ResponseWriter, r *http.Request) {
+	schemaVersion, err := parseSchemaVersion(r, false)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	overwrite, err := defaultsQueryBool(r, "overwrite")
 	if err != nil {
 		s.writeError(w, r, err)
@@ -91,8 +96,9 @@ func (s *server) handleApplicationDefaults(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	result, err := s.svc.ApplyApplicationDefaults(r.Context(), principalFrom(r.Context()), domain.DefaultsApplyInput{
-		Namespace: domain.NamespaceRef{Env: r.URL.Query().Get("env"), App: r.URL.Query().Get("app")},
-		Artifact:  raw, Overwrite: overwrite, UpdateDefinition: updateDefinition, Execute: execute,
+		Namespace:     domain.NamespaceRef{Env: r.URL.Query().Get("env"), App: r.URL.Query().Get("app")},
+		SchemaVersion: schemaVersion,
+		Artifact:      raw, Overwrite: overwrite, UpdateDefinition: updateDefinition, Execute: execute,
 		PlanDigest: r.URL.Query().Get("plan_digest"),
 	})
 	if err != nil {
