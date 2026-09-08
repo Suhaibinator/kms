@@ -465,13 +465,14 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 // releaseListItemJSON is one row of `release list`: every table column plus the
 // creation time, which the table has no room for.
 type releaseListItemJSON struct {
-	Name      string  `json:"name"`
-	Version   uint64  `json:"version"`
-	Current   bool    `json:"current"`
-	Previous  bool    `json:"previous"`
-	Revision  uint64  `json:"revision"`
-	Digest    string  `json:"digest"`
-	CreatedAt *string `json:"created_at"`
+	Name          string  `json:"name"`
+	SchemaVersion uint64  `json:"schema_version"`
+	Version       uint64  `json:"version"`
+	Current       bool    `json:"current"`
+	Previous      bool    `json:"previous"`
+	Revision      uint64  `json:"revision"`
+	Digest        string  `json:"digest"`
+	CreatedAt     *string `json:"created_at"`
 }
 
 func (c *CLI) cmdReleaseList(args []string) int {
@@ -526,18 +527,19 @@ func (c *CLI) cmdReleaseList(args []string) int {
 			release := summary.GetRelease()
 			if c.jsonOutput() {
 				items = append(items, releaseListItemJSON{
-					Name:      release.GetName(),
-					Version:   release.GetVersion(),
-					Current:   summary.GetCurrent(),
-					Previous:  summary.GetPrevious(),
-					Revision:  summary.GetActivationRevision(),
-					Digest:    release.GetDigest(),
-					CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
+					Name:          release.GetName(),
+					SchemaVersion: release.GetSchemaVersion(),
+					Version:       release.GetVersion(),
+					Current:       summary.GetCurrent(),
+					Previous:      summary.GetPrevious(),
+					Revision:      summary.GetActivationRevision(),
+					Digest:        release.GetDigest(),
+					CreatedAt:     jsonTime(release.GetCreatedAtUnixMs()),
 				})
 				continue
 			}
 			rows = append(rows, []string{
-				release.GetName(), strconv.FormatUint(release.GetVersion(), 10),
+				release.GetName(), strconv.FormatUint(release.GetSchemaVersion(), 10), strconv.FormatUint(release.GetVersion(), 10),
 				strconv.FormatBool(summary.GetCurrent()), strconv.FormatBool(summary.GetPrevious()),
 				strconv.FormatUint(summary.GetActivationRevision(), 10), release.GetDigest(),
 			})
@@ -552,7 +554,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 		// there is no token to hand back.
 		return c.printList(items, "")
 	}
-	c.printTable([]string{"NAME", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
+	c.printTable([]string{"NAME", "SCHEMA", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
 	return 0
 }
 

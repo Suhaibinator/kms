@@ -252,11 +252,51 @@ func TestReleaseListJSONCarriesEveryTableColumn(t *testing.T) {
 		t.Fatalf("items = %+v", page.Items)
 	}
 	first := page.Items[0]
-	if first.Name != "runtime" || first.Version != 3 || !first.Current || first.Previous || first.Revision != 42 || first.Digest != "d3" {
+	if first.Name != "runtime" || first.SchemaVersion != 2 || first.Version != 3 || !first.Current || first.Previous || first.Revision != 42 || first.Digest != "d3" {
 		t.Fatalf("first item = %+v", first)
 	}
 	if first.CreatedAt == nil || *first.CreatedAt != "2023-11-14T22:13:20Z" {
 		t.Fatalf("created_at = %v", first.CreatedAt)
+	}
+}
+
+func TestReleaseListDistinguishesDuplicateVersionsAcrossSchemaTracks(t *testing.T) {
+	schemaFree := releaseFixture(1, "schema-free")
+	schemaFree.SchemaVersion = 0
+	registered := releaseFixture(1, "registered")
+	registered.SchemaVersion = 2
+	stub := &releaseServiceStub{list: []*kmsv1.ReleaseSummary{
+		{Release: schemaFree, Current: true, ActivationRevision: 40},
+		{Release: registered, Current: true, ActivationRevision: 41},
+	}}
+
+	code, table := runRelease(t, stub, "list", "prod/app", "runtime", "--insecure")
+	if code != 0 {
+		t.Fatalf("table exit=%d stderr=%s", code, table.stderr())
+	}
+	lines := strings.Split(strings.TrimSpace(table.stdout()), "\n")
+	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), "|") != "NAME|SCHEMA|VERSION|CURRENT|PREVIOUS|REVISION|DIGEST" {
+		t.Fatalf("table output:\n%s", table.stdout())
+	}
+	if fields := strings.Fields(lines[1]); len(fields) < 3 || fields[0] != "runtime" || fields[1] != "0" || fields[2] != "1" {
+		t.Fatalf("schema-free row = %q", lines[1])
+	}
+	if fields := strings.Fields(lines[2]); len(fields) < 3 || fields[0] != "runtime" || fields[1] != "2" || fields[2] != "1" {
+		t.Fatalf("registered row = %q", lines[2])
+	}
+
+	code, jsonOutput := runRelease(t, stub, "list", "prod/app", "runtime", "--insecure", "--output", "json")
+	if code != 0 {
+		t.Fatalf("json exit=%d stderr=%s", code, jsonOutput.stderr())
+	}
+	var page struct {
+		Items []releaseListItemJSON `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput.stdout()), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 || page.Items[0].SchemaVersion != 0 || page.Items[1].SchemaVersion != 2 || page.Items[0].Version != page.Items[1].Version {
+		t.Fatalf("json items = %+v", page.Items)
 	}
 }
 
