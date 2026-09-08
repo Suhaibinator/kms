@@ -215,6 +215,38 @@ describe("ReleaseLoader", () => {
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("rejects every contradictory active-release address before startup state changes", async () => {
+    const selected = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const foreignReleases = [
+      copyRelease(selected, { namespace: { env: "staging", app: "api" } }),
+      copyRelease(selected, { namespace: { env: "prod", app: "worker" } }),
+      copyRelease(selected, { name: "other" }),
+      copyRelease(selected, { schemaVersion: 7n }),
+      copyRelease(selected, { namespace: undefined }),
+    ];
+
+    for (const foreign of foreignReleases) {
+      const transport = new FakeTransport(foreign, 99n);
+      let preparations = 0;
+      const loader = ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+        schemaVersion: 0n,
+      });
+
+      await expect(
+        loader.run(() => {
+          preparations += 1;
+          return invalidPrepared();
+        }),
+      ).rejects.toThrow(/different release track/u);
+      expect(preparations).toBe(0);
+      expect(transport.stream).toBeUndefined();
+      expect(loader.stats().candidates).toBe(0n);
+    }
+  });
+
   it("validates the manifest, resolves exact versions, redacts, commits, and acknowledges", async () => {
     const policy = '{"minLength":14}';
     const release = makeRelease(3n, [
@@ -295,10 +327,19 @@ describe("ReleaseLoader", () => {
     expect(loader.stats().applied).toBe(1n);
   });
 
-  it("drops foreign-schema events before fetch, acknowledgement, or supersession", async () => {
+  it("drops malformed and foreign-track envelopes before cursor or candidate state", async () => {
     const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
     const transport = new FakeTransport(release);
     transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
     const controller = new AbortController();
     const loader = ReleaseLoader._create(transport, {
       namespace,
@@ -308,17 +349,125 @@ describe("ReleaseLoader", () => {
     });
     const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
     await waitFor(() => loader.status().state === "applied");
-    const foreign = ConfigurationRelease.create({
-      ...release,
-      version: 2n,
-      schemaVersion: 7n,
+
+    const foreignReleases = [
+      copyRelease(release, { version: 10n, schemaVersion: 7n }),
+      copyRelease(release, { version: 11n, namespace: { env: "staging", app: "api" } }),
+      copyRelease(release, { version: 12n, namespace: { env: "prod", app: "worker" } }),
+      copyRelease(release, { version: 13n, name: "other" }),
+    ];
+    streams[0]?.push(activationEvent(foreignReleases[0] as ConfigurationRelease, 100n));
+    streams[0]?.push(snapshotEvent(foreignReleases[1] as ConfigurationRelease, 101n));
+    streams[0]?.push(activationEvent(foreignReleases[2] as ConfigurationRelease, 102n));
+    streams[0]?.push(snapshotEvent(foreignReleases[3] as ConfigurationRelease, 103n));
+    streams[0]?.push({
+      event: { $case: "snapshot", value: { release: undefined } },
+      revision: 104n,
     });
-    foreign.digest = deterministicReleaseDigest(foreign);
-    transport.stream?.push(activationEvent(foreign, 2n));
+    streams[0]?.push({
+      event: { $case: "activation", value: { release: undefined } },
+      revision: 105n,
+    });
+    streams[0]?.push({ event: undefined, revision: 106n });
+    streams[0]?.push({
+      event: { $case: "futureEvent", value: {} },
+      revision: 107n,
+    } as unknown as WatchReleaseEvent);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(loader.stats().candidates).toBe(1n);
     expect(transport.calls.filter((call) => call.startsWith("parameter:"))).toHaveLength(1);
-    expect(acknowledgements(transport.stream).some((ack) => ack.version === 2n)).toBe(false);
+    expect(
+      acknowledgements(streams[0]).every((acknowledgement) => acknowledgement.version === 1n),
+    ).toBe(true);
+
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(registrations[1]?.lastSeenRevision).toBe(1n);
+
+    const selected = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    transport.active = { release: selected, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[1]?.push(activationEvent(selected, 2n));
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    expect(loader.stats().candidates).toBe(2n);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("advances the replay cursor only for monotonic heartbeats and matching candidates", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      random: () => 0,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => loader.status().state === "applied");
+
+    streams[0]?.push(heartbeatEvent(100n));
+    streams[0]?.push(heartbeatEvent(90n));
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(registrations[1]?.lastSeenRevision).toBe(100n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[1]?.push(activationEvent(second, 2n));
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    streams[1]?.close();
+    await waitFor(() => streams.length === 3);
+    expect(registrations[2]?.lastSeenRevision).toBe(100n);
+
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("retries the selected candidate after a newer global heartbeat", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    let secondAttempts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      reconcileIntervalMs: 50,
+    });
+    const run = loader.run((snapshot) => {
+      if (snapshot.version === 2n) {
+        secondAttempts += 1;
+        if (secondAttempts === 1) throw new ClassifiedReleaseError("prepare_failed", "retry");
+      }
+      return { commit() {}, abort() {} };
+    }, controller.signal);
+    await waitFor(() => loader.status().appliedVersion === 1n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    transport.stream?.push(activationEvent(second, 2n));
+    await waitFor(() => loader.status().lastFailureCategory === "prepare_failed");
+    transport.stream?.push(heartbeatEvent(100n));
+
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    expect(secondAttempts).toBe(2);
     controller.abort();
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
@@ -1218,6 +1367,51 @@ describe("ReleaseLoader", () => {
     expect(loader.status().appliedVersion).toBe(0n);
   });
 
+  it("aborts precommit when the active response copies identity under a foreign namespace", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const contradictory = ConfigurationRelease.create({
+      ...release,
+      namespace: { env: "staging", app: "api" },
+      digest: release.digest,
+    });
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let activeCalls = 0;
+    transport.getActiveReleaseHook = () => {
+      activeCalls += 1;
+      return Promise.resolve(
+        activeCalls === 1
+          ? transport.active
+          : { release: contradictory, activationRevision: 1n, previousVersion: 0n },
+      );
+    };
+    let commits = 0;
+    let aborts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+
+    await expect(
+      loader.run(() => ({
+        commit: () => {
+          commits += 1;
+        },
+        abort: () => {
+          aborts += 1;
+        },
+      })),
+    ).rejects.toMatchObject({ category: "active_check_failed" });
+    expect({ commits, aborts }).toEqual({ commits: 0, aborts: 1 });
+    expect(loader.status()).toMatchObject({
+      appliedVersion: 0n,
+      lastFailureCategory: "active_check_failed",
+    });
+    expect(acknowledgementStates(transport.stream)).not.toContain("applied");
+  });
+
   it("surfaces an abort contract violation as a redacted fatal error", async () => {
     const release1 = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
     const release2 = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
@@ -1397,6 +1591,17 @@ function makeRelease(version: bigint, entries: ConfigurationReleaseEntry[]): Con
   return release;
 }
 
+function copyRelease(
+  release: ConfigurationRelease,
+  overrides: Partial<
+    Pick<ConfigurationRelease, "namespace" | "name" | "schemaVersion" | "version">
+  >,
+): ConfigurationRelease {
+  const copy = ConfigurationRelease.create({ ...release, ...overrides });
+  copy.digest = copy.namespace ? deterministicReleaseDigest(copy) : release.digest;
+  return copy;
+}
+
 function parameterEntry(
   alias: string,
   key: string,
@@ -1501,6 +1706,20 @@ function secretResource(
 function activationEvent(release: ConfigurationRelease, revision: bigint): WatchReleaseEvent {
   return {
     event: { $case: "activation", value: { release } },
+    revision,
+  };
+}
+
+function snapshotEvent(release: ConfigurationRelease, revision: bigint): WatchReleaseEvent {
+  return {
+    event: { $case: "snapshot", value: { release } },
+    revision,
+  };
+}
+
+function heartbeatEvent(revision: bigint): WatchReleaseEvent {
+  return {
+    event: { $case: "heartbeat", value: { serverTimeUnixMs: 1n } },
     revision,
   };
 }

@@ -289,9 +289,6 @@ export class ReleaseLoader {
 
     try {
       const initial = await this.#getActive(runController.signal);
-      if (initial.release && initial.release.schemaVersion !== this.#options.schemaVersion) {
-        throw new Error("KMS active release response belongs to a different schema track");
-      }
       this.#lastSeenRevision = initial.activationRevision;
 
       let sequence = 0n;
@@ -394,7 +391,7 @@ export class ReleaseLoader {
         // A foreign-track event is a transport protocol violation. It must not
         // supersede an in-flight matching candidate, trigger resource reads,
         // or produce an acknowledgement on this track's stream.
-        if (incoming.release.schemaVersion !== this.#options.schemaVersion) return;
+        if (!releaseMatchesTrack(incoming.release, this.#options)) return;
         if (latest) {
           if (incoming.revision < latest.revision) return;
           if (sameQueuedCandidate(incoming, latest)) {
@@ -550,11 +547,7 @@ export class ReleaseLoader {
     const { release } = candidate;
     const namespace = release.namespace;
     if (!namespace) throw new ResolutionError("resolution_failed");
-    if (
-      release.name !== this.#options.name ||
-      namespace.env !== this.#options.namespace.env ||
-      namespace.app !== this.#options.namespace.app
-    ) {
+    if (!releaseMatchesTrack(release, this.#options)) {
       throw new ResolutionError("version_mismatch");
     }
     try {
@@ -696,8 +689,12 @@ export class ReleaseLoader {
       this.#options.schemaVersion,
       signal,
     );
+    const release = response.release ? cloneRelease(response.release) : undefined;
+    if (release && !releaseMatchesTrack(release, this.#options)) {
+      throw new Error("KMS active release response belongs to a different release track");
+    }
     return {
-      release: response.release ? cloneRelease(response.release) : undefined,
+      release,
       activationRevision: response.activationRevision,
       previousVersion: response.previousVersion,
     };
@@ -727,17 +724,30 @@ export class ReleaseLoader {
         await this.#scheduleAckFlush();
         for await (const event of stream) {
           if (signal.aborted) break;
-          receivedEvent = true;
           const payload = event.event;
           if (payload?.$case === "acknowledgementRejected") {
+            receivedEvent = true;
             this.#handleAcknowledgementRejected(payload.value);
             continue;
           }
-          if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
-          if (payload?.$case === "snapshot" && payload.value.release) {
-            offer(makeCandidate(payload.value.release, event.revision, "reconciliation", 0n));
-          } else if (payload?.$case === "activation" && payload.value.release) {
-            offer(makeCandidate(payload.value.release, event.revision, "activation", 0n));
+          if (payload?.$case === "heartbeat") {
+            receivedEvent = true;
+            if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
+            continue;
+          }
+          if (payload?.$case === "snapshot" || payload?.$case === "activation") {
+            const release = payload.value.release;
+            if (!release || !releaseMatchesTrack(release, this.#options)) continue;
+            receivedEvent = true;
+            if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
+            offer(
+              makeCandidate(
+                release,
+                event.revision,
+                payload.$case === "snapshot" ? "reconciliation" : "activation",
+                0n,
+              ),
+            );
           }
         }
       } catch (error) {
@@ -1118,6 +1128,17 @@ function sameNamespace(left: NamespaceRef | undefined, right: NamespaceRef): boo
   return left !== undefined && left.env === right.env && left.app === right.app;
 }
 
+function releaseMatchesTrack(
+  release: ConfigurationRelease,
+  track: Pick<NormalizedOptions, "namespace" | "name" | "schemaVersion">,
+): boolean {
+  return (
+    sameNamespace(release.namespace, track.namespace) &&
+    release.name === track.name &&
+    release.schemaVersion === track.schemaVersion
+  );
+}
+
 function synchronousCallbackError(name: string, returned: unknown): Error | undefined {
   if (returned === undefined) return undefined;
   // A JavaScript consumer can evade the declaration contract. Attach a
@@ -1139,6 +1160,8 @@ function sameQueuedCandidate(left: Candidate, right: Candidate): boolean {
 function sameActiveCandidate(left: Candidate, right: Candidate): boolean {
   return (
     left.revision === right.revision &&
+    right.release.namespace !== undefined &&
+    sameNamespace(left.release.namespace, right.release.namespace) &&
     left.release.name === right.release.name &&
     left.release.schemaVersion === right.release.schemaVersion &&
     left.release.version === right.release.version &&
