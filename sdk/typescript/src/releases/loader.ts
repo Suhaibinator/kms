@@ -85,6 +85,7 @@ export interface ReleaseTransport {
   getActiveRelease(
     namespace: NamespaceRef,
     name: string,
+    schemaVersion: bigint,
     signal?: AbortSignal,
   ): Promise<GetActiveReleaseResponse>;
   fetchParameter(ref: ResourceRef, version: bigint, signal?: AbortSignal): Promise<Parameter>;
@@ -115,6 +116,8 @@ export interface ReleaseLoaderOptions {
   readonly namespace: NamespaceRef;
   readonly name: string;
   readonly clientName: string;
+  /** Exact schema track selected for the full loader lifetime, including 0. */
+  readonly schemaVersion: bigint;
   readonly instanceId?: string;
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
@@ -132,6 +135,7 @@ interface NormalizedOptions {
   readonly namespace: NamespaceRef;
   readonly name: string;
   readonly clientName: string;
+  readonly schemaVersion: bigint;
   readonly instanceId: string;
   readonly reconcileIntervalMs: number;
   readonly maxConcurrentFetches: number;
@@ -284,7 +288,9 @@ export class ReleaseLoader {
 
     try {
       const initial = await this.#getActive(runController.signal);
-      if (!initial.release) throw new Error("KMS active release response was empty");
+      if (initial.release && initial.release.schemaVersion !== this.#options.schemaVersion) {
+        throw new Error("KMS active release response belongs to a different schema track");
+      }
       this.#lastSeenRevision = initial.activationRevision;
 
       let sequence = 0n;
@@ -384,6 +390,10 @@ export class ReleaseLoader {
 
       const offer = (incoming: Candidate): void => {
         if (runController.signal.aborted) return;
+        // A foreign-track event is a transport protocol violation. It must not
+        // supersede an in-flight matching candidate, trigger resource reads,
+        // or produce an acknowledgement on this track's stream.
+        if (incoming.release.schemaVersion !== this.#options.schemaVersion) return;
         if (latest) {
           if (incoming.revision < latest.revision) return;
           if (sameQueuedCandidate(incoming, latest)) {
@@ -405,7 +415,9 @@ export class ReleaseLoader {
 
       watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop);
       reconcileTask = this.#reconcileLoop(runController.signal, offer);
-      offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
+      if (initial.release) {
+        offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
+      }
 
       await Promise.race([finished.promise, aborted(runController.signal)]);
     } finally {
@@ -676,6 +688,7 @@ export class ReleaseLoader {
     const response = await this.#transport.getActiveRelease(
       { ...this.#options.namespace },
       this.#options.name,
+      this.#options.schemaVersion,
       signal,
     );
     return {
@@ -701,6 +714,7 @@ export class ReleaseLoader {
           clientName: this.#options.clientName,
           instanceId: this.#options.instanceId,
           lastSeenRevision: this.#lastSeenRevision,
+          schemaVersion: this.#options.schemaVersion,
         };
         stream = await this.#transport.watchRelease(registration, signal);
         await this.#flushAcknowledgements(stream, true);
@@ -792,6 +806,7 @@ export class ReleaseLoader {
       timestampUnixMs: BigInt(Math.trunc(this.#options.now())),
       appliedDivergent: applied,
       divergentFieldCount: applied ? divergence.fieldCount : 0,
+      schemaVersion: this.#options.schemaVersion,
     };
     const current = this.#pendingAcknowledgements.get(state);
     if (!current || current.acknowledgement.activationRevision <= candidate.revision) {
@@ -913,6 +928,7 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
   const clientName = options.clientName.trim();
   if (!clientName) throw new TypeError("release loader clientName is required");
   const instanceId = options.instanceId?.trim() || randomUUID();
+  assertUint64(options.schemaVersion, "release loader schemaVersion");
   const requestedReconcileIntervalMs = options.reconcileIntervalMs ?? 0;
   if (!Number.isFinite(requestedReconcileIntervalMs)) {
     throw new RangeError("reconcileIntervalMs must be finite");
@@ -932,6 +948,7 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
     namespace: { env: options.namespace.env, app: options.namespace.app },
     name,
     clientName,
+    schemaVersion: options.schemaVersion,
     instanceId,
     reconcileIntervalMs,
     maxConcurrentFetches,
@@ -951,6 +968,13 @@ function positiveFinite(value: number, name: string): number {
     throw new RangeError(`${name} must be positive`);
   }
   return value;
+}
+
+function assertUint64(value: unknown, name: string): asserts value is bigint {
+  if (typeof value !== "bigint") throw new TypeError(`${name} must be a bigint`);
+  if (value < 0n || value > (1n << 64n) - 1n) {
+    throw new RangeError(`${name} is outside the uint64 range`);
+  }
 }
 
 function metadataForEntry(entry: ConfigurationRelease["entries"][number]): ReleaseEntryMetadata {

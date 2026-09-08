@@ -16,6 +16,24 @@ const expectedRef: ResourceRef = { namespace, key: "settings" };
 const wrongRef: ResourceRef = { namespace, key: "other" };
 
 describe("KmsClient release transport boundary", () => {
+  it("requires one schema selector and resolves a digest exactly once", async () => {
+    const digest = "a".repeat(64);
+    const transport = new FakeTransport((path, request) => {
+      expect(path).toBe("/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema");
+      expect(request).toEqual({ namespace, name: "runtime", schemaSha256: digest });
+      return { schemaVersion: 7n };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    await expect(client.createReleaseLoader({ name: "runtime" })).rejects.toThrow(/exactly one/u);
+    await expect(
+      client.createReleaseLoader({ name: "runtime", schemaVersion: 0n, schemaSHA256: digest }),
+    ).rejects.toThrow(/exactly one/u);
+    await client.createReleaseLoader({ name: "runtime", schemaSHA256: digest });
+    expect(transport.calls).toHaveLength(1);
+    await client.close();
+  });
+
   it("rejects a returned parameter ref mismatch without polluting the read cache", async () => {
     const expectedValue = "expected-value";
     const release = makeRelease({
@@ -28,8 +46,9 @@ describe("KmsClient release transport boundary", () => {
       parameterDigest: sha256Hex(expectedValue),
     });
     let parameterReads = 0;
-    const transport = new FakeTransport((path) => {
+    const transport = new FakeTransport((path, request) => {
       if (path.endsWith("/GetActiveRelease")) {
+        expect(request).toMatchObject({ schemaVersion: 0n });
         return { release, activationRevision: 11n, previousVersion: 0n };
       }
       if (path.endsWith("/GetParameter")) {
@@ -50,7 +69,7 @@ describe("KmsClient release transport boundary", () => {
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
-    const loader = await client.createReleaseLoader({ name: "runtime" });
+    const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
 
     const error = await loader
       .run(() => {
@@ -64,6 +83,7 @@ describe("KmsClient release transport boundary", () => {
       state: "rejected",
       rejectionCategory: "version_mismatch",
       diagnostic: "",
+      schemaVersion: 0n,
     });
     await expect(client.getParameter("settings", { version: 7n })).resolves.toBe("fresh-value");
     expect(parameterReads).toBe(2);
@@ -130,6 +150,7 @@ describe("KmsClient release transport boundary", () => {
     const client = new KmsClient({ transport, namespace: "prod/api" });
     const loader = await client.createReleaseLoader({
       name: "runtime",
+      schemaVersion: 0n,
     });
 
     const error = await loader
@@ -182,7 +203,7 @@ describe("KmsClient release transport boundary", () => {
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
-    const loader = await client.createReleaseLoader({ name: "runtime" });
+    const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
 
     const run = loader.run(() => ({ commit() {}, abort() {} }));
     await waitFor(() => transport.cancelCount === 1);

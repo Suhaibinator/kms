@@ -32,6 +32,8 @@ export interface VerifyReleaseDefaultsOptions {
   readonly profile?: string;
   /** Generated contract schema digest; empty skips the schema check and leaves schemaMatches false. */
   readonly schemaSha256?: string;
+  /** Exact numeric schema track. Mutually exclusive with schemaSha256. */
+  readonly schemaVersion?: bigint;
   readonly entries: readonly VerifyDefaultsEntry[];
   readonly signal?: AbortSignal;
   readonly deadline?: Date;

@@ -28,6 +28,7 @@ function response(
     unsupportedContentTypeCount: 0,
     unverifiedCount: 2,
     ...overrides,
+    schemaVersion: overrides.schemaVersion ?? 0n,
   };
 }
 

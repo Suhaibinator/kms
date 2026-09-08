@@ -36,7 +36,7 @@ import type {
 } from "../../../src/configstore/index.js";
 import type { Config as RootConfig } from "./config.js";
 
-export const schemaSHA256 = "53ba1cdc7b814182e41c2d1c2271689c856c3018bb6cd88075d66e13612a954a";
+export const schemaSHA256 = "2c59911ebaaa65bfe06b0994695c2b90757da369d4baa0237e5a45c15ef24c15";
 
 export const generatedContract = Object.freeze([
   Object.freeze({ alias: "database", kind: "parameter", contentType: "json" }),
@@ -181,7 +181,7 @@ export class Snapshot {
 }
 
 export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
-export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;
+export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys" | "schemaVersion" | "schemaSHA256">;
 
 export class Store {
   readonly #defaults: ConfigSnapshot<RootConfig>;
@@ -213,7 +213,7 @@ export class Store {
     this.#started = true;
     return startManagedConfig(
       client,
-      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },
+      { ...options, schemaSHA256, bindingKeys: this.#bindingKeys, contract: generatedContract },
       (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),
       signal,
     );

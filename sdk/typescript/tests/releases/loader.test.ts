@@ -104,6 +104,7 @@ class FakeTransport implements ReleaseTransport {
   getActiveRelease(
     requestedNamespace: NamespaceRef,
     name: string,
+    _schemaVersion: bigint,
     signal?: AbortSignal,
   ): Promise<GetActiveReleaseResponse> {
     this.calls.push("active");
@@ -189,6 +190,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       instanceId: "stable-instance",
 
       bindingKeys: { database: "local-binding-key" },
@@ -227,6 +229,7 @@ describe("ReleaseLoader", () => {
     expect(transport.registration).toMatchObject({
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       instanceId: "stable-instance",
       lastSeenRevision: 22n,
     });
@@ -239,6 +242,55 @@ describe("ReleaseLoader", () => {
       appliedRevision: 22n,
     });
     expect(loader.stats().applied).toBe(1n);
+  });
+
+  it("drops foreign-schema events before fetch, acknowledgement, or supersession", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => loader.status().state === "applied");
+    const foreign = ConfigurationRelease.create({
+      ...release,
+      version: 2n,
+      schemaVersion: 7n,
+    });
+    foreign.digest = deterministicReleaseDigest(foreign);
+    transport.stream?.push(activationEvent(foreign, 2n));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(loader.stats().candidates).toBe(1n);
+    expect(transport.calls.filter((call) => call.startsWith("parameter:"))).toHaveLength(1);
+    expect(acknowledgements(transport.stream).some((ack) => ack.version === 2n)).toBe(false);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("keeps watching a known track with no active release", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => transport.stream !== undefined);
+    transport.active = { release, activationRevision: 1n, previousVersion: 0n };
+    transport.stream?.push(activationEvent(release, 1n));
+    await waitFor(() => loader.status().state === "applied");
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("rejects missing exact-version credentials before fetching plaintext", async () => {
@@ -256,6 +308,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -275,6 +328,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -294,6 +348,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: { database: "wrong-key" },
     });
 
@@ -326,6 +381,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         now: () => 100,
       });
 
@@ -345,6 +401,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: { database: "must-not-use" },
     });
 
@@ -374,6 +431,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
       });
 
       await expect(
@@ -405,6 +463,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: source,
     });
     source.database = "mutated-key";
@@ -437,6 +496,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -457,6 +517,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const run = loader.run(
@@ -494,6 +555,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
       });
       const secondRun = secondLoader.run(
         () => ({
@@ -520,6 +582,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
 
       validateManifest: () => {
         throw new ClassifiedReleaseError("config_contract_mismatch", "sensitive validation detail");
@@ -551,6 +614,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       acknowledgementTimeoutMs: 500,
     });
     let settled = false;
@@ -604,6 +668,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       acknowledgementTimeoutMs: 500,
       random: () => 0,
     });
@@ -630,6 +695,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         reconcileIntervalMs: 0,
       }),
     ).not.toThrow();
@@ -638,6 +704,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         reconcileIntervalMs: -1,
       }),
     ).not.toThrow();
@@ -661,6 +728,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const run = loader.run(async (snapshot) => {
@@ -716,6 +784,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const firstController = new AbortController();
     const firstPrepareStarted = deferred<void>();
@@ -808,6 +877,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run((snapshot) => {
       if (snapshot.version === 2n) {
@@ -854,6 +924,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run(() => {
       preparations += 1;
@@ -907,6 +978,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const error = await loader
@@ -943,6 +1015,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const sensitiveFailure = "sensitive async commit failure";
 
@@ -986,6 +1059,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run(
       () => ({
@@ -1026,6 +1100,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const error = await loader
@@ -1067,6 +1142,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const sensitiveFailure = "sensitive async abort failure";
 
@@ -1098,6 +1174,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = runTypedRelease(
       loader,
@@ -1150,6 +1227,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       maxConcurrentFetches: 3,
     });
     const run = loader.run(
@@ -1174,7 +1252,6 @@ function makeRelease(version: bigint, entries: ConfigurationReleaseEntry[]): Con
     namespace,
     name: "runtime",
     version,
-    schemaVersion: 0n,
     entries,
     metadataJson: "{}",
   });

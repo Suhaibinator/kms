@@ -424,6 +424,7 @@ function options(onDefaultMismatch: (report: DefaultMismatchReport) => void) {
     namespace: "prod/api",
     release: "runtime",
     clientName: "configstore-test",
+    schemaVersion: 0n,
     instanceId: "stable-test-instance",
     contract: [{ alias: "settings", kind: "parameter" as const, contentType: "json" }],
     onDefaultMismatch,
@@ -442,6 +443,7 @@ function managedClient(transport: FakeReleaseTransport) {
             app: selectedNamespace?.[1] ?? namespace.app,
           },
           clientName: options.clientName ?? "configstore-test",
+          schemaVersion: 0n,
         }),
       );
     },

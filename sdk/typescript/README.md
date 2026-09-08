@@ -215,7 +215,7 @@ commit, a rejected candidate preserves the last-known-good value.
 import type { PreparedRelease, ReleaseSnapshot } from "@suhaibinator/kms";
 
 let active: Readonly<{ requestTimeoutMs: number }> | undefined;
-const loader = await client.createReleaseLoader({ name: "runtime" });
+const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
 
 await loader.run(async (snapshot: ReleaseSnapshot): Promise<PreparedRelease> => {
   const raw = snapshot.parameter("request_timeout")?.value();
