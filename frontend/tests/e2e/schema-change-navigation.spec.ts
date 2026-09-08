@@ -144,15 +144,22 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   await row
     .getByRole("button", { name: "Add apple_oauth_additional_redirect_urls item", exact: true })
     .scrollIntoViewIfNeeded();
-  const arrayState = row.getByRole("combobox", {
-    name: "apple_oauth_additional_redirect_urls state",
+  const arrayField = row.getByRole("group", {
+    name: "apple_oauth_additional_redirect_urls",
+    exact: true,
   });
-  await expect(arrayState).toHaveValue("unset");
-  await arrayState.selectOption("set");
-  await expect(row.getByText("Empty array · 0 items", { exact: true })).toBeVisible();
-  await arrayState.selectOption("unset");
-  await expect(arrayState).toHaveValue("unset");
-  await arrayState.selectOption("set");
+  await expect(arrayField.getByText("Not configured · Field omitted")).toBeVisible();
+  await arrayField
+    .getByRole("button", { name: "Use empty list for apple_oauth_additional_redirect_urls" })
+    .click();
+  await expect(arrayField.getByText("No items · Empty list []", { exact: true })).toBeVisible();
+  await arrayField
+    .getByRole("button", { name: "Omit apple_oauth_additional_redirect_urls field" })
+    .click();
+  await expect(arrayField.getByText("Not configured · Field omitted")).toBeVisible();
+  await arrayField
+    .getByRole("button", { name: "Use empty list for apple_oauth_additional_redirect_urls" })
+    .click();
   await page.screenshot({
     path: info.outputPath("target-schema-fields.png"),
     animations: "disabled",
@@ -175,9 +182,7 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   expect(beforeTable).toBe(true);
   await dialog.getByRole("button", { name: "database · Fix field" }).click();
   const value = dialog.getByRole("textbox", { name: "client_id", exact: true });
-  await expect(
-    row.getByRole("combobox", { name: "apple_oauth_additional_redirect_urls state" }),
-  ).toHaveValue("set");
+  await expect(arrayField.getByText("No items · Empty list []")).toBeVisible();
   await expect(value).toBeFocused();
   await expect(value).toBeInViewport();
   await expect(row).toHaveAttribute("open");
@@ -185,9 +190,7 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
     .locator("details[id^=upgrade-field]")
     .evaluateAll((elements) => elements.map((el) => el.id));
   await value.fill("client-123");
-  await expect(
-    row.getByRole("combobox", { name: "apple_oauth_additional_redirect_urls state" }),
-  ).toHaveValue("set");
+  await expect(arrayField.getByText("No items · Empty list []")).toBeVisible();
   await expect(value).toBeFocused();
   await expect(value).toBeInViewport();
   await expect(row).toHaveAttribute("open");

@@ -3,12 +3,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
-import { Badge, Button, Field, Input, Loading } from "@/components/ui";
+import { Badge, Button, Checkbox, Field, Input, Loading } from "@/components/ui";
 import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { deriveContractFromSchema } from "@/lib/contract-derive";
-import { prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
+import { type PreparedUpgradeValue, prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
 import { structuredSchemaDifferences } from "@/lib/schema-diff";
 import { aliasSchema } from "@/lib/schema-form";
 import type {
@@ -1223,7 +1223,7 @@ export function SchemaMigrationModal({
                       onPrepare={(value) => {
                         setBeforePreparation((previous) => ({
                           ...previous,
-                          [field.id]: field.value ?? "",
+                          [field.id]: previous[field.id] ?? field.value ?? "",
                         }));
                         update(field.id, { value });
                       }}
@@ -1486,35 +1486,135 @@ function UpgradeValuePreparation({
   onPrepare: (value: string) => void;
   onUndo: () => void;
 }) {
-  const prepared = useMemo(
-    () => prepareUpgradeValue(value, schemaJson ?? null, alias),
-    [value, schemaJson, alias],
+  const source = value;
+  const [lastPrepared, setLastPrepared] = useState<PreparedUpgradeValue | null>(null);
+  const [selection, setSelection] = useState<{ source: string; schema?: string; ids: string[] }>({
+    source,
+    schema: schemaJson,
+    ids: [],
+  });
+  const selected =
+    selection.source === source && selection.schema === schemaJson ? selection.ids : [];
+  const baseline = useMemo(
+    () => prepareUpgradeValue(source, schemaJson ?? null, alias),
+    [source, schemaJson, alias],
   );
-  if (previous !== undefined)
-    return (
-      <div className="info-panel row-wrap">
-        <span>
-          Draft prepared for the target schema. Existing values were preserved where allowed.
-          Restoring also reverts any later edits.
-        </span>
-        <Button variant="outline" disabled={disabled} onClick={onUndo}>
-          Restore pre-preparation value
-        </Button>
-      </div>
-    );
-  if (!prepared.added.length && !prepared.removed.length) return null;
+  const prepared = useMemo(
+    () => prepareUpgradeValue(source, schemaJson ?? null, alias, selected),
+    [source, schemaJson, alias, selected],
+  );
+  if (
+    previous === undefined &&
+    !prepared.added.length &&
+    !prepared.removed.length &&
+    !baseline.suggestions.length
+  )
+    return null;
   return (
     <section className="info-panel stack" aria-label={`Prepare ${alias}`}>
-      <strong>Prepare this value for the target schema</strong>
-      <p>
-        Add required lists and schema defaults; remove fields the target schema forbids. Other
-        values stay unchanged.
-      </p>
-      {prepared.added.length > 0 && <p>Add: {prepared.added.join(", ")}</p>}
-      {prepared.removed.length > 0 && <p>Remove: {prepared.removed.join(", ")}</p>}
-      <Button disabled={disabled || invalidDraft} onClick={() => onPrepare(prepared.value)}>
-        Prepare draft
-      </Button>
+      {previous !== undefined ? (
+        <>
+          <span>Draft prepared for the target schema. Restoring also reverts any later edits.</span>
+          {lastPrepared ? (
+            <details>
+              <summary>Last preparation changes</summary>
+              <PreparationSummary prepared={lastPrepared} />
+            </details>
+          ) : null}
+          <Button
+            variant="outline"
+            disabled={disabled}
+            onClick={() => {
+              setLastPrepared(null);
+              onUndo();
+            }}
+          >
+            Restore pre-preparation value
+          </Button>
+        </>
+      ) : null}
+      {prepared.value !== value || baseline.suggestions.length > 0 ? (
+        <>
+          <strong>Prepare this value for the target schema</strong>
+          <p>
+            Review suggested conversions, initialize allowed empty lists, apply schema defaults, and
+            remove forbidden fields. Unaccepted conversions keep their old fields for manual review.
+          </p>
+          {baseline.suggestions.map((migration) => (
+            <div key={migration.id} className="checkbox-row">
+              {migration.value !== undefined ? (
+                <Checkbox
+                  id={`migration-${alias}-${migration.id}`}
+                  checked={selected.includes(migration.id)}
+                  disabled={disabled || invalidDraft}
+                  onCheckedChange={(checked) =>
+                    setSelection({
+                      source,
+                      schema: schemaJson,
+                      ids: checked
+                        ? [...selected, migration.id]
+                        : selected.filter((id) => id !== migration.id),
+                    })
+                  }
+                />
+              ) : null}
+              <label
+                htmlFor={
+                  migration.value !== undefined ? `migration-${alias}-${migration.id}` : undefined
+                }
+              >
+                <span>
+                  {migration.from} → {migration.to}
+                </span>
+                <span className="faint">{migration.reason}</span>
+              </label>
+            </div>
+          ))}
+          <PreparationSummary prepared={prepared} />
+          <Button
+            disabled={disabled || invalidDraft || prepared.value === value}
+            onClick={() => {
+              setLastPrepared(prepared);
+              onPrepare(prepared.value);
+            }}
+          >
+            Prepare draft
+          </Button>
+        </>
+      ) : null}
     </section>
+  );
+}
+
+function PreparationSummary({ prepared }: { prepared: PreparedUpgradeValue }) {
+  const addedObjects = prepared.added.filter(
+    (path) =>
+      !prepared.initializedLists.includes(path) &&
+      !prepared.appliedDefaults.includes(path) &&
+      !prepared.migrations.some((migration) => migration.to === path),
+  );
+  return (
+    <ul className="text-sm">
+      {prepared.initializedLists.length > 0 && (
+        <li>
+          Initialize {prepared.initializedLists.length} empty list
+          {prepared.initializedLists.length === 1 ? "" : "s"}:{" "}
+          {prepared.initializedLists.join(", ")}
+        </li>
+      )}
+      {prepared.appliedDefaults.length > 0 && (
+        <li>
+          Apply {prepared.appliedDefaults.length} schema default
+          {prepared.appliedDefaults.length === 1 ? "" : "s"}: {prepared.appliedDefaults.join(", ")}
+        </li>
+      )}
+      {prepared.migrations.map((migration) => (
+        <li key={migration.id}>
+          Convert {migration.from} → {migration.to}: {migration.reason}
+        </li>
+      ))}
+      {addedObjects.length > 0 && <li>Add required object fields: {addedObjects.join(", ")}</li>}
+      {prepared.removed.length > 0 && <li>Remove: {prepared.removed.join(", ")}</li>}
+    </ul>
   );
 }

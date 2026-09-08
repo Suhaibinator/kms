@@ -15,6 +15,8 @@ import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
 import { checkJson, tokenizeJson } from "@/lib/json-text";
 import {
+  arrayAllowsEmpty,
+  arrayStateLabel,
   buildForm,
   describeConstraints,
   extraKeys,
@@ -88,6 +90,152 @@ export function storeEditorMode(mode: Mode): void {
   } catch {
     /* storage unavailable; the toggle still works for this open */
   }
+}
+
+/** New rows are drafts, so opening or cancelling one never changes the JSON. */
+function NewArrayItem({
+  field,
+  text,
+  disabled,
+  onChange,
+  onAdd,
+  onCancel,
+}: {
+  field: FormField;
+  text: string;
+  disabled: boolean;
+  onChange: (text: string) => void;
+  onAdd: (item: unknown) => void;
+  onCancel: () => void;
+}) {
+  const [objectValid, setObjectValid] = useState(false);
+  const schema = isJsonObject(field.schema.items) ? field.schema.items : {};
+  const label = `New ${field.name} item`;
+  const controlId = useId();
+  const input = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    input.current
+      ?.querySelector<HTMLElement>('input, textarea, [role="combobox"], [role="checkbox"]')
+      ?.focus();
+  }, []);
+  const parsed =
+    field.item === "object"
+      ? parseFormText(text)
+      : field.item === "number"
+        ? (() => {
+            const result = parseFormNumber(text, Boolean(field.integer));
+            return result.error || result.value === undefined
+              ? { ok: false as const, error: result.error ?? "Enter a number." }
+              : { ok: true as const, data: result.value };
+          })()
+        : { ok: true as const, data: field.item === "boolean" ? text === "true" : text };
+  const issues = parsed.ok ? validateValue(schema, parsed.data) : [];
+  const blank = field.item === "string" && text === "";
+  const canAdd =
+    parsed.ok &&
+    parsed.data !== undefined &&
+    !issues.length &&
+    !blank &&
+    (field.item !== "object" || objectValid);
+  const emptyAllowed = field.item === "string" && validateValue(schema, "").length === 0;
+  const unset = enumUnsetValue(field.enumValues ?? []);
+  return (
+    <fieldset
+      ref={input}
+      className="grid gap-2 rounded-md border border-input p-3"
+      aria-label={label}
+    >
+      <span className="text-sm font-medium">New item · Not added yet</span>
+      {field.item === "object" ? (
+        <SchemaForm
+          schema={schema}
+          value={text}
+          onChange={onChange}
+          disabled={disabled}
+          preferForm
+          jsonLabel={label}
+          onValidityChange={setObjectValid}
+        />
+      ) : field.item === "boolean" ? (
+        <div className="checkbox-row">
+          <Checkbox
+            id={controlId}
+            aria-label={label}
+            checked={text === "true"}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange(String(checked === true))}
+          />
+          <label htmlFor={controlId} className="block">
+            {text === "true" ? "True" : "False"}
+          </label>
+        </div>
+      ) : field.enumValues ? (
+        <AppSelect
+          aria-label={label}
+          disabled={disabled}
+          value={text === "" ? unset : text}
+          options={[
+            { value: unset, label: "Choose a value" },
+            ...field.enumValues
+              .filter((value) => value !== "")
+              .map((value) => ({ value: String(value), label: String(value) })),
+          ]}
+          onValueChange={(next) => onChange(next === unset ? "" : next)}
+        />
+      ) : (
+        <Input
+          aria-label={label}
+          value={text}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          inputMode={field.item === "number" ? (field.integer ? "numeric" : "decimal") : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+      {text !== "" && (issues.length || !parsed.ok) ? (
+        <span className="field-error" role="alert">
+          {!parsed.ok
+            ? parsed.error
+            : issues.map((issue) => `${formatIssuePath(issue.path)} ${issue.message}`).join("; ")}
+        </span>
+      ) : null}
+      <div className="row-wrap">
+        <Button
+          type="button"
+          size="sm"
+          disabled={disabled || !canAdd}
+          aria-label={`Add new ${field.name} item`}
+          onClick={() => {
+            if (parsed.ok && canAdd) onAdd(parsed.data);
+          }}
+        >
+          Add item
+        </Button>
+        {blank && emptyAllowed ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={() => onAdd("")}
+          >
+            Add empty string
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          aria-label={`Cancel new ${field.name} item`}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </fieldset>
+  );
 }
 
 function serialize(value: unknown): string {
@@ -199,7 +347,7 @@ export function SchemaForm({
       const first = node
         ? Array.from(
             node.querySelectorAll<HTMLElement>(
-              'input:not([type="hidden"]), textarea, [role="combobox"], [role="checkbox"]',
+              'input:not([type="hidden"]), textarea, [role="combobox"], [role="checkbox"], button',
             ),
           ).find((candidate) => !candidate.closest(".schema-form-toolbar"))
         : undefined;
@@ -228,6 +376,7 @@ export function SchemaForm({
     storeEditorMode(next);
   };
   const [drafts, setDrafts] = useState<Record<string, { text: string; error: string | null }>>({});
+  const hasNewItems = Object.keys(drafts).some((key) => key.endsWith(" \0new"));
   // Keep local incomplete number/JSON text while typing, but discard it on an
   // explicit parent restore/source replacement. Expansion and mode stay intact.
   useEffect(() => {
@@ -367,12 +516,15 @@ export function SchemaForm({
           type="button"
           className={cn("schema-form-toggle-button", effectiveMode === "json" && "is-active")}
           aria-pressed={effectiveMode === "json"}
-          disabled={disabled}
+          disabled={disabled || hasNewItems}
           onClick={() => setMode("json")}
         >
           JSON
         </button>
       </fieldset>
+      {hasNewItems ? (
+        <span role="status">Add or cancel new list items before saving or switching to JSON.</span>
+      ) : null}
       {Object.values(drafts).some((draft) => draft.error) && effectiveMode === "json" ? (
         <span role="alert">
           Fix the incomplete Form fields, or edit JSON to replace those drafts.
@@ -522,11 +674,11 @@ export function SchemaForm({
                 aria-invalid={error ? true : undefined}
                 onCheckedChange={(next) => commit(field.path, next === true)}
               />
-              <label htmlFor={controlId}>
+              <label htmlFor={controlId} className="block">
                 {label}
                 {field.required ? (
                   <span aria-hidden="true" className="text-danger">
-                    {" *"}
+                    {"\u00a0*"}
                   </span>
                 ) : null}
               </label>
@@ -690,7 +842,9 @@ export function SchemaForm({
         const hint = hintFor(field, current);
         const nullable =
           field.nullable ||
-          (Array.isArray(field.schema.type) && field.schema.type.includes("null"));
+          (Array.isArray(field.schema.type) &&
+            field.schema.type.includes("null") &&
+            validateValue(field.schema, null).length === 0);
         const state =
           current === undefined
             ? "unset"
@@ -699,6 +853,11 @@ export function SchemaForm({
               : Array.isArray(current)
                 ? "set"
                 : "invalid";
+        const newItemKey = `${key} \0new`;
+        const newItem = drafts[newItemKey];
+        const allowsEmpty = arrayAllowsEmpty(field.schema);
+        const atCapacity =
+          typeof field.schema.maxItems === "number" && items.length >= field.schema.maxItems;
         const replaceList = (next: unknown) => {
           // Item indices can be reused after a clear, unset or removal. Do not
           // overlay the replacement list with old numeric/JSON input drafts.
@@ -712,51 +871,112 @@ export function SchemaForm({
           commit(field.path, next);
         };
         const stateControl = (
-          <div className="row-wrap">
-            <select
-              id={`${controlId}-state`}
-              className="native-select w-full rounded-md border border-input bg-input/30 px-3 py-2 sm:w-48"
-              aria-label={`${label} state`}
-              aria-invalid={error ? true : undefined}
-              disabled={disabled}
-              value={state}
-              onChange={(event) =>
-                replaceList(
-                  event.target.value === "unset"
-                    ? undefined
-                    : event.target.value === "null"
-                      ? null
-                      : [],
-                )
-              }
-              onBlur={onBlur}
-            >
-              <option value="unset">Not set</option>
-              <option value="set">Set</option>
-              {nullable && <option value="null">Null</option>}
-              {state === "null" && !nullable && (
-                <option value="null" disabled>
-                  Null (not allowed)
-                </option>
-              )}
-              {state === "invalid" && (
-                <option value="invalid" disabled>
-                  Invalid value
-                </option>
-              )}
-            </select>
-            <span className="faint text-sm" role="status">
+          <div className="grid gap-1">
+            <span className={cn("text-sm", error ? "text-danger" : "faint")} role="status">
               {state === "unset"
-                ? "Not set · property omitted"
+                ? field.required
+                  ? "Missing · Required field"
+                  : `${arrayStateLabel(field.schema, "omitted")} · Field omitted`
                 : state === "null"
-                  ? "Null · explicit null value"
+                  ? `${arrayStateLabel(field.schema, "null")} · null${nullable ? "" : " (not allowed)"}`
                   : state === "set"
                     ? items.length === 0
-                      ? "Empty array · 0 items"
+                      ? `${arrayStateLabel(field.schema, "empty")} · Empty list []`
                       : `${items.length} item${items.length === 1 ? "" : "s"}`
                     : "Not an array · use JSON to inspect"}
             </span>
+            {items.length === 0 && state !== "invalid" ? (
+              <span className="faint text-sm">
+                {allowsEmpty
+                  ? field.required
+                    ? "An empty list is allowed; this field must be included."
+                    : "An empty list includes the field with no items."
+                  : typeof field.schema.minItems === "number" && field.schema.minItems > 0
+                    ? `Add at least ${field.schema.minItems} item${field.schema.minItems === 1 ? "" : "s"}.`
+                    : "Add items that satisfy the schema."}
+              </span>
+            ) : null}
           </div>
+        );
+        const listActions = (
+          <>
+            {newItem ? (
+              <NewArrayItem
+                field={field}
+                text={newItem.text}
+                disabled={disabled || atCapacity}
+                onChange={(text) => setDraft(newItemKey, text, "Add or cancel the new list item.")}
+                onAdd={(item) => {
+                  setDraft(newItemKey, undefined);
+                  commit(field.path, [...items, item]);
+                }}
+                onCancel={() => setDraft(newItemKey, undefined)}
+              />
+            ) : null}
+            <div className="row-wrap">
+              {!newItem && state !== "invalid" ? (
+                <Button
+                  id={`${controlId}-add`}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled || atCapacity}
+                  onClick={() => {
+                    const itemSchema = isJsonObject(field.schema.items) ? field.schema.items : {};
+                    const initial = field.itemField
+                      ? serialize(initialValue(field.itemField) ?? {})
+                      : field.item === "boolean"
+                        ? String(itemSchema.default ?? false)
+                        : "default" in itemSchema
+                          ? String(itemSchema.default)
+                          : "";
+                    setDraft(newItemKey, initial, "Add or cancel the new list item.");
+                  }}
+                >
+                  <Plus size={14} aria-hidden /> Add {label} item
+                </Button>
+              ) : null}
+              {!newItem && state !== "set" && state !== "invalid" && allowsEmpty ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  disabled={disabled}
+                  aria-label={`Use empty list for ${label}`}
+                  onClick={() => replaceList([])}
+                >
+                  Use empty list
+                </Button>
+              ) : null}
+              {!newItem && !field.required && state !== "unset" ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  disabled={disabled}
+                  aria-label={`Omit ${label} field`}
+                  onClick={() => replaceList(undefined)}
+                >
+                  Omit field
+                </Button>
+              ) : null}
+              {!newItem && nullable && state !== "null" ? (
+                <details>
+                  <summary className="faint text-sm">More options</summary>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    disabled={disabled}
+                    aria-label={`Set ${label} to null`}
+                    onClick={() => replaceList(null)}
+                  >
+                    Set to null
+                  </Button>
+                </details>
+              ) : null}
+            </div>
+          </>
         );
         const removeItem = (index: number) => {
           reindexListDrafts(key, index);
@@ -766,16 +986,8 @@ export function SchemaForm({
           );
         };
         if (field.item === "object" && field.itemField) {
-          const itemField = field.itemField;
           return (
-            <Field
-              key={key}
-              label={label}
-              htmlFor={`${controlId}-state`}
-              required={field.required}
-              hint={hint}
-              error={error}
-            >
+            <Field key={key} label={label} required={field.required} hint={hint} error={error}>
               {stateControl}
               <ul className="schema-form-list" aria-label={`${label} items`}>
                 {items.map((_, index) => {
@@ -798,27 +1010,12 @@ export function SchemaForm({
                   );
                 })}
               </ul>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={disabled}
-                onClick={() => commit(field.path, [...items, initialValue(itemField) ?? {}])}
-              >
-                <Plus size={14} aria-hidden /> Add {label} item
-              </Button>
+              {listActions}
             </Field>
           );
         }
         return (
-          <Field
-            key={key}
-            label={label}
-            htmlFor={`${controlId}-state`}
-            required={field.required}
-            hint={hint}
-            error={error}
-          >
+          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
             {stateControl}
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
@@ -922,28 +1119,16 @@ export function SchemaForm({
                     {itemError ? (
                       <span className="field-error schema-form-list-error">{itemError}</span>
                     ) : null}
+                    {field.item === "string" && item === "" ? (
+                      <span className="faint text-sm schema-form-list-error">
+                        Empty string · Stored item
+                      </span>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={disabled}
-              onClick={() =>
-                commit(field.path, [
-                  ...items,
-                  field.item === "boolean"
-                    ? false
-                    : field.item === "number"
-                      ? (field.enumValues?.[0] ?? 0)
-                      : (field.enumValues?.[0] ?? ""),
-                ])
-              }
-            >
-              <Plus size={14} aria-hidden /> Add {label} item
-            </Button>
+            {listActions}
           </Field>
         );
       }

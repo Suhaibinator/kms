@@ -101,6 +101,60 @@ existing setup/import workflow.
 
 ## Optional schema registry
 
+### Array editing and upgrade preparation
+
+The console distinguishes omitted properties, empty lists (`[]`), populated
+lists, and explicit `null`. Opening an existing value preserves those states.
+Adding a list item opens a draft; **Add item** commits it and **Cancel** leaves
+the value unchanged. Pending items block saving and switching the parent editor
+to JSON until added or cancelled. Removing the last stored item leaves `[]`.
+Use **Omit field** to remove an optional property. Required fields do not offer
+omission, and **Use empty list** is offered only when local schema checks allow
+it. Nullable lists expose **Set to null** under **More options**. Existing empty
+strings remain stored items; creating one requires **Add empty string**.
+
+During an upgrade, **Prepare draft** previews list initializations, schema
+defaults, conversions, and forbidden-field removals. A missing required list
+is initialized only when an empty list is allowed. Existing empty, null, and
+omitted optional fields without defaults are preserved. The backend migration
+preview remains authoritative for full schema validation. **Restore
+pre-preparation value** restores the original JSON, including edits made after
+preparation and any subsequent preparations.
+
+A new string-list property whose name is the old sibling name plus `s` (for
+example, `redirect_url` → `redirect_urls`) can suggest wrapping the old string
+as a single item. Name-based suggestions must be selected before preparation;
+unaccepted or incompatible sources are retained for manual review. An empty
+old string requires a separate, explicit choice to discard it and use `[]`.
+An existing target property is never overwritten by a conversion.
+
+Schema authors may declare a sibling mapping and application-specific state
+labels on an array property:
+
+```json
+{
+  "type": "array",
+  "items": { "type": "string" },
+  "x-kms-migrate-from": "redirect_url",
+  "x-kms-array": {
+    "omittedLabel": "Use application defaults",
+    "emptyLabel": "No redirect URLs",
+    "nullLabel": "Provider disabled"
+  }
+}
+```
+
+These optional console annotations do not change validation or application
+runtime behavior. Only use labels that describe the consuming application's
+actual semantics. Labels may also appear on the supported nullable wrapper.
+`x-kms-migrate-from` names a sibling key, not a dotted path; a compatible nonempty
+string is included in the preparation plan without a name-based confirmation.
+The source is removed only if the target schema forbids it. Complex or
+incompatible conversions remain manual. Source string tokens and unrelated
+numeric tokens are preserved exactly.
+
+### Registry semantics
+
 `ConfigurationSchemaService` provides immutable `CreateSchema`, `GetSchema`,
 and `ListSchemas` operations. A schema belongs to exactly one application and
 that application's immutable release name. Each successful create allocates

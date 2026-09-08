@@ -152,6 +152,9 @@ export function unwrapNullable(schema: JsonSchema): JsonSchema | null {
     merged.description = schema.description;
   }
   if ("default" in schema && !("default" in merged)) merged.default = schema.default;
+  for (const keyword of ["x-kms-array", "x-kms-migrate-from"]) {
+    if (keyword in schema && !(keyword in merged)) merged[keyword] = schema[keyword];
+  }
   if (schemaNeedsExactJson(schema) || schemaNeedsExactJson(inner)) exactJsonSchemas.add(merged);
   return merged;
 }
@@ -320,7 +323,20 @@ export function flattenFields(root: FormField): FormField[] {
 
 /** A starting value: schema defaults, and empty containers for required objects and lists. */
 export function initialValue(field: FormField): unknown {
-  if ("default" in field.schema) return field.schema.default;
+  if ("default" in field.schema) {
+    const value = field.schema.default;
+    if (field.nullable && value === null) return null;
+    if (
+      validateValue(field.schema, value).length === 0 &&
+      !(
+        field.kind === "list" &&
+        Array.isArray(value) &&
+        value.length === 0 &&
+        !arrayAllowsEmpty(field.schema)
+      )
+    )
+      return value;
+  }
   switch (field.kind) {
     case "object": {
       const out: JsonObject = {};
@@ -332,12 +348,31 @@ export function initialValue(field: FormField): unknown {
       return out;
     }
     case "list":
-      return [];
+      return arrayAllowsEmpty(field.schema) ? [] : undefined;
     case "string":
       return field.enumValues ? undefined : "";
     default:
       return undefined;
   }
+}
+
+/** Only promise an empty list when the local validator understands the constraints. */
+export function arrayAllowsEmpty(schema: JsonSchema): boolean {
+  const inner = unwrapNullable(schema) ?? schema;
+  return (
+    (inner.type === "array" || (Array.isArray(inner.type) && inner.type.includes("array"))) &&
+    ![...UNSUPPORTED, "contains"].some((keyword) => keyword in inner) &&
+    validateValue(inner, []).length === 0
+  );
+}
+
+/** Application-owned labels; omission alone never implies a runtime default. */
+export function arrayStateLabel(schema: JsonSchema, state: "empty" | "omitted" | "null"): string {
+  const labels = schema["x-kms-array"];
+  const custom = isObject(labels) ? labels[`${state}Label`] : undefined;
+  return typeof custom === "string" && custom.trim()
+    ? custom
+    : { empty: "No items", omitted: "Not configured", null: "Explicit null" }[state];
 }
 
 function isIndex(key: string): boolean {

@@ -78,6 +78,20 @@ function out(): unknown {
 }
 
 describe("schema-form model", () => {
+  it("preserves nullable defaults while leaving nonempty required lists for the user", () => {
+    const root = buildForm({
+      type: "object",
+      required: ["urls", "rows"],
+      properties: {
+        urls: {
+          anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+          default: null,
+        },
+        rows: { type: "array", items: { type: "string" }, minItems: 1 },
+      },
+    });
+    expect(initialValue(root!)).toEqual({ urls: null });
+  });
   it("builds typed fields and falls back to JSON for unsupported subtrees", () => {
     const root = buildForm(schema);
     expect(root?.kind).toBe("object");
@@ -204,6 +218,7 @@ describe("SchemaForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove flags item 2" }));
     expect(out()).toEqual({ flags: [true, true, true] });
     fireEvent.click(screen.getByRole("button", { name: "Add flags item" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add new flags item" }));
     expect(out()).toEqual({ flags: [true, true, true, false] });
     const lastRow = within(list).getAllByRole("listitem")[3];
     expect(within(lastRow).getByText("Item 4")).toBeVisible();
@@ -247,7 +262,10 @@ describe("SchemaForm", () => {
     await waitFor(() => expect(out()).toMatchObject({ tier: "pro" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Add tags item" }));
-    fireEvent.change(screen.getByLabelText("tags item 1"), { target: { value: "blue" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "New tags item" }), {
+      target: { value: "blue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add new tags item" }));
     expect(out()).toMatchObject({ tags: ["blue"] });
     fireEvent.click(screen.getByRole("button", { name: "Remove tags item 1" }));
     expect(out()).toMatchObject({ tags: [] });
@@ -355,11 +373,11 @@ describe("SchemaForm", () => {
     expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }] });
 
     fireEvent.click(screen.getByRole("button", { name: "Add endpoints item" }));
-    expect(screen.getByRole("group", { name: /^endpoints 2/ })).toBeInTheDocument();
-    // A new item starts from the item schema: required `host` seeded, nothing else.
-    expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }, { host: "" }] });
+    expect(screen.getAllByRole("group", { name: "New endpoints item" }).length).toBeGreaterThan(0);
+    expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }] });
     // The missing-required check reaches into each item.
     fireEvent.change(screen.getAllByLabelText(/^host/)[1], { target: { value: "c" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add new endpoints item" }));
     expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }, { host: "c" }] });
 
     fireEvent.click(screen.getByRole("button", { name: "Remove endpoints item 1" }));
@@ -493,7 +511,7 @@ it("clears stale control drafts on an explicit restore without remounting the fo
   expect(screen.getByRole("textbox", { name: "count" })).toHaveValue("10");
 });
 
-it("distinguishes omitted, empty, populated and null arrays without changing other values", () => {
+it("preserves omitted, empty, populated and null arrays through explicit actions", () => {
   render(
     <Harness
       initial={'{"keep":"unchanged"}'}
@@ -506,35 +524,31 @@ it("distinguishes omitted, empty, populated and null arrays without changing oth
       }}
     />,
   );
-  const state = screen.getByRole("combobox", { name: "urls state" });
-  expect(state).toHaveValue("unset");
-  expect(screen.getByText("Not set · property omitted")).toBeVisible();
-  fireEvent.change(state, { target: { value: "set" } });
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
-    keep: "unchanged",
-    urls: [],
-  });
-  expect(screen.getByText("Empty array · 0 items")).toBeVisible();
+  expect(screen.queryByRole("combobox", { name: "urls state" })).toBeNull();
+  expect(screen.getByText("Not configured · Field omitted")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Add urls item" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "urls item 1" }), {
+  expect(out()).toEqual({ keep: "unchanged" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel new urls item" }));
+  expect(out()).toEqual({ keep: "unchanged" });
+  fireEvent.click(screen.getByRole("button", { name: "Use empty list for urls" }));
+  expect(out()).toEqual({ keep: "unchanged", urls: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Add urls item" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "New urls item" }), {
     target: { value: "https://example.com" },
   });
+  expect(out()).toEqual({ keep: "unchanged", urls: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Add new urls item" }));
+  expect(out()).toEqual({ keep: "unchanged", urls: ["https://example.com"] });
   fireEvent.click(screen.getByRole("button", { name: "Remove urls item 1" }));
-  expect(state).toHaveValue("set");
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
-    keep: "unchanged",
-    urls: [],
-  });
-  fireEvent.change(state, { target: { value: "null" } });
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
-    keep: "unchanged",
-    urls: null,
-  });
-  fireEvent.change(state, { target: { value: "unset" } });
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ keep: "unchanged" });
+  expect(out()).toEqual({ keep: "unchanged", urls: [] });
+  fireEvent.click(screen.getByText("More options"));
+  fireEvent.click(screen.getByRole("button", { name: "Set urls to null" }));
+  expect(out()).toEqual({ keep: "unchanged", urls: null });
+  fireEvent.click(screen.getByRole("button", { name: "Omit urls field" }));
+  expect(out()).toEqual({ keep: "unchanged" });
 });
 
-it("validates required and nonempty arrays separately and supports object lists", () => {
+it("offers only schema-valid empty/omit choices and stages object items", () => {
   render(
     <Harness
       initial="{}"
@@ -545,42 +559,133 @@ it("validates required and nonempty arrays separately and supports object lists"
           rows: {
             type: "array",
             minItems: 1,
-            items: { type: "object", properties: { name: { type: "string" } } },
+            maxItems: 1,
+            items: {
+              type: "object",
+              required: ["name"],
+              properties: { name: { type: "string", minLength: 1 } },
+            },
           },
         },
       }}
     />,
   );
-  const state = screen.getByRole("combobox", { name: "rows state" });
-  expect(state).toHaveAttribute("aria-invalid", "true");
-  expect(screen.queryByRole("option", { name: "Null" })).toBeNull();
-  fireEvent.change(state, { target: { value: "set" } });
-  expect(state).toHaveAttribute("aria-invalid", "true");
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ rows: [] });
+  expect(screen.getByText("Missing · Required field")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Use empty list for rows" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Omit rows field" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Add rows item" }));
-  expect(state).not.toHaveAttribute("aria-invalid");
+  expect(out()).toEqual({});
+  expect(screen.getByRole("button", { name: "Add new rows item" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("textbox", { name: "name" }), { target: { value: "primary" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add new rows item" }));
+  expect(out()).toEqual({ rows: [{ name: "primary" }] });
+  expect(screen.getByRole("button", { name: "Add rows item" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Remove rows item 1" }));
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ rows: [] });
-  fireEvent.change(state, { target: { value: "unset" } });
-  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({});
+  expect(out()).toEqual({ rows: [] });
+  expect(screen.getByText("must have at least 1 item")).toBeVisible();
 });
 
-it("exposes null for type unions and disables array state changes with the editor", () => {
+it("preserves null on opening a disabled array editor", () => {
   render(
     <Harness
-      initial={'{"urls":null}'}
       disabled
+      initial='{"urls":null}'
       schema={{
         type: "object",
         properties: { urls: { type: ["array", "null"], items: { type: "string" } } },
       }}
     />,
   );
-  expect(screen.getByRole("combobox", { name: "urls state" })).toBeDisabled();
-  expect(screen.getByRole("combobox", { name: "urls state" })).toHaveValue("null");
+  expect(screen.getByText("Explicit null · null")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Use empty list for urls" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Omit urls field" })).toBeDisabled();
+  expect(out()).toEqual({ urls: null });
+});
+
+it("uses application-provided array labels without inferring fallback behavior", () => {
+  render(
+    <Harness
+      initial="{}"
+      schema={{
+        type: "object",
+        properties: {
+          urls: {
+            anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+            "x-kms-array": {
+              omittedLabel: "Use application defaults",
+              emptyLabel: "No redirect URLs",
+              nullLabel: "Provider disabled",
+            },
+          },
+        },
+      }}
+    />,
+  );
+  expect(screen.getByText("Use application defaults · Field omitted")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Use empty list for urls" }));
+  expect(screen.getByText("No redirect URLs · Empty list []")).toBeVisible();
+  fireEvent.click(screen.getByText("More options"));
+  fireEvent.click(screen.getByRole("button", { name: "Set urls to null" }));
+  expect(screen.getByText("Provider disabled · null")).toBeVisible();
 });
 
 describe("safe form drafts", () => {
+  it("keeps new string/number rows outside JSON, blocks saving, and restores the original state on cancel", () => {
+    render(
+      <DraftHarness
+        initial='{"urls":null,"counts":[]}'
+        formSchema={{
+          type: "object",
+          properties: {
+            urls: { type: ["array", "null"], items: { type: "string", minLength: 1 } },
+            counts: { type: "array", items: { type: "integer" } },
+          },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add urls item" }));
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "JSON" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add new urls item" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Add empty string" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "New urls item" }), {
+      target: { value: "example" },
+    });
+    expect(out()).toEqual({ urls: null, counts: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel new urls item" }));
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+    expect(out()).toEqual({ urls: null, counts: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Add counts item" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "New counts item" }), {
+      target: { value: "9007199254740993" },
+    });
+    expect(screen.getByRole("button", { name: "Add new counts item" })).toBeDisabled();
+    expect(out()).toEqual({ urls: null, counts: [] });
+    fireEvent.change(screen.getByRole("textbox", { name: "New counts item" }), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add new counts item" }));
+    expect(out()).toEqual({ urls: null, counts: [2] });
+  });
+
+  it("keeps saved empty strings explicit and requires an explicit action to add another", () => {
+    render(
+      <DraftHarness
+        initial='{"urls":[""]}'
+        formSchema={{
+          type: "object",
+          properties: { urls: { type: "array", items: { type: "string" } } },
+        }}
+      />,
+    );
+    expect(screen.getByText("Empty string · Stored item")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Add urls item" }));
+    expect(screen.getByRole("button", { name: "Add new urls item" })).toBeDisabled();
+    expect(out()).toEqual({ urls: [""] });
+    fireEvent.click(screen.getByRole("button", { name: "Add empty string" }));
+    expect(out()).toEqual({ urls: ["", ""] });
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+  });
   function DraftHarness({
     initial = '{"replicas":3}',
     resetKey = "a",

@@ -295,7 +295,7 @@ describe("SchemaMigrationModal regressions", () => {
     expect(within(dialog).queryByRole("textbox", { name: "old" })).toBeNull();
     expect(within(dialog).getByText("Target schema v2")).toBeVisible();
     const prepare = within(dialog).getByRole("region", { name: "Prepare database" });
-    expect(prepare).toHaveTextContent("Add: urls");
+    expect(prepare).toHaveTextContent("Initialize 1 empty list: urls");
     expect(prepare).toHaveTextContent("Remove: old");
     fireEvent.click(within(prepare).getByRole("button", { name: "Prepare draft" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Preview migration" }));
