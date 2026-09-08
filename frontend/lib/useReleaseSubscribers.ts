@@ -7,7 +7,7 @@
 // visibility-gated polling the Subscribers page uses. Everything stops on
 // unmount or when `enabled` flips off.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { useLatestRequest } from "@/lib/hooks";
 import { groupSubscriberInstances } from "@/lib/subscribers";
@@ -76,41 +76,20 @@ export function useReleaseSubscribers(
   const env = ns?.env ?? "";
   const app = ns?.app ?? "";
   const scope = enabled ? JSON.stringify([env, app, name, schemaVersion]) : "";
-  const scopeRef = useRef({ scope, generation: 0 });
-  if (scopeRef.current.scope !== scope) {
-    scopeRef.current = { scope, generation: scopeRef.current.generation + 1 };
-  }
-  const generation = scopeRef.current.generation;
   const [result, setResult] = useState<{
     scope: string;
-    generation: number;
     data: ReleaseSubscribersData;
-  }>(() => ({ scope, generation, data: emptySubscriberData() }));
+  }>(() => ({ scope, data: emptySubscriberData() }));
   const request = useLatestRequest();
-
-  const isCurrentScope = useCallback(
-    () =>
-      scopeRef.current.scope === scope &&
-      scopeRef.current.generation === generation &&
-      scope !== "",
-    [scope, generation],
-  );
 
   const update = useCallback(
     (change: Partial<ReleaseSubscribersData>) => {
-      if (!isCurrentScope()) return;
-      setResult((current) => ({
-        scope,
-        generation,
-        data: {
-          ...(current.scope === scope && current.generation === generation
-            ? current.data
-            : emptySubscriberData()),
-          ...change,
-        },
-      }));
+      if (scope === "") return;
+      setResult((current) =>
+        current.scope === scope ? { scope, data: { ...current.data, ...change } } : current,
+      );
     },
-    [generation, isCurrentScope, scope],
+    [scope],
   );
 
   const refresh = useCallback(async () => {
@@ -125,7 +104,7 @@ export function useReleaseSubscribers(
         { signal: run.signal },
         schemaVersion,
       );
-      if (!run.current || !isCurrentScope()) return;
+      if (!run.current) return;
       update({
         instances: groupSubscriberInstances(page.subscribers ?? []),
         currentRevision: page.current_revision ?? 0,
@@ -133,21 +112,19 @@ export function useReleaseSubscribers(
         stale: false,
       });
     } catch (err) {
-      if (!run.current || !isCurrentScope() || isAbortError(err)) return;
+      if (!run.current || isAbortError(err)) return;
       update({ stale: true });
     }
-  }, [enabled, env, app, name, request, schemaVersion, isCurrentScope, update]);
+  }, [enabled, env, app, name, request, schemaVersion, update]);
 
   useEffect(() => {
     if (!enabled) {
-      setResult({ scope, generation, data: emptySubscriberData() });
+      setResult({ scope, data: emptySubscriberData() });
       return;
     }
 
     setResult((current) =>
-      current.scope === scope && current.generation === generation
-        ? current
-        : { scope, generation, data: emptySubscriberData() },
+      current.scope === scope ? current : { scope, data: emptySubscriberData() },
     );
 
     const controller = new AbortController();
@@ -184,7 +161,7 @@ export function useReleaseSubscribers(
           await api.subscriberStream({ env, app }, name, schemaVersion, {
             signal,
             onSnapshot: (snapshot) => {
-              if (signal.aborted || !isCurrentScope()) return;
+              if (signal.aborted) return;
               failures = 0;
               attempt = 0;
               update({
@@ -227,24 +204,9 @@ export function useReleaseSubscribers(
       if (pollTimer !== undefined) window.clearTimeout(pollTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [
-    enabled,
-    mode,
-    refresh,
-    generation,
-    isCurrentScope,
-    scope,
-    update,
-    env,
-    app,
-    name,
-    schemaVersion,
-  ]);
+  }, [enabled, mode, refresh, scope, update, env, app, name, schemaVersion]);
 
-  const data =
-    result.scope === scope && result.generation === generation && enabled
-      ? result.data
-      : emptySubscriberData();
+  const data = result.scope === scope && enabled ? result.data : emptySubscriberData();
 
   return useMemo(() => ({ ...data, refresh }), [data, refresh]);
 }

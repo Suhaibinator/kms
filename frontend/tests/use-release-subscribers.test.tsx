@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { startTransition, Suspense, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import type { ReleaseSubscriberState, SubscriberStreamSnapshot } from "@/lib/types";
@@ -317,6 +318,33 @@ describe("useReleaseSubscribers", () => {
     act(() => stream.push?.(snapshot([row({ activation_revision: 99 })], 99)));
     expect(result.current.instances).toEqual([]);
     expect(result.current.currentRevision).toBe(0);
+  });
+
+  it("keeps the committed track live when a proposed track render suspends", async () => {
+    const stream = openStream();
+    const never = new Promise<void>(() => {});
+    let selectSchema!: (version: number) => void;
+    function Harness() {
+      const [schemaVersion, setSchemaVersion] = useState(1);
+      selectSchema = setSchemaVersion;
+      const live = useReleaseSubscribers(ns, "runtime", { schemaVersion });
+      if (schemaVersion === 2) throw never;
+      return <output data-testid="committed-revision">{live.currentRevision}</output>;
+    }
+    render(
+      <Suspense fallback={<span>Loading proposed track</span>}>
+        <Harness />
+      </Suspense>,
+    );
+    await waitFor(() => expect(stream.push).toBeDefined());
+    await waitFor(() => expect(screen.getByTestId("committed-revision")).toHaveTextContent("41"));
+
+    act(() => {
+      startTransition(() => selectSchema(2));
+    });
+    expect(screen.queryByText("Loading proposed track")).not.toBeInTheDocument();
+    act(() => stream.push?.(snapshot([row({ activation_revision: 44 })], 44)));
+    expect(screen.getByTestId("committed-revision")).toHaveTextContent("44");
   });
 
   it("uses polling only when transport is poll, and refresh() reloads on demand", async () => {
