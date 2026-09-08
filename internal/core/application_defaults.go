@@ -146,12 +146,20 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if !app.ArchivedAt.IsZero() {
 		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	persistedApp := app
+	if in.UpdateDefinition && in.SchemaVersion != nil {
+		return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "schema override cannot update the application default")
+	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	if err != nil {
+		return defaultsPlan{}, err
+	}
 	desiredApp := app
 	desiredContract := applicationContractFromArtifact(artifact.Contract)
-	contractChanged := !reflect.DeepEqual(desiredContract, app.Contract)
-	if contractChanged {
-		desiredApp.Contract = desiredContract
+	if len(app.Contract) > 0 && !reflect.DeepEqual(desiredContract, app.Contract) {
+		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema contract")
 	}
+	desiredApp.Contract = desiredContract
 	for _, parameter := range artifact.Parameters {
 		if err := validateParameterValue(parameter.Value, parameter.ContentType); err != nil {
 			return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "defaults parameter %q does not parse as %s", parameter.Alias, parameter.ContentType)
@@ -165,22 +173,14 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
-	schemaMatches := false
-	if app.SchemaVersion != 0 {
-		schema, schemaErr := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-		schemaMatches = schemaErr == nil && schema.Digest == artifact.SchemaSHA256
-		if schemaErr != nil && !errors.Is(schemaErr, domain.ErrNotFound) {
-			return defaultsPlan{}, schemaErr
-		}
+	schema, err := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+	if err != nil {
+		return defaultsPlan{}, err
 	}
-	if !schemaMatches {
-		matching, err := findConfigurationSchemaByDigest(ctx, releaseStore, app.Name, app.ReleaseName, artifact.SchemaSHA256)
-		if err != nil {
-			return defaultsPlan{}, err
-		}
-		desiredApp.SchemaVersion = matching.Version
+	if schema.Digest != artifact.SchemaSHA256 {
+		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
 	}
-	definitionChanged := contractChanged || desiredApp.SchemaVersion != app.SchemaVersion
+	definitionChanged := in.UpdateDefinition && (persistedApp.SchemaVersion != desiredApp.SchemaVersion || !reflect.DeepEqual(persistedApp.Contract, desiredApp.Contract))
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
 	if err != nil {
 		return defaultsPlan{}, err
@@ -210,7 +210,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	otherActive := make(map[string]domain.ConfigurationRelease)
 	var targetActive, targetLatest *domain.ConfigurationRelease
 	for _, environment := range environments {
-		facts, err := s.loadEnvironmentReleaseFacts(ctx, releaseStore, environment.NamespaceRef, app.ReleaseName, false)
+		facts, err := s.loadEnvironmentReleaseFacts(ctx, releaseStore, applicationTrack(app, environment.NamespaceRef), false)
 		if err != nil {
 			return defaultsPlan{}, err
 		}

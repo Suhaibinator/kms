@@ -12,10 +12,7 @@ import (
 // maxRolloutSnapshotAcks bounds the acknowledgement rows one snapshot folds.
 const maxRolloutSnapshotAcks = 1000
 
-type releaseNotifyKey struct {
-	ns   domain.NamespaceRef
-	name string
-}
+type releaseNotifyKey = domain.ReleaseTrack
 
 // releaseSubscriberNotifier is an in-process fan-out of "the subscriber state
 // of (namespace, release name) may have changed" wakeups. Each subscription is
@@ -32,9 +29,9 @@ func newReleaseSubscriberNotifier() *releaseSubscriberNotifier {
 
 // Subscribe returns a channel that receives at most one pending wakeup at a
 // time and a cancel function that must be called when the consumer is done.
-func (n *releaseSubscriberNotifier) Subscribe(ns domain.NamespaceRef, name string) (<-chan struct{}, func()) {
+func (n *releaseSubscriberNotifier) Subscribe(track domain.ReleaseTrack) (<-chan struct{}, func()) {
 	ch := make(chan struct{}, 1)
-	key := releaseNotifyKey{ns: ns, name: name}
+	key := track
 	n.mu.Lock()
 	set := n.subs[key]
 	if set == nil {
@@ -56,10 +53,10 @@ func (n *releaseSubscriberNotifier) Subscribe(ns domain.NamespaceRef, name strin
 }
 
 // Notify wakes every subscription of (ns, name) without blocking.
-func (n *releaseSubscriberNotifier) Notify(ns domain.NamespaceRef, name string) {
+func (n *releaseSubscriberNotifier) Notify(track domain.ReleaseTrack) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for ch := range n.subs[releaseNotifyKey{ns: ns, name: name}] {
+	for ch := range n.subs[track] {
 		select {
 		case ch <- struct{}{}:
 		default:
@@ -69,20 +66,21 @@ func (n *releaseSubscriberNotifier) Notify(ns domain.NamespaceRef, name string) 
 
 // SubscribeReleaseSubscribers wakes the returned channel whenever an
 // acknowledgement, a connection change or an activation touches the release.
-func (s *Service) SubscribeReleaseSubscribers(ns domain.NamespaceRef, name string) (<-chan struct{}, func()) {
-	return s.releaseNotify.Subscribe(ns, name)
+func (s *Service) SubscribeReleaseSubscribers(track domain.ReleaseTrack) (<-chan struct{}, func()) {
+	return s.releaseNotify.Subscribe(track)
 }
 
-func (s *Service) notifyReleaseSubscribers(ns domain.NamespaceRef, name string) {
+func (s *Service) notifyReleaseSubscribers(track domain.ReleaseTrack) {
 	if s.releaseNotify != nil {
-		s.releaseNotify.Notify(ns, name)
+		s.releaseNotify.Notify(track)
 	}
 }
 
 // GetReleaseRolloutSnapshot is one frame of the console's live rollout view:
 // the folded rollout summary plus the raw subscriber rows for one release
 // name. Admin-only, like ListReleaseSubscribers.
-func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) (domain.SubscriberStreamSnapshot, error) {
+func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, track domain.ReleaseTrack) (domain.SubscriberStreamSnapshot, error) {
+	ns, name := track.Namespace, track.Name
 	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
@@ -96,12 +94,12 @@ func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, n
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
-	acks, _, err := rs.ListReleaseAcknowledgements(ctx, ns, name, storage.ListPage{Limit: maxRolloutSnapshotAcks})
+	acks, _, err := rs.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: name, SchemaVersion: &track.SchemaVersion}, storage.ListPage{Limit: maxRolloutSnapshotAcks})
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
 	var currentRevision uint64
-	if active, err := rs.GetActiveConfigurationRelease(ctx, ns, name); err == nil {
+	if active, err := rs.GetActiveConfigurationRelease(ctx, track); err == nil {
 		currentRevision = active.ActivationRevision
 	}
 	now := s.now()

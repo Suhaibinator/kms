@@ -41,6 +41,10 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	if err != nil {
+		return domain.CloneEnvironmentResult{}, err
+	}
 	sourceNS := domain.NamespaceRef{Env: in.SourceEnv, App: app.Name}
 	targetNS := domain.NamespaceRef{Env: in.TargetEnv, App: app.Name}
 	source, err := s.store.GetNamespace(ctx, sourceNS)
@@ -67,7 +71,7 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, sourceNS, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, sourceNS), false)
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
@@ -84,7 +88,7 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 		if other.Env == sourceNS.Env {
 			continue
 		}
-		active, err := rs.GetActiveConfigurationRelease(ctx, other.NamespaceRef, app.ReleaseName)
+		active, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, other.NamespaceRef))
 		if err == nil {
 			otherActive[other.Env] = active.Release
 		} else if !errors.Is(err, domain.ErrNotFound) {

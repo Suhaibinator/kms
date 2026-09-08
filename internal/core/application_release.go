@@ -64,6 +64,10 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	if err != nil {
+		return domain.ApplicationReleaseCreateResult{}, err
+	}
 	if !app.ArchivedAt.IsZero() {
 		return domain.ApplicationReleaseCreateResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
@@ -138,7 +142,7 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		}
 		parameters[parameter.Alias] = parameter
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, namespace.NamespaceRef, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, namespace.NamespaceRef), false)
 	if err != nil {
 		return applicationReleasePlan{}, err
 	}
@@ -159,7 +163,7 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		if environment.Env == namespace.Env {
 			continue
 		}
-		active, activeErr := rs.GetActiveConfigurationRelease(ctx, environment.NamespaceRef, app.ReleaseName)
+		active, activeErr := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, environment.NamespaceRef))
 		if activeErr == nil {
 			otherActive[environment.Env] = active.Release
 		} else if !errors.Is(activeErr, domain.ErrNotFound) {

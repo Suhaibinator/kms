@@ -70,7 +70,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	source, err := rs.GetActiveConfigurationRelease(ctx, in.Namespace, app.ReleaseName)
+	source, err := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SourceSchemaVersion})
 	if errors.Is(err, domain.ErrNotFound) {
 		return empty, domain.Errorf(domain.ErrFailedPrecondition, "an active release is required for migration")
 	}
@@ -170,7 +170,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		if env.Env == in.Namespace.Env {
 			continue
 		}
-		a, e := rs.GetActiveConfigurationRelease(ctx, env.NamespaceRef, app.ReleaseName)
+		a, e := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: env.NamespaceRef, Name: app.ReleaseName, SchemaVersion: in.SchemaVersion})
 		if e != nil && !errors.Is(e, domain.ErrNotFound) {
 			return empty, e
 		}
@@ -354,6 +354,6 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	result.Release = &migrated.Release
 	result.Activation = &domain.ShipActivation{ActivationRevision: migrated.ActivationRevision, PreviousVersion: migrated.PreviousVersion, Changed: true}
 	s.getHub().Wake()
-	s.notifyReleaseSubscribers(in.Namespace, app.ReleaseName)
+	s.notifyReleaseSubscribers(release.Track())
 	return result, nil
 }

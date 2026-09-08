@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"strconv"
 
@@ -126,7 +125,21 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
 	}
 	auditRef.Key = releaseName
-	active, err := rs.GetActiveConfigurationRelease(ctx, in.Namespace, releaseName)
+	var schema domain.ConfigurationSchema
+	if in.SchemaVersion != nil {
+		schema.Version = *in.SchemaVersion
+		if schema.Version != 0 {
+			schema, err = rs.GetConfigurationSchema(ctx, app.Name, releaseName, schema.Version)
+		}
+	} else {
+		schema, err = rs.GetConfigurationSchemaByDigest(ctx, app.Name, releaseName, in.SchemaSHA256)
+	}
+	if err != nil {
+		return domain.VerifyReleaseDefaultsResult{}, err
+	}
+	app.Contract = schema.Contract
+	track := domain.ReleaseTrack{Namespace: in.Namespace, Name: releaseName, SchemaVersion: schema.Version}
+	active, err := rs.GetActiveConfigurationRelease(ctx, track)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
@@ -138,7 +151,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	// storage validation enforce this invariant, but verify it again here so a
 	// corrupt row or alternate ReleaseStore implementation cannot turn this
 	// endpoint into a cross-namespace comparison oracle.
-	if release.Namespace != in.Namespace {
+	if release.Track() != track {
 		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"active release violates namespace ownership invariants")
@@ -151,26 +164,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		}
 	}
 
-	// Schema check against the application-pinned version (falling back to the
-	// release's own pin when the application has none). The generator's
-	// schema_sha256 is sha256(jsontext.Value(schema).Compact()), exactly the
-	// registry digest.
-	schemaMatches := false
-	if in.SchemaSHA256 != "" {
-		schemaVersion := app.SchemaVersion
-		if schemaVersion == 0 {
-			schemaVersion = release.SchemaVersion
-		}
-		if schemaVersion != 0 {
-			schema, err := rs.GetConfigurationSchema(ctx, app.Name, releaseName, schemaVersion)
-			if err != nil && !errors.Is(err, domain.ErrNotFound) {
-				return domain.VerifyReleaseDefaultsResult{}, err
-			}
-			if err == nil {
-				schemaMatches = subtle.ConstantTimeCompare([]byte(schema.Digest), []byte(in.SchemaSHA256)) == 1
-			}
-		}
-	}
+	schemaMatches := in.SchemaVersion != nil || schema.Digest == in.SchemaSHA256
 
 	releaseEntries := make(map[string]domain.ConfigurationReleaseEntry, len(release.Entries))
 	for _, entry := range release.Entries {
@@ -240,6 +234,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "allow", counts)
 	return domain.VerifyReleaseDefaultsResult{
 		ReleaseName:        release.Name,
+		SchemaVersion:      release.SchemaVersion,
 		ReleaseVersion:     release.Version,
 		ActivationRevision: active.ActivationRevision,
 		SchemaMatches:      schemaMatches,
@@ -297,6 +292,9 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefa
 }
 
 func validateVerifyDefaultsInput(in domain.VerifyReleaseDefaultsInput) error {
+	if (in.SchemaVersion != nil) == (in.SchemaSHA256 != "") {
+		return domain.Errorf(domain.ErrInvalidArgument, "exactly one of schema_version and schema_sha256 is required")
+	}
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}

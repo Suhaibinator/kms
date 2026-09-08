@@ -62,6 +62,10 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	if err != nil {
+		return domain.ShipResult{}, err
+	}
 	if !app.ArchivedAt.IsZero() {
 		return domain.ShipResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
@@ -84,7 +88,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 			return domain.ShipResult{}, err
 		}
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, ns, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns), false)
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
@@ -112,7 +116,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		if other.Env == ns.Env {
 			continue
 		}
-		active, err := rs.GetActiveConfigurationRelease(ctx, other.NamespaceRef, app.ReleaseName)
+		active, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, other.NamespaceRef))
 		if err == nil {
 			otherActive[other.Env] = active.Release
 		} else if !errors.Is(err, domain.ErrNotFound) {
@@ -223,7 +227,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		return domain.ShipResult{}, err
 	}
 	result.Release = &release
-	active, changed, err := s.ActivateConfigurationRelease(ctx, pr, ns, app.ReleaseName, release.Version, &activeVersion)
+	active, changed, err := s.ActivateConfigurationRelease(ctx, pr, applicationTrack(app, ns), release.Version, &activeVersion)
 	if err != nil {
 		var validationFailed *domain.ReleaseValidationFailedError
 		switch {
@@ -235,7 +239,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		case errors.Is(err, domain.ErrAborted):
 			result.Status = domain.ShipStatusConflict
 			shipErr := &domain.ShipError{Code: "aborted", Message: "the active release changed while shipping; the new release was created but not activated"}
-			if current, err := rs.GetActiveConfigurationRelease(ctx, ns, app.ReleaseName); err == nil {
+			if current, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, ns)); err == nil {
 				shipErr.CurrentVersion = current.Release.Version
 			}
 			result.Error = shipErr
