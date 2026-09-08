@@ -405,7 +405,7 @@ same set instead of running anything.
 # -> sk_test_123
 
 # In production, pin the active release's exact, digest-verified versions:
-parameter-store exec prod/gradethis --release runtime -- ./server
+parameter-store exec prod/gradethis --release runtime --schema-version 1 -- ./server
 ```
 
 Both commands reject known unsafe environment names such as `NODE_OPTIONS`

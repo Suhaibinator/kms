@@ -1167,7 +1167,7 @@ namespace.
 | `binding-key rotate /env/app/key` | `--expected-current-version` | Obtains the old and replacement keys separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits a CAS guard. An explicit positive expected version avoids a metadata read; when omitted, the CLI reads current metadata. It clones only current into one new version protected by the replacement; historical versions retain the old key. The server proves the old key before rejecting a byte-for-byte unchanged replacement. |
 | `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
 | `secret purge-unbound-versions /env/app/key` | — | **Irreversible, admin only.** Previews every non-destroyed unbound version (including disabled, expired, and corrupt rows), prints the exact set, confirms, then replays the mandatory revision/version-set guards and destroys it even if releases pin those versions. |
-| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--preserve-env`, `--allow-unsafe-env-names` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
+| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--schema-version VERSION` (required with a release), `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--preserve-env`, `--allow-unsafe-env-names` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
 Binding keys are opaque valid UTF-8 strings containing 32 to 1024 bytes. The CLI reads
@@ -1208,10 +1208,10 @@ same selection of parameters and secrets and map them to environment variables.
 
 ```bash
 # Run the workload with the active release's exact, digest-verified values.
-parameter-store exec prod/gradethis --release runtime -- ./server --port 8080
+parameter-store exec prod/gradethis --release runtime --schema-version 1 -- ./server --port 8080
 
 # The same values, printed for a shell to source.
-source <(parameter-store env prod/gradethis --release runtime --format export)
+source <(parameter-store env prod/gradethis --release runtime --schema-version 1 --format export)
 ```
 
 #### Prefer `--release NAME` in production
@@ -1222,7 +1222,8 @@ label points to at that moment. That is convenient in development and
 non-deterministic in production — two replicas started a minute apart can get
 different values, and nothing records what either of them saw.
 
-`--release NAME` resolves the namespace's **active** release instead and pins
+`--release NAME --schema-version VERSION` resolves the selected track's
+**active** release and pins
 every entry to the version it recorded. Before any resource read, the CLI
 recomputes the complete release digest from the deterministic alias-sorted
 manifest projection; an empty or mismatched digest rejects the whole
@@ -1391,7 +1392,7 @@ User=gradethis
 Environment=KMS_ENDPOINT=kms.internal:8443
 Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
 ExecStart=/usr/local/bin/parameter-store exec prod/gradethis \
-  --release runtime -- /usr/local/bin/gradethis-server
+  --release runtime --schema-version 1 -- /usr/local/bin/gradethis-server
 Restart=on-failure
 ```
 
@@ -1417,7 +1418,7 @@ RuntimeDirectoryPreserve=yes
 Environment=KMS_ENDPOINT=kms.internal:8443
 Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
 ExecStart=/usr/local/bin/parameter-store env prod/gradethis \
-  --release runtime --force --out /run/gradethis/env
+  --release runtime --schema-version 1 --force --out /run/gradethis/env
 
 # /etc/systemd/system/gradethis.service
 [Unit]
@@ -1495,13 +1496,13 @@ parameter-store release schema list gradethis runtime \
 
 parameter-store release create runtime-release.yaml \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-parameter-store release validate prod/gradethis runtime 1 \
+parameter-store release validate prod/gradethis runtime 1 --schema-version 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-parameter-store release show prod/gradethis runtime 1 \
+parameter-store release show prod/gradethis runtime 1 --schema-version 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 parameter-store release list prod/gradethis runtime \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-parameter-store release diff prod/gradethis runtime 1 2 \
+parameter-store release diff prod/gradethis runtime 1 2 --schema-version 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 ```
 
@@ -1509,16 +1510,16 @@ Activate with compare-and-swap to avoid overwriting an activation you did not
 observe. `0` means “expect no active release”:
 
 ```bash
-parameter-store release activate prod/gradethis runtime 1 \
+parameter-store release activate prod/gradethis runtime 1 --schema-version 1 \
   --expected-current-version 0 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 
 # Defaults to the active release's previous version and includes a CAS guard.
-parameter-store release rollback prod/gradethis runtime \
+parameter-store release rollback prod/gradethis runtime --schema-version 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 
 # Or reactivate any retained immutable version directly.
-parameter-store release rollback prod/gradethis runtime 1 \
+parameter-store release rollback prod/gradethis runtime 1 --schema-version 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 ```
 

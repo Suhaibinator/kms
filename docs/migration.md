@@ -239,10 +239,10 @@ entries:
 parameter-store release create runtime-release.yaml \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
-parameter-store release validate prod/gradethis runtime 1 \
+parameter-store release validate prod/gradethis runtime 1 --schema-version 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
-parameter-store release activate prod/gradethis runtime 1 \
+parameter-store release activate prod/gradethis runtime 1 --schema-version 1 \
   --expected-current-version 0 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
@@ -252,7 +252,9 @@ The Go process replaces manifest watching, parallel ad hoc reads, and apply
 bookkeeping with one loader:
 
 ```go
+schemaVersion := uint64(1) // Select the schema compiled into this application.
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
+    SchemaVersion: &schemaVersion,
     Name: "runtime",
 
     BindingKeys: map[string]kmsclient.BindingKey{
@@ -289,7 +291,7 @@ compile-checked example is in
 Roll back by reactivating any retained immutable version:
 
 ```bash
-parameter-store release rollback prod/gradethis runtime 1 \
+parameter-store release rollback prod/gradethis runtime 1 --schema-version 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
 ```

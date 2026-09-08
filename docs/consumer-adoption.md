@@ -17,7 +17,7 @@ defaults in code.
 
 **Not using an SDK?** A workload that cannot link one — a shell script, a
 third-party binary, a container entrypoint, a migration tool — reads the same
-values through the CLI: `parameter-store exec ENV/APP --release NAME -- CMD`
+values through the CLI: `parameter-store exec ENV/APP --release NAME --schema-version VERSION -- CMD`
 resolves the active release, verifies every pinned version and digest, and runs
 `CMD` with the values as environment variables; `parameter-store env ENV/APP`
 prints them instead, for `source <(...)` or a systemd `EnvironmentFile=`. It is

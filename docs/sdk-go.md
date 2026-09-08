@@ -524,7 +524,9 @@ client's home namespace; unlike ordinary `ParameterValue` callbacks, a release
 event cannot be permanently lost to callback-queue saturation.
 
 ```go
+schemaVersion := uint64(1) // Select the schema compiled into this application.
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
+    SchemaVersion: &schemaVersion,
     Name:              "runtime",
     ReconcileInterval: time.Minute, // default
     MaxConcurrentFetches: 16,       // default; maximum 256
@@ -555,7 +557,10 @@ err = loader.Run(ctx, func(ctx context.Context, candidate kmsclient.ReleaseSnaps
 })
 ```
 
-`ReleaseLoaderConfig.Name` is required. `ReconcileInterval` defaults to one
+`ReleaseLoaderConfig.Name` and exactly one of `SchemaVersion` or `SchemaSHA256`
+are required. A schema version pointer may explicitly select `0` for a schema-free
+track. Generated managed stores supply their digest automatically.
+`ReconcileInterval` defaults to one
 minute and `MaxConcurrentFetches` to 16. `InstanceID` normally stays empty so
 the loader generates one process-lifetime UUID and reuses it across stream
 reconnects; set it only when the runtime already owns a stable replica ID. The
