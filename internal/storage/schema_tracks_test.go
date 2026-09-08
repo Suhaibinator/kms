@@ -306,3 +306,42 @@ func TestSchemaFreeReleaseCannotBypassEstablishedContract(t *testing.T) {
 		t.Fatalf("bypassed schema0 contract: %v", err)
 	}
 }
+
+func TestSchemaFreeFirstReleaseAdoptsContractTransactionally(t *testing.T) {
+	st, tracks := trackFixture(t)
+	ctx := context.Background()
+	track := tracks[0]
+	fields, err := st.GetConfigurationSchemaContract(ctx, track.Namespace.App, track.Name, 0)
+	if err != nil || fields != nil {
+		t.Fatalf("initial contract = %#v, %v", fields, err)
+	}
+	// An invalid pin must roll back first adoption along with the release.
+	invalid := domain.ConfigurationRelease{Namespace: track.Namespace, Name: track.Name, Digest: "invalid", Entries: []domain.ConfigurationReleaseEntry{
+		{Alias: "missing", Kind: domain.ReleaseEntryParameter, ContentType: "string", Ref: domain.Ref{NS: track.Namespace, Key: "missing"}, Version: 1},
+	}}
+	ns, err := st.GetNamespace(ctx, track.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateLatestApplicationRelease(ctx, ApplicationReleaseCreate{
+		Release: invalid, NamespaceID: ns.ID,
+		Contract: []domain.ApplicationContractField{{Alias: "missing", Kind: domain.ReleaseEntryParameter, ContentType: "string"}},
+	}); err == nil {
+		t.Fatal("invalid pin was accepted")
+	}
+	fields, err = st.GetConfigurationSchemaContract(ctx, track.Namespace.App, track.Name, 0)
+	if err != nil || fields != nil {
+		t.Fatalf("failed release adopted contract = %#v, %v", fields, err)
+	}
+	first := createTrackRelease(t, st, track)
+	if first.Version != 1 {
+		t.Fatalf("failed allocation consumed version: %d", first.Version)
+	}
+	fields, err = st.GetConfigurationSchemaContract(ctx, track.Namespace.App, track.Name, 0)
+	if err != nil || fields == nil || len(fields) != 0 {
+		t.Fatalf("first release did not establish empty contract = %#v, %v", fields, err)
+	}
+	if _, err := st.CreateConfigurationRelease(ctx, invalid); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("later release changed established empty contract: %v", err)
+	}
+}

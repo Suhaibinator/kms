@@ -220,7 +220,9 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 		}
 		return release
 	}
-	previous := create("previous", nil)
+	previous := create("previous", []domain.ConfigurationReleaseEntry{{
+		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, ContentType: "application/octet-stream", Metadata: "{}",
+	}})
 	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, previous.Version, nil); err != nil || !changed {
 		t.Fatalf("activate previous changed=%v err=%v", changed, err)
 	}
@@ -1027,12 +1029,17 @@ func TestCountConfigurationReleases(t *testing.T) {
 		t.Fatalf("missing namespace count error = %v", err)
 	}
 	entries := []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "integer", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("1"))), Metadata: "{}"}}
-	for i, name := range []string{"runtime", "runtime", "batch"} {
-		if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: name, Digest: fmt.Sprintf("d%d", i), Metadata: "{}", Entries: entries}); err != nil {
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: ns.App, ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "schema"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, version := range []uint64{0, 0, schema.Version} {
+		if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", SchemaVersion: version, Digest: fmt.Sprintf("d%d", i), Metadata: "{}", Entries: entries}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}); err != nil || n != 2 {
+	zero := uint64(0)
+	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime", SchemaVersion: &zero}); err != nil || n != 2 {
 		t.Fatalf("runtime count = %d, %v", n, err)
 	}
 	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: ""}); err != nil || n != 3 {

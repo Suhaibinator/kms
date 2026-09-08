@@ -71,25 +71,8 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 			}
 			fields = append(fields, field)
 		}
-		if release.SchemaVersion != 0 {
-			if _, err := adoptSchemaContractTx(tx, release.Namespace.App, release.Name, release.SchemaVersion, fields); err != nil {
-				return err
-			}
-		} else {
-			var contract schemaFreeContractModel
-			err := tx.Where("application_name = ? AND release_name = ?", release.Namespace.App, release.Name).First(&contract).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			if err == nil {
-				candidate, err := canonicalSchemaContract(fields)
-				if err != nil {
-					return err
-				}
-				if candidate != contract.ContractJSON {
-					return domain.Errorf(domain.ErrFailedPrecondition, "release does not match immutable schema contract")
-				}
-			}
+		if _, err := adoptSchemaContractTx(tx, release.Namespace.App, release.Name, release.SchemaVersion, fields); err != nil {
+			return err
 		}
 
 		if options.application != nil {
