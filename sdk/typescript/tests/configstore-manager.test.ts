@@ -127,14 +127,14 @@ describe("ManagedConfigManager", () => {
         1n,
       );
       const controller = new AbortController();
-      const secondPreparing = deferred<void>();
+      let secondPreparing = false;
       const releaseSecond = deferred<void>();
       const manager = await startManagedConfig(
         managedClient(transport),
         { ...options(() => undefined), schemaVersion },
         async (snapshot) => {
           if (snapshot.version === 2n) {
-            secondPreparing.resolve();
+            secondPreparing = true;
             await releaseSecond.promise;
           }
           return { publish: () => undefined };
@@ -145,7 +145,7 @@ describe("ManagedConfigManager", () => {
         await waitFor(() => transport.registration !== undefined);
 
         transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}', schemaVersion), 2n);
-        await secondPreparing.promise;
+        await waitFor(() => secondPreparing);
         transport.activate(makeRelease(3n, '{"hot":3,"restart":"a"}', schemaVersion), 3n);
         await waitFor(() => manager.status().observed.version === 3n);
 
