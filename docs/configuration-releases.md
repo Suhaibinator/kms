@@ -1,10 +1,13 @@
 # Configuration releases
 
 Configuration releases are the atomic hot-reload contract for a set of
-related values. A release is immutable, belongs to one namespace and name,
-and stores stable aliases pointing to exact parameter or secret versions. An
-activation moves the release name's `current` and `previous` labels in one
-SQLite transaction and appends exactly one authoritative global revision.
+related values. A release is immutable and belongs to one track identified by
+`(environment, application, release name, schema version)`. Each track numbers
+its releases independently from 1 and stores stable aliases pointing to exact
+parameter or secret versions. An activation moves that track's `current` and
+`previous` labels in one SQLite transaction and appends exactly one authoritative
+global revision. Release numbers must always be interpreted together with their
+schema version.
 
 This is separate from the namespace-wide `WatchService`. Its acknowledgement
 means only that an SDK received a transport revision. A release subscriber
@@ -22,14 +25,19 @@ Environment names are scoped to that application: there is no KMS-wide
 environment record, and two applications may define completely different sets
 of environment names.
 
-Release creation and activation compare the complete manifest to the owning
-application record. A release with a different name, schema pin, missing or
-extra alias, wrong resource kind, or wrong parameter content type fails with
-`failed_precondition`. Thus `dev/payments`, `prod/payments`, and
-`prod-gcp/payments` can carry different values while retaining one application
-contract. If an application was created without an explicit contract, its
-first release atomically establishes the canonical schema and alias/type shape;
-concurrent first releases compare against whichever contract wins that write.
+Release creation and activation compare the complete manifest to the contract
+established for the pinned schema version. A mismatched alias, resource kind,
+or parameter content type fails with `failed_precondition`. The same schema
+contract applies across environments; each environment has independent values
+and releases. A schema's contract is established once from its definition or
+first release. Concurrent attempts must agree with the winning contract.
+
+Publishing a new schema does not retire older tracks. For example, schema 1's
+release 3 and schema 2's release 1 can both be active in `prod/payments`.
+Activating, editing, or rolling back either track leaves the other track's
+active and previous releases unchanged. Resources remain shared within their
+namespace, but immutable release pins prevent a new resource version from
+changing another track's active configuration.
 
 The Applications page in the embedded console compares current parameter
 values and secret metadata across every environment. A reviewed multi-target
@@ -84,20 +92,18 @@ pins. Only edited or new parameters receive new versions. Removed aliases do
 not delete their resources. New secret bindings select existing versions in
 the same environment; create missing secrets through normal secret management.
 
-The final preview validates the candidate and shows the application-wide
-definition change and other affected environments. **Review and activate**
-updates the application schema/contract, writes edited parameters, creates a
-release, and activates it in one transaction. Production environments require
-typing the environment name. A stale preview must be refreshed; failed
-validation or a transaction conflict leaves configuration unchanged.
+The final preview identifies the source and destination schema tracks and
+validates the candidate. **Review and activate** writes edited parameters,
+creates a release in the destination track, and activates it transactionally.
+The source track keeps its active release and remains available for new
+releases and rollback. Production environments require typing the environment
+name. A stale preview must be refreshed; failed validation or a transaction
+conflict leaves configuration unchanged.
 
-Only the selected environment receives a new release. The schema pin and
-contract belong to the application, so other environments keep their active
-releases but releases using the old definition cannot be reactivated or rolled
-back under the current contract checks. Migrate those environments separately,
-using the same registered schema. Registration itself remains independent and
-does not activate anything. Environments without an active release use the
-existing setup/import workflow.
+Only the selected environment and destination schema track receive the new
+activation. Other tracks and environments keep their active releases.
+Registration itself does not activate anything. Environments without an active
+release use the existing setup/import workflow.
 
 ## Optional schema registry
 
@@ -210,6 +216,7 @@ service ConfigurationReleaseService {
   rpc ActivateRelease(ActivateReleaseRequest) returns (ActivateReleaseResponse);
   rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
   rpc GetActiveRelease(GetActiveReleaseRequest) returns (GetActiveReleaseResponse);
+  rpc ResolveReleaseSchema(ResolveReleaseSchemaRequest) returns (ResolveReleaseSchemaResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc WatchRelease(stream WatchReleaseRequest) returns (stream WatchReleaseEvent);
   rpc VerifyReleaseDefaults(VerifyReleaseDefaultsRequest) returns (VerifyReleaseDefaultsResponse);
@@ -236,23 +243,27 @@ already-active target is an idempotent no-op (`changed=false`) and creates no
 revision. Any earlier immutable version can be activated directly as a
 rollback.
 
-The first `WatchReleaseRequest` is a registration with namespace, release
-name, client name, stable process instance ID, and last-seen revision. Later
-messages are lifecycle acknowledgements. The server sends the current release
-immediately, replays retained activations monotonically after a resume point,
-or sends a complete current snapshot if replay was pruned. Heartbeats
+The first `WatchReleaseRequest` registers the namespace, release name, exact
+`schema_version`, client name, stable process instance ID, and last-seen revision.
+Schema selection is required, including explicit `0` for a schema-free track.
+An omitted version never selects the newest schema. Later messages are lifecycle
+acknowledgements carrying that same schema version. The server sends the track's
+current release immediately, replays only that track's retained activations
+after a resume point, or sends its current snapshot if replay was pruned. A
+known schema without an active release stays subscribed and receives heartbeats
+until its first activation; an unknown schema fails registration. Heartbeats
 reauthorize the stream. A slow consumer's pending activation is replaced with
 the latest current activation rather than being permanently dropped. Delivery
 is at least once in monotonically increasing activation-revision order, so a
 client must accept an idempotent duplicate after reconnect.
 
-Lifecycle acknowledgements are idempotent by namespace, release name,
-authenticated identity, client, instance, state, and activation identity. The
+Lifecycle acknowledgements are idempotent by namespace, release name, schema
+version, authenticated identity, client, instance, state, and activation identity. The
 client timestamp is diagnostic; server receipt time orders retries for the same
 activation. The admin subscriber API stores the
 latest `received`, `prepared`, `applied`, and `rejected` rows separately, plus
 transport connection state. A newly registered instance is therefore visible
-as connected before it has acknowledged any lifecycle state. UIs group
+as connected before it has acknowledged any lifecycle state. Within each schema track, UIs group
 instances by `(identity, client_name, instance_id)`; different authenticated
 identities and replicas do not overwrite one another.
 
@@ -495,3 +506,32 @@ every parameter alias in `required`, and sets `additionalProperties: false`.
 Secrets are never part of the schema. The full table, with the readiness
 states and finding codes the console renders, is in
 [`http-api.md`](http-api.md#readiness-model).
+
+## Schema selection and deployment cutover
+
+The application console's schema selector is part of its URL. It selects the
+schema forms, release history, publishing and rollback actions, and subscriber
+progress. Release links and identities include the schema version because
+several tracks can each have a release 1. Switching the selector invalidates
+previews and ignores stale responses from the previous selection.
+
+Exact release reads and activation requests require `schema_version`. List
+requests can omit the filter to inspect all tracks, and every result identifies
+its schema. CLI release operations expose `--schema-version`.
+
+Low-level Go, TypeScript, and Python loaders accept either an exact schema
+version or a schema SHA-256 digest, never both. `ResolveReleaseSchema` resolves
+the digest under release-read authorization; clients do not need schema-admin
+access. The loader pins the resolved version for startup, subscriptions,
+reconnects, reconciliation, and the final active check before commit.
+
+Generated managed clients supply their embedded digest automatically. Regenerate
+bindings with the updated generator. Generated schemas include a sorted
+`x-kms-contract` annotation with each parameter and secret alias, kind, and
+parameter content type. This metadata contains no secret values or binding keys
+and makes secret-contract changes part of schema identity.
+
+This change requires a **fresh database** and updated server, SDKs, and generated
+clients. Previous database baselines are rejected without conversion or deletion.
+Create and provision a new database explicitly; retain any existing database
+separately. Unscoped old clients cannot subscribe to schema-backed releases.

@@ -8,6 +8,13 @@ when gradethis builds and runs with no dependency on
 > in-place upgrade from a `0.2.x` SQLite database and no compatibility path for
 > its client-bound tokens or release digests.
 
+> **Schema-track cutover:** independent release tracks use a new database
+> baseline. Existing KMS databases, including earlier `0.3.x` baselines, are not
+> upgraded in place. Provision a fresh database and deploy the updated server,
+> SDKs, and regenerated configuration bindings together. Existing databases
+> are rejected without being converted or deleted. See
+> [schema selection and deployment cutover](configuration-releases.md#schema-selection-and-deployment-cutover).
+
 The versioned protection-transition update within this greenfield `0.3.x`
 contract changes SecretService and SDK signatures, but not the SQLite table
 layout, application configuration schema, release-entry schema, or release
