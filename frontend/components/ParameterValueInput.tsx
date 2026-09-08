@@ -22,6 +22,7 @@ export interface ParameterValueInputProps {
   schema?: JsonSchema | null;
   /** Chips shown beside the Form/JSON toggle when a pinned schema applies. */
   schemaLabel?: ReactNode;
+  resetKey?: string;
   preferForm?: boolean;
   preserveExactNumbers?: boolean;
   /** Forwarded to the real control so a wrapping `Field` labels it. */
@@ -94,6 +95,7 @@ export function ParameterValueInput({
   schema = null,
   schemaLabel,
   preferForm,
+  resetKey,
   preserveExactNumbers,
   id,
   "aria-label": ariaLabel,
@@ -226,6 +228,7 @@ export function ParameterValueInput({
             key={schema ? "pinned" : "inferred"}
             {...aria}
             schema={effective}
+            resetKey={resetKey}
             preferForm={preferForm}
             preserveExactNumbers={preserveExactNumbers}
             captionSource={schema ? "pinned" : "inferred"}

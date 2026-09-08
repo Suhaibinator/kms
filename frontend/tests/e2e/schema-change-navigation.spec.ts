@@ -41,6 +41,7 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
                   type: "object",
                   additionalProperties: false,
                   properties: {
+                    host: { type: "string" },
                     client_id: { type: "string" },
                     go_auth_config: {
                       type: "object",
@@ -165,12 +166,14 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   await dialog.getByRole("button", { name: "database · Fix field" }).click();
   const value = dialog.getByRole("textbox", { name: "client_id", exact: true });
   await expect(value).toBeFocused();
+  await expect(value).toBeInViewport();
   await expect(row).toHaveAttribute("open");
   const order = await dialog
     .locator("details[id^=upgrade-field]")
     .evaluateAll((elements) => elements.map((el) => el.id));
   await value.fill("client-123");
   await expect(value).toBeFocused();
+  await expect(value).toBeInViewport();
   await expect(row).toHaveAttribute("open");
   expect(
     await dialog

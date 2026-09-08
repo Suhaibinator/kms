@@ -49,6 +49,8 @@ export interface SchemaFormProps {
   captionSource?: "pinned" | "inferred";
   /** Shown beside the mode toggle, e.g. schema and alias chips. */
   schemaLabel?: ReactNode;
+  /** Changes when the parent intentionally replaces the draft, e.g. restore or source pin. */
+  resetKey?: string;
   preferForm?: boolean;
   preserveExactNumbers?: boolean;
 }
@@ -121,6 +123,7 @@ export function SchemaForm({
   captionSource = "pinned",
   schemaLabel,
   preferForm,
+  resetKey,
   preserveExactNumbers,
   inputRef,
 }: SchemaFormProps) {
@@ -168,6 +171,12 @@ export function SchemaForm({
     storeEditorMode(next);
   };
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // Keep local incomplete number/JSON text while typing, but discard it on an
+  // explicit parent restore/source replacement. Expansion and mode stay intact.
+  useEffect(() => {
+    void resetKey;
+    setDrafts({});
+  }, [resetKey]);
   // Object groups the operator folded; a group with a problem inside stays open.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const effectiveMode: Mode = mode === "form" && formable ? "form" : "json";
@@ -271,7 +280,7 @@ export function SchemaForm({
       {schemaLabel ? <span className="schema-form-label">{schemaLabel}</span> : null}
       <span className="schema-form-caption faint">
         {root === null
-          ? "This alias has no field-level schema; edit it as JSON."
+          ? "This schema cannot be rendered as fields; edit it as JSON."
           : !parsed.ok
             ? "Fix the JSON to use the form."
             : exactJsonOnly

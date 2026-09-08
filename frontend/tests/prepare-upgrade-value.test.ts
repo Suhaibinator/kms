@@ -69,3 +69,19 @@ describe("prepareUpgradeValue", () => {
     expect(prepareUpgradeValue("{", {}).value).toBe("{");
   });
 });
+
+it("uses tuple prefix schemas before applying the trailing item schema", () => {
+  const prepared = prepareUpgradeValue('[{"name":"db"},{"old":1,"port":8080}]', {
+    type: "array",
+    prefixItems: [
+      { type: "object", additionalProperties: false, properties: { name: { type: "string" } } },
+    ],
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: { port: { type: "integer" } },
+    },
+  });
+  expect(prepared.value).toBe('[{"name":"db"},{"port":8080}]');
+  expect(prepared.removed).toEqual(["1.old"]);
+});

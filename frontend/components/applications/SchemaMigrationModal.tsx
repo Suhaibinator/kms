@@ -140,7 +140,14 @@ export function SchemaMigrationModal({
     fieldProblems,
   );
   const changeById = new Map(changes.map((change) => [change.id, change]));
-  const removed = removedUpgradeAliases(fields, application.contract, sourceEntries);
+  const removed = [
+    ...new Set([
+      ...removedUpgradeAliases(fields, application.contract, sourceEntries),
+      ...(preview?.entries
+        .filter((entry) => entry.source === "removed")
+        .map((entry) => entry.alias) ?? []),
+    ]),
+  ];
   const orderedFields = [...fields].sort((a, b) => {
     const ai = fieldOrder.indexOf(a.id),
       bi = fieldOrder.indexOf(b.id);
@@ -174,7 +181,10 @@ export function SchemaMigrationModal({
     const heading = row.querySelector<HTMLElement>("[data-field-heading]") ?? row;
     const target = jumpTarget.control
       ? (row.querySelector<HTMLElement>(
-          'input[aria-invalid=true], textarea[aria-invalid=true], input[aria-label$=" value"]:not([disabled]), textarea[aria-label$=" value"]:not([disabled]), .schema-form input:not([disabled]), .schema-form textarea:not([disabled])',
+          "[aria-invalid=true]:not([disabled]):is(input, textarea, button, select, [role=combobox], [role=checkbox])",
+        ) ??
+        row.querySelector<HTMLElement>(
+          'input[aria-label$=" value"]:not([disabled]), textarea[aria-label$=" value"]:not([disabled]), .schema-form input:not([disabled]), .schema-form textarea:not([disabled]), .schema-form [role=combobox]:not([disabled]), .schema-form [role=checkbox]:not([disabled])',
         ) ??
         row.querySelector<HTMLElement>(
           "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
@@ -183,7 +193,7 @@ export function SchemaMigrationModal({
       : heading;
     const body = row.closest<HTMLElement>("[data-modal-body]");
     if (body)
-      body.scrollTop += row.getBoundingClientRect().top - body.getBoundingClientRect().top - 12;
+      body.scrollTop += target.getBoundingClientRect().top - body.getBoundingClientRect().top - 24;
     target.focus({ preventScroll: true });
   }, [jumpTarget]);
 
@@ -386,6 +396,13 @@ export function SchemaMigrationModal({
   }, [open, step, fields, selectedEnvironment, environment, application.name, toast]);
 
   function update(id: number, patch: Partial<DraftField>) {
+    if (["key", "version", "fromAlias", "kind", "content_type"].some((key) => key in patch)) {
+      setBeforePreparation((previous) => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+    }
     const alias = fields.find((field) => field.id === id)?.alias;
     setFieldProblems((problems) => problems.filter((problem) => problem.alias !== alias));
     setPreview(null);
@@ -852,14 +869,33 @@ export function SchemaMigrationModal({
               <strong>Removed aliases</strong>
               <ul>
                 {removed
-                  .filter((alias) => alias.toLowerCase().includes(fieldSearch.toLowerCase()))
+                  .filter(
+                    (alias) =>
+                      step === 3 || alias.toLowerCase().includes(fieldSearch.toLowerCase()),
+                  )
                   .map((alias) => (
                     <li key={alias}>
                       <span className="mono">{alias}</span> · removed from release
+                      {step === 3 &&
+                        preview?.entries
+                          .filter((entry) => entry.alias === alias && entry.source === "removed")
+                          .map((entry) => (
+                            <span key={entry.alias}>
+                              {" "}
+                              · key <span className="mono">{entry.key}</span> · v
+                              {entry.from_version}
+                            </span>
+                          ))}
                     </li>
                   ))}
               </ul>
             </section>
+          )}
+          {(fieldSearch || onlyChanged) && (
+            <p role="status">
+              Showing {visibleFields.length} of {fields.length} target fields. Search and filters
+              are active.{step === 3 ? " All removals are shown separately above." : ""}
+            </p>
           )}
           {!visibleFields.length && <p>No fields match this filter.</p>}
         </>
@@ -1160,6 +1196,12 @@ export function SchemaMigrationModal({
                       <ParameterValueInput
                         schema={aliasSchema(selectedSchema?.schema_json, field.alias)}
                         schemaLabel={`Target schema v${schemaVersion}`}
+                        resetKey={JSON.stringify([
+                          field.id,
+                          field.key,
+                          field.version,
+                          beforePreparation[field.id] !== undefined,
+                        ])}
                         preferForm
                         preserveExactNumbers
                         aria-label={`${field.alias} value`}
@@ -1392,7 +1434,7 @@ function UpgradeValuePreparation({
           Draft prepared for the target schema. Existing values were preserved where allowed.
           Restoring also reverts any later edits.
         </span>
-        <Button variant="outline" onClick={onUndo}>
+        <Button variant="outline" disabled={disabled} onClick={onUndo}>
           Restore pre-preparation value
         </Button>
       </div>

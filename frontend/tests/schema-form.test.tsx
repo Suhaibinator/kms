@@ -478,3 +478,17 @@ it("does not initialize a value while its source is loading", () => {
   );
   expect(screen.getByRole("textbox", { name: "name" })).toBeDisabled();
 });
+
+it("clears stale control drafts on an explicit restore without remounting the form", () => {
+  const props = {
+    schema: { type: "object", properties: { count: { type: "integer" } } },
+    value: '{"count":10}',
+    onChange: () => {},
+    preferForm: true,
+  };
+  const view = render(<SchemaForm {...props} resetKey="prepared" />);
+  fireEvent.change(screen.getByRole("textbox", { name: "count" }), { target: { value: "20" } });
+  expect(screen.getByRole("textbox", { name: "count" })).toHaveValue("20");
+  view.rerender(<SchemaForm {...props} resetKey="restored" />);
+  expect(screen.getByRole("textbox", { name: "count" })).toHaveValue("10");
+});

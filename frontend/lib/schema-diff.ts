@@ -67,6 +67,12 @@ export function structuredSchemaDifferences(
       if (requiredA.has(key) !== requiredB.has(key) && result.length === start)
         result.push({ path: child.join("."), segments: child, change: "changed" });
     }
+    if (aa.items !== undefined || bb.items !== undefined)
+      visit(aa.items, bb.items, [...segments, "[]"]);
+    const prefixA = Array.isArray(aa.prefixItems) ? aa.prefixItems : [];
+    const prefixB = Array.isArray(bb.prefixItems) ? bb.prefixItems : [];
+    for (let index = 0; index < Math.max(prefixA.length, prefixB.length); index++)
+      visit(prefixA[index], prefixB[index], [...segments, String(index)]);
   }
   try {
     visit(JSON.parse(before || "{}"), JSON.parse(after), []);

@@ -103,7 +103,13 @@ export function prepareUpgradeValue(
       let changed = false;
       while (value[tokens[cursor].start] !== "]") {
         const childStart = tokens[cursor].start;
-        const child = walk(s?.items, [...path, String(parts.length)]);
+        // Tuple prefix positions have their own schemas; `items` applies only after them.
+        const index = parts.length;
+        const itemSchema =
+          Array.isArray(s?.prefixItems) && index < s.prefixItems.length
+            ? s.prefixItems[index]
+            : s?.items;
+        const child = walk(itemSchema, [...path, String(index)]);
         changed ||= child !== value.slice(childStart, tokens[cursor - 1].end);
         parts.push(child);
         if (value[tokens[cursor].start] === ",") cursor++;

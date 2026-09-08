@@ -99,3 +99,42 @@ it("maps dotted aliases and nested required constraints using structured paths",
   );
   expect(requiredOnly.some((d) => d.segments[0] === "x")).toBe(true);
 });
+
+it("does not attach root constraints to new aliases and marks content-type value writes", () => {
+  const rootChange = { path: "(root)", segments: [], change: "changed" as const };
+  expect(
+    upgradeFieldChanges([{ ...field, fromAlias: undefined }], contract, [pin], [rootChange], [])[0]
+      .paths,
+  ).toEqual([]);
+  expect(
+    upgradeFieldChanges(
+      [{ ...field, loaded: true, value: "1", originalValue: "1", originalContentType: "integer" }],
+      contract,
+      [pin],
+      [],
+      [],
+    )[0].labels,
+  ).toContain("Value edited");
+});
+
+it("exposes nested array and tuple property changes for alias search", () => {
+  const before = {
+    properties: {
+      workers: {
+        type: "array",
+        items: { type: "object", properties: { timeout: { type: "integer" } } },
+      },
+    },
+  };
+  const after = {
+    properties: {
+      workers: {
+        type: "array",
+        items: { type: "object", properties: { timeout: { type: "integer", minimum: 1 } } },
+      },
+    },
+  };
+  expect(structuredSchemaDifferences(JSON.stringify(before), JSON.stringify(after))).toContainEqual(
+    { path: "workers.[].timeout", segments: ["workers", "[]", "timeout"], change: "changed" },
+  );
+});

@@ -38,7 +38,9 @@ export function upgradeFieldChanges(
     const prior = contract.find((item) => item.alias === (field.fromAlias ?? field.alias));
     const pin = entries.find((item) => item.alias === field.fromAlias);
     const paths = differences.filter(
-      (d) => d.segments[0] === field.alias || d.segments[0] === field.fromAlias,
+      (d) =>
+        d.segments.length > 0 &&
+        (d.segments[0] === field.alias || d.segments[0] === field.fromAlias),
     );
     const labels: string[] = [];
     if (!field.fromAlias) labels.push("Added");
@@ -53,7 +55,9 @@ export function upgradeFieldChanges(
       field.kind === "parameter" &&
       field.value !== undefined &&
       (field.originalValue !== undefined
-        ? field.value !== field.originalValue
+        ? field.value !== field.originalValue ||
+          (field.originalContentType !== undefined &&
+            field.content_type !== field.originalContentType)
         : field.loaded === true)
     )
       labels.push("Value edited");

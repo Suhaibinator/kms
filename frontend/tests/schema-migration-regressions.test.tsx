@@ -131,6 +131,7 @@ describe("SchemaMigrationModal regressions", () => {
           required: ["urls"],
           properties: {
             urls: { type: "array", items: { type: "string" } },
+            count: { type: "integer" },
             host: { type: "string" },
           },
         },
@@ -138,7 +139,7 @@ describe("SchemaMigrationModal regressions", () => {
       },
     });
     mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
-    const original = '{"host":"retained","old":"obsolete"}';
+    const original = '{"host":"retained","old":"obsolete","count":10}';
     mocks.getParameter.mockImplementation((ref: { key: string }) =>
       Promise.resolve({
         parameter: {
@@ -167,14 +168,69 @@ describe("SchemaMigrationModal regressions", () => {
     await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
     const request = mocks.migrateApplicationSchema.mock.calls[0][1] as SchemaMigrationRequest;
     expect(request.changes.find((change) => change.alias === "database")?.value).toBe(
-      '{"host":"retained","urls":[]}',
+      '{"host":"retained","count":10,"urls":[]}',
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "count" }), {
+      target: { value: "20" },
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Restore pre-preparation value" }));
+    expect(within(dialog).getByRole("textbox", { name: "count" })).toHaveValue("10");
     expect(within(dialog).getByRole("region", { name: "Prepare database" })).toHaveTextContent(
       "Remove: old",
     );
     expect(within(dialog).getByRole("textbox", { name: "host" })).toHaveValue("retained");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Prepare draft" }));
+    let resolvePin!: (result: unknown) => void;
+    mocks.getParameter.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePin = resolve;
+        }),
+    );
+    fireEvent.change(within(dialog).getByLabelText("database exact version"), {
+      target: { value: "2" },
+    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Restore pre-preparation value" }),
+    ).toBeNull();
+    await waitFor(() => expect(resolvePin).toBeDefined());
+    resolvePin({ parameter: { value: '{"host":"replacement","urls":[]}', content_type: "json" } });
+    await waitFor(() =>
+      expect(within(dialog).getByRole("textbox", { name: "host" })).toHaveValue("replacement"),
+    );
+    expect(within(dialog).getByRole("button", { name: "Preview migration" })).toBeEnabled();
+  });
+
+  it("keeps authoritative removal details visible in a filtered preview", async () => {
+    mocks.migrateApplicationSchema.mockResolvedValue(
+      migrationResult({
+        entries: [
+          {
+            alias: "removed_pin",
+            key: "original_key",
+            kind: "parameter",
+            source: "removed",
+            from_version: 7,
+            to_version: 0,
+          },
+        ],
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    fireEvent.change(within(dialog).getByLabelText("Search fields or schema paths"), {
+      target: { value: "database" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview migration" }));
+    await waitFor(() =>
+      expect(within(dialog).getByText("Backend validation passed.")).toBeVisible(),
+    );
+    expect(within(dialog).getByRole("region", { name: "Removed aliases" })).toHaveTextContent(
+      "removed_pin · removed from release · key original_key · v7",
+    );
+    expect(within(dialog).getByText(/Search and filters are active/)).toBeVisible();
   });
 
   it("requires the production name and does not show success when execution is declined", async () => {
