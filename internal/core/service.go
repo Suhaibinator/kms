@@ -445,7 +445,11 @@ func (s *Service) namespaceMethodCheck(ctx context.Context, pr Principal, ns dom
 		allowed[i] = string(m)
 	}
 	s.m().AuthzMethodDenied(authFailureReason(pr.Method))
-	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
+	ref := domain.Ref{NS: ns}
+	if track, ok := ctx.Value(releaseAuditTrackKey{}).(domain.ReleaseTrack); ok && resourceType == domain.ResourceConfigurationRelease && track.Namespace == ns {
+		ref.Key = track.Name
+	}
+	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, ref, n.ID, 0, "deny",
 		map[string]string{"method": string(pr.Method), "required": strings.Join(allowed, ",")})
 	return domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied,
 		"namespace %s requires %s", ns, strings.Join(allowed, " or "))

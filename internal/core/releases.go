@@ -364,6 +364,7 @@ func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principa
 }
 
 func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
+	ctx = withReleaseAuditFilter(ctx, filter)
 	ns, name := filter.Namespace, filter.Name
 	if err := keyutil.ValidateNamespace(ns); err != nil {
 		return nil, "", domain.Errorf(domain.ErrInvalidArgument, "%v", err)
@@ -693,14 +694,16 @@ func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal
 	return domain.RollbackResult{Active: next, RolledBackFrom: current, Changed: changed}, nil
 }
 
-func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
-	_, err := s.AuthorizeReleaseWatchContext(ctx, pr, ns, name)
+func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, track domain.ReleaseTrack) error {
+	_, err := s.AuthorizeReleaseWatchContext(ctx, pr, track)
 	return err
 }
 
 // AuthorizeReleaseWatchContext returns the namespace-incarnation-bound context
 // that must be used for the initial release snapshot and connection lifecycle.
-func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) (context.Context, error) {
+func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal, track domain.ReleaseTrack) (context.Context, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return ctx, err
 	}
@@ -714,11 +717,12 @@ func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal
 	return bound, nil
 }
 
-func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
+func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, track domain.ReleaseTrack) error {
+	ctx = withReleaseAuditTrack(ctx, track)
 	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
 		return err
 	}
-	return s.AuthorizeReleaseWatch(ctx, pr, ns, name)
+	return s.AuthorizeReleaseWatch(ctx, pr, track)
 }
 
 func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Principal, ack domain.ReleaseAcknowledgement) error {
@@ -808,6 +812,7 @@ func (s *Service) ResetReleaseSubscriberConnections(ctx context.Context) error {
 }
 
 func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ReleaseAcknowledgement, string, uint64, error) {
+	ctx = withReleaseAuditFilter(ctx, filter)
 	ns, name := filter.Namespace, filter.Name
 	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
 		return nil, "", 0, err

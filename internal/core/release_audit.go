@@ -33,6 +33,14 @@ func withReleaseAuditTrack(ctx context.Context, track domain.ReleaseTrack) conte
 	return context.WithValue(ctx, releaseAuditTrackKey{}, track)
 }
 
+// A broad list must not inherit an earlier exact selection from its context.
+func withReleaseAuditFilter(ctx context.Context, filter domain.ReleaseFilter) context.Context {
+	if filter.Name != "" && filter.SchemaVersion != nil {
+		return withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: filter.Namespace, Name: filter.Name, SchemaVersion: *filter.SchemaVersion})
+	}
+	return context.WithValue(ctx, releaseAuditTrackKey{}, struct{}{})
+}
+
 func scopedReleaseAuditMetadata(ctx context.Context, resourceType string, ref domain.Ref, metadata map[string]string) map[string]string {
 	track, ok := ctx.Value(releaseAuditTrackKey{}).(domain.ReleaseTrack)
 	if !ok || resourceType != domain.ResourceConfigurationRelease || track.Namespace != ref.NS || (ref.Key != "" && track.Name != ref.Key) {

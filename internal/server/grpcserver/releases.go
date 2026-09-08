@@ -249,7 +249,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if regp.GetClientName() == "" || regp.GetInstanceId() == "" || len(regp.GetClientName()) > 128 || len(regp.GetInstanceId()) > 128 {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "client_name and instance_id must be between 1 and 128 bytes"))
 	}
-	ctx, err = h.s.svc.AuthorizeReleaseWatchContext(ctx, pr, ns, regp.GetName())
+	ctx, err = h.s.svc.AuthorizeReleaseWatchContext(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: regp.GetName(), SchemaVersion: regp.GetSchemaVersion()})
 	if err != nil {
 		return h.s.mapErr(ctx, err)
 	}
@@ -376,7 +376,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			return nil
 		case result := <-received:
 			if result.rejected != nil {
-				if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+				if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, reg.Track()); err != nil {
 					return h.s.mapErr(ctx, err)
 				}
 				// Rejections are ACK responses, not configuration progress. Keep
@@ -401,7 +401,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 					// Retention may prune an activation already dequeued for delivery.
 					// Only a still-authorized, active track in this same namespace
 					// incarnation can recover by reconnecting for replay or a snapshot.
-					if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+					if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, reg.Track()); err != nil {
 						return h.s.mapErr(ctx, err)
 					}
 					if _, err := h.s.svc.GetActiveConfigurationRelease(ctx, pr, reg.Track()); err != nil {
@@ -416,7 +416,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			if release.Track() != reg.Track() {
 				return h.s.mapErr(ctx, domain.Errorf(domain.ErrFailedPrecondition, "release event does not match registration"))
 			}
-			if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+			if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, reg.Track()); err != nil {
 				return h.s.mapErr(ctx, err)
 			}
 			if err := stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: toProtoConfigurationRelease(release)}}, Revision: e.Revision}); err != nil {
@@ -424,7 +424,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			}
 			last = e.Revision
 		case <-ticker.C:
-			if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+			if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, reg.Track()); err != nil {
 				return h.s.mapErr(ctx, err)
 			}
 			if err := stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Heartbeat{Heartbeat: &kmsv1.Heartbeat{ServerTimeUnixMs: time.Now().UnixMilli()}}, Revision: last}); err != nil {

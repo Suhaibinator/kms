@@ -80,6 +80,7 @@ func (s *Service) notifyReleaseSubscribers(track domain.ReleaseTrack) {
 // the folded rollout summary plus the raw subscriber rows for one release
 // name. Admin-only, like ListReleaseSubscribers.
 func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, track domain.ReleaseTrack) (domain.SubscriberStreamSnapshot, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
@@ -112,6 +113,7 @@ func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, t
 
 // AuditReleaseStreamRejected records a live-stream request refused by the
 // transport's concurrency caps so the deny is visible in the audit log.
-func (s *Service) AuditReleaseStreamRejected(ctx context.Context, pr Principal, ns domain.NamespaceRef, name, reason string) {
-	s.auditRef(ctx, pr, "configuration_release.subscribers_stream", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, 0, "deny", map[string]string{"reason": reason})
+func (s *Service) AuditReleaseStreamRejected(ctx context.Context, pr Principal, track domain.ReleaseTrack, reason string) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	s.auditRef(ctx, pr, "configuration_release.subscribers_stream", domain.ResourceConfigurationRelease, domain.Ref{NS: track.Namespace, Key: track.Name}, 0, "deny", map[string]string{"reason": reason})
 }

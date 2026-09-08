@@ -101,7 +101,7 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 	release, reason := s.streams.acquire(pr.Identity.Name, s.stream)
 	if release == nil {
 		s.rateLimited(streamLimiter(reason))
-		s.svc.AuditReleaseStreamRejected(ctx, pr, ns, name, reason)
+		s.svc.AuditReleaseStreamRejected(ctx, pr, track, reason)
 		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many live subscriber streams open")
 		return
 	}

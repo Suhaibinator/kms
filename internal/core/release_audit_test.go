@@ -284,3 +284,149 @@ func TestMigrationAuditsSeparateSourceAndDestinationActivation(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseReadAndSubscriberDenialsAuditExactTrack(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newConsoleTestService(t)
+	app := seedConsoleApp(t, svc, adminPrincipal())
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	if _, err := svc.CreateConfigurationSchema(ctx, adminPrincipal(), app.Name, `{"type":"object","title":"newer"}`, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{Name: "denied", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := clientPrincipalTok("denied", created.Token)
+	operations := []struct {
+		name      string
+		eventType string
+		call      func(Principal, domain.ReleaseTrack) error
+	}{
+		{"list", "authz.denial", func(pr Principal, track domain.ReleaseTrack) error {
+			_, _, err := svc.ListConfigurationReleases(ctx, pr, trackFilter(track), storage.ListPage{})
+			return err
+		}},
+		{"subscribers", "configuration_release.subscribers", func(pr Principal, track domain.ReleaseTrack) error {
+			_, _, _, err := svc.ListReleaseSubscribers(ctx, pr, trackFilter(track), storage.ListPage{})
+			return err
+		}},
+		{"rollout", "configuration_release.subscribers", func(pr Principal, track domain.ReleaseTrack) error {
+			_, err := svc.GetReleaseRolloutSnapshot(ctx, pr, track)
+			return err
+		}},
+		{"watch", "authz.denial", func(pr Principal, track domain.ReleaseTrack) error {
+			return svc.AuthorizeReleaseWatch(ctx, pr, track)
+		}},
+		{"reauthorize", "authz.denial", func(pr Principal, track domain.ReleaseTrack) error {
+			return svc.ReauthorizeReleaseWatch(ctx, pr, track)
+		}},
+	}
+	for _, schema := range []uint64{0, 2} {
+		track := domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: schema}
+		for _, op := range operations {
+			actor := pr
+			actor.RequestID = fmt.Sprintf("%s-schema-%d", op.name, schema)
+			if err := op.call(actor, track); !errors.Is(err, domain.ErrPermissionDenied) {
+				t.Fatalf("%s: %v", actor.RequestID, err)
+			}
+			events, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: op.eventType, Decision: "deny", ActorIdentity: actor.Identity.Name}, storage.ListPage{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := 0
+			for _, event := range events {
+				if event.RequestID != actor.RequestID {
+					continue
+				}
+				found++
+				metadata := auditMetadataForTest(t, event)
+				if event.ResourceType != domain.ResourceConfigurationRelease || event.ResourceEnv != ns.Env || event.ResourceApp != ns.App || event.ResourceKey != track.Name || metadata["schema_version"] != fmt.Sprint(schema) {
+					t.Fatalf("denial lost exact identity: %+v", event)
+				}
+				if _, ok := metadata["activation_revision"]; ok {
+					t.Fatalf("denial invented activation: %+v", event)
+				}
+			}
+			if found != 1 {
+				t.Fatalf("%s: got %d denial events", actor.RequestID, found)
+			}
+		}
+	}
+
+	// Schema selection adds audit metadata, not a new permission boundary.
+	if _, err := svc.CreatePolicy(ctx, adminPrincipal(), domain.Policy{Name: "read-tracks", Subject: pr.Identity.Name, Allow: []domain.PolicyRule{
+		{Operation: domain.OpConfigurationReleaseList, Env: ns.Env, App: ns.App},
+		{Operation: domain.OpConfigurationReleaseWatch, Env: ns.Env, App: ns.App},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []uint64{0, 2} {
+		track := domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: schema}
+		if _, _, err := svc.ListConfigurationReleases(ctx, pr, trackFilter(track), storage.ListPage{}); err != nil {
+			t.Fatalf("namespace list permission for schema %d: %v", schema, err)
+		}
+		if err := svc.ReauthorizeReleaseWatch(ctx, pr, track); err != nil {
+			t.Fatalf("namespace watch permission for schema %d: %v", schema, err)
+		}
+	}
+}
+
+func TestReleaseWatchMethodDenialsPreserveTrackNameAndSchema(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newConsoleTestService(t)
+	app := seedConsoleApp(t, svc, adminPrincipal())
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	if _, err := st.UpdateNamespace(ctx, ns, "", []domain.AuthMethod{domain.AuthMethodMTLS}); err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []uint64{0, 1} {
+		if err := svc.AuthorizeReleaseWatch(ctx, clientPrincipal("denied"), domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: schema}); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("method denial: %v", err)
+		}
+	}
+	events, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: "authz.method_denied"}, storage.ListPage{Limit: 10})
+	if err != nil || len(events) != 2 {
+		t.Fatalf("method denials: %+v %v", events, err)
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		if event.ResourceEnv != ns.Env || event.ResourceApp != ns.App || event.ResourceKey != app.ReleaseName {
+			t.Fatalf("method denial lost release identity: %+v", event)
+		}
+		seen[auditMetadataForTest(t, event)["schema_version"]] = true
+	}
+	if !seen["0"] || !seen["1"] {
+		t.Fatalf("method denial schema selections: %v", seen)
+	}
+}
+
+func TestCrossTrackListDenialsDoNotInventSchema(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newConsoleTestService(t)
+	app := seedConsoleApp(t, svc, adminPrincipal())
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	pr := clientPrincipal("denied")
+	ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: 2})
+	for _, filter := range []domain.ReleaseFilter{
+		{Namespace: ns, Name: app.ReleaseName},
+		{Namespace: ns, SchemaVersion: new(uint64(0))},
+		{Namespace: ns},
+	} {
+		if _, _, err := svc.ListConfigurationReleases(ctx, pr, filter, storage.ListPage{}); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("list denial: %v", err)
+		}
+		if _, _, _, err := svc.ListReleaseSubscribers(ctx, pr, filter, storage.ListPage{}); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("subscriber denial: %v", err)
+		}
+	}
+	events, _, err := st.ListAudit(ctx, domain.AuditFilter{Decision: "deny", ActorIdentity: pr.Identity.Name}, storage.ListPage{Limit: 100})
+	if err != nil || len(events) != 6 {
+		t.Fatalf("cross-track denials: %+v %v", events, err)
+	}
+	for _, event := range events {
+		if _, ok := auditMetadataForTest(t, event)["schema_version"]; ok {
+			t.Fatalf("cross-track denial invented schema: %+v", event)
+		}
+	}
+}
