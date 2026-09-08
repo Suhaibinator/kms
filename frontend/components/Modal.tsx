@@ -117,11 +117,15 @@ export function Modal({
           // Base UI dispatches the same Escape close request to every open
           // controlled root. Only the topmost nested dialog may handle it.
           const eventTarget = eventDetails.event.target;
+          const expandedPicker = popupRef.current?.querySelector(
+            '[data-slot="select-trigger"][aria-expanded="true"]',
+          );
           if (
             eventDetails.reason === "escape-key" &&
             ((eventTarget instanceof Element &&
               eventTarget.closest('[data-slot="dialog-content"]') !== popupRef.current) ||
-              popupRef.current?.hasAttribute("data-nested-dialog-open"))
+              popupRef.current?.hasAttribute("data-nested-dialog-open") ||
+              expandedPicker)
           ) {
             return;
           }

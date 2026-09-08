@@ -67,6 +67,19 @@ export function SearchableAppSelect({
           className,
         )}
         onBlur={onBlur}
+        onKeyDown={(event) => {
+          // The popup input is portaled and receives focus after opening. If
+          // Escape arrives before that transfer, close this picker explicitly
+          // so the same key cannot dismiss an enclosing dialog instead.
+          if (
+            event.key === "Escape" &&
+            event.currentTarget.getAttribute("aria-expanded") === "true"
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.click();
+          }
+        }}
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid}
       >

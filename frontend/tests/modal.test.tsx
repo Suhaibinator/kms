@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { AppSelect } from "@/components/ui/app-select";
 
 afterEach(cleanup);
 
@@ -205,6 +206,54 @@ describe("Modal", () => {
     await waitFor(() => expect(popupOf("Save credential")).toBeVisible());
     expect(parentClosed).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Workspace", hidden: true })).toBeInTheDocument();
+  });
+
+  it("gives an expanded searchable picker the first Escape before popup focus lands", async () => {
+    const parentClosed = vi.fn();
+    function Probe() {
+      const [open, setOpen] = useState(true);
+      return (
+        <Modal
+          open={open}
+          title="New release"
+          onClose={() => {
+            parentClosed();
+            setOpen(false);
+          }}
+        >
+          <label htmlFor="resource">Resource</label>
+          <AppSelect
+            id="resource"
+            value=""
+            onValueChange={() => undefined}
+            options={Array.from({ length: 61 }, (_, index) => ({
+              value: `resource-${index}`,
+              label: `resource-${index}`,
+            }))}
+            searchable
+            searchPlaceholder="Filter resources…"
+          />
+        </Modal>
+      );
+    }
+    render(<Probe />);
+
+    const trigger = screen.getByRole("combobox", { name: "Resource" });
+    fireEvent.click(trigger);
+    // Keep focus on the trigger to deterministically model Escape racing the
+    // popup's deferred focus transfer in a busy browser render.
+    trigger.focus();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(trigger, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("combobox", { name: "Filter resources…" })).not.toBeInTheDocument(),
+    );
+    expect(popupOf("New release")).toBeVisible();
+    expect(parentClosed).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    await waitFor(() => expect(parentClosed).toHaveBeenCalledTimes(1));
   });
 });
 
