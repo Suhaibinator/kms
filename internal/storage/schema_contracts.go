@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -25,6 +26,11 @@ func canonicalSchemaContract(fields []domain.ApplicationContractField) (string, 
 }
 
 func schemaAnnotationContract(schema string) ([]domain.ApplicationContractField, bool, error) {
+	// Boolean schemas are valid JSON Schemas but cannot carry annotations.
+	trimmed := bytes.TrimSpace([]byte(schema))
+	if bytes.Equal(trimmed, []byte("true")) || bytes.Equal(trimmed, []byte("false")) {
+		return nil, false, nil
+	}
 	var root map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(schema), &root); err != nil {
 		return nil, false, domain.Errorf(domain.ErrInvalidArgument, "invalid JSON schema")
