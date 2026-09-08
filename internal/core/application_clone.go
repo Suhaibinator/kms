@@ -101,7 +101,9 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 
 	type cloneTarget struct{ alias, key, kind string }
 	targets := make([]cloneTarget, 0)
-	if len(app.Contract) > 0 {
+	// Only an unestablished contract allows the legacy copy-all fallback.
+	// An established empty contract owns no resources on this schema track.
+	if app.Contract != nil {
 		refs := resolveContractRefs(app, sourceNS.Env, sourceActive, facts.Latest, otherActive, rows)
 		for _, field := range app.Contract {
 			key := field.Alias

@@ -112,6 +112,32 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	}
 }
 
+func TestCloneApplicationEnvironmentWithEstablishedEmptyContract(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newConsoleTestService(t)
+	pr := adminPrincipal()
+	app := seedConsoleApp(t, svc, pr, "dev")
+	schema, err := svc.CreateConfigurationSchema(ctx, pr, app.Name, `{"type":"object","x-kms-contract":[]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{
+		Application: app.Name, SourceEnv: "dev", TargetEnv: "empty-clone", CopyValues: true, SchemaVersion: &schema.Version,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NamespaceCreated || len(result.Items) != 0 || len(result.NeedsValue) != 0 {
+		t.Fatalf("empty schema %d cloned resources from another track: %+v", schema.Version, result)
+	}
+	for _, key := range []string{"database", "rate_limits"} {
+		ref := domain.Ref{NS: result.Namespace.NamespaceRef, Key: key}
+		if _, err := st.GetParameter(ctx, ref, 0, domain.LabelCurrent); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("unrelated parameter %s copied: %v", key, err)
+		}
+	}
+}
+
 func TestCloneApplicationEnvironmentWithoutContractCopiesEverything(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newConsoleTestService(t)
