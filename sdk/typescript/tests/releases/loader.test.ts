@@ -168,6 +168,7 @@ describe("ReleaseLoader", () => {
   it.each([
     ["not_found", "unknown schema track"],
     ["permission_denied", "watch is forbidden"],
+    ["failed_precondition", "application is archived"],
   ] as const)("surfaces terminal inactive-track watch %s", async (code, message) => {
     const transport = new FakeTransport(makeRelease(1n, []));
     transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };

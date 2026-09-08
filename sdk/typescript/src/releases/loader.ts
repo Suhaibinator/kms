@@ -909,6 +909,7 @@ function terminalReleaseWatchError(error: unknown): Error | undefined {
     (isKmsError(mapped, "not_found") ||
       isKmsError(mapped, "invalid_argument") ||
       isKmsError(mapped, "permission_denied") ||
+      isKmsError(mapped, "failed_precondition") ||
       isKmsError(mapped, "unauthenticated"))
   ) {
     return mapped;
