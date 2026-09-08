@@ -323,6 +323,87 @@ describe("ReleaseLoader", () => {
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("retains exact acknowledgement generations across replay and rejection races", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const third = makeRelease(3n, [parameterEntry("value", "value", 3n, "three")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      instanceId: "stable-instance",
+      random: () => 0,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+
+    await waitFor(() => appliedAcknowledgement(streams[0])?.version === 1n);
+    const firstApplied = appliedAcknowledgement(streams[0]);
+    if (!firstApplied) throw new Error("first applied acknowledgement was not sent");
+    expect(firstApplied?.sequence).toBeGreaterThan(0n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[0]?.push(activationEvent(second, 2n));
+    await waitFor(() =>
+      acknowledgements(streams[0]).some((ack) => ack.state === "applied" && ack.version === 2n),
+    );
+    const secondApplied = acknowledgements(streams[0]).find(
+      (acknowledgement) => acknowledgement.state === "applied" && acknowledgement.version === 2n,
+    );
+    if (!secondApplied) throw new Error("second applied acknowledgement was not sent");
+    expect(secondApplied?.sequence).toBeGreaterThan(firstApplied?.sequence ?? 0n);
+
+    streams[0]?.push(acknowledgementRejectedEvent(secondApplied, 999n, { clientName: "foreign" }));
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(appliedAcknowledgement(streams[1])).toMatchObject({
+      version: 2n,
+      sequence: secondApplied?.sequence,
+    });
+    expect(registrations[1]?.lastSeenRevision).toBe(2n);
+
+    streams[1]?.push(acknowledgementRejectedEvent(firstApplied, 1_000n));
+    streams[1]?.close();
+    await waitFor(() => streams.length === 3);
+    expect(appliedAcknowledgement(streams[2])).toMatchObject({
+      version: 2n,
+      sequence: secondApplied?.sequence,
+    });
+    expect(registrations[2]?.lastSeenRevision).toBe(2n);
+
+    const sentBeforeRejection = streams[2]?.sent.length;
+    streams[2]?.push(acknowledgementRejectedEvent(secondApplied, 1_001n));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(streams[2]?.sent).toHaveLength(sentBeforeRejection ?? 0);
+    expect(loader.status()).toMatchObject({ state: "applied", appliedVersion: 2n });
+    streams[2]?.close();
+    await waitFor(() => streams.length === 4);
+    expect(appliedAcknowledgement(streams[3])).toBeUndefined();
+    expect(registrations[3]?.lastSeenRevision).toBe(2n);
+
+    transport.active = { release: third, activationRevision: 3n, previousVersion: 2n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 3n, "three"));
+    streams[3]?.push(activationEvent(third, 3n));
+    await waitFor(() => appliedAcknowledgement(streams[3])?.version === 3n);
+    expect(loader.status()).toMatchObject({ state: "applied", appliedVersion: 3n });
+
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("keeps watching a known track with no active release", async () => {
     const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
     const transport = new FakeTransport(release);
@@ -701,6 +782,7 @@ describe("ReleaseLoader", () => {
     transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
     const streams: FakeWatchStream[] = [];
     let rejectedAttempts = 0;
+    let firstRejectedSequence = 0n;
     transport.watchReleaseHook = async (_registration, signal) => {
       const stream = new FakeWatchStream(signal, (request) => {
         if (
@@ -708,7 +790,10 @@ describe("ReleaseLoader", () => {
           request.request.value.state === "rejected"
         ) {
           rejectedAttempts += 1;
-          if (rejectedAttempts === 1) throw new Error("injected acknowledgement failure");
+          if (rejectedAttempts === 1) {
+            firstRejectedSequence = request.request.value.sequence;
+            throw new Error("injected acknowledgement failure");
+          }
         }
       });
       streams.push(stream);
@@ -736,6 +821,8 @@ describe("ReleaseLoader", () => {
       rejectionCategory: "prepare_failed",
       diagnostic: "",
     });
+    expect(firstRejectedSequence).toBeGreaterThan(0n);
+    expect(rejectedAcknowledgement(streams[1])?.sequence).toBe(firstRejectedSequence);
   });
 
   it("defaults nonpositive release reconciliation intervals like the Go SDK", () => {
@@ -1418,6 +1505,32 @@ function activationEvent(release: ConfigurationRelease, revision: bigint): Watch
   };
 }
 
+function acknowledgementRejectedEvent(
+  acknowledgement: NonNullable<ReturnType<typeof appliedAcknowledgement>>,
+  revision: bigint,
+  overrides: Partial<NonNullable<WatchReleaseEvent["event"]>["value"]> = {},
+): WatchReleaseEvent {
+  return {
+    event: {
+      $case: "acknowledgementRejected",
+      value: {
+        namespace: acknowledgement.namespace,
+        name: acknowledgement.name,
+        schemaVersion: acknowledgement.schemaVersion,
+        version: acknowledgement.version,
+        activationRevision: acknowledgement.activationRevision,
+        clientName: acknowledgement.clientName,
+        instanceId: acknowledgement.instanceId,
+        state: acknowledgement.state,
+        sequence: acknowledgement.sequence,
+        reason: "activation_unavailable",
+        ...overrides,
+      },
+    },
+    revision,
+  };
+}
+
 function pathOf(ref: ResourceRef): string {
   if (!ref.namespace) return "";
   return `/${ref.namespace.env}/${ref.namespace.app}/${ref.key}`;
@@ -1435,6 +1548,10 @@ function acknowledgementStates(stream: FakeWatchStream | undefined): string[] {
 
 function rejectedAcknowledgement(stream: FakeWatchStream | undefined) {
   return acknowledgements(stream).find((acknowledgement) => acknowledgement.state === "rejected");
+}
+
+function appliedAcknowledgement(stream: FakeWatchStream | undefined) {
+  return acknowledgements(stream).find((acknowledgement) => acknowledgement.state === "applied");
 }
 
 function invalidPrepared() {

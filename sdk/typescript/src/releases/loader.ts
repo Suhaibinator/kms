@@ -728,8 +728,12 @@ export class ReleaseLoader {
         for await (const event of stream) {
           if (signal.aborted) break;
           receivedEvent = true;
-          if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
           const payload = event.event;
+          if (payload?.$case === "acknowledgementRejected") {
+            this.#handleAcknowledgementRejected(payload.value);
+            continue;
+          }
+          if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
           if (payload?.$case === "snapshot" && payload.value.release) {
             offer(makeCandidate(payload.value.release, event.revision, "reconciliation", 0n));
           } else if (payload?.$case === "activation" && payload.value.release) {
@@ -792,6 +796,43 @@ export class ReleaseLoader {
     this.#stats.reconnects += 1n;
   }
 
+  #handleAcknowledgementRejected(event: {
+    namespace: NamespaceRef | undefined;
+    name: string;
+    schemaVersion: bigint;
+    version: bigint;
+    activationRevision: bigint;
+    clientName: string;
+    instanceId: string;
+    state: string;
+    sequence: bigint;
+    reason: string;
+  }): void {
+    if (
+      event.reason !== "activation_unavailable" ||
+      event.sequence === 0n ||
+      !isReleaseState(event.state) ||
+      !sameNamespace(event.namespace, this.#options.namespace) ||
+      event.name !== this.#options.name ||
+      event.schemaVersion !== this.#options.schemaVersion ||
+      event.clientName !== this.#options.clientName ||
+      event.instanceId !== this.#options.instanceId
+    ) {
+      return;
+    }
+    const retained = this.#pendingAcknowledgements.get(event.state);
+    if (
+      retained?.generation !== event.sequence ||
+      retained.acknowledgement.sequence !== event.sequence ||
+      retained.acknowledgement.version !== event.version ||
+      retained.acknowledgement.activationRevision !== event.activationRevision ||
+      retained.acknowledgement.state !== event.state
+    ) {
+      return;
+    }
+    this.#pendingAcknowledgements.delete(event.state);
+  }
+
   #ack(
     candidate: Candidate,
     state: ReleaseState,
@@ -799,6 +840,7 @@ export class ReleaseLoader {
     divergence: AckDivergence = NO_DIVERGENCE,
   ): bigint {
     this.#ackGeneration += 1n;
+    const sequence = this.#ackGeneration;
     const applied = state === "applied" && divergence.divergent;
     const acknowledgement: ReleaseAcknowledgement = {
       namespace: { ...this.#options.namespace },
@@ -814,17 +856,18 @@ export class ReleaseLoader {
       appliedDivergent: applied,
       divergentFieldCount: applied ? divergence.fieldCount : 0,
       schemaVersion: this.#options.schemaVersion,
+      sequence,
     };
     const current = this.#pendingAcknowledgements.get(state);
     if (!current || current.acknowledgement.activationRevision <= candidate.revision) {
       this.#pendingAcknowledgements.set(state, {
         acknowledgement,
-        generation: this.#ackGeneration,
+        generation: sequence,
         dirty: true,
       });
     }
     void this.#scheduleAckFlush().catch(() => undefined);
-    return this.#ackGeneration;
+    return sequence;
   }
 
   #scheduleAckFlush(): Promise<void> {
@@ -900,6 +943,12 @@ export class ReleaseLoader {
       }
     });
   }
+}
+
+function isReleaseState(state: string): state is ReleaseState {
+  return (
+    state === "received" || state === "prepared" || state === "applied" || state === "rejected"
+  );
 }
 
 function terminalReleaseWatchError(error: unknown): Error | undefined {
