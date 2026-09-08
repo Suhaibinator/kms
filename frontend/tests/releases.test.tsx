@@ -1174,15 +1174,38 @@ describe("ReleasesPage", () => {
     editor = within(dialog).getByRole("textbox", { name: "Release definition" });
     const unpinned = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
     expect(unpinned.schema_version).toBe(0);
+    const omitted = { ...unpinned };
+    delete omitted.schema_version;
+    fireEvent.change(editor, { target: { value: JSON.stringify(omitted) } });
+    expect(within(dialog).getByText(/schema_version is required/)).toBeVisible();
+    const create = within(dialog).getByRole("button", { name: "Create release" });
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(mocks.createRelease).not.toHaveBeenCalled();
+    for (const invalid of [null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      fireEvent.change(editor, {
+        target: { value: JSON.stringify({ ...unpinned, schema_version: invalid }) },
+      });
+      expect(create).toBeDisabled();
+      fireEvent.click(create);
+    }
+    expect(mocks.createRelease).not.toHaveBeenCalled();
     fireEvent.change(editor, {
       target: { value: JSON.stringify({ ...unpinned, schema_version: 1 }) },
     });
-    expect(within(dialog).getByText(/has no pinned schema/)).toBeVisible();
+    expect(within(dialog).getByText(/selected track: 0/)).toBeVisible();
     fireEvent.change(editor, {
       target: { value: JSON.stringify({ ...unpinned, schema_version: 0 }) },
     });
-    expect(within(dialog).queryByText(/has no pinned schema/)).toBeNull();
+    expect(within(dialog).queryByText(/selected track: 0/)).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Create release" })).toBeEnabled();
+    mocks.createRelease.mockResolvedValue({ release: { ...releaseV1, schema_version: 0 } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+    await waitFor(() =>
+      expect(mocks.createRelease).toHaveBeenCalledWith(
+        expect.objectContaining({ schema_version: 0 }),
+      ),
+    );
   });
 
   it("shows the guided blocking reason on click instead of an inert Create button", async () => {

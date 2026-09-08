@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { useFocusFirstInvalid } from "@/lib/forms";
+import { schemaVersionError } from "@/lib/schema";
 import { useFieldErrors } from "@/lib/hooks";
 import type {
   ApplicationOverview,
@@ -154,12 +155,11 @@ function builderError(
 }
 
 /** JSON mode may choose selectors and cross-namespace refs, but never a
- * different schema pin. Omitted and explicit zero both mean "not pinned". */
+ * different schema track. Schema-free releases explicitly select zero. */
 function releaseSchemaVersionError(
   definition: string,
   applicationSchemaVersion: number | null,
 ): string | null {
-  if (applicationSchemaVersion === null) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(definition);
@@ -167,12 +167,14 @@ function releaseSchemaVersionError(
     return null;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!Object.hasOwn(parsed, "schema_version")) {
+    return `schema_version is required${applicationSchemaVersion === null ? "." : ` and must match the selected track: ${applicationSchemaVersion}.`}`;
+  }
   const raw = (parsed as Record<string, unknown>).schema_version;
-  const requested = raw === undefined || raw === 0 ? 0 : raw;
-  if (requested === applicationSchemaVersion) return null;
-  return applicationSchemaVersion === 0
-    ? "This application has no pinned schema; schema_version must be omitted or 0."
-    : `schema_version must match the selected track: ${applicationSchemaVersion}.`;
+  const invalid = schemaVersionError(raw);
+  if (invalid) return invalid;
+  if (applicationSchemaVersion === null || raw === applicationSchemaVersion) return null;
+  return `schema_version must match the selected track: ${applicationSchemaVersion}.`;
 }
 
 interface GuidedSnapshot {
