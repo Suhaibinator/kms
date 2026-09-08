@@ -20,7 +20,7 @@ func migrationHTTPBody(t *testing.T, e *testEnv) map[string]any {
 	mustStatus(t, w, http.StatusCreated)
 	version := decodeBody(t, w)["schema"].(map[string]any)["version"]
 	return map[string]any{
-		"environment": "dev", "schema_version": version,
+		"environment": "dev", "source_schema_version": 1, "schema_version": version,
 		"contract": []map[string]any{
 			{"alias": "database", "kind": "parameter", "content_type": "json"},
 			{"alias": "rate_limits", "kind": "parameter", "content_type": "integer"},

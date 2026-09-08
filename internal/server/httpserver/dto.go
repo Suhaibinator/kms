@@ -450,6 +450,7 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 
 type subscriberDTO struct {
 	ReleaseName         string            `json:"release_name,omitempty"`
+	SchemaVersion       uint64            `json:"schema_version,omitempty"`
 	ReleaseState        string            `json:"release_state,omitempty"`
 	ReleaseVersion      uint64            `json:"release_version,omitempty"`
 	ReleaseRevision     uint64            `json:"release_revision,omitempty"`
@@ -469,7 +470,7 @@ func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
 		namespaces = append(namespaces, namespaceRefDTO{Env: ns.Env, App: ns.App})
 	}
 	return subscriberDTO{
-		ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
+		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,
 		Identity:            s.Identity,
@@ -595,6 +596,7 @@ func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
 type releaseSubscriberDTO struct {
 	Namespace             namespaceRefDTO `json:"namespace"`
 	ReleaseName           string          `json:"release_name"`
+	SchemaVersion         uint64          `json:"schema_version"`
 	ClientName            string          `json:"client_name"`
 	InstanceID            string          `json:"instance_id"`
 	Identity              string          `json:"identity"`
@@ -616,7 +618,7 @@ type releaseSubscriberDTO struct {
 func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDTO {
 	return releaseSubscriberDTO{
 		Namespace:   namespaceRefDTO{Env: s.Namespace.Env, App: s.Namespace.App},
-		ReleaseName: s.ReleaseName, ClientName: s.ClientName, InstanceID: s.InstanceID,
+		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ClientName: s.ClientName, InstanceID: s.InstanceID,
 		Identity: s.Identity, State: s.State, ReleaseVersion: s.ReleaseVersion,
 		ActivationRevision: s.ActivationRevision, RejectionCategory: s.RejectionCategory,
 		Diagnostic: s.Diagnostic, ClientTimestampUnixMS: unixMS(s.ClientTimestamp),

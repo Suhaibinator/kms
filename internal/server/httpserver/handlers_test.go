@@ -329,7 +329,7 @@ func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
 	}
 
 	w = e.admin(http.MethodPost, "/api/v1/releases/validate", map[string]any{
-		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1, "schema_version": 1,
 	})
 	mustStatus(t, w, http.StatusOK)
 	if decodeBody(t, w)["valid"] != true {
@@ -337,7 +337,7 @@ func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
 	}
 
 	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
-		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1, "schema_version": 1,
 		"expected_current_version": 0,
 	})
 	mustStatus(t, w, http.StatusOK)
@@ -346,7 +346,7 @@ func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
 		t.Fatalf("activation = %v", activation)
 	}
 
-	w = e.admin(http.MethodGet, "/api/v1/releases/active?env=prod&app=app&name=runtime", nil)
+	w = e.admin(http.MethodGet, "/api/v1/releases/active?env=prod&app=app&name=runtime&schema_version=1", nil)
 	mustStatus(t, w, http.StatusOK)
 	if decodeBody(t, w)["release"].(map[string]any)["version"].(float64) != 1 {
 		t.Fatal("active release version mismatch")
@@ -354,7 +354,7 @@ func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
 
 	// Presence-aware CAS distinguishes an omitted guard from expect-no-active.
 	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
-		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1, "schema_version": 1,
 		"expected_current_version": 0,
 	})
 	mustStatus(t, w, http.StatusConflict)
@@ -1613,23 +1613,23 @@ func TestRollbackReleaseHTTP(t *testing.T) {
 		mustStatus(t, w, http.StatusCreated)
 	}
 	activate := func(version int) {
-		w := e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": version})
+		w := e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": version, "schema_version": 0})
 		mustStatus(t, w, http.StatusOK)
 	}
-	w := e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"})
+	w := e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "schema_version": 0})
 	mustStatus(t, w, http.StatusPreconditionFailed)
 	create("1")
 	create("2")
 	activate(1)
-	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"})
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "schema_version": 0})
 	mustStatus(t, w, http.StatusPreconditionFailed)
 	activate(2)
-	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "expected_current_version": 1})
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "schema_version": 0, "expected_current_version": 1})
 	mustStatus(t, w, http.StatusConflict)
 	if errCode(t, w) != "aborted" {
 		t.Fatalf("code = %s", errCode(t, w))
 	}
-	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "expected_current_version": 2})
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "schema_version": 0, "expected_current_version": 2})
 	mustStatus(t, w, http.StatusOK)
 	body := decodeBody(t, w)
 	if body["rolled_back_from"].(float64) != 2 || body["changed"] != true || body["previous_version"].(float64) != 2 || body["release"].(map[string]any)["version"].(float64) != 1 {
