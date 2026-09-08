@@ -524,6 +524,17 @@ func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) 
 	}
 }
 
+func TestSameActiveCandidateRejectsForeignNamespace(t *testing.T) {
+	want := releaseCandidate{release: testRelease(7, `{"enabled":true}`), revision: 42}
+	got := releaseCandidate{release: proto.Clone(want.release).(*kmsv1.ConfigurationRelease), revision: 42}
+	got.release.Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+	// A malformed active lookup can copy the expected version, revision, and
+	// digest. Its contradictory address must still fence the precommit check.
+	if sameActiveCandidate(want, got) {
+		t.Fatal("foreign namespace satisfied the precommit active comparison")
+	}
+}
+
 func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server := newReleaseLoaderServer()
 	release := testRelease(7, `{"enabled":true}`)
@@ -955,6 +966,219 @@ func TestReleaseLoaderStartsInactiveTrackAndAppliesFirstActivation(t *testing.T)
 	cancel()
 	if err := <-runErr; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run cancellation error = %v", err)
+	}
+}
+
+func TestReleaseLoaderDropsForeignAndMalformedWatchEventsBeforeCursorAndQueue(t *testing.T) {
+	tests := []struct {
+		name  string
+		event func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent
+	}{
+		{
+			name: "foreign schema snapshot",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.SchemaVersion = 1
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign environment activation",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Namespace.Env = "staging"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign application snapshot",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Namespace.App = "other"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign release name activation",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Name = "other"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "snapshot without release",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{},
+				}}
+			},
+		},
+		{
+			name: "activation without release",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{},
+				}}
+			},
+		},
+		{
+			name: "empty event envelope",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			valid := testRelease(1, `{"enabled":true}`)
+			server.parameters["settings"] = &kmsv1.Parameter{
+				Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 1,
+			}
+			server.secrets["password"] = &kmsv1.GetSecretResponse{
+				Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain",
+			}
+			loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{
+				Name: "runtime", SchemaVersion: new(uint64),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var prepares atomic.Int32
+			committed := make(chan struct{})
+			runErr := make(chan error, 1)
+			go func() {
+				runErr <- loader.Run(ctx, func(_ context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
+					prepares.Add(1)
+					if snapshot.Version() != 1 || snapshot.SchemaVersion() != 0 {
+						t.Errorf("snapshot identity = version %d schema %d", snapshot.Version(), snapshot.SchemaVersion())
+					}
+					return &testPreparedRelease{done: committed}, nil
+				})
+			}()
+
+			select {
+			case registration := <-server.watchRegs:
+				if registration.GetLastSeenRevision() != 0 {
+					t.Fatalf("initial cursor = %d, want 0", registration.GetLastSeenRevision())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("release watch did not register")
+			}
+
+			invalid := tt.event(proto.Clone(valid).(*kmsv1.ConfigurationRelease))
+			invalid.Revision = 100
+			server.watchEvents <- invalid
+			server.watchEvents <- &kmsv1.WatchReleaseEvent{
+				Revision: 1,
+				Event:    &kmsv1.WatchReleaseEvent_Heartbeat{Heartbeat: &kmsv1.Heartbeat{}},
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for loader.lastSeen.Load() != 1 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if got := loader.lastSeen.Load(); got != 1 {
+				t.Fatalf("cursor after malformed revision 100 and heartbeat 1 = %d, want 1", got)
+			}
+			if got := prepares.Load(); got != 0 {
+				t.Fatalf("prepare calls before selected activation = %d, want 0", got)
+			}
+
+			server.watchKills <- struct{}{}
+			select {
+			case registration := <-server.watchRegs:
+				if registration.GetLastSeenRevision() != 1 {
+					t.Fatalf("reconnect cursor = %d, want heartbeat revision 1", registration.GetLastSeenRevision())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("release watch did not reconnect")
+			}
+
+			server.setActive(valid, 2)
+			server.watchEvents <- &kmsv1.WatchReleaseEvent{
+				Revision: 2,
+				Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: valid},
+				},
+			}
+			select {
+			case <-committed:
+			case err := <-runErr:
+				t.Fatalf("Run returned before selected activation committed: %v", err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("selected lower-revision activation did not commit")
+			}
+			if got := loader.lastSeen.Load(); got != 2 {
+				t.Fatalf("cursor after selected activation = %d, want 2", got)
+			}
+			cancel()
+			if err := <-runErr; !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run cancellation error = %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderPrecommitRejectsContradictoryActiveNamespace(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(7, `{"enabled":true}`)
+	server.setActive(release, 42)
+	server.parameters["settings"] = &kmsv1.Parameter{
+		Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7,
+	}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{
+		Ref: testResource("password"), Version: 7, Value: []byte("secret"), ContentType: "text/plain",
+	}
+	loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{
+		Name: "runtime", SchemaVersion: new(uint64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	prepared := &testPreparedRelease{done: make(chan struct{})}
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			contradictory := proto.Clone(release).(*kmsv1.ConfigurationRelease)
+			contradictory.Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+			server.setActive(contradictory, 42)
+			return prepared, nil
+		})
+	}()
+
+	select {
+	case err := <-runErr:
+		if err == nil || !strings.Contains(err.Error(), ReleaseRejectActiveCheck) {
+			t.Fatalf("Run error = %v, want %s", err, ReleaseRejectActiveCheck)
+		}
+	case <-ctx.Done():
+		t.Fatal("loader did not reject contradictory precommit active identity")
+	}
+	if prepared.commits.Load() != 0 || prepared.aborts.Load() != 1 {
+		t.Fatalf("commit/abort = %d/%d, want 0/1", prepared.commits.Load(), prepared.aborts.Load())
+	}
+	var sawRejected, sawApplied bool
+	for {
+		select {
+		case ack := <-server.acks:
+			sawRejected = sawRejected || ack.GetState() == ReleaseStateRejected
+			sawApplied = sawApplied || ack.GetState() == ReleaseStateApplied
+		default:
+			if !sawRejected || sawApplied {
+				t.Fatalf("acknowledgements: rejected=%t applied=%t", sawRejected, sawApplied)
+			}
+			return
+		}
 	}
 }
 

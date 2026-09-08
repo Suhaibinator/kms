@@ -381,12 +381,6 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("kmsclient: load initial active release: %w", err)
 	}
-	if haveInitial && initial.release == nil {
-		return errors.New("kmsclient: active release response was empty")
-	}
-	if haveInitial && initial.release.GetSchemaVersion() != l.trackSchemaVersion {
-		return errors.New("kmsclient: active release response schema track mismatch")
-	}
 	if haveInitial {
 		l.lastSeen.Store(initial.revision)
 	}
@@ -429,9 +423,9 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	}
 
 	queue := func(candidate releaseCandidate) {
-		// A malformed or stale server response from another schema track must not
-		// cancel or supersede work for the loader's pinned track.
-		if candidate.release == nil || candidate.release.GetSchemaVersion() != l.trackSchemaVersion {
+		// A malformed or stale server response from another track must not cancel
+		// or supersede work for the loader's pinned track.
+		if !releaseHasAddress(candidate.release, ns, l.cfg.Name, l.trackSchemaVersion) {
 			return
 		}
 		if !shouldQueueReleaseCandidate(candidate, latestCandidate, haveLatestCandidate, retryLatestCandidate) {
@@ -674,6 +668,9 @@ func sameActiveCandidate(want, got releaseCandidate) bool {
 		return false
 	}
 	return want.revision == got.revision &&
+		want.release.GetNamespace() != nil && got.release.GetNamespace() != nil &&
+		want.release.GetNamespace().GetEnv() == got.release.GetNamespace().GetEnv() &&
+		want.release.GetNamespace().GetApp() == got.release.GetNamespace().GetApp() &&
 		want.release.GetName() == got.release.GetName() &&
 		want.release.GetSchemaVersion() == got.release.GetSchemaVersion() &&
 		want.release.GetVersion() == got.release.GetVersion() &&
@@ -748,11 +745,8 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 	if release == nil || release.GetNamespace() == nil {
 		return ReleaseSnapshot{}, ReleaseRejectResolutionFailed, errors.New("empty release")
 	}
-	if release.GetName() != l.cfg.Name || release.GetNamespace().GetEnv() != ns.env || release.GetNamespace().GetApp() != ns.app {
+	if !releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
 		return ReleaseSnapshot{}, ReleaseRejectVersionMismatch, errors.New("release identity mismatch")
-	}
-	if release.GetSchemaVersion() != l.trackSchemaVersion {
-		return ReleaseSnapshot{}, ReleaseRejectVersionMismatch, errors.New("release schema track mismatch")
 	}
 	calculatedDigest, err := deterministicReleaseDigest(release)
 	if err != nil || release.GetDigest() == "" || !strings.EqualFold(calculatedDigest, release.GetDigest()) {
@@ -1035,6 +1029,12 @@ func sameResourceRef(a, b *kmsv1.ResourceRef) bool {
 	return refFromProto(a) == refFromProto(b)
 }
 
+func releaseHasAddress(release *kmsv1.ConfigurationRelease, ns namespaceRef, name string, schemaVersion uint64) bool {
+	return release != nil && release.GetNamespace() != nil &&
+		release.GetNamespace().GetEnv() == ns.env && release.GetNamespace().GetApp() == ns.app &&
+		release.GetName() == name && release.GetSchemaVersion() == schemaVersion
+}
+
 func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (releaseCandidate, error) {
 	cctx, cancel := l.client.callCtx(ctx)
 	defer cancel()
@@ -1043,6 +1043,9 @@ func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (release
 	})
 	if err != nil {
 		return releaseCandidate{}, mapError(err)
+	}
+	if !releaseHasAddress(resp.GetRelease(), ns, l.cfg.Name, l.trackSchemaVersion) {
+		return releaseCandidate{}, errors.New("kmsclient: active release response identity mismatch")
 	}
 	return releaseCandidate{release: resp.GetRelease(), revision: resp.GetActivationRevision()}, nil
 }
@@ -1187,28 +1190,37 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 			}
 			event := item.event
 			if event != nil {
-				receivedEvent = true
-				var release *kmsv1.ConfigurationRelease
-				source := releaseCandidateSourceActivation
 				switch payload := event.GetEvent().(type) {
 				case *kmsv1.WatchReleaseEvent_Snapshot:
-					release = payload.Snapshot.GetRelease()
-					source = releaseCandidateSourceReconciliation
+					release := payload.Snapshot.GetRelease()
+					if releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+						offerLatestCandidate(events, releaseCandidate{
+							release: release, revision: event.GetRevision(), source: releaseCandidateSourceReconciliation,
+						})
+					}
 				case *kmsv1.WatchReleaseEvent_Activation:
-					release = payload.Activation.GetRelease()
+					release := payload.Activation.GetRelease()
+					if releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+						offerLatestCandidate(events, releaseCandidate{
+							release: release, revision: event.GetRevision(), source: releaseCandidateSourceActivation,
+						})
+					}
+				case *kmsv1.WatchReleaseEvent_Heartbeat:
+					if payload.Heartbeat != nil {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+					}
 				case *kmsv1.WatchReleaseEvent_AcknowledgementRejected:
-					l.handleAcknowledgementRejected(ns, payload.AcknowledgementRejected)
+					if l.handleAcknowledgementRejected(ns, payload.AcknowledgementRejected) {
+						receivedEvent = true
+					}
 					// Rejection events describe retained client state, not a
 					// release cursor. In particular, their envelope revision must
 					// never suppress a later activation.
-				}
-				if _, rejected := event.GetEvent().(*kmsv1.WatchReleaseEvent_AcknowledgementRejected); !rejected {
-					if release == nil {
-						l.advanceLastSeen(event.GetRevision())
-					} else if release.GetSchemaVersion() == l.trackSchemaVersion {
-						l.advanceLastSeen(event.GetRevision())
-						offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision(), source: source})
-					}
 				}
 			}
 			go func() {
@@ -1317,13 +1329,13 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 	}
 }
 
-func (l *ReleaseLoader) handleAcknowledgementRejected(ns namespaceRef, rejected *kmsv1.ReleaseAcknowledgementRejectedEvent) {
+func (l *ReleaseLoader) handleAcknowledgementRejected(ns namespaceRef, rejected *kmsv1.ReleaseAcknowledgementRejectedEvent) bool {
 	if rejected == nil || rejected.GetReason() != "activation_unavailable" || rejected.GetNamespace() == nil ||
 		rejected.GetNamespace().GetEnv() != ns.env || rejected.GetNamespace().GetApp() != ns.app ||
 		rejected.GetName() != l.cfg.Name || rejected.GetSchemaVersion() != l.trackSchemaVersion ||
 		rejected.GetClientName() != l.client.clientName || rejected.GetInstanceId() != l.instanceID ||
 		rejected.GetSequence() == 0 {
-		return
+		return false
 	}
 	l.ackMu.Lock()
 	defer l.ackMu.Unlock()
@@ -1331,10 +1343,11 @@ func (l *ReleaseLoader) handleAcknowledgementRejected(ns namespaceRef, rejected 
 	if ack == nil || ack.GetSequence() != rejected.GetSequence() ||
 		ack.GetVersion() != rejected.GetVersion() || ack.GetActivationRevision() != rejected.GetActivationRevision() ||
 		ack.GetState() != rejected.GetState() {
-		return
+		return true
 	}
 	delete(l.pendingAck, rejected.GetState())
 	delete(l.dirtyAck, rejected.GetState())
+	return true
 }
 
 func (l *ReleaseLoader) sendPendingAcks(stream kmsv1.ConfigurationReleaseService_WatchReleaseClient, replay bool) error {
