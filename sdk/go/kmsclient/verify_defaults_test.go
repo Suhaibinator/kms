@@ -20,7 +20,7 @@ const (
 func TestVerifyReleaseDefaultsSendsHashesOnlyAndParsesVerdicts(t *testing.T) {
 	client, server := newUnboundTestClient(t, Config{Token: "verify-token"})
 	server.QueueVerifyReleaseDefaultsResponse(&kmsv1.VerifyReleaseDefaultsResponse{
-		Name: "runtime", Version: 7, ActivationRevision: 42, SchemaMatches: true,
+		Name: "runtime", Version: 7, ActivationRevision: 42, SchemaMatches: true, SchemaVersion: 3,
 		Entries: []*kmsv1.VerifyEntryVerdict{
 			{Alias: "database", Verdict: VerifyVerdictMatch},
 			{Alias: "limits", Verdict: VerifyVerdictDiffers},
@@ -41,7 +41,7 @@ func TestVerifyReleaseDefaultsSendsHashesOnlyAndParsesVerdicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ReleaseName != "runtime" || result.ReleaseVersion != 7 || result.ActivationRevision != 42 || !result.SchemaMatches ||
+	if result.ReleaseName != "runtime" || result.ReleaseVersion != 7 || result.ActivationRevision != 42 || result.SchemaVersion != 3 || !result.SchemaMatches ||
 		result.MatchCount != 1 || result.DiffersCount != 1 || result.UnverifiedCount != 2 || result.Passed() {
 		t.Fatalf("result = %+v", result)
 	}
@@ -95,6 +95,7 @@ func TestVerifyReleaseDefaultsPassedRequiresSchemaAndAllMatch(t *testing.T) {
 
 func TestVerifyReleaseDefaultsValidatesRequests(t *testing.T) {
 	client, server := newUnboundTestClient(t, Config{})
+	schemaVersion := uint64(0)
 	tests := []struct {
 		name    string
 		options VerifyReleaseDefaultsOptions
@@ -127,6 +128,11 @@ func TestVerifyReleaseDefaultsValidatesRequests(t *testing.T) {
 			name:    "schema hash",
 			options: VerifyReleaseDefaultsOptions{Namespace: "prod/app", SchemaSHA256: "not-hex"},
 			want:    "schema sha256",
+		},
+		{
+			name:    "both schema selectors",
+			options: VerifyReleaseDefaultsOptions{Namespace: "prod/app", SchemaSHA256: testHashS, SchemaVersion: &schemaVersion},
+			want:    "at most one",
 		},
 	}
 	for _, tt := range tests {

@@ -48,9 +48,10 @@ func TestCreateApplicationReleasePreview(t *testing.T) {
 		},
 	}}
 	client := newApplicationReleaseTestClient(stub)
+	schemaVersion := uint64(3)
 
 	result, err := client.CreateApplicationRelease(context.Background(), CreateApplicationReleaseOptions{
-		Namespace: "dev/gradethis", Artifact: []byte(`{"format":"kms-config-defaults/v1"}`), MetadataJSON: `{"commit":"abc"}`,
+		Namespace: "dev/gradethis", SchemaVersion: &schemaVersion, Artifact: []byte(`{"format":"kms-config-defaults/v1"}`), MetadataJSON: `{"commit":"abc"}`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +64,7 @@ func TestCreateApplicationReleasePreview(t *testing.T) {
 		t.Fatalf("entries = %#v", result.Entries)
 	}
 	if len(stub.calls) != 1 || stub.calls[0].GetNamespace().GetEnv() != "dev" || stub.calls[0].GetNamespace().GetApp() != "gradethis" ||
-		stub.calls[0].GetExecute() || stub.calls[0].GetPlanDigest() != "" || stub.calls[0].GetMetadataJson() != `{"commit":"abc"}` {
+		stub.calls[0].GetExecute() || stub.calls[0].GetSchemaVersion() != 3 || stub.calls[0].SchemaVersion == nil || stub.calls[0].GetPlanDigest() != "" || stub.calls[0].GetMetadataJson() != `{"commit":"abc"}` {
 		t.Fatalf("calls = %#v", stub.calls)
 	}
 	if got := stub.metadata.Get("authorization"); len(got) != 1 || got[0] != "Bearer admin-token" {
