@@ -351,6 +351,10 @@ func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	hub := NewHub(st, nil, Options{})
+	hubCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = hub.Run(hubCtx) }()
+	<-hub.Started()
 	reg := releaseWatchRegistration(t, st, ns)
 	reg.SchemaVersion = schema.Version
 	sub, err := hub.SubscribeRelease(ctx, reg)
@@ -365,6 +369,23 @@ func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
 	case <-sub.Done():
 		t.Fatal("inactive track closed")
 	default:
+	}
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: reg.Name, SchemaVersion: reg.SchemaVersion, Digest: "first-active", Metadata: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := st.ActivateConfigurationRelease(ctx, reg.Track(), release.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.Wake()
+	select {
+	case event := <-sub.Events():
+		if event.SchemaVersion != reg.SchemaVersion || event.Revision != active.ActivationRevision {
+			t.Fatalf("first activation: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("inactive stream did not receive its first activation")
 	}
 	reg.SchemaVersion++
 	if _, err := hub.SubscribeRelease(ctx, reg); !errors.Is(err, domain.ErrNotFound) {
