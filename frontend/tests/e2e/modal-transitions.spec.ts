@@ -14,6 +14,9 @@ for (const entry of ["list", "application"] as const) {
           ? "/secrets?env=prod&app=gradethis"
           : "/applications?app=gradethis&tab=matrix",
       );
+      if (entry === "application") {
+        await expect(page).toHaveURL(/schema_version=1/);
+      }
       const url = page.url();
       await page
         .getByRole(entry === "list" ? "link" : "button", { name: "New secret", exact: true })

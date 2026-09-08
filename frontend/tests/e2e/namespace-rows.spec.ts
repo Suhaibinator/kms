@@ -48,6 +48,6 @@ test("namespace rows navigate while their explicit controls remain independent",
     (box?.x ?? 0) + (box?.width ?? 0) / 2,
     (box?.y ?? 0) + (box?.height ?? 0) / 2,
   );
-  await expect(page).toHaveURL("/applications?app=gradethis&env=prod");
+  await expect(page).toHaveURL("/applications?app=gradethis&env=prod&schema_version=1");
   await expect(page.locator('[data-env="prod"]')).toBeVisible();
 });
