@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   createRelease: vi.fn(),
   listApplications: vi.fn(),
   listSchemas: vi.fn(),
+  releaseSchemaVersions: vi.fn(),
   createSchema: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
@@ -90,6 +91,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       createRelease: mocks.createRelease,
       listApplications: mocks.listApplications,
       listSchemas: mocks.listSchemas,
+      releaseSchemaVersions: mocks.releaseSchemaVersions,
       createSchema: mocks.createSchema,
     },
   };
@@ -166,6 +168,7 @@ describe("ReleasesPage", () => {
     }
     for (const mock of Object.values(mocks.toast)) mock.mockReset();
     mocks.listReleases.mockResolvedValue({ releases: [], next_page_token: "" });
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [1], next_page_token: "" });
     mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "none", 404));
     mocks.listApplications.mockResolvedValue({
       applications: [dashboardWithContract.application],
@@ -197,6 +200,111 @@ describe("ReleasesPage", () => {
     });
     // No stream endpoint: the rollout hook falls back to polling at once.
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
+  });
+
+  it("discovers the newest registered track without admin schema access, including inactive tracks", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listSchemas.mockRejectedValue(new ApiError("permission_denied", "admin only", 403));
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [3, 1], next_page_token: "" });
+    render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        3,
+      ),
+    );
+    expect(mocks.listSchemas).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("3");
+    expect(screen.getByRole("option", { name: "v0 · schema-free" })).toBeVisible();
+    expect(mocks.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ schema_version: "3" }) }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("keeps an explicit URL track usable when discovery is denied", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime", schema_version: "0" };
+    mocks.releaseSchemaVersions.mockRejectedValue(new ApiError("permission_denied", "denied", 403));
+    render(<ReleasesPage />);
+    await screen.findByText(/Could not discover schema tracks/);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        0,
+      ),
+    );
+    expect(screen.getByRole("textbox", { name: "Schema version" })).toHaveValue("0");
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("allows exact numeric selection after discovery denial without a newest fallback", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.releaseSchemaVersions.mockRejectedValue(new ApiError("permission_denied", "denied", 403));
+    const { rerender } = render(<ReleasesPage />);
+    const input = await screen.findByRole("textbox", { name: "Schema version" });
+    const select = screen.getByRole("button", { name: "Select schema" });
+    expect(mocks.listReleases).not.toHaveBeenCalled();
+    for (const value of ["", "-1", "1.5", "1e3", "9007199254740992"]) {
+      fireEvent.change(input, { target: { value } });
+      expect(select).toBeDisabled();
+    }
+    for (const value of ["0", "99"]) {
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(select);
+      expect(mocks.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ schema_version: value }) }),
+        undefined,
+        expect.anything(),
+      );
+    }
+    mocks.query = { ...mocks.query, schema_version: "99" };
+    rerender(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenLastCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        99,
+      ),
+    );
+  });
+
+  it("keeps the name filter usable and retries discovery when its scope changes", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.releaseSchemaVersions.mockImplementation(async (_ns, name) => {
+      if (!name) throw new ApiError("unavailable", "temporarily unavailable", 503);
+      return { schema_versions: [2], next_page_token: "" };
+    });
+    const { rerender } = render(<ReleasesPage />);
+    await screen.findByText(/Could not discover schema tracks/);
+    const nameFilter = screen.getByRole("textbox", { name: "Release name" });
+    expect(nameFilter).toBeEnabled();
+    fireEvent.change(nameFilter, {
+      target: { value: "runtime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    mocks.query = { ...mocks.query, name: "runtime" };
+    rerender(<ReleasesPage />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+    );
+    expect(mocks.releaseSchemaVersions).toHaveBeenLastCalledWith(
+      { env: "prod", app: "payments" },
+      "runtime",
+      undefined,
+      expect.anything(),
+    );
   });
 
   it("rollback uses the selected schema previous release", async () => {
@@ -381,7 +489,7 @@ describe("ReleasesPage", () => {
 
   it("resolves legacy links in the newest track and never probes schema0", async () => {
     mocks.query = { app: "payments", env: "prod", release: "runtime@99" };
-    mocks.listSchemas.mockResolvedValue({ schemas: [{ version: 3 }], next_page_token: "" });
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [3], next_page_token: "" });
     mocks.getRelease.mockResolvedValue({
       release: { ...releaseV1, version: 99, schema_version: 3 },
     });

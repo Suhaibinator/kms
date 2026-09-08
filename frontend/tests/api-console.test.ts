@@ -36,6 +36,21 @@ describe("console api additions", () => {
     clearToken();
   });
 
+  it("discovers release schema versions under the namespace and name list scope", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ schema_versions: [3, 1], next_page_token: "next" }));
+    const response = await api.releaseSchemaVersions(ns, "runtime", "cursor");
+    expect(response.schema_versions).toEqual([3, 1]);
+    const url = new URL(String(fetchMock.mock.calls[0][0]), "https://console.test");
+    expect(url.pathname).toBe("/api/v1/releases/schema-versions");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      env: "prod",
+      app: "gradethis",
+      name: "runtime",
+      page_size: "100",
+      page_token: "cursor",
+    });
+  });
+
   it("getApplication / applicationOverview / fleetOverview hit the documented paths", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ applications: [] })));
     await api.getApplication("gradethis");

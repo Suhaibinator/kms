@@ -931,6 +931,17 @@ export const api = {
   },
 
   // --- Configuration releases ---
+  releaseSchemaVersions(
+    ns: NamespaceRef,
+    name?: string,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<{ schema_versions: number[]; next_page_token: string }> {
+    return apiFetch(
+      `/releases/schema-versions${qs({ env: ns.env, app: ns.app, name, page_size: 100, page_token: pageToken })}`,
+      request,
+    );
+  },
   listReleases(
     ns: NamespaceRef,
     name?: string,

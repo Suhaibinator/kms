@@ -33,10 +33,9 @@ import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import { useCursorPagination, useLatestRequest, useNamespaces } from "@/lib/hooks";
-import { parseSchemaVersion } from "@/lib/schema";
-import { useSchemaRegistry } from "@/lib/useSchemaRegistry";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
+import { parseSchemaVersion } from "@/lib/schema";
 import type { SortColumn } from "@/lib/sort";
 import type {
   ConfigurationRelease,
@@ -45,6 +44,7 @@ import type {
   ReleaseValidationError,
 } from "@/lib/types";
 import { queryValue, useQueryReplace } from "@/lib/url";
+import { useReleaseSchemaVersions } from "@/lib/useReleaseSchemaVersions";
 import { validateReleaseName } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
@@ -151,14 +151,19 @@ export default function ReleasesPage() {
   const querySchema = queryValue(router.query.schema_version);
   const explicitSchema = parseSchemaVersion(querySchema);
   const invalidSchema = querySchema !== "" && explicitSchema === undefined;
-  const registry = useSchemaRegistry(invalidSchema ? "" : queryApp);
+  const tracks = useReleaseSchemaVersions(queryEnv, queryApp, queryName);
+  const [schemaDraft, setSchemaDraft] = useState("");
   const linkedSchema = parseReleaseKey(queryRelease)?.schema_version;
   const schemaVersion = invalidSchema
     ? undefined
     : (explicitSchema ??
       linkedSchema ??
-      (registry.schemas === null ? undefined : (registry.schemas[0]?.version ?? 0)));
+      (tracks.versions === null ? undefined : (tracks.versions[0] ?? 0)));
   const trackReady = schemaVersion !== undefined && !invalidSchema;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: discard a manual draft when its namespace or name changes, even if the selected number is unchanged.
+  useEffect(() => {
+    setSchemaDraft(schemaVersion === undefined ? "" : String(schemaVersion));
+  }, [schemaVersion, queryEnv, queryApp, queryName]);
 
   const schemaURLRequest = useRef("");
   useEffect(() => {
@@ -751,34 +756,64 @@ export default function ReleasesPage() {
               disabled={Boolean(busyAction)}
               loading={namespacesLoading}
             />
-            <Field label="Schema version">
-              <select
-                aria-label="Schema version"
-                value={schemaVersion ?? ""}
-                disabled={!hasNS || registry.schemas === null}
-                onChange={(event) =>
+            {tracks.error || invalidSchema ? (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const selected = parseSchemaVersion(schemaDraft);
+                  if (selected === undefined) return;
                   void replaceQuery({
-                    schema_version: event.target.value,
+                    schema_version: String(selected),
                     release: "",
                     compare: "",
                     section: "",
-                  })
-                }
+                  });
+                }}
               >
-                {schemaVersion === undefined ? <option value="">Select schema</option> : null}
-                {schemaVersion !== undefined &&
-                schemaVersion !== 0 &&
-                !registry.schemas?.some((schema) => schema.version === schemaVersion) ? (
-                  <option value={schemaVersion}>v{schemaVersion}</option>
-                ) : null}
-                {(registry.schemas ?? []).map((schema) => (
-                  <option key={schema.version} value={schema.version}>
-                    v{schema.version}
-                  </option>
-                ))}
-                <option value={0}>v0 · schema-free</option>
-              </select>
-            </Field>
+                <Field label="Schema version" hint="Enter an exact version; 0 selects schema-free.">
+                  <div className="row-wrap">
+                    <Input
+                      aria-label="Schema version"
+                      inputMode="numeric"
+                      value={schemaDraft}
+                      onChange={(event) => setSchemaDraft(event.target.value)}
+                    />
+                    <Button type="submit" disabled={parseSchemaVersion(schemaDraft) === undefined}>
+                      Select schema
+                    </Button>
+                  </div>
+                </Field>
+              </form>
+            ) : (
+              <Field label="Schema version">
+                <select
+                  aria-label="Schema version"
+                  value={schemaVersion ?? ""}
+                  disabled={!hasNS || tracks.versions === null}
+                  onChange={(event) =>
+                    void replaceQuery({
+                      schema_version: event.target.value,
+                      release: "",
+                      compare: "",
+                      section: "",
+                    })
+                  }
+                >
+                  {schemaVersion === undefined ? <option value="">Select schema</option> : null}
+                  {schemaVersion !== undefined &&
+                  schemaVersion !== 0 &&
+                  !tracks.versions?.includes(schemaVersion) ? (
+                    <option value={schemaVersion}>v{schemaVersion}</option>
+                  ) : null}
+                  {(tracks.versions ?? []).map((version) => (
+                    <option key={version} value={version}>
+                      v{version}
+                    </option>
+                  ))}
+                  <option value={0}>v0 · schema-free</option>
+                </select>
+              </Field>
+            )}
             <form className="filters filter-grow" onSubmit={applyNameFilter}>
               <div className="filter-grow">
                 <Field label="Release name" error={nameTouched ? nameFilterError : null}>
@@ -788,7 +823,7 @@ export default function ReleasesPage() {
                     onChange={(event) => setNameDraft(event.target.value)}
                     onBlur={() => setNameTouched(true)}
                     placeholder="All release names"
-                    disabled={!hasNS || !trackReady || Boolean(busyAction)}
+                    disabled={!hasNS || Boolean(busyAction)}
                   />
                 </Field>
               </div>
@@ -808,9 +843,9 @@ export default function ReleasesPage() {
             <div role="alert" className="danger-panel">
               Invalid schema version. Use a nonnegative safe integer; 0 selects schema-free.
             </div>
-          ) : registry.error ? (
+          ) : tracks.error ? (
             <div role="alert" className="danger-panel">
-              Could not load schema tracks.
+              Could not discover schema tracks. Enter a schema version to continue.
             </div>
           ) : null}
 
@@ -865,6 +900,10 @@ export default function ReleasesPage() {
               title="Choose an application and environment"
             >
               Release history and creation are scoped to one isolated environment.
+            </EmptyState>
+          ) : !trackReady && tracks.error ? (
+            <EmptyState title="Select a schema version">
+              Enter the exact schema version above to load its release history.
             </EmptyState>
           ) : !seeded || !settled || releasesLoading ? (
             <TableSkeleton
@@ -996,7 +1035,7 @@ export default function ReleasesPage() {
         </TabsContent>
 
         <TabsContent value="schemas">
-          {activeTab === "schemas" ? <SchemaRegistry onRegistered={registry.reload} /> : null}
+          {activeTab === "schemas" ? <SchemaRegistry onRegistered={tracks.reload} /> : null}
         </TabsContent>
       </Tabs>
 
