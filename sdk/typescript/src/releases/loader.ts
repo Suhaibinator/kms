@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isKmsError, mapGrpcError } from "../errors.js";
 import {
   type ConfigurationRelease,
   ConfigurationRelease as ConfigurationReleaseMessage,
@@ -413,7 +414,11 @@ export class ReleaseLoader {
         start(candidate);
       };
 
-      watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop);
+      watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop).catch(
+        (error: unknown) => {
+          finished.reject(error);
+        },
+      );
       reconcileTask = this.#reconcileLoop(runController.signal, offer);
       if (initial.release) {
         offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
@@ -731,8 +736,10 @@ export class ReleaseLoader {
             offer(makeCandidate(payload.value.release, event.revision, "activation", 0n));
           }
         }
-      } catch {
-        // Stream reliability is owned here; candidate failures are separate.
+      } catch (error) {
+        const terminal = terminalReleaseWatchError(error);
+        if (terminal) throw terminal;
+        // Transient stream reliability is owned here; candidate failures are separate.
       } finally {
         if (this.#currentStream === stream) this.#currentStream = undefined;
         await closeStream(stream);
@@ -893,6 +900,20 @@ export class ReleaseLoader {
       }
     });
   }
+}
+
+function terminalReleaseWatchError(error: unknown): Error | undefined {
+  const mapped = mapGrpcError(error);
+  if (
+    mapped &&
+    (isKmsError(mapped, "not_found") ||
+      isKmsError(mapped, "invalid_argument") ||
+      isKmsError(mapped, "permission_denied") ||
+      isKmsError(mapped, "unauthenticated"))
+  ) {
+    return mapped;
+  }
+  return undefined;
 }
 
 export async function runTypedRelease<T>(

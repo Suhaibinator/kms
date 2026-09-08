@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { KmsError } from "../../src/errors.js";
 import {
   ConfigurationRelease,
   type ConfigurationReleaseEntry,
@@ -162,6 +163,55 @@ describe("ReleaseLoader", () => {
     expect(releaseReconnectBackoff(0, () => 0)).toBe(10);
     expect(releaseReconnectBackoff(1, () => 0)).toBe(10);
     expect(releaseReconnectBackoff(30, () => 0)).toBe(10);
+  });
+
+  it.each([
+    ["not_found", "unknown schema track"],
+    ["permission_denied", "watch is forbidden"],
+  ] as const)("surfaces terminal inactive-track watch %s", async (code, message) => {
+    const transport = new FakeTransport(makeRelease(1n, []));
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    transport.watchReleaseHook = () => Promise.reject(new KmsError(code, message));
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 99n,
+      random: () => 0,
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      code,
+      message,
+    });
+    expect(loader.status().reconnects).toBe(0n);
+  });
+
+  it("retries a transient inactive-track watch failure", async () => {
+    const transport = new FakeTransport(makeRelease(1n, []));
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    let attempts = 0;
+    transport.watchReleaseHook = async (_registration, signal) => {
+      attempts += 1;
+      if (attempts === 1) throw new KmsError("unavailable", "try again");
+      const stream = new FakeWatchStream(signal);
+      transport.stream = stream;
+      return stream;
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 1n,
+      random: () => 0,
+    });
+    const controller = new AbortController();
+    const run = loader.run(() => invalidPrepared(), controller.signal);
+
+    await waitFor(() => attempts === 2);
+    expect(loader.status().reconnects).toBe(1n);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("validates the manifest, resolves exact versions, redacts, commits, and acknowledges", async () => {
