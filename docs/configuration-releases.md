@@ -503,7 +503,8 @@ frontend, and pinned by a shared fixture:
 
 The reverse direction emits `{}` for `json`, `{"type": …}` otherwise, lists
 every parameter alias in `required`, and sets `additionalProperties: false`.
-Secrets are never part of the schema. The full table, with the readiness
+Secret values are excluded from the validated payload; generated schemas include
+secret aliases and kinds in the contract annotation. The full table, with the readiness
 states and finding codes the console renders, is in
 [`http-api.md`](http-api.md#readiness-model).
 
@@ -517,17 +518,24 @@ previews and ignores stale responses from the previous selection.
 
 Exact release reads and activation requests require `schema_version`. List
 requests can omit the filter to inspect all tracks, and every result identifies
-its schema. CLI release operations expose `--schema-version`.
+its schema. CLI release operations and `defaults apply` expose `--schema-version`.
 
 Schema-free defaults artifacts retain the `schema_sha256` field with an empty
 string and require an explicit schema-0 selection for import. Generated artifacts
 keep their nonempty digest; they cannot be imported as schema-free defaults.
+Defaults imports and generated release commands resolve that embedded digest when
+no numeric selection is supplied, so an older generated client continues managing
+its own track after a newer schema registers. An explicit numeric selection must
+match the artifact digest.
 
 Low-level Go, TypeScript, and Python loaders accept either an exact schema
 version or a schema SHA-256 digest, never both. `ResolveReleaseSchema` resolves
 the digest under release-read authorization; clients do not need schema-admin
 access. The loader pins the resolved version for startup, subscriptions,
-reconnects, reconciliation, and the final active check before commit.
+reconnects, reconciliation, and the final active check before commit. A known
+track without an activation can remain subscribed until its first release becomes
+active. Unknown-track and permission errors terminate the loader; temporary
+connection failures still retry.
 
 Generated managed clients supply their embedded digest automatically. Regenerate
 bindings with the updated generator. Generated schemas include a sorted

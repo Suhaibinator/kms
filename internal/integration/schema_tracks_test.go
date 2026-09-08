@@ -2,12 +2,14 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -128,11 +130,75 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	if _, err := releases.GetActiveRelease(auth, &kmsv1.GetActiveReleaseRequest{Namespace: wireNS, Name: name, SchemaVersion: &secondSchema.Version}); status.Code(err) != codes.NotFound {
 		t.Fatalf("unactivated schema active read = %v", err)
 	}
+	// Exercise the real SDK as well: resolving a known digest before its first
+	// activation must register a waiting subscriber, then commit that track.
+	sdk, err := kmsclient.NewClient(kmsclient.Config{
+		Endpoint: env.endpoint(), Namespace: ns.Env + "/" + ns.App, Token: env.adminToken,
+		TLS: env.clientTLS(nil), Timeout: 2 * time.Second, ClientName: "sdk-waiting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sdk.Close() }()
+	loader, err := kmsclient.NewReleaseLoader(sdk, kmsclient.ReleaseLoaderConfig{
+		Name: name, SchemaSHA256: secondSchema.Digest, InstanceID: "sdk-waiting", ReconcileInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaderCtx, stopLoader := context.WithCancel(ctx)
+	defer stopLoader()
+	committed := make(chan uint64, 8)
+	loaderDone := make(chan error, 1)
+	go func() {
+		loaderDone <- loader.Run(loaderCtx, func(_ context.Context, snapshot kmsclient.ReleaseSnapshot) (kmsclient.PreparedRelease, error) {
+			if snapshot.SchemaVersion() != secondSchema.Version {
+				return nil, errors.New("SDK crossed schema tracks")
+			}
+			return schemaTrackPrepared{commit: func() {
+				select {
+				case committed <- snapshot.Version():
+				case <-loaderCtx.Done():
+				}
+			}}, nil
+		})
+	}()
+	defer func() {
+		stopLoader()
+		select {
+		case err := <-loaderDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("SDK run: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("SDK failed to stop")
+		}
+	}()
+	waitForManagedState(t, func() bool {
+		rows, _, err := env.svc.ListSubscribers(ctx, principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.ClientName == "sdk-waiting" && row.SchemaVersion == secondSchema.Version {
+				return true
+			}
+		}
+		return false
+	}, "SDK subscribed before activation")
 	second := create(secondSchema.Version, "workers-text", "four", "string")
 	if second.GetVersion() != 1 {
 		t.Fatalf("second track starts at %d", second.GetVersion())
 	}
 	secondRevision := activate(second, 0)
+	select {
+	case version := <-committed:
+		if version != 1 {
+			t.Fatalf("SDK first commit version=%d", version)
+		}
+	case <-ctx.Done():
+		t.Fatal("SDK did not apply first activation")
+	}
 	if revision := receive(newStream, secondSchema.Version, 1); revision != secondRevision {
 		t.Fatalf("second revision = %d", revision)
 	}
@@ -166,7 +232,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 		}
 		seen := map[uint64]bool{}
 		for _, row := range result.GetSubscribers() {
-			if row.GetState() == "applied" && row.GetConnected() {
+			if row.GetClientName() == "same-client" && row.GetState() == "applied" && row.GetConnected() {
 				seen[row.GetSchemaVersion()] = true
 			}
 		}
@@ -220,8 +286,15 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 		}
 		connected := map[uint64]bool{}
 		for _, row := range result.GetSubscribers() {
-			connected[row.GetSchemaVersion()] = connected[row.GetSchemaVersion()] || row.GetConnected()
+			if row.GetClientName() == "same-client" {
+				connected[row.GetSchemaVersion()] = connected[row.GetSchemaVersion()] || row.GetConnected()
+			}
 		}
 		return connected[firstSchema.Version] && !connected[secondSchema.Version]
 	}, "foreign-track acknowledgement disconnects only its registered track")
 }
+
+type schemaTrackPrepared struct{ commit func() }
+
+func (p schemaTrackPrepared) Commit() { p.commit() }
+func (schemaTrackPrepared) Abort()    {}
