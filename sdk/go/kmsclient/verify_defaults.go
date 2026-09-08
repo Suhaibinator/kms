@@ -38,8 +38,8 @@ type VerifyReleaseDefaultsOptions struct {
 	Release string
 	// Profile is an informational label carried with the request.
 	Profile string
-	// SchemaSHA256 is the generated contract's schema digest; empty skips the
-	// schema check and leaves SchemaMatches false.
+	// SchemaSHA256 selects the generated contract's schema track. Exactly one
+	// of SchemaSHA256 and SchemaVersion must be supplied.
 	SchemaSHA256 string
 	// SchemaVersion selects an exact numeric track instead of resolving
 	// SchemaSHA256. A non-nil pointer to zero explicitly selects schema 0.

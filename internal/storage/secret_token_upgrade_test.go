@@ -125,8 +125,15 @@ func TestLegacyBaselineRejectedBeforeAnyWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool, _ := db.DB()
-	defer pool.Close()
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	wrote := false
 	if err := db.Callback().Update().Before("gorm:update").Register("test:observe-write", func(tx *gorm.DB) { wrote = true }); err != nil {
 		t.Fatal(err)

@@ -575,17 +575,14 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 			t.Fatalf("one mismatch after budget exhaustion = (%+v, %v), want ErrRateLimited", result, err)
 		}
 
-		// A non-matching schema digest is one bit about the pinned schema and
-		// is charged like an alias mismatch: the first all-match call with a
-		// wrong digest is answered (schema: differs), the second is refused.
+		// An unknown digest selects no track. It must fail before comparing
+		// aliases, even when another schema has an active release.
 		f.env.svc.SetVerifyDefaultsLimits(tight)
-		result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
-		if err != nil || result.SchemaMatches || len(result.Failures()) != 0 || result.Passed() {
-			t.Fatalf("wrong schema digest within budget = (%+v, %v)", result, err)
-		}
-		result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
-		if !errors.Is(err, kmsclient.ErrRateLimited) || len(result.Entries) != 0 {
-			t.Fatalf("wrong schema digest after budget exhaustion = (%+v, %v), want ErrRateLimited", result, err)
+		for range 2 {
+			result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
+			if !errors.Is(err, kmsclient.ErrNotFound) || result.SchemaMatches || len(result.Entries) != 0 || result.ReleaseVersion != 0 {
+				t.Fatalf("unknown schema digest = (%+v, %v), want ErrNotFound without verdicts", result, err)
+			}
 		}
 	})
 
@@ -659,7 +656,7 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		if !sawPass || !sawDrift || !sawRequestLimited || !sawMismatchLimited {
 			t.Fatalf("verify audit coverage pass=%t drift=%t request_limited=%t mismatch_limited=%t decisions=%v", sawPass, sawDrift, sawRequestLimited, sawMismatchLimited, decisions)
 		}
-		if decisions["deny"] < 5 || decisions["allow"] < 8 {
+		if decisions["deny"] < 4 || decisions["allow"] < 8 || decisions["error"] < 2 {
 			t.Fatalf("verify audit decisions = %v", decisions)
 		}
 		// Authorization denials of the oracle are audited as authz denials,
