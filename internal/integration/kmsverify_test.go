@@ -586,7 +586,7 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		}
 	})
 
-	t.Run("audit rows carry counts only", func(t *testing.T) {
+	t.Run("audit rows carry track identity and counts only", func(t *testing.T) {
 		rows := f.auditRows(t)
 		if len(rows) == 0 {
 			t.Fatal("no verify audit rows")
@@ -612,6 +612,13 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 			if err := json.Unmarshal([]byte(row.Metadata), &meta); err != nil {
 				t.Fatalf("verify audit metadata %q: %v", row.Metadata, err)
 			}
+			// A resolved fixture release belongs to schema 1. Refusals before
+			// digest resolution may be unscoped, but must not invent a track.
+			schemaVersion, scoped := meta["schema_version"]
+			if (scoped && schemaVersion != "1") || (!scoped && row.ResourceVersion != 0) {
+				t.Fatalf("verify audit schema = %q (present=%t) for release %d", schemaVersion, scoped, row.ResourceVersion)
+			}
+			delete(meta, "schema_version")
 			if len(meta) != len(wantKeys) {
 				t.Fatalf("verify audit metadata keys = %v, want exactly %v", meta, wantKeys)
 			}
