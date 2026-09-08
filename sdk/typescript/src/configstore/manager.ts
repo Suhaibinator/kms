@@ -459,6 +459,8 @@ function copyLoaderOptions(
 ): ClientReleaseLoaderOptions {
   return {
     name: release,
+    ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
+    ...(options.schemaSHA256 !== undefined ? { schemaSHA256: options.schemaSHA256 } : {}),
     ...(options.namespace ? { namespace: options.namespace } : {}),
     ...(options.clientName ? { clientName: options.clientName } : {}),
     ...(options.instanceId ? { instanceId: options.instanceId } : {}),

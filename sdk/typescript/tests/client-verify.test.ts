@@ -103,17 +103,23 @@ describe("KmsClient.verifyReleaseDefaults", () => {
     const client = new KmsClient({ transport });
     const result = await client.verifyReleaseDefaults({
       namespace: "prod/api",
+      schemaVersion: 0n,
       entries: [entries[0] as (typeof entries)[number]],
     });
     expect(result.passed()).toBe(true);
-    expect(transport.calls[0]?.request).toMatchObject({ name: "", profile: "", schemaSha256: "" });
+    expect(transport.calls[0]?.request).toMatchObject({
+      name: "",
+      profile: "",
+      schemaSha256: "",
+      schemaVersion: 0n,
+    });
     await client.close();
   });
 
   it("rejects malformed requests before any RPC", async () => {
     const transport = new FakeTransport(() => response());
     const client = new KmsClient({ transport });
-    const base = { namespace: "prod/api" };
+    const base = { namespace: "prod/api", schemaVersion: 0n };
     for (const [options, pattern] of [
       [
         { ...base, entries: [{ alias: " ", contentType: "json", sha256: sha("a") }] },
@@ -128,8 +134,10 @@ describe("KmsClient.verifyReleaseDefaults", () => {
         { ...base, entries: [{ alias: "x", contentType: "json", sha256: "abc" }] },
         /invalid sha256/u,
       ],
-      [{ ...base, entries, schemaSha256: "not-hex" }, /invalid schema sha256/u],
-      [{ namespace: "prod", entries }, /namespace/u],
+      [{ namespace: "prod/api", entries, schemaSha256: "not-hex" }, /invalid schema sha256/u],
+      [{ ...base, entries, schemaSha256: sha("c") }, /exactly one/u],
+      [{ namespace: "prod/api", entries }, /exactly one/u],
+      [{ namespace: "prod", schemaVersion: 0n, entries }, /namespace/u],
     ] as const) {
       await expect(
         client.verifyReleaseDefaults(options as Parameters<typeof client.verifyReleaseDefaults>[0]),
@@ -182,7 +190,7 @@ describe("KmsClient.verifyReleaseDefaults", () => {
       const transport = new FakeTransport(() => response(overrides));
       const client = new KmsClient({ transport });
       const error = await client
-        .verifyReleaseDefaults({ namespace: "prod/api", entries })
+        .verifyReleaseDefaults({ namespace: "prod/api", schemaVersion: 0n, entries })
         .catch((reason: unknown) => reason);
       expect(error).toBeInstanceOf(KmsError);
       expect(error).toMatchObject({ code: "internal", message: expect.stringMatching(pattern) });
@@ -197,7 +205,7 @@ describe("KmsClient.verifyReleaseDefaults", () => {
       }),
     });
     const error = await limited
-      .verifyReleaseDefaults({ namespace: "prod/api", entries })
+      .verifyReleaseDefaults({ namespace: "prod/api", schemaVersion: 0n, entries })
       .catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(RateLimitedError);
     expect(error).toMatchObject({
@@ -214,11 +222,11 @@ describe("KmsClient.verifyReleaseDefaults", () => {
       }),
     });
     await expect(
-      denied.verifyReleaseDefaults({ namespace: "prod/api", entries }),
+      denied.verifyReleaseDefaults({ namespace: "prod/api", schemaVersion: 0n, entries }),
     ).rejects.toMatchObject({ code: "permission_denied" });
     await denied.close();
-    await expect(denied.verifyReleaseDefaults({ namespace: "prod/api", entries })).rejects.toThrow(
-      /closed/u,
-    );
+    await expect(
+      denied.verifyReleaseDefaults({ namespace: "prod/api", schemaVersion: 0n, entries }),
+    ).rejects.toThrow(/closed/u);
   });
 });

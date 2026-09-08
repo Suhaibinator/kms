@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClientReleaseLoaderOptions } from "../src/client.js";
+import { KmsClient, type ClientReleaseLoaderOptions } from "../src/client.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
 import type {
   AppliedReport,
@@ -26,6 +26,7 @@ import {
   type ReleaseTransport,
   type ReleaseWatchStream,
 } from "../src/releases/loader.js";
+import { FakeTransport } from "./helpers/fake-transport.js";
 
 const namespace: NamespaceRef = { env: "prod", app: "api" };
 
@@ -45,8 +46,15 @@ describe("ManagedConfigManager", () => {
     const transport = new FakeReleaseTransport(release, 1n);
     let receivedOptions: ClientReleaseLoaderOptions | undefined;
     const client = {
-      createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+      async createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
         receivedOptions = options;
+        // Exercise the real public selector validation before substituting the
+        // focused release transport used by this manager test.
+        const validated = await new KmsClient({
+          transport: new FakeTransport(() => ({})),
+          namespace: "prod/api",
+        }).createReleaseLoader(options);
+        await validated.stop();
         return managedClient(transport).createReleaseLoader(options);
       },
     };
@@ -55,6 +63,7 @@ describe("ManagedConfigManager", () => {
       client,
       {
         release: "runtime",
+        schemaVersion: 0n,
         instanceId: "stable-test-instance",
         contract: [{ alias: "settings", kind: "parameter", contentType: "json" }],
         onDefaultMismatch: () => undefined,
@@ -63,11 +72,51 @@ describe("ManagedConfigManager", () => {
       controller.signal,
     );
 
-    expect(receivedOptions).toMatchObject({ name: "runtime" });
+    expect(receivedOptions).toMatchObject({ name: "runtime", schemaVersion: 0n });
     expect(receivedOptions).not.toHaveProperty("namespace");
     expect(receivedOptions).not.toHaveProperty("clientName");
     controller.abort();
     await manager.wait();
+  });
+
+  it("forwards a generated schema digest through real client resolution", async () => {
+    const release = makeRelease(1n, '{"hot":1,"restart":"a"}');
+    const transport = new FakeReleaseTransport(release, 1n);
+    const digest = "a".repeat(64);
+    let receivedOptions: ClientReleaseLoaderOptions | undefined;
+    const selectorTransport = new FakeTransport((path, request) => {
+      expect(path).toBe("/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema");
+      expect(request).toMatchObject({ schemaSha256: digest });
+      return { schemaVersion: 1n };
+    });
+    const realClient = new KmsClient({ transport: selectorTransport, namespace: "prod/api" });
+    const client = {
+      async createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+        receivedOptions = options;
+        const validated = await realClient.createReleaseLoader(options);
+        await validated.stop();
+        return managedClient(transport).createReleaseLoader(options);
+      },
+    };
+    const controller = new AbortController();
+    const manager = await startManagedConfig(
+      client,
+      {
+        release: "runtime",
+        schemaSHA256: digest,
+        instanceId: "stable-digest-instance",
+        contract: [{ alias: "settings", kind: "parameter", contentType: "json" }],
+        onDefaultMismatch: () => undefined,
+      },
+      () => ({ publish: () => undefined }),
+      controller.signal,
+    );
+
+    expect(receivedOptions).toMatchObject({ name: "runtime", schemaSHA256: digest });
+    expect(selectorTransport.calls).toHaveLength(1);
+    controller.abort();
+    await manager.wait();
+    await realClient.close();
   });
 
   it("applies and reports startup drift, notifies onApplied, and acknowledges divergence", async () => {

@@ -94,6 +94,7 @@ export async function consumeManagedDeclarations(client: KmsClient): Promise<voi
 export async function consumeVerifyDeclarations(client: KmsClient): Promise<VerifyResult> {
   await client.verifyReleaseDefaults({
     namespace: "prod/api",
+    schemaVersion: 0n,
     entries: [{ alias: "runtime", contentType: "json", sha256: parameterHash("json", "{}") }],
   });
   return verifyDefaults(

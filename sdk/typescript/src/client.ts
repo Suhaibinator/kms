@@ -852,8 +852,8 @@ export class KmsClient {
     }
     const schemaSha256 = options.schemaSha256 ?? "";
     const hasSchemaVersion = options.schemaVersion !== undefined;
-    if (hasSchemaVersion && schemaSha256 !== "") {
-      throw new ConfigError("schemaVersion and schemaSha256 are mutually exclusive");
+    if (hasSchemaVersion === (schemaSha256 !== "")) {
+      throw new ConfigError("exactly one of schemaVersion or schemaSha256 is required");
     }
     if (hasSchemaVersion) assertUint64(options.schemaVersion, "schemaVersion");
     if (schemaSha256 !== "" && !validLowerHex64(schemaSha256)) {

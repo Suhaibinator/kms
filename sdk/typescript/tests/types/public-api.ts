@@ -272,6 +272,7 @@ void [onlySeverity, fatalSeverity, DefaultMismatchError];
 export async function verifiesDefaults(client: KmsClient): Promise<string> {
   const wire: VerifyReleaseDefaultsResult = await client.verifyReleaseDefaults({
     namespace: "prod/api",
+    schemaVersion: 0n,
     entries: [{ alias: "runtime", contentType: "json", sha256: parameterHash("json", "{}") }],
   });
   const result: VerifyResult = await verifyDefaults(
