@@ -272,6 +272,7 @@ describe("generated managed configuration binding", () => {
         const result: VerifyReleaseDefaultsResult = {
           releaseName: "runtime",
           releaseVersion: 9n,
+          schemaVersion: 2n,
           activationRevision: 12n,
           schemaMatches: true,
           entries: [

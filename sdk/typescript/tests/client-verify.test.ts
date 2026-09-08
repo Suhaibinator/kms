@@ -46,6 +46,24 @@ describe("KmsClient.verifyReleaseDefaults", () => {
     { alias: "database", contentType: "json", sha256: sha("b") },
   ];
 
+  it.each([0n, 2n])(
+    "retains resolved schema %s in the verification identity",
+    async (schemaVersion) => {
+      const transport = new FakeTransport(() => response({ schemaVersion, version: 1n }));
+      const client = new KmsClient({ transport });
+      try {
+        const result = await client.verifyReleaseDefaults({
+          namespace: "prod/api",
+          ...(schemaVersion === 0n ? { schemaVersion } : { schemaSha256: sha("c") }),
+          entries,
+        });
+        expect(result).toMatchObject({ releaseName: "runtime", releaseVersion: 1n, schemaVersion });
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
   it("sends a value-free request and validates the verdicts", async () => {
     const transport = new FakeTransport((path, request) => {
       expect(path).toBe("/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults");

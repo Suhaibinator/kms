@@ -281,7 +281,9 @@ export async function verifiesDefaults(client: KmsClient): Promise<string> {
     { namespace: "prod/api" },
   );
   const canonical: Uint8Array = canonicalParameterValue("json", "{}");
-  void [wire.passed(), canonical, RateLimitedError];
+  const wireSchema: bigint = wire.schemaVersion;
+  const managedSchema: bigint = result.schemaVersion;
+  void [wire.passed(), wireSchema, managedSchema, canonical, RateLimitedError];
   return result.passed()
     ? result.report()
     : result

@@ -41,6 +41,7 @@ function wireResult(
   return {
     releaseName: "runtime",
     releaseVersion: 4n,
+    schemaVersion: 2n,
     activationRevision: 9n,
     schemaMatches,
     entries,
@@ -59,6 +60,34 @@ function wireResult(
 describe("configstore.verifyDefaults", () => {
   const groups = { runtime: '{"b":1,"a":2}', database: '{"host":"db.internal"}' };
   const schemaSha256 = "a".repeat(64);
+
+  it.each([0n, 2n])(
+    "retains schema %s in managed results, JSON, and reports",
+    async (schemaVersion) => {
+      const client = fakeClient(() =>
+        wireResult(
+          [
+            { alias: "runtime", verdict: "match" },
+            { alias: "database", verdict: "match" },
+          ],
+          { schemaVersion, releaseVersion: 1n },
+        ),
+      );
+      const result = await verifyDefaults(
+        client,
+        { schemaSha256, contract, groups },
+        { namespace: "prod/api" },
+      );
+      expect(result.schemaVersion).toBe(schemaVersion);
+      expect(JSON.parse(JSON.stringify(result))).toMatchObject({
+        releaseVersion: "1",
+        schemaVersion: schemaVersion.toString(),
+      });
+      expect(result.report()).toContain(
+        `prod/api runtime@1#9  schema_version: ${schemaVersion}  schema: match`,
+      );
+    },
+  );
 
   it("hashes parameter groups canonically, skips secrets, and never sends values", async () => {
     const client = fakeClient(() =>
@@ -92,6 +121,7 @@ describe("configstore.verifyDefaults", () => {
       namespace: "prod/api",
       releaseName: "runtime",
       releaseVersion: 4n,
+      schemaVersion: 2n,
       activationRevision: 9n,
       schemaMatches: true,
       unverified: 0,
@@ -100,7 +130,7 @@ describe("configstore.verifyDefaults", () => {
     expect(Object.isFrozen(result.entries)).toBe(true);
     expect(result.report()).toBe(
       [
-        "prod/api runtime@4#9  schema: match",
+        "prod/api runtime@4#9  schema_version: 2  schema: match",
         "VERDICT  ALIAS     CONTENT_TYPE",
         "match    database  json",
         "match    runtime   json",
@@ -135,7 +165,7 @@ describe("configstore.verifyDefaults", () => {
     const report = result.report();
     expect(report).toBe(
       [
-        "prod/api runtime@4#9  schema: differs",
+        "prod/api runtime@4#9  schema_version: 2  schema: differs",
         "VERDICT             ALIAS     CONTENT_TYPE",
         "missing_in_release  database  json",
         "differs             runtime   json",

@@ -49,6 +49,7 @@ export interface VerifyDefaultsVerdict {
 export interface VerifyReleaseDefaultsResult {
   readonly releaseName: string;
   readonly releaseVersion: bigint;
+  readonly schemaVersion: bigint;
   readonly activationRevision: bigint;
   readonly schemaMatches: boolean;
   readonly entries: readonly VerifyDefaultsVerdict[];
@@ -113,6 +114,7 @@ export function verifyResultFromWire(
   return Object.freeze({
     releaseName: response.name,
     releaseVersion: response.version,
+    schemaVersion: response.schemaVersion,
     activationRevision: response.activationRevision,
     schemaMatches,
     entries: frozenEntries,
