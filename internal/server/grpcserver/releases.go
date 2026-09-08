@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -308,27 +309,54 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			return err
 		}
 	}
-	recvErr := make(chan error, 1)
+	// Keep rejection responses and receive errors ordered, and send every wire
+	// event from this handler's main goroutine. In particular, client EOF must
+	// not overtake a rejection for an acknowledgement it already sent.
+	type receiveResult struct {
+		err      error
+		rejected *kmsv1.ReleaseAcknowledgementRejectedEvent
+	}
+	received := make(chan receiveResult, 1)
+	sendResult := func(result receiveResult) bool {
+		select {
+		case received <- result:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 	go func() {
 		for {
 			req, err := stream.Recv()
 			if err != nil {
-				recvErr <- err
+				sendResult(receiveResult{err: err})
 				return
 			}
 			a := req.GetAcknowledgement()
 			if a == nil {
-				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "watch message must be an acknowledgement")
+				sendResult(receiveResult{err: domain.Errorf(domain.ErrInvalidArgument, "watch message must be an acknowledgement")})
 				return
 			}
 			if nsRefFromProto(a.GetNamespace()) != ns || a.GetName() != reg.Name || a.GetSchemaVersion() != reg.SchemaVersion || a.GetClientName() != reg.ClientName || a.GetInstanceId() != reg.InstanceID {
-				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")
+				sendResult(receiveResult{err: domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")})
 				return
 			}
 			ack := domain.ReleaseAcknowledgement{Namespace: ns, SchemaVersion: reg.SchemaVersion, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()}
-			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
-			if err != nil {
-				recvErr <- err
+			ackErr := h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
+			var unavailable *domain.ReleaseAcknowledgementUnavailableError
+			if errors.As(ackErr, &unavailable) {
+				if !sendResult(receiveResult{rejected: &kmsv1.ReleaseAcknowledgementRejectedEvent{
+					Namespace: a.GetNamespace(), Name: reg.Name, SchemaVersion: reg.SchemaVersion,
+					Version: a.GetVersion(), ActivationRevision: a.GetActivationRevision(),
+					ClientName: reg.ClientName, InstanceId: reg.InstanceID, State: a.GetState(),
+					Sequence: a.GetSequence(), Reason: "activation_unavailable",
+				}}) {
+					return
+				}
+				continue
+			}
+			if ackErr != nil {
+				sendResult(receiveResult{err: ackErr})
 				return
 			}
 			sub.RecordAcknowledgement(ack)
@@ -343,11 +371,22 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			return nil
 		case <-sub.Done():
 			return nil
-		case err := <-recvErr:
-			if err == io.EOF {
+		case result := <-received:
+			if result.rejected != nil {
+				if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+					return h.s.mapErr(ctx, err)
+				}
+				// Rejections are ACK responses, not configuration progress. Keep
+				// revision zero and leave the stream's last release cursor alone.
+				if err := stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_AcknowledgementRejected{AcknowledgementRejected: result.rejected}}); err != nil {
+					return err
+				}
+				continue
+			}
+			if result.err == io.EOF {
 				return nil
 			}
-			return h.s.mapErr(ctx, err)
+			return h.s.mapErr(ctx, result.err)
 		case e := <-sub.Events():
 			if e.Namespace != reg.Namespace || e.Name != reg.Name || e.SchemaVersion != reg.SchemaVersion || e.NamespaceID != reg.NamespaceID {
 				continue

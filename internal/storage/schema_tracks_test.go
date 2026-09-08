@@ -144,11 +144,12 @@ func TestSchemaTrackSubscriberIdentityAndPagination(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().UTC()
 	for _, track := range tracks {
+		active := seedReleaseAcknowledgementActivation(t, st, track)
 		c := domain.ReleaseSubscriberConnection{Namespace: track.Namespace, ReleaseName: track.Name, SchemaVersion: track.SchemaVersion, ClientName: "same", InstanceID: "same", Identity: "same", ConnectionID: fmt.Sprint(track.SchemaVersion), Connected: true, ServerTimestamp: at}
 		if err := st.SetReleaseInstanceConnected(ctx, c); err != nil {
 			t.Fatal(err)
 		}
-		ack := domain.ReleaseAcknowledgement{Namespace: c.Namespace, ReleaseName: c.ReleaseName, SchemaVersion: c.SchemaVersion, ClientName: c.ClientName, InstanceID: c.InstanceID, Identity: c.Identity, ConnectionID: c.ConnectionID, State: domain.ReleaseStateApplied, ReleaseVersion: 1, ActivationRevision: 1, ClientTimestamp: at, ServerTimestamp: at}
+		ack := domain.ReleaseAcknowledgement{Namespace: c.Namespace, ReleaseName: c.ReleaseName, SchemaVersion: c.SchemaVersion, ClientName: c.ClientName, InstanceID: c.InstanceID, Identity: c.Identity, ConnectionID: c.ConnectionID, State: domain.ReleaseStateApplied, ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientTimestamp: at, ServerTimestamp: at}
 		if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 			t.Fatal(err)
 		}

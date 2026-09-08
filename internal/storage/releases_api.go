@@ -38,6 +38,10 @@ type ReleaseStore interface {
 	GetConfigurationSchema(ctx context.Context, application, releaseName string, version uint64) (domain.ConfigurationSchema, error)
 	ListConfigurationSchemas(ctx context.Context, application, releaseName string, page ListPage) ([]domain.ConfigurationSchema, string, error)
 
+	// UpsertReleaseAcknowledgement validates namespace incarnation, live stream
+	// ownership and the exact activation atomically before persisting. Missing
+	// activation evidence returns ReleaseAcknowledgementUnavailableError without
+	// accepting or persisting the acknowledgement.
 	UpsertReleaseAcknowledgement(ctx context.Context, ack domain.ReleaseAcknowledgement) error
 	ListReleaseAcknowledgements(ctx context.Context, filter domain.ReleaseFilter, page ListPage) ([]domain.ReleaseAcknowledgement, string, error)
 	SetReleaseInstanceConnected(ctx context.Context, connection domain.ReleaseSubscriberConnection) error

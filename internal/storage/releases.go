@@ -873,6 +873,10 @@ func (s *SQLStore) UpsertReleaseAcknowledgement(ctx context.Context, ack domain.
 			return err
 		}
 
+		if err := validateAcknowledgementActivationTx(tx, nsID, ack); err != nil {
+			return err
+		}
+
 		m := releaseSubscriberStateModel{NamespaceID: nsID, ReleaseName: ack.ReleaseName, SchemaVersion: int64(ack.SchemaVersion), ClientName: ack.ClientName, InstanceID: ack.InstanceID, State: ack.State, Identity: ack.Identity, ReleaseVersion: int64(ack.ReleaseVersion), ActivationRevision: int64(ack.ActivationRevision), RejectionCategory: ack.RejectionCategory, Diagnostic: ack.Diagnostic, ClientTimestamp: fmtTime(ack.ClientTimestamp), ServerTimestamp: fmtTime(ack.ServerTimestamp), Connected: 1, AppliedDivergent: b2i(ack.AppliedDivergent), DivergentFieldCount: int64(ack.DivergentFieldCount)}
 		return tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}, {Name: "state"}},
@@ -880,6 +884,38 @@ func (s *SQLStore) UpsertReleaseAcknowledgement(ctx context.Context, ack domain.
 			Where:     clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "excluded.activation_revision > release_subscriber_states.activation_revision OR (excluded.activation_revision = release_subscriber_states.activation_revision AND excluded.server_timestamp >= release_subscriber_states.server_timestamp)"}}},
 		}).Create(&m).Error
 	})
+}
+
+func validateAcknowledgementActivationTx(tx *gorm.DB, namespaceID int64, ack domain.ReleaseAcknowledgement) error {
+	var activation configurationReleaseActivationModel
+	err := tx.Where("revision = ?", ack.ActivationRevision).First(&activation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// A retained changelog entry can disprove a forged identity even after
+		// activation retention. It is never sufficient proof to accept an ACK.
+		var change changeLogModel
+		changeErr := tx.Where("revision = ?", ack.ActivationRevision).First(&change).Error
+		if changeErr != nil && !errors.Is(changeErr, gorm.ErrRecordNotFound) {
+			return changeErr
+		}
+		if changeErr == nil && (change.ResourceType != domain.ResourceConfigurationRelease || change.ChangeType != "activate" || change.NamespaceID != namespaceID || change.Key != ack.ReleaseName || uint64(change.SchemaVersion) != ack.SchemaVersion || uint64(change.VersionNumber) != ack.ReleaseVersion) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "acknowledgement does not match an authoritative release activation")
+		}
+		return &domain.ReleaseAcknowledgementUnavailableError{}
+	}
+	if err != nil {
+		return err
+	}
+	if activation.NamespaceID != namespaceID || activation.ReleaseName != ack.ReleaseName || uint64(activation.SchemaVersion) != ack.SchemaVersion || uint64(activation.VersionNumber) != ack.ReleaseVersion {
+		return domain.Errorf(domain.ErrFailedPrecondition, "acknowledgement does not match an authoritative release activation")
+	}
+	var count int64
+	if err := tx.Model(&configurationReleaseModel{}).Where("namespace_id = ? AND name = ? AND schema_version = ? AND version_number = ?", namespaceID, ack.ReleaseName, ack.SchemaVersion, ack.ReleaseVersion).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 1 {
+		return &domain.ReleaseAcknowledgementUnavailableError{}
+	}
+	return nil
 }
 
 func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domain.ReleaseFilter, page ListPage) ([]domain.ReleaseAcknowledgement, string, error) {

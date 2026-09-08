@@ -573,6 +573,7 @@ func TestConfigurationSchemaAndReleaseAcknowledgementRoundTrip(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: "app", ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "d", Metadata: "{}"})
 	if err != nil || schema.Version != 1 {
 		t.Fatalf("schema=%+v err=%v", schema, err)
@@ -584,7 +585,7 @@ func TestConfigurationSchemaAndReleaseAcknowledgementRoundTrip(t *testing.T) {
 	if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", Connected: true, ServerTimestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "redacted", ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
+	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "redacted", ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
 	}
@@ -708,6 +709,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	base := time.Now().UTC().Add(-time.Minute)
 
 	connection := func(identity, id string, connected bool, at time.Time) domain.ReleaseSubscriberConnection {
@@ -725,7 +727,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 
 	ack := func(identity, diagnostic string, clientAt, serverAt time.Time) domain.ReleaseAcknowledgement {
 		return domain.ReleaseAcknowledgement{
-			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 			ClientName: "api", InstanceID: "replica-1", Identity: identity, ConnectionID: identity + "-1",
 			State: domain.ReleaseStateReceived, Diagnostic: diagnostic,
 			ClientTimestamp: clientAt, ServerTimestamp: serverAt,
@@ -782,6 +784,7 @@ func TestReleaseAcknowledgementPaginationIsStableAndComplete(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	states := []string{domain.ReleaseStateReceived, domain.ReleaseStatePrepared, domain.ReleaseStateApplied, domain.ReleaseStateRejected}
 	base := time.Now().UTC().Add(-time.Minute)
 	if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
@@ -794,7 +797,7 @@ func TestReleaseAcknowledgementPaginationIsStableAndComplete(t *testing.T) {
 		at := base.Add(time.Duration(i) * time.Second)
 		ack := domain.ReleaseAcknowledgement{
 			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1,
-			ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one",
+			ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one",
 			State: state, ClientTimestamp: at, ServerTimestamp: at,
 		}
 		if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
@@ -836,6 +839,7 @@ func TestLateReleaseAcknowledgementCannotResurrectDisconnectedSubscriber(t *test
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	base := time.Now().UTC().Add(-time.Minute)
 	connection := func(connected bool, at time.Time) domain.ReleaseSubscriberConnection {
 		return domain.ReleaseSubscriberConnection{
@@ -847,7 +851,7 @@ func TestLateReleaseAcknowledgementCannotResurrectDisconnectedSubscriber(t *test
 		t.Fatal(err)
 	}
 	ack := domain.ReleaseAcknowledgement{
-		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "generation-1",
 		State: domain.ReleaseStateReceived, ClientTimestamp: base, ServerTimestamp: base,
 	}
@@ -879,6 +883,7 @@ func TestReleaseAcknowledgementPaginationUsesIdentityTieBreaker(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	at := time.Now().UTC().Add(-time.Minute)
 	for _, identity := range []string{"alice", "bob"} {
 		connectionID := identity + "-1"
@@ -889,7 +894,7 @@ func TestReleaseAcknowledgementPaginationUsesIdentityTieBreaker(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := st.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
-			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 			ClientName: "api", InstanceID: "replica-1", Identity: identity, ConnectionID: connectionID,
 			State: domain.ReleaseStateReceived, ClientTimestamp: at, ServerTimestamp: at,
 		}); err != nil {
@@ -1058,6 +1063,7 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	connect := func(instance string) {
 		t.Helper()
 		if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: instance, Identity: "client", ConnectionID: "one", Connected: true, ServerTimestamp: time.Now()}); err != nil {
@@ -1066,7 +1072,7 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	}
 	connect("replica-1")
 	connect("registered-only")
-	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 3, ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
+	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 3, ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
 	}
@@ -1086,7 +1092,9 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	}
 
 	// A later applied acknowledgement at a newer revision clears divergence.
-	ack.ActivationRevision, ack.AppliedDivergent, ack.DivergentFieldCount = 8, false, 0
+	next := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
+	ack.ReleaseVersion = next.Release.Version
+	ack.ActivationRevision, ack.AppliedDivergent, ack.DivergentFieldCount = next.ActivationRevision, false, 0
 	ack.ServerTimestamp = time.Now()
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
@@ -1096,8 +1104,24 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 		t.Fatal(err)
 	}
 	for _, row := range rows {
-		if row.InstanceID == "replica-1" && (row.AppliedDivergent || row.DivergentFieldCount != 0 || row.ActivationRevision != 8) {
+		if row.InstanceID == "replica-1" && (row.AppliedDivergent || row.DivergentFieldCount != 0 || row.ActivationRevision != next.ActivationRevision) {
 			t.Fatalf("divergence not cleared on upsert: %+v", row)
 		}
 	}
+}
+
+// seedReleaseAcknowledgementActivation gives ACK persistence tests real
+// authoritative activation identities instead of fabricated revision numbers.
+func seedReleaseAcknowledgementActivation(t *testing.T, st *SQLStore, track domain.ReleaseTrack) domain.ActiveConfigurationRelease {
+	t.Helper()
+	ctx := context.Background()
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: track.Namespace, Name: track.Name, SchemaVersion: track.SchemaVersion, Digest: "ack-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := st.ActivateConfigurationRelease(ctx, track, release.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return active
 }

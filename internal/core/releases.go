@@ -763,16 +763,9 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err != nil {
 		return err
 	}
-	if _, err := rs.GetConfigurationRelease(ctx, ack.Track(), ack.ReleaseVersion); err != nil {
-		return err
-	}
-	exists, err := rs.ConfigurationReleaseActivationExists(ctx, ack.Track(), ack.ReleaseVersion, ack.ActivationRevision)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return domain.Errorf(domain.ErrFailedPrecondition, "acknowledgement does not match an authoritative release activation")
-	}
+	// Storage checks activation identity and stream ownership atomically with
+	// persistence, so retention or a disconnect cannot invalidate either proof
+	// between validation and the write.
 	if err := rs.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		return err
 	}
