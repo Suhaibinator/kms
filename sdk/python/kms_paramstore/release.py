@@ -603,7 +603,11 @@ class ReleaseLoader:
                         # alive and continue periodic reconciliation.
                         continue
                     except Exception:
-                        if not applied_once:
+                        # An inactive track has already entered normal watching.
+                        # Reconciliation failures must not abort that wait before
+                        # its first activation. Terminal watch errors still surface
+                        # through _raise_watch_error above.
+                        if not applied_once and initial is not None:
                             raise ReleaseStartupError(
                                 "unable to reconcile the initial active configuration release"
                             ) from None

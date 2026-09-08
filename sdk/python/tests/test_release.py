@@ -466,6 +466,33 @@ def test_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatc
     assert stub.registrations[0].schema_version == 1
 
 
+@pytest.mark.parametrize("code", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+def test_inactive_track_retries_transient_reconciliation_before_first_activation(monkeypatch, code):
+    loader, stub, _ = _loader(monkeypatch, None, reconcile_interval=0.02)
+    original = stub.GetActiveRelease
+    requests = 0
+
+    def active(request, **kwargs):
+        nonlocal requests
+        requests += 1
+        if requests == 2:
+            raise _RpcFailure(code, "one transient reconciliation failure")
+        return original(request, **kwargs)
+
+    stub.GetActiveRelease = active
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    try:
+        assert wait_until(lambda: bool(stub.registrations))
+        assert wait_until(lambda: requests >= 3), repr(raised)
+        stub.activate(_release(1, 1))
+        assert wait_until(lambda: prepared.commits == 1), repr(raised)
+        assert raised == []
+    finally:
+        loader.stop()
+        thread.join(timeout=2)
+
+
 def test_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
     loader, stub, _client = _loader(monkeypatch, None)
     external_stop = threading.Event()
@@ -485,6 +512,8 @@ def test_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
     ("code", "error_type", "initial"),
     [
         (grpc.StatusCode.NOT_FOUND, kms_paramstore.NotFoundError, None),
+        (grpc.StatusCode.PERMISSION_DENIED, kms_paramstore.PermissionDeniedError, None),
+        (grpc.StatusCode.UNAUTHENTICATED, kms_paramstore.UnauthenticatedError, None),
         (
             grpc.StatusCode.PERMISSION_DENIED,
             kms_paramstore.PermissionDeniedError,
