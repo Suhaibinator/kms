@@ -1,9 +1,6 @@
 package storage
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,33 +56,25 @@ func legacyTokenDatabase(t *testing.T) string {
 	return path
 }
 
-func TestUnusedSecretTokenSchemaUpgrade(t *testing.T) {
+func TestUnusedSecretTokenBaselineRejectedWithoutChanges(t *testing.T) {
 	path := legacyTokenDatabase(t)
-	if err := ValidateKMSDatabase(path); err != nil {
-		t.Fatal(err)
-	}
-	st, err := Open(path)
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"plain", "bound"} {
-		_, version, err := st.GetSecretVersion(context.Background(), ref("prod", "app", key), 1, "")
-		if err != nil || string(version.Ciphertext) != "ct-1" || version.Bound != (key == "bound") {
-			t.Fatalf("preserved %s: %+v, %v", key, version, err)
-		}
+	if err := ValidateKMSDatabase(path); err == nil {
+		t.Fatal("legacy baseline accepted")
 	}
-	if err := verifyBaselineDB(st.db); err != nil {
-		t.Fatal(err)
+	if st, err := Open(path); err == nil {
+		_ = st.Close()
+		t.Fatal("legacy baseline opened")
 	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	st, err = Open(path)
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
+	if string(before) != string(after) {
+		t.Fatal("rejected database changed")
 	}
 }
 
@@ -108,16 +97,16 @@ func TestSecretTokenUpgradeRejectsUsedColumns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateKMSDatabase(path); err == nil || !strings.Contains(err.Error(), "per-secret access tokens are in use") {
-				t.Fatalf("validation error = %v, want token-use rejection", err)
+			if err := ValidateKMSDatabase(path); err == nil || !strings.Contains(err.Error(), "incompatible") {
+				t.Fatalf("validation error = %v, want baseline rejection", err)
 			}
 			if st, err := Open(path); err == nil {
 				if err := st.Close(); err != nil {
 					t.Fatal(err)
 				}
 				t.Fatal("upgrade accepted token use")
-			} else if !strings.Contains(err.Error(), "per-secret access tokens are in use") {
-				t.Fatalf("upgrade error = %v, want token-use rejection", err)
+			} else if !strings.Contains(err.Error(), "incompatible") {
+				t.Fatalf("upgrade error = %v, want baseline rejection", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil {
@@ -130,37 +119,25 @@ func TestSecretTokenUpgradeRejectsUsedColumns(t *testing.T) {
 	}
 }
 
-func TestSecretTokenUpgradeRollsBackOnStampFailure(t *testing.T) {
+func TestLegacyBaselineRejectedBeforeAnyWrite(t *testing.T) {
 	path := legacyTokenDatabase(t)
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pool, _ := db.DB()
-	defer func() {
-		if err := pool.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	injected := fmt.Errorf("injected schema stamp failure")
-	if err := db.Callback().Update().Before("gorm:update").Register("test:fail-stamp", func(tx *gorm.DB) { _ = tx.AddError(injected) }); err != nil {
+	defer pool.Close()
+	wrote := false
+	if err := db.Callback().Update().Before("gorm:update").Register("test:observe-write", func(tx *gorm.DB) { wrote = true }); err != nil {
 		t.Fatal(err)
 	}
-	if err := upgradeSecretTokenSchema(db); !errors.Is(err, injected) {
-		t.Fatalf("upgrade error = %v", err)
+	if err := upgradeSecretTokenSchema(db); err == nil {
+		t.Fatal("legacy baseline accepted")
+	}
+	if wrote {
+		t.Fatal("baseline rejection attempted a write")
 	}
 	if err := verifyTokenFreeLegacyBaseline(db); err != nil {
-		t.Fatalf("rollback did not restore legacy schema: %v", err)
-	}
-	if err := db.Callback().Update().Remove("test:fail-stamp"); err != nil {
-		t.Fatal(err)
-	}
-	if err := upgradeSecretTokenSchema(db); err != nil {
-		t.Fatal(err)
-	}
-	st := &SQLStore{db: db}
-	_, version, err := st.GetSecretVersion(context.Background(), ref("prod", "app", "bound"), 1, "")
-	if err != nil || !version.Bound || string(version.Ciphertext) != "ct-1" {
-		t.Fatalf("secret not preserved: %+v, %v", version, err)
+		t.Fatalf("legacy state changed: %v", err)
 	}
 }

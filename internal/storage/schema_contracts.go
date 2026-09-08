@@ -121,3 +121,33 @@ func adoptSchemaContractTx(tx *gorm.DB, application, releaseName string, version
 	}
 	return schemaFromModel(row), nil
 }
+
+// GetConfigurationSchemaContract selects exactly one schema, including the schema-free track.
+// Nil means unadopted; a nonnil empty slice is an established empty contract.
+func (s *SQLStore) GetConfigurationSchemaContract(ctx context.Context, application, releaseName string, version uint64) ([]domain.ApplicationContractField, error) {
+	if version != 0 {
+		schema, err := s.GetConfigurationSchema(ctx, application, releaseName, version)
+		return schema.Contract, err
+	}
+	var app applicationModel
+	err := s.db.WithContext(ctx).Where("name = ? AND release_name = ?", application, releaseName).First(&app).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var row schemaFreeContractModel
+	err = s.db.WithContext(ctx).Where("application_name = ? AND release_name = ?", application, releaseName).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var fields []domain.ApplicationContractField
+	if err := json.Unmarshal([]byte(row.ContractJSON), &fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}

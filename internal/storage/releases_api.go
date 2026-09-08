@@ -10,6 +10,7 @@ import (
 // ReleaseReference identifies an active/previous release entry that prevents
 // a destructive resource operation.
 type ReleaseReference struct {
+	SchemaVersion  uint64
 	Namespace      domain.NamespaceRef
 	ReleaseName    string
 	ReleaseVersion uint64
@@ -30,6 +31,7 @@ type ReleaseStore interface {
 	ActivateConfigurationRelease(ctx context.Context, track domain.ReleaseTrack, version uint64, expectedCurrent *uint64) (active domain.ActiveConfigurationRelease, changed bool, err error)
 	ConfigurationReleaseActivationExists(ctx context.Context, track domain.ReleaseTrack, version, revision uint64) (bool, error)
 
+	GetConfigurationSchemaContract(ctx context.Context, application, releaseName string, schemaVersion uint64) ([]domain.ApplicationContractField, error)
 	GetConfigurationSchemaByDigest(ctx context.Context, application, releaseName, digest string) (domain.ConfigurationSchema, error)
 	AdoptConfigurationSchemaContract(ctx context.Context, application, releaseName string, schemaVersion uint64, fields []domain.ApplicationContractField) (domain.ConfigurationSchema, error)
 	CreateConfigurationSchema(ctx context.Context, schema domain.ConfigurationSchema) (domain.ConfigurationSchema, error)

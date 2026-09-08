@@ -29,7 +29,10 @@ func (s *SQLStore) ApplyDefaults(ctx context.Context, in DefaultsApplyTransactio
 			return err
 		}
 		if in.UpdateDefinition {
-			contract, err := contractJSON(in.DesiredContract)
+			if _, err := adoptSchemaContractTx(tx, in.Namespace.App, in.ReleaseName, in.DesiredSchemaVersion, in.DesiredContract); err != nil {
+				return err
+			}
+			contract, err := canonicalSchemaContract(in.DesiredContract)
 			if err != nil {
 				return err
 			}

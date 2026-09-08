@@ -63,6 +63,19 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		for index := range release.Entries {
 			release.Entries[index].ResourceNamespaceID = nsID
 		}
+		if release.SchemaVersion != 0 {
+			fields := make([]domain.ApplicationContractField, 0, len(release.Entries))
+			for _, entry := range release.Entries {
+				field := domain.ApplicationContractField{Alias: entry.Alias, Kind: entry.Kind}
+				if entry.Kind == domain.ReleaseEntryParameter {
+					field.ContentType = entry.ContentType
+				}
+				fields = append(fields, field)
+			}
+			if _, err := adoptSchemaContractTx(tx, release.Namespace.App, release.Name, release.SchemaVersion, fields); err != nil {
+				return err
+			}
+		}
 		if options.application != nil {
 			if err := verifyApplicationReleaseState(tx, nsID, *options.application); err != nil {
 				return err
@@ -74,14 +87,14 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 			return err
 		}
 		maxVersion := counter.LastVersion
-		if options.application != nil && maxVersion != 0 {
-			latest, err := getConfigurationRelease(tx, release.Track(), uint64(maxVersion))
-			if err != nil {
+		if options.application != nil {
+			latest, err := getConfigurationRelease(tx, release.Track(), 0)
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return err
 			}
-			if sameCanonicalRelease(latest, release) {
+			if err == nil && sameCanonicalRelease(latest, release) {
 				var latestModel configurationReleaseModel
-				if err := tx.Where("namespace_id = ? AND name = ? AND schema_version = ? AND version_number = ?", nsID, release.Name, release.SchemaVersion, maxVersion).First(&latestModel).Error; err != nil {
+				if err := tx.Where("namespace_id = ? AND name = ? AND schema_version = ? AND version_number = ?", nsID, release.Name, release.SchemaVersion, latest.Version).First(&latestModel).Error; err != nil {
 					return err
 				}
 				if err := validateReleasePinsTx(tx, latestModel.ID); err != nil {
@@ -90,11 +103,9 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 				out = latest
 				return nil
 			}
-			if uint64(maxVersion) != options.application.ExpectedLatestVersion {
+			if latest.Version != options.application.ExpectedLatestVersion {
 				return applicationReleaseStale()
 			}
-		} else if options.application != nil && options.application.ExpectedLatestVersion != 0 {
-			return applicationReleaseStale()
 		}
 		if options.requireFirst && maxVersion != 0 {
 			return domain.Errorf(domain.ErrAborted, "configuration release %s/%s is already established", release.Namespace, release.Name)
@@ -170,14 +181,26 @@ func verifyApplicationReleaseState(tx *gorm.DB, nsID int64, in ApplicationReleas
 	if in.NamespaceID != nsID {
 		return applicationReleaseStale()
 	}
-	var schema configurationSchemaModel
-	if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", app.Name, app.ReleaseName, in.Release.SchemaVersion).First(&schema).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return applicationReleaseStale()
-		}
+	selected, err := (&SQLStore{db: tx}).GetConfigurationSchemaContract(tx.Statement.Context, app.Name, app.ReleaseName, in.Release.SchemaVersion)
+	if err != nil {
 		return err
 	}
-	if schema.Digest != in.SchemaDigest || schema.ContractJSON == nil || *schema.ContractJSON != contract {
+	actual, err := canonicalSchemaContract(selected)
+	if err != nil {
+		return err
+	}
+	if selected == nil || actual != contract {
+		return applicationReleaseStale()
+	}
+	if in.Release.SchemaVersion != 0 {
+		var schema configurationSchemaModel
+		if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", app.Name, app.ReleaseName, in.Release.SchemaVersion).First(&schema).Error; err != nil {
+			return applicationReleaseStale()
+		}
+		if schema.Digest != in.SchemaDigest {
+			return applicationReleaseStale()
+		}
+	} else if in.SchemaDigest != "" {
 		return applicationReleaseStale()
 	}
 	var active configurationReleaseLabelModel
@@ -737,6 +760,7 @@ func createConfigurationSchemaTx(tx *gorm.DB, schema domain.ConfigurationSchema)
 }
 
 func (s *SQLStore) GetConfigurationSchema(ctx context.Context, application, releaseName string, version uint64) (domain.ConfigurationSchema, error) {
+
 	var m configurationSchemaModel
 	q := s.db.WithContext(ctx).Where("application_name = ? AND release_name = ?", application, releaseName)
 	if version == 0 {
@@ -1026,13 +1050,14 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 	if err != nil {
 		return ReleaseReference{}, err
 	}
-	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
+	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.schema_version,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
 	if version > 0 {
 		q = q.Where("e.resource_version=?", version)
 	}
 	var row struct {
 		Env, App, ReleaseName, Alias string
 		VersionNumber                int64
+		SchemaVersion                int64
 	}
 	res := q.Order("CASE l.label WHEN 'current' THEN 0 ELSE 1 END").Limit(1).Scan(&row)
 	if res.Error != nil {
@@ -1041,7 +1066,7 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 	if res.RowsAffected == 0 {
 		return ReleaseReference{}, domain.ErrNotFound
 	}
-	return ReleaseReference{Namespace: domain.NamespaceRef{Env: row.Env, App: row.App}, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.VersionNumber), Alias: row.Alias}, nil
+	return ReleaseReference{Namespace: domain.NamespaceRef{Env: row.Env, App: row.App}, ReleaseName: row.ReleaseName, SchemaVersion: uint64(row.SchemaVersion), ReleaseVersion: uint64(row.VersionNumber), Alias: row.Alias}, nil
 }
 
 func rejectProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, version uint64) error {
@@ -1056,7 +1081,7 @@ func rejectProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, v
 }
 
 func protectedError(rr ReleaseReference) error {
-	return domain.Errorf(domain.ErrFailedPrecondition, "resource is referenced by configuration release %s/%s version %d alias %q", rr.Namespace, rr.ReleaseName, rr.ReleaseVersion, rr.Alias)
+	return domain.Errorf(domain.ErrFailedPrecondition, "resource is referenced by configuration release %s/%s schema %d version %d alias %q", rr.Namespace, rr.ReleaseName, rr.SchemaVersion, rr.ReleaseVersion, rr.Alias)
 }
 
 func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuration time.Duration, retainVersions int) (int, error) {
