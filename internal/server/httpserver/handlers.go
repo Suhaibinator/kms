@@ -231,18 +231,19 @@ func (s *server) handleApplicationDashboard(w http.ResponseWriter, r *http.Reque
 
 func (s *server) handlePutApplicationParameter(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Application  string   `json:"application"`
-		Key          string   `json:"key"`
-		Value        string   `json:"value"`
-		ContentType  string   `json:"content_type"`
-		MetadataJSON string   `json:"metadata_json"`
-		Environments []string `json:"environments"`
+		Application      string   `json:"application"`
+		Key              string   `json:"key"`
+		Value            string   `json:"value"`
+		ContentType      string   `json:"content_type"`
+		MetadataJSON     string   `json:"metadata_json"`
+		Environments     []string `json:"environments"`
+		PreserveMetadata bool     `json:"preserve_metadata"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	results, err := s.svc.PutApplicationParameter(r.Context(), principalFrom(r.Context()), body.Application, body.Key, body.Value, body.ContentType, body.MetadataJSON, body.Environments)
+	results, err := s.svc.PutApplicationParameter(r.Context(), principalFrom(r.Context()), body.Application, body.Key, body.Value, body.ContentType, body.MetadataJSON, body.Environments, body.PreserveMetadata)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

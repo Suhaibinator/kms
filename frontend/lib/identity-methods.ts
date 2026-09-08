@@ -75,3 +75,17 @@ export function identitiesRelyingOn(
       identityUsesMethod(identity, method),
   );
 }
+
+/** Active clients outside `namespace` whose policies may grant access to it. */
+export function identitiesWithUnknownPolicyImpact(
+  identities: readonly Identity[],
+  namespace: NamespaceRef,
+  method: AuthMethod,
+): Identity[] {
+  return identities.filter(
+    (identity) =>
+      identity.kind !== "admin" &&
+      (identity.namespace?.env !== namespace.env || identity.namespace?.app !== namespace.app) &&
+      identityUsesMethod(identity, method),
+  );
+}

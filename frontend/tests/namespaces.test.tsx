@@ -279,12 +279,14 @@ describe("NamespacesPage", () => {
     expect(warning.closest(".warn-panel")).toHaveTextContent("1 identity: payments-worker.");
     expect(warning.closest(".warn-panel")).not.toHaveTextContent("elsewhere");
     expect(warning.closest(".warn-panel")).not.toHaveTextContent("root");
+    expect(within(modal).getByText(/additional impact is unknown/i)).toBeVisible();
 
     fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
     const confirm = await screen.findByRole("dialog", { name: "Remove authentication method?" });
     expect(mocks.updateNamespace).not.toHaveBeenCalled();
-    expect(confirm).toHaveTextContent("payments-worker");
-    fireEvent.click(within(confirm).getByRole("button", { name: "Save and break 1 identity" }));
+    expect(confirm).toHaveTextContent(/policy-granted access/i);
+    expect(confirm).not.toHaveTextContent(/1 identity stops/i);
+    fireEvent.click(within(confirm).getByRole("button", { name: "Save with unknown impact" }));
     await waitFor(() =>
       expect(mocks.updateNamespace).toHaveBeenCalledWith({
         env: "dev",
@@ -293,6 +295,32 @@ describe("NamespacesPage", () => {
         allowed_auth_methods: ["mtls"],
       }),
     );
+  });
+
+  it("treats a live unbound credential as unknown policy impact", async () => {
+    mocks.namespaces.namespaces = [namespace("dev", { methods: ["mtls", "token"] })];
+    mocks.listIdentities.mockResolvedValue({
+      identities: [
+        {
+          name: "automation",
+          kind: "client",
+          namespace: null,
+          has_token: true,
+          certs: [],
+        },
+      ],
+      next_page_token: "",
+    });
+    render(<NamespacesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const modal = await screen.findByRole("dialog", { name: "Edit dev/payments-api" });
+    await waitFor(() => expect(mocks.listIdentities).toHaveBeenCalled());
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /Token/ }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Save changes" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Remove authentication method?" });
+    expect(confirm).toHaveTextContent(/number of credentials this disables is unknown/i);
+    expect(within(confirm).getByRole("button", { name: "Save with unknown impact" })).toBeEnabled();
   });
 
   it("saves directly when the removed method has no dependants", async () => {

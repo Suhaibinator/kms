@@ -55,7 +55,7 @@ export default function CloneEnvironmentModal({
   /** Prefill from the Add-environment form's "Copy values from…" choice. */
   seed?: CloneSeed | null;
   /** Open recovery after completing the clone and refreshing the overview. */
-  onAddSecret?: (env: string, alias: string) => void;
+  onAddSecret?: (env: string, alias: string, key: string) => void;
   onAddParameter?: (env: string, key: string) => void;
 }) {
   const toast = useToast();
@@ -249,7 +249,7 @@ export default function CloneEnvironmentModal({
                             onClick={() => {
                               close();
                               if (item.kind === "secret")
-                                onAddSecret?.(result.namespace.env, item.alias);
+                                onAddSecret?.(result.namespace.env, item.alias, item.key);
                               else onAddParameter?.(result.namespace.env, item.key);
                             }}
                           />

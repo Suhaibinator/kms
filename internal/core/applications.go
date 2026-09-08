@@ -399,7 +399,7 @@ func resolveContractRefs(app domain.Application, env string, active, latest *dom
 	return out
 }
 
-func (s *Service) PutApplicationParameter(ctx context.Context, pr Principal, app, key, value, contentType, metadata string, environments []string) ([]domain.ApplicationParameterWriteResult, error) {
+func (s *Service) PutApplicationParameter(ctx context.Context, pr Principal, app, key, value, contentType, metadata string, environments []string, preserveMetadata ...bool) ([]domain.ApplicationParameterWriteResult, error) {
 	if len(environments) == 0 {
 		return nil, domain.Errorf(domain.ErrInvalidArgument, "at least one environment is required")
 	}
@@ -416,7 +416,13 @@ func (s *Service) PutApplicationParameter(ctx context.Context, pr Principal, app
 		if err := keyutil.ValidateEnv(environment); err != nil {
 			return nil, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 		}
-		version, revision, err := s.PutParameter(ctx, pr, domain.Ref{NS: domain.NamespaceRef{Env: environment, App: app}, Key: key}, value, contentType, metadata)
+		var version, revision uint64
+		var err error
+		if len(preserveMetadata) > 0 && preserveMetadata[0] {
+			version, revision, err = s.PutParameterPreservingMetadata(ctx, pr, domain.Ref{NS: domain.NamespaceRef{Env: environment, App: app}, Key: key}, value, contentType)
+		} else {
+			version, revision, err = s.PutParameter(ctx, pr, domain.Ref{NS: domain.NamespaceRef{Env: environment, App: app}, Key: key}, value, contentType, metadata)
+		}
 		result := domain.ApplicationParameterWriteResult{Environment: environment, Version: version, Revision: revision}
 		if err != nil {
 			result.Error = boundedApplicationError(err)

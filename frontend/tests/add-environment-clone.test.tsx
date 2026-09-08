@@ -188,7 +188,7 @@ describe("CloneEnvironmentModal", () => {
     expect(within(result).getByText("Needs a value")).toBeVisible();
     expect(within(result).getByText(/Secret values are never copied/)).toBeVisible();
     fireEvent.click(within(result).getByRole("button", { name: "Add secret" }));
-    expect(onAddSecret).toHaveBeenCalledWith("prod-eu", "db_password");
+    expect(onAddSecret).toHaveBeenCalledWith("prod-eu", "db_password", "db_password");
     fireEvent.click(within(result).getByRole("button", { name: "Done" }));
     expect(onCreated).toHaveBeenCalledWith(cloneResult);
   });

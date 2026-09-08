@@ -508,6 +508,25 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/Release detail is shown for the first 25/)).toBeVisible();
   });
 
+  it("uses the complete active fleet for the application count beyond the list page", async () => {
+    const many = Array.from({ length: 201 }, (_, i) => ({
+      ...fleet.applications[0],
+      application: { ...fleet.applications[0]?.application, name: `app${i}` },
+    }));
+    // The list endpoint's first page is intentionally incomplete; the fleet
+    // summary is the complete active-app source used for the dashboard grid.
+    mocks.listApplications.mockResolvedValue({
+      applications: many.slice(0, 200).map((entry) => entry.application),
+      next_page_token: "page-2",
+    });
+    mocks.fleetOverview.mockResolvedValue({ applications: many });
+
+    render(<DashboardPage />);
+    const grid = await screen.findByRole("region", { name: "Applications" });
+    await waitFor(() => expect(grid.querySelectorAll(".fleet-card")).toHaveLength(201));
+    expect(screen.getByRole("heading", { name: /Applications 201/ })).toBeVisible();
+  });
+
   it("does not mistake a failed fleet load for an empty store", async () => {
     mocks.listApplications.mockRejectedValue(new Error("boom"));
     mocks.fleetOverview.mockRejectedValue(new Error("boom"));

@@ -50,6 +50,34 @@ func TestCreateParameterRejectsExistingWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestPutParameterPreservingMetadataCopiesCurrentMetadataAtomically(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "config")
+	if _, _, err := st.PutParameter(ctx, r, "original", "string", `{"owner":"platform"}`, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	version, _, err := st.PutParameterPreservingMetadata(ctx, r, "updated", "string", "editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := st.GetParameter(ctx, r, version, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Value != "updated" || current.Metadata != `{"owner":"platform"}` {
+		t.Fatalf("current = %+v", current)
+	}
+	info, err := st.GetParameterInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Metadata != `{"owner":"platform"}` {
+		t.Fatalf("parameter metadata = %q", info.Metadata)
+	}
+}
+
 func TestCreateParameterConcurrentWriters(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

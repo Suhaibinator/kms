@@ -129,6 +129,10 @@ endpoints are admin-only:
   Each target receives an independent immutable version and result. The
   response may contain per-environment errors when only some targets succeed;
   the operation intentionally does not create shared mutable state.
+  Set optional `preserve_metadata: true` to retain each existing target's own
+  metadata atomically when changing only its value or content type. With this
+  flag, `metadata_json` is ignored and newly created parameters receive `{}`.
+  Omit the flag (or set it to `false`) to replace metadata as usual.
 - `POST /api/v1/applications/defaults?env=ENV&app=APP&overwrite=false&update_definition=false&execute=false&plan_digest=`
   accepts a raw `kms-config-defaults/v1` JSON artifact. Preview is the default.
   The response contains the artifact profile and schema digest, an opaque plan

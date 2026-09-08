@@ -230,6 +230,30 @@ describe("SchemaMigrationModal regressions", () => {
     ).toBe(JSON.stringify({ count: 400 }, null, 2));
   });
 
+  it("allows preview after replacing an invalid parameter with a valid secret", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [registeredSchema(2, { new_setting: { type: "integer" } })],
+      next_page_token: "",
+    });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    expect(within(dialog).getByRole("button", { name: /Preview migration/ })).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    const row = within(dialog)
+      .getAllByLabelText("Alias")
+      .find((element) => (element as HTMLInputElement).value === "new_setting")
+      ?.closest(".migration-contract-row") as HTMLElement;
+    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "secret" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
+    fireEvent.change(within(dialog).getByLabelText("new_setting exact version"), {
+      target: { value: "1" },
+    });
+
+    expect(within(dialog).getByRole("button", { name: /Preview migration/ })).toBeEnabled();
+  });
+
   it("uses target fields, prepares obsolete properties explicitly, and restores the original draft", async () => {
     const target = registeredSchema(overview.application.schema_version + 1);
     target.schema_json = JSON.stringify({

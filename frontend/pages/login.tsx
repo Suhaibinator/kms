@@ -13,7 +13,7 @@ import { safeReturnTo } from "@/lib/returnTo";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, ready } = useAuth();
+  const { login, ready, verificationPending, retryVerification } = useAuth();
   const toast = useToast();
   const [token, setTokenValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,6 +52,12 @@ export default function LoginPage() {
       toast.success("Signed in", `Welcome, ${identity.name}`);
       await router.replace(destination);
     } catch (err) {
+      if (err instanceof Error && err.name === "SessionVerificationError") {
+        setAuthError(
+          "Signed in, but the console could not load your access scope. Retry the check.",
+        );
+        return;
+      }
       const status = err instanceof ApiError ? err.status : 0;
       const code = err instanceof ApiError ? err.code : "";
       if (status === 503 || (status !== 401 && code === "unavailable" && status !== 0)) {
@@ -127,6 +133,16 @@ export default function LoginPage() {
           <Button type="submit" className="w-full" loading={busy}>
             Sign in
           </Button>
+          {verificationPending ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full mt-2"
+              onClick={retryVerification}
+            >
+              Retry access scope check
+            </Button>
+          ) : null}
         </form>
         <ClientCertificatePanel />
         <div className="auth-foot">

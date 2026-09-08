@@ -962,6 +962,49 @@ describe("identity list", () => {
     expect(listIdentities).toHaveBeenLastCalledWith(100, "page-2", expect.anything());
   });
 
+  it("locates every identity bound to a linked namespace across pages", async () => {
+    mocks.query = { env: "prod", app: "billing" };
+    const revoked = identity("revoked-match", { disabled: true });
+    const listIdentities = vi.mocked(api.listIdentities).mockImplementation(async (_size, token) =>
+      token === "page-2"
+        ? {
+            identities: [
+              revoked,
+              identity("elsewhere", { namespace: { env: "dev", app: "billing" } }),
+            ],
+            next_page_token: "",
+          }
+        : {
+            identities: [identity("active-match"), identity("unbound", { namespace: null })],
+            next_page_token: "page-2",
+          },
+    );
+
+    render(<IdentitiesPage />);
+    expect(await screen.findByText("active-match")).toBeVisible();
+    expect(screen.getByText("revoked-match")).toBeVisible();
+    expect(screen.queryByText("elsewhere")).toBeNull();
+    expect(screen.queryByText("unbound")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+    expect(listIdentities).toHaveBeenNthCalledWith(1, 200, undefined, expect.anything());
+    expect(listIdentities).toHaveBeenNthCalledWith(2, 200, "page-2", expect.anything());
+    expect(screen.getByText(/including revoked identities/i)).toBeVisible();
+  });
+
+  it("shows scoped empty and retryable failure states", async () => {
+    mocks.query = { env: "prod", app: "billing" };
+    vi.mocked(api.listIdentities)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        identities: [],
+        next_page_token: "",
+      });
+    render(<IdentitiesPage />);
+    expect(await screen.findByText("Could not locate bound identities")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("No identities bound to prod/billing")).toBeVisible();
+  });
+
   it("steps back to page 1 after revoking the last identity on page 2", async () => {
     let revoked = false;
     const listIdentities = vi
@@ -1128,12 +1171,12 @@ describe("IdentitiesPage query prefill", () => {
     expect(within(dialog).getByRole("combobox", { name: "Environment" })).toHaveTextContent("prod");
   });
 
-  it("stays on the list without the new flag even when env/app are present", async () => {
+  it("filters the list without opening create when env/app are present", async () => {
     mocks.query = { env: "prod", app: "billing" };
     vi.mocked(api.listIdentities).mockResolvedValue({ identities: [], next_page_token: "" });
 
     render(<IdentitiesPage />);
-    await screen.findByText("No identities yet");
+    await screen.findByText("No identities bound to prod/billing");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

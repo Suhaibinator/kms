@@ -113,6 +113,11 @@ export default function ParameterManager({
   const key = resourceRef?.key ?? values.key ?? "";
   const hasRef = !!env && !!app && !!key;
   const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
+  const refKey = `${env}\u0000${app}\u0000${key}`;
+  // Detail pages remain mounted while Next changes only their query. Keep this
+  // current during render so an old request cannot commit in the effect gap.
+  const activeRefKey = useRef(refKey);
+  activeRefKey.current = refKey;
 
   const [meta, setMeta] = useState<ParameterMetadata | null>(null);
   const [current, setCurrent] = useState<Parameter | null>(null);
@@ -135,12 +140,15 @@ export default function ParameterManager({
   }, [ref, viewRequest, mutationRequest]);
 
   const [viewed, setViewed] = useState<LoadedVersion | null>(null);
+  const [viewedRefKey, setViewedRefKey] = useState<string | null>(null);
   // A second version beside the viewed one turns the panel into a diff.
   const [compare, setCompare] = useState<LoadedVersion | null>(null);
+  const [compareRefKey, setCompareRefKey] = useState<string | null>(null);
   const [busyVersion, setBusyVersion] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
+  const [newVersionRefKey, setNewVersionRefKey] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [valueValid, setValueValid] = useState(true);
   // The value the form opened with; a schema that arrives late may only take
@@ -162,6 +170,7 @@ export default function ParameterManager({
   const { formRef, requestFocus } = useFocusFirstInvalid();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteRefKey, setDeleteRefKey] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // The application's pinned schema, looked up in the background from the page
@@ -228,12 +237,12 @@ export default function ParameterManager({
           api.parameterMetadata(ref, { signal: run.signal }),
           api.getParameter(ref, undefined, undefined, { signal: run.signal }),
         ]);
-        if (!run.current) return;
+        if (!run.current || activeRefKey.current !== refKey) return;
         setMeta(m);
         setCurrent(cur.parameter);
         setLoadState("success");
       } catch (err) {
-        if (!run.current || isAbortError(err)) return;
+        if (!run.current || activeRefKey.current !== refKey || isAbortError(err)) return;
         if (err instanceof ApiError && err.status === 404) {
           setLoadState("not-found");
         } else {
@@ -243,10 +252,10 @@ export default function ParameterManager({
           toast.error(err, "Failed to load parameter");
         }
       } finally {
-        if (run.current) setRefreshing(false);
+        if (run.current && activeRefKey.current === refKey) setRefreshing(false);
       }
     },
-    [hasRef, ref, request, toast],
+    [hasRef, ref, refKey, request, toast],
   );
 
   useEffect(() => {
@@ -260,6 +269,36 @@ export default function ParameterManager({
     }
     return () => request.abort();
   }, [ready, hasRef, load, request]);
+
+  // A URL-only detail navigation does not remount this component. Clear every
+  // resource-specific interaction so a draft, viewer, or confirmation cannot
+  // be applied to the newly selected resource.
+  useEffect(() => {
+    void refKey;
+    viewRequest.abort();
+    mutationRequest.abort();
+    setViewed(null);
+    setViewedRefKey(null);
+    setCompare(null);
+    setCompareRefKey(null);
+    setBusyVersion(null);
+    setNewVersionOpen(false);
+    setNewVersionRefKey(null);
+    setValue("");
+    setValueValid(true);
+    setOpenedValue("");
+    setVersionSchema(null);
+    setMetadataJson("{}");
+    setMetadataOpen(false);
+    setShowChanges(false);
+    setRestoredFrom(null);
+    setTouched({});
+    setSubmitAttempted(false);
+    setSaving(false);
+    setDeleteOpen(false);
+    setDeleteRefKey(null);
+    setDeleting(false);
+  }, [refKey, viewRequest, mutationRequest]);
 
   // The viewer renders below the whole table; bring it into view when it
   // opens or changes, so a long history does not hide what was just asked for.
@@ -292,12 +331,13 @@ export default function ParameterManager({
     setRestoredFrom(prefill?.restoredFrom ?? null);
     setTouched({});
     setSubmitAttempted(false);
+    setNewVersionRefKey(refKey);
     setNewVersionOpen(true);
   }
 
   async function saveVersion(e?: React.SyntheticEvent) {
     e?.preventDefault();
-    if (!hasRef || saving) return;
+    if (!hasRef || saving || newVersionRefKey !== refKey) return;
     setSubmitAttempted(true);
     // Every remaining problem now has an inline message next to its field;
     // move focus there so the button never looks dead.
@@ -318,17 +358,21 @@ export default function ParameterManager({
         content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
-      if (!run.current) return;
+      if (!run.current || activeRefKey.current !== refKey) return;
       onChanged?.(ref);
       toast.success(`Saved version ${res.version}`, displayPath(ref));
       setNewVersionOpen(false);
+      setNewVersionRefKey(null);
       setViewed(null);
+      setViewedRefKey(null);
       setCompare(null);
+      setCompareRefKey(null);
       await load({ background: true });
     } catch (err) {
-      if (run.current) toast.error(err, "Failed to save version");
+      if (run.current && activeRefKey.current === refKey)
+        toast.error(err, "Failed to save version");
     } finally {
-      if (run.current) setSaving(false);
+      if (run.current && activeRefKey.current === refKey) setSaving(false);
     }
   }
 
@@ -339,18 +383,18 @@ export default function ParameterManager({
     setBusyVersion(version);
     try {
       const res = await api.getParameter(ref, version, undefined, { signal: run.signal });
-      if (!run.current) return null;
+      if (!run.current || activeRefKey.current !== refKey) return null;
       return {
         version: res.parameter.version,
         value: res.parameter.value,
         contentType: res.parameter.content_type,
       };
     } catch (err) {
-      if (!run.current || isAbortError(err)) return null;
+      if (!run.current || activeRefKey.current !== refKey || isAbortError(err)) return null;
       toast.error(err, "Failed to load version value");
       return null;
     } finally {
-      if (run.current) setBusyVersion(null);
+      if (run.current && activeRefKey.current === refKey) setBusyVersion(null);
     }
   }
 
@@ -358,6 +402,7 @@ export default function ParameterManager({
     const loaded = await loadVersion(version);
     if (!loaded) return;
     setViewed(loaded);
+    setViewedRefKey(refKey);
     // A compare slot that now equals the viewed version has nothing to show.
     setCompare((slot) => (slot && slot.version === loaded.version ? null : slot));
   }
@@ -370,10 +415,14 @@ export default function ParameterManager({
         value: current.value,
         contentType: current.content_type,
       });
+      setCompareRefKey(refKey);
       return;
     }
     const loaded = await loadVersion(version);
-    if (loaded) setCompare(loaded);
+    if (loaded) {
+      setCompare(loaded);
+      setCompareRefKey(refKey);
+    }
   }
 
   async function restoreVersion(version: number) {
@@ -389,24 +438,26 @@ export default function ParameterManager({
   }
 
   async function onDelete() {
-    if (!hasRef) return;
+    if (!hasRef || deleteRefKey !== refKey) return;
     setDeleting(true);
     const run = mutationRequest.begin();
     try {
       await api.deleteParameter(ref);
-      if (!run.current) return;
+      if (!run.current || activeRefKey.current !== refKey) return;
       toast.success("Parameter deleted", displayPath(ref));
       // Closed before navigating, so a back-navigation cannot land on an open
       // confirmation for a parameter that no longer exists.
       setDeleteOpen(false);
+      setDeleteRefKey(null);
       if (surface === "workspace") {
         onDeleted?.(ref);
         onClose?.();
       } else await router.push(links.parameters({ env, app }));
     } catch (err) {
-      if (run.current) toast.error(err, "Failed to delete parameter");
+      if (run.current && activeRefKey.current === refKey)
+        toast.error(err, "Failed to delete parameter");
     } finally {
-      if (run.current) setDeleting(false);
+      if (run.current && activeRefKey.current === refKey) setDeleting(false);
     }
   }
 
@@ -578,12 +629,14 @@ export default function ParameterManager({
     );
   }
 
+  const scopedViewed = viewedRefKey === refKey ? viewed : null;
+  const scopedCompare = compareRefKey === refKey ? compare : null;
   // The diff reads oldest on the left.
   const diffPair =
-    viewed && compare
-      ? viewed.version < compare.version
-        ? ([viewed, compare] as const)
-        : ([compare, viewed] as const)
+    scopedViewed && scopedCompare
+      ? scopedViewed.version < scopedCompare.version
+        ? ([scopedViewed, scopedCompare] as const)
+        : ([scopedCompare, scopedViewed] as const)
       : null;
   const nextVersion = Math.max(0, ...meta.versions.map((v) => v.version)) + 1;
 
@@ -672,8 +725,8 @@ export default function ParameterManager({
                   .sort((a, b) => b.version - a.version)
                   .map((v) => {
                     const isCurrent = current?.version === v.version;
-                    const isViewed = viewed?.version === v.version;
-                    const isCompared = compare?.version === v.version;
+                    const isViewed = scopedViewed?.version === v.version;
+                    const isCompared = scopedCompare?.version === v.version;
                     const busy = busyVersion === v.version;
                     return (
                       <tr key={v.version} aria-current={isViewed ? "true" : undefined}>
@@ -707,11 +760,11 @@ export default function ParameterManager({
                             >
                               View value
                             </Button>
-                            {viewed && !isViewed ? (
+                            {scopedViewed && !isViewed ? (
                               <Button
                                 variant="outline"
                                 size="sm"
-                                aria-label={`Compare v${v.version} with v${viewed.version}`}
+                                aria-label={`Compare v${v.version} with v${scopedViewed.version}`}
                                 disabled={busyVersion !== null || isCompared}
                                 onClick={() => void compareVersion(v.version)}
                               >
@@ -739,7 +792,7 @@ export default function ParameterManager({
           </div>
         )}
 
-        {viewed ? (
+        {scopedViewed ? (
           <div className="version-panel" ref={panelRef} data-testid="version-panel">
             <div className="version-panel-head">
               <div className="version-panel-title">
@@ -754,13 +807,13 @@ export default function ParameterManager({
                   </>
                 ) : (
                   <>
-                    <Badge kind="accent">v{viewed.version}</Badge>
-                    <span className="faint text-sm">{viewed.contentType || "value"}</span>
+                    <Badge kind="accent">v{scopedViewed.version}</Badge>
+                    <span className="faint text-sm">{scopedViewed.contentType || "value"}</span>
                   </>
                 )}
               </div>
               <div className="version-panel-actions">
-                {!diffPair && current && current.version !== viewed.version ? (
+                {!diffPair && current && current.version !== scopedViewed.version ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -769,14 +822,14 @@ export default function ParameterManager({
                     Compare with current
                   </Button>
                 ) : null}
-                {current && current.version !== viewed.version ? (
+                {current && current.version !== scopedViewed.version ? (
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={busyVersion !== null}
-                    onClick={() => void restoreVersion(viewed.version)}
+                    onClick={() => void restoreVersion(scopedViewed.version)}
                   >
-                    Restore v{viewed.version}
+                    Restore v{scopedViewed.version}
                   </Button>
                 ) : null}
                 {diffPair ? (
@@ -789,7 +842,9 @@ export default function ParameterManager({
                   size="sm"
                   onClick={() => {
                     setViewed(null);
+                    setViewedRefKey(null);
                     setCompare(null);
+                    setCompareRefKey(null);
                   }}
                 >
                   Close
@@ -809,7 +864,7 @@ export default function ParameterManager({
                 }
               />
             ) : (
-              <ValueView value={viewed.value} contentType={viewed.contentType} />
+              <ValueView value={scopedViewed.value} contentType={scopedViewed.contentType} />
             )}
           </div>
         ) : null}
@@ -820,10 +875,13 @@ export default function ParameterManager({
     <>
       <Modal
         mobileFullScreen
-        open={newVersionOpen}
+        open={newVersionOpen && newVersionRefKey === refKey}
         title="New parameter version"
         description={`Saving creates v${nextVersion} and makes it current.`}
-        onClose={() => setNewVersionOpen(false)}
+        onClose={() => {
+          setNewVersionOpen(false);
+          setNewVersionRefKey(null);
+        }}
         dismissible={!saving}
         dirty={dirty}
         initialFocus={valueRef}
@@ -975,7 +1033,7 @@ export default function ParameterManager({
         </form>
       </Modal>
       <ConfirmDialog
-        open={deleteOpen}
+        open={deleteOpen && deleteRefKey === refKey}
         title="Delete parameter?"
         danger
         message={
@@ -986,7 +1044,10 @@ export default function ParameterManager({
         confirmLabel="Delete parameter"
         busy={deleting}
         onConfirm={onDelete}
-        onCancel={() => setDeleteOpen(false)}
+        onCancel={() => {
+          setDeleteOpen(false);
+          setDeleteRefKey(null);
+        }}
       />
     </>
   );
@@ -1026,7 +1087,14 @@ export default function ParameterManager({
               <Button size="sm" onClick={() => openNewVersion()}>
                 New version
               </Button>
-              <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setDeleteRefKey(refKey);
+                  setDeleteOpen(true);
+                }}
+              >
                 Delete
               </Button>
             </div>
@@ -1057,7 +1125,13 @@ export default function ParameterManager({
         actions={
           <>
             <Button onClick={() => openNewVersion()}>New version</Button>
-            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDeleteRefKey(refKey);
+                setDeleteOpen(true);
+              }}
+            >
               Delete
             </Button>
           </>

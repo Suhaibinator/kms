@@ -140,6 +140,8 @@ export function setToken(token: string): void {
   memToken = token;
   try {
     sessionStorage.setItem(TOKEN_KEY, token);
+    // A cached identity is valid only for the token that established it.
+    sessionStorage.removeItem(IDENTITY_KEY);
   } catch {
     /* storage unavailable; memory copy still works for this tab */
   }
@@ -165,9 +167,18 @@ export function clearToken(): void {
   }
 }
 
+/** Clear a rejected session only if it still owns the current request slot. */
+function expireToken(requestToken: string | null): void {
+  if (getToken() !== requestToken) return;
+  clearToken();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+}
+
 export function storeIdentity(identity: Identity): void {
   try {
-    sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+    sessionStorage.setItem(IDENTITY_KEY, JSON.stringify({ token: getToken(), identity }));
   } catch {
     /* ignore */
   }
@@ -177,7 +188,9 @@ export function loadIdentity(): Identity | null {
   try {
     const raw = sessionStorage.getItem(IDENTITY_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as Identity;
+    const cached = JSON.parse(raw) as { token?: unknown; identity?: unknown };
+    if (cached.token !== getToken() || !cached.identity) return null;
+    return cached.identity as Identity;
   } catch {
     return null;
   }
@@ -237,10 +250,8 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   const finalHeaders: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined || rawBody !== undefined)
     finalHeaders["Content-Type"] = "application/json";
-  if (auth) {
-    const token = getToken();
-    if (token) finalHeaders.Authorization = `Bearer ${token}`;
-  }
+  const requestToken = auth ? getToken() : null;
+  if (requestToken) finalHeaders.Authorization = `Bearer ${requestToken}`;
 
   const controller = new AbortController();
   let timedOut = false;
@@ -278,10 +289,7 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   }
 
   if (res.status === 401 && auth) {
-    clearToken();
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    }
+    expireToken(requestToken);
   }
 
   let data: unknown = null;
@@ -505,6 +513,7 @@ export const api = {
     value: string;
     content_type: string;
     metadata_json: string;
+    preserve_metadata?: boolean;
     environments: string[];
   }): Promise<{ results: ApplicationWriteResult[] }> {
     return apiFetch("/applications/parameters", { method: "PUT", body: req });
@@ -1055,8 +1064,7 @@ async function openSubscriberStream(
   }
 
   if (res.status === 401) {
-    clearToken();
-    if (typeof window !== "undefined") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    expireToken(token);
     throw new ApiError("unauthenticated", "Your session has ended.", 401);
   }
   if (res.status === 404 || res.status === 405 || res.status === 501) {

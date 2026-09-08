@@ -26,7 +26,11 @@ import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFieldErrors, useNamespaces } from "@/lib/hooks";
-import { identitiesRelyingOn, methodLabel } from "@/lib/identity-methods";
+import {
+  identitiesRelyingOn,
+  identitiesWithUnknownPolicyImpact,
+  methodLabel,
+} from "@/lib/identity-methods";
 import { links } from "@/lib/links";
 import type { SortColumn } from "@/lib/sort";
 import type { AuthMethod, Identity, Namespace } from "@/lib/types";
@@ -235,6 +239,11 @@ export default function NamespacesPage() {
     ...new Set(affected.flatMap((entry) => entry.identities.map((i) => i.name))),
   ];
   const affectedCount = affectedNames.length;
+  const unknownPolicyImpact = editTarget
+    ? removedMethods.some(
+        (method) => identitiesWithUnknownPolicyImpact(identities, editTarget, method).length > 0,
+      )
+    : false;
 
   function openEdit(ns: Namespace) {
     setEditTarget(ns);
@@ -249,7 +258,10 @@ export default function NamespacesPage() {
     editErrors.markAllTouched();
     if (methodsError) return;
     // Removing a method identities rely on is a fleet-affecting change: confirm first.
-    if (removedMethods.length > 0 && (identityScanStatus !== "complete" || affectedCount > 0)) {
+    if (
+      removedMethods.length > 0 &&
+      (identityScanStatus !== "complete" || affectedCount > 0 || unknownPolicyImpact)
+    ) {
       setConfirmRemoval(true);
       return;
     }
@@ -553,6 +565,14 @@ export default function NamespacesPage() {
                 next RPC.
               </div>
             ))}
+            {removedMethods.length > 0 &&
+            identityScanStatus === "complete" &&
+            unknownPolicyImpact ? (
+              <div className="warn-panel text-sm" role="status">
+                Active unbound or differently bound clients also hold this credential type. Their
+                policies are not included in the identity list, so additional impact is unknown.
+              </div>
+            ) : null}
           </form>
         ) : null}
       </Modal>
@@ -562,7 +582,7 @@ export default function NamespacesPage() {
         title="Remove authentication method?"
         danger
         message={
-          identityScanStatus === "complete" ? (
+          identityScanStatus === "complete" && !unknownPolicyImpact ? (
             <>
               Saving removes {removedMethods.map(methodLabel).join(" and ")} authentication from{" "}
               <span className="mono">
@@ -579,16 +599,18 @@ export default function NamespacesPage() {
                 {editTarget ? `${editTarget.env}/${editTarget.app}` : ""}
               </span>
               .{" "}
-              {identityScanStatus === "loading"
-                ? "The identity check is still running, so the number of credentials this disables is unknown."
-                : identityScanStatus === "incomplete"
-                  ? "More than 2,000 identities exist, so the number of credentials this disables is unknown."
-                  : "The identity check failed, so the number of credentials this disables is unknown."}
+              {identityScanStatus === "complete" && unknownPolicyImpact
+                ? "Active unbound or differently bound clients may have policy-granted access, so the number of credentials this disables is unknown."
+                : identityScanStatus === "loading"
+                  ? "The identity check is still running, so the number of credentials this disables is unknown."
+                  : identityScanStatus === "incomplete"
+                    ? "More than 2,000 identities exist, so the number of credentials this disables is unknown."
+                    : "The identity check failed, so the number of credentials this disables is unknown."}
             </>
           )
         }
         confirmLabel={
-          identityScanStatus === "complete"
+          identityScanStatus === "complete" && !unknownPolicyImpact
             ? `Save and break ${affectedCount} ${affectedCount === 1 ? "identity" : "identities"}`
             : "Save with unknown impact"
         }

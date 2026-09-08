@@ -354,6 +354,119 @@ describe("audit filters", () => {
       ),
     );
   });
+
+  it("keeps cursor history and an unapplied draft across its own pagination acknowledgements", async () => {
+    const listAudit = vi.mocked(api.listAudit).mockImplementation(async (filters) => ({
+      events: [event(filters.page_token === "page-3" ? 3 : filters.page_token ? 2 : 1)],
+      next_page_token:
+        filters.page_token === "page-3" ? "" : filters.page_token ? "page-3" : "page-2",
+    }));
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("10.0.0.1");
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "unapplied-draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    rerender(<AuditPage />);
+    await screen.findByText("Page 2");
+    expect(screen.getByLabelText("Actor")).toHaveValue("unapplied-draft");
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    rerender(<AuditPage />);
+    await screen.findByText("Page 3");
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+    rerender(<AuditPage />);
+    await screen.findByText("Page 2");
+    await waitFor(() =>
+      expect(listAudit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page_token: "page-2" }),
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Actor")).toHaveValue("unapplied-draft");
+  });
+
+  it("does not let a no-op filter replace mask later browser history", async () => {
+    mocks.query = { actor: "actor-a" };
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("No events match the current filters.");
+
+    // Applying the URL's existing filters is a no-op and must not leave an
+    // acknowledgement marker that can be mistaken for history returning here.
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(mocks.replace).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "actor-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    rerender(<AuditPage />);
+    await waitFor(() => expect(screen.getByLabelText("Actor")).toHaveValue("actor-b"));
+
+    mocks.query = { actor: "actor-a" };
+    rerender(<AuditPage />);
+    await waitFor(() => expect(screen.getByLabelText("Actor")).toHaveValue("actor-a"));
+  });
+
+  it("does not retain an acknowledgement after a cancelled URL replacement", async () => {
+    mocks.query = { actor: "actor-a" };
+    mocks.replace.mockResolvedValueOnce(false);
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("No events match the current filters.");
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "actor-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledTimes(1));
+    // Let the rejected acknowledgement clear before an unrelated history entry
+    // reaches the page, then retain a local draft that an external entry must replace.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "local-draft" } });
+
+    mocks.query = { actor: "actor-b" };
+    rerender(<AuditPage />);
+    await waitFor(() => expect(screen.getByLabelText("Actor")).toHaveValue("actor-b"));
+  });
+
+  it("retries a cancelled replacement from the last acknowledged URL", async () => {
+    mocks.query = { actor: "actor-a" };
+    mocks.replace.mockResolvedValueOnce(false);
+    render(<AuditPage />);
+    await screen.findByText("No events match the current filters.");
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "actor-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledTimes(2));
+  });
+
+  it("restores a cursor from same-filter browser history", async () => {
+    const listAudit = vi.mocked(api.listAudit).mockImplementation(async (filters) => ({
+      events: [event(filters.page_token ? 3 : 1)],
+      next_page_token: "",
+    }));
+    mocks.query = { actor: "actor-a" };
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("secret.read");
+    expect(screen.getByLabelText("Actor")).toHaveValue("actor-a");
+
+    mocks.query = { actor: "actor-a", page_token: "cursor-b", page: "3" };
+    rerender(<AuditPage />);
+
+    await waitFor(() =>
+      expect(listAudit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ actor: "actor-a", page_token: "cursor-b" }),
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Actor")).toHaveValue("actor-a");
+    expect(screen.getByText("Page 3")).toBeVisible();
+    // The middle cursors were never loaded in this component instance, so
+    // history restoration exposes First page instead of inventing Previous.
+    expect(screen.queryByRole("button", { name: "Previous page" })).toBeNull();
+    expect(screen.getByRole("button", { name: "First page" })).toBeVisible();
+  });
 });
 
 describe("audit events", () => {

@@ -687,6 +687,29 @@ describe("ReleasesPage", () => {
     await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
   });
 
+  it("submits an immutable release only once while creation is pending", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    let finish!: (value: { release: typeof releaseV2 }) => void;
+    mocks.createRelease.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    const create = within(dialog).getByRole("button", { name: "Create release" });
+    fireEvent.click(create);
+    fireEvent.click(create);
+
+    expect(mocks.createRelease).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ release: releaseV2 }));
+  });
+
   it("does not let a late URL update overwrite what the user typed into the name filter", async () => {
     mocks.query = { app: "payments", env: "prod" };
     const { rerender } = render(<ReleasesPage />);
@@ -1028,6 +1051,51 @@ describe("ReleasesPage", () => {
     expect(mocks.toast.success).toHaveBeenCalledWith("Created schema payments/runtime@4");
   });
 
+  it("registers a schema only once while its editor shortcut is pending", async () => {
+    mocks.query = { tab: "schemas" };
+    let finish!: (value: {
+      schema: {
+        application: string;
+        release_name: string;
+        version: number;
+        schema_json: string;
+        digest: string;
+        metadata_json: string;
+        created_by: string;
+        created_at_unix_ms: number;
+      };
+    }) => void;
+    mocks.createSchema.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
+    await chooseSelectOption(within(dialog).getByLabelText("Application"), "payments / runtime");
+    const editor = within(dialog).getByRole("textbox", { name: "JSON Schema definition" });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+
+    expect(mocks.createSchema).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      finish({
+        schema: {
+          application: "payments",
+          release_name: "runtime",
+          version: 4,
+          schema_json: "{}",
+          digest: "schema-digest",
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: 1,
+        },
+      }),
+    );
+  });
+
   it("loads every application page for the schema owner selector", async () => {
     mocks.query = { tab: "schemas" };
     const second = {
@@ -1128,6 +1196,90 @@ describe("ReleasesPage", () => {
       undefined,
       { shallow: true, scroll: false },
     );
+  });
+
+  it("keeps a loaded selection open when an older off-page deep link fails", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+    let rejectLink!: (error: Error) => void;
+    mocks.getRelease.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectLink = reject;
+      }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1),
+    );
+
+    mocks.query = { ...mocks.query, release: "runtime@2" };
+    rerender(<ReleasesPage />);
+    expect(await screen.findByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    await act(async () => rejectLink(new Error("late failure")));
+
+    expect(screen.getByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    expect(mocks.replace).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@2" }) }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("keeps a release-list failure visible and retries it", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.listReleases
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValueOnce({ releases: [], next_page_token: "" });
+    render(<ReleasesPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("gateway timeout");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No releases found")).toBeVisible();
+    expect(mocks.listReleases).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the live activation revision for an inactive release rollout", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 0 },
+      ],
+      next_page_token: "",
+    });
+    mocks.releaseSubscribers.mockResolvedValue({
+      subscribers: [
+        {
+          namespace: releaseV1.namespace,
+          release_name: "runtime",
+          client_name: "api",
+          instance_id: "api-1",
+          identity: "payments-client",
+          state: "applied",
+          release_version: 2,
+          activation_revision: 8,
+          rejection_category: "",
+          diagnostic: "",
+          client_timestamp_unix_ms: 1,
+          server_timestamp_unix_ms: 1,
+          connected: true,
+        },
+      ],
+      current_revision: 8,
+      next_page_token: "",
+    });
+    render(<ReleasesPage />);
+    const view = await screen.findAllByRole("button", { name: "View" });
+    fireEvent.click(view[1]);
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@1" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
+
+    expect(await within(dialog).findByText("api/api-1")).toBeVisible();
+    expect(within(dialog).getByTestId("rollout-progress")).toHaveTextContent("1/1 applied");
+    expect(within(dialog).getByTestId("rollout-progress")).toHaveTextContent("rev8");
   });
 
   it("rolls back through the RollbackDialog with pre-validation and a CAS guard", async () => {

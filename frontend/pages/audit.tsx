@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import {
   headerLabels,
@@ -163,6 +163,34 @@ let lastRowCount = PAGE_SIZE;
 
 export default function AuditPage() {
   const { values, ready } = useQueryParams(QUERY_KEYS);
+  const querySignature = JSON.stringify(values);
+  const expectedInternalQueries = useRef(new Set<string>());
+  const lastQuerySignature = useRef(querySignature);
+  const [externalNavigation, setExternalNavigation] = useState(0);
+
+  // A shallow replace made by this page acknowledges local state already in
+  // memory. Browser Back/Forward (including a jump between two audit entries)
+  // is different: rebuild from that URL so filters and a restored cursor agree.
+  // Keeping this distinction here prevents a pagination acknowledgement from
+  // discarding the cursor stack or text that is still only a form draft.
+  useEffect(() => {
+    if (!ready) {
+      lastQuerySignature.current = querySignature;
+      return;
+    }
+    if (lastQuerySignature.current === querySignature) return;
+    lastQuerySignature.current = querySignature;
+    if (expectedInternalQueries.current.delete(querySignature)) return;
+    expectedInternalQueries.current.clear();
+    setExternalNavigation((version) => version + 1);
+  }, [querySignature, ready]);
+
+  const rememberInternalNavigation = useCallback((next: QueryValues) => {
+    const signature = JSON.stringify(next);
+    expectedInternalQueries.current.add(signature);
+    return () => expectedInternalQueries.current.delete(signature);
+  }, []);
+
   // On a static export the query is empty until the client router hydrates;
   // rendering the list before that would fetch page 1 unfiltered for nothing.
   if (!ready)
@@ -176,13 +204,66 @@ export default function AuditPage() {
         summary
       />
     );
-  return <AuditLog initial={values} />;
+  return (
+    <AuditLog
+      key={externalNavigation}
+      initial={values}
+      onInternalNavigation={rememberInternalNavigation}
+    />
+  );
 }
 
-function AuditLog({ initial }: { initial: QueryValues }) {
+function AuditLog({
+  initial,
+  onInternalNavigation,
+}: {
+  initial: QueryValues;
+  onInternalNavigation: (next: QueryValues) => () => void;
+}) {
   const toast = useToast();
   const { namespaces, loading: namespacesLoading, error: namespacesError } = useNamespaces();
   const replaceQuery = useQueryReplace("/audit");
+  const currentQuery = useRef(initial);
+  const acknowledgedQuery = useRef(initial);
+  useEffect(() => {
+    // Keep the last URL the router has actually published separately from an
+    // optimistic target. A late Page 2 acknowledgement must not overwrite a
+    // Page 3 action that was already issued from the same component.
+    acknowledgedQuery.current = initial;
+  }, [initial]);
+  const replaceAuditQuery = useCallback(
+    (patch: Record<string, string>) => {
+      const next = { ...currentQuery.current };
+      for (const key of QUERY_KEYS) {
+        if (key in patch) next[key] = patch[key] || null;
+      }
+      const nextSignature = JSON.stringify(next);
+      if (nextSignature === JSON.stringify(currentQuery.current)) return;
+      // Update before router.replace resolves: a quick Page 2 → Page 3
+      // sequence must build the second URL from Page 2, not stale props.
+      currentQuery.current = next;
+      const forget = onInternalNavigation(next);
+      void replaceQuery(patch)
+        .then((changed) => {
+          // A false result means Next cancelled the transition and will never
+          // publish the expected query. Successful replacements are consumed
+          // by AuditPage's query effect, which runs with the router update.
+          if (!changed) {
+            forget();
+            if (JSON.stringify(currentQuery.current) === nextSignature) {
+              currentQuery.current = acknowledgedQuery.current;
+            }
+          }
+        })
+        .catch(() => {
+          forget();
+          if (JSON.stringify(currentQuery.current) === nextSignature) {
+            currentQuery.current = acknowledgedQuery.current;
+          }
+        });
+    },
+    [onInternalNavigation, replaceQuery],
+  );
   const sort = useSort<AuditEvent>("/audit", COLUMNS);
   const now = useNow();
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -308,29 +389,29 @@ function AuditLog({ initial }: { initial: QueryValues }) {
     setExpanded(null);
     const next = filtersFromForm(form);
     setApplied(next);
-    replaceQuery(queryFromFilters(next));
+    replaceAuditQuery(queryFromFilters(next));
   }
   function clear() {
     setForm(EMPTY_FORM);
     filterErrors.reset();
     setExpanded(null);
     setApplied({});
-    replaceQuery(queryFromFilters({}));
+    replaceAuditQuery(queryFromFilters({}));
   }
 
   // The cursor moves from event handlers, so the URL follows it here rather
   // than from an effect (see useQueryReplace).
   function nextPage() {
-    replaceQuery({ page_token: paging.nextToken, page: String(paging.page + 1) });
+    replaceAuditQuery({ page_token: paging.nextToken, page: String(paging.page + 1) });
     paging.next();
   }
   function previousPage() {
     const page = paging.previousToken ? paging.page - 1 : 1;
-    replaceQuery({ page_token: paging.previousToken, page: page > 1 ? String(page) : "" });
+    replaceAuditQuery({ page_token: paging.previousToken, page: page > 1 ? String(page) : "" });
     paging.previous();
   }
   function firstPage() {
-    replaceQuery({ page_token: "", page: "" });
+    replaceAuditQuery({ page_token: "", page: "" });
     paging.reset();
   }
 

@@ -160,6 +160,12 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function enumUnsetValue(values: Array<string | number>): string {
+  let value = "__kms_unset__";
+  while (values.some((option) => String(option) === value)) value += "_";
+  return value;
+}
+
 /**
  * Renders one alias's value as typed inputs derived from its schema, with a
  * JSON editor as the escape hatch. Both views edit the same JSON text, so the
@@ -269,6 +275,26 @@ export function SchemaForm({
       if (text === undefined) delete copy[key];
       else copy[key] = { text, error };
       return copy;
+    });
+  }
+  function reindexListDrafts(listKey: string, removedIndex: number) {
+    const prefix = `${listKey} `;
+    setDrafts((previous) => {
+      const next: Record<string, { text: string; error: string | null }> = {};
+      for (const [draftKey, draft] of Object.entries(previous)) {
+        if (!draftKey.startsWith(prefix)) {
+          next[draftKey] = draft;
+          continue;
+        }
+        const path = draftKey.slice(prefix.length).split(" ");
+        const index = Number(path[0]);
+        if (!Number.isInteger(index) || String(index) !== path[0] || index < removedIndex) {
+          next[draftKey] = draft;
+        } else if (index > removedIndex) {
+          next[`${prefix}${[String(index - 1), ...path.slice(1)].join(" ")}`] = draft;
+        }
+      }
+      return next;
     });
   }
   function errorFor(field: FormField, draftError: string | null): string | null {
@@ -519,9 +545,11 @@ export function SchemaForm({
         const error = errorFor(field, null);
         const hint = hintFor(field, current);
         if (field.enumValues) {
+          const unsetValue = enumUnsetValue(field.enumValues);
+          const emptyValue = enumUnsetValue([...field.enumValues, unsetValue]);
           const options = field.enumValues.map((option) => ({
-            value: String(option),
-            label: String(option),
+            value: option === "" ? emptyValue : String(option),
+            label: option === "" ? "Empty string" : String(option),
           }));
           return (
             <Field
@@ -534,11 +562,26 @@ export function SchemaForm({
             >
               <AppSelect
                 id={controlId}
-                value={text}
+                value={
+                  current === undefined
+                    ? field.required
+                      ? ""
+                      : unsetValue
+                    : text === ""
+                      ? emptyValue
+                      : text
+                }
                 disabled={disabled}
                 placeholder="Choose…"
-                options={field.required ? options : [{ value: "", label: "— none —" }, ...options]}
-                onValueChange={(next) => commit(field.path, next === "" ? undefined : next)}
+                options={
+                  field.required ? options : [{ value: unsetValue, label: "— none —" }, ...options]
+                }
+                onValueChange={(next) =>
+                  commit(
+                    field.path,
+                    next === unsetValue ? undefined : next === emptyValue ? "" : next,
+                  )
+                }
                 onBlur={onBlur}
                 aria-required={field.required || undefined}
               />
@@ -715,8 +758,13 @@ export function SchemaForm({
             </span>
           </div>
         );
-        const removeItem = (index: number) =>
-          replaceList(items.filter((_, position) => position !== index));
+        const removeItem = (index: number) => {
+          reindexListDrafts(key, index);
+          commit(
+            field.path,
+            items.filter((_, position) => position !== index),
+          );
+        };
         if (field.item === "object" && field.itemField) {
           const itemField = field.itemField;
           return (

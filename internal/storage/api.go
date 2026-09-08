@@ -493,3 +493,9 @@ type Store interface {
 type ParameterCreateStore interface {
 	CreateParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (version, revision uint64, err error)
 }
+
+// ParameterMetadataPreservingStore supports value-only writes that copy the
+// parameter's current metadata into the new version in the same transaction.
+type ParameterMetadataPreservingStore interface {
+	PutParameterPreservingMetadata(ctx context.Context, ref domain.Ref, value, contentType, createdBy string) (version, revision uint64, err error)
+}

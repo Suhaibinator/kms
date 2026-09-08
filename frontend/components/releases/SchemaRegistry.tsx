@@ -21,6 +21,7 @@ import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useCursorPagination, useFieldErrors } from "@/lib/hooks";
+import { formatJson } from "@/lib/json-text";
 import { links } from "@/lib/links";
 import type { Application, ConfigurationSchema } from "@/lib/types";
 
@@ -43,11 +44,7 @@ function schemaJSONError(value: string): string | null {
 }
 
 function prettySchema(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
+  return formatJson(value) ?? value;
 }
 
 function SchemaViewer({
@@ -86,7 +83,7 @@ function SchemaViewer({
                 <Checkbox id="schema-wrap-lines" checked={wrap} onCheckedChange={setWrap} /> Wrap
                 lines
               </label>
-              <CopyButton value={pretty} label="Copy JSON" />
+              <CopyButton value={schema.schema_json} label="Copy JSON" />
               <CopyButton value={schema.digest} label="Copy digest" />
               <ButtonLink
                 variant="outline"
@@ -121,6 +118,7 @@ function RegisterSchemaDialog({
   const [schemaJSON, setSchemaJSON] = useState(DEFAULT_SCHEMA_JSON);
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const applicationErrors = useFieldErrors<"application">();
   const { formRef, requestFocus } = useFocusFirstInvalid<HTMLDivElement>();
   const schemaError = useMemo(() => schemaJSONError(schemaJSON), [schemaJSON]);
@@ -174,12 +172,14 @@ function RegisterSchemaDialog({
   }, [open, resetApplicationErrors, toast]);
 
   async function register() {
+    if (savingRef.current) return;
     setAttempted(true);
     applicationErrors.markAllTouched();
     if (applicationProblem || schemaError) {
       requestFocus();
       return;
     }
+    savingRef.current = true;
     setSaving(true);
     try {
       const result = await api.createSchema(application, schemaJSON);
@@ -189,6 +189,7 @@ function RegisterSchemaDialog({
     } catch (error) {
       toast.error(error, "Could not register schema");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }

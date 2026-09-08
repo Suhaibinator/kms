@@ -673,6 +673,64 @@ describe("safe form drafts", () => {
     expect(out()).toEqual({ counts: [] });
   });
 
+  it("keeps incomplete drafts in surviving scalar list items after removal", () => {
+    render(
+      <DraftHarness
+        initial='{"counts":[1,2,3]}'
+        formSchema={{
+          type: "object",
+          properties: { counts: { type: "array", items: { type: "number" } } },
+        }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("counts item 2"), { target: { value: "5e" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove counts item 1" }));
+    expect(screen.getByLabelText("counts item 1")).toHaveValue("5e");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ counts: [2, 3] });
+  });
+
+  it("keeps incomplete drafts in surviving object list items after removal", () => {
+    render(
+      <DraftHarness
+        initial='{"rows":[{"count":1},{"count":2}]}'
+        formSchema={{
+          type: "object",
+          properties: {
+            rows: {
+              type: "array",
+              items: { type: "object", properties: { count: { type: "number" } } },
+            },
+          },
+        }}
+      />,
+    );
+    fireEvent.change(screen.getAllByLabelText("count")[1], { target: { value: "5e" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove rows item 1" }));
+    expect(screen.getByLabelText("count")).toHaveValue("5e");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(out()).toEqual({ rows: [{ count: 2 }] });
+  });
+
+  it("distinguishes an empty string enum value from an optional enum's unset choice", async () => {
+    render(
+      <Harness
+        initial='{"choice":"x"}'
+        schema={{
+          type: "object",
+          properties: { choice: { type: "string", enum: ["", "x"] } },
+        }}
+      />,
+    );
+    const choice = screen.getByRole("combobox", { name: "choice" });
+    await chooseSelectOption(choice, "— none —");
+    expect(out()).toEqual({});
+    expect(choice).toHaveTextContent("— none —");
+    await chooseSelectOption(screen.getByRole("combobox", { name: "choice" }), "Empty string");
+    expect(out()).toEqual({ choice: "" });
+    expect(choice).toHaveTextContent("Empty string");
+  });
+
   it("blocks invalid and precision-losing raw property drafts", () => {
     render(<DraftHarness initial='{"custom":3}' />);
     const input = screen.getByLabelText("custom");

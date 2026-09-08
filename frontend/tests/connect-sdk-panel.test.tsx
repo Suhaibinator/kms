@@ -6,6 +6,7 @@ import ConnectSdkPanel, {
 } from "@/components/onboarding/ConnectSdkPanel";
 import { goSnippet, MTLS_RUNBOOK_URL, tsSnippet } from "@/lib/sdk-snippets";
 import type { HealthResponse } from "@/lib/types";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -130,6 +131,59 @@ describe("ConnectSdkPanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("The gRPC listener serves without TLS.");
     expect(snippet()).toContain("Insecure: true");
     expect(snippet()).not.toContain("MTLSFromFiles");
+  });
+
+  it("uses a token with server-authenticated TLS in both languages for token-only environments", () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={health}
+        allowedAuthMethods={["token"]}
+      />,
+    );
+    expect(snippet()).toContain('kmsclient.TLSFromFiles(os.Getenv("KMS_CA_FILE"))');
+    expect(snippet()).toContain('Token:    os.Getenv("KMS_TOKEN")');
+    expect(snippet()).not.toContain("KMS_CLIENT_CERT_FILE");
+    expect(snippet()).not.toContain("Insecure");
+    fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
+    expect(snippet()).toContain("credentials: tlsFromFiles(process.env.KMS_CA_FILE!)");
+    expect(snippet()).toContain("token: process.env.KMS_TOKEN");
+    expect(snippet()).not.toContain("mtlsFromFiles");
+    expect(snippet()).not.toContain("KMS_CLIENT_KEY_FILE");
+  });
+
+  it("offers either accepted credential method without changing transport security", async () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={health}
+        allowedAuthMethods={["mtls", "token"]}
+      />,
+    );
+    expect(snippet()).toContain("kmsclient.MTLSFromFiles(");
+    await chooseSelectOption(screen.getByRole("combobox", { name: "Authentication" }), "Token");
+    expect(snippet()).toContain("kmsclient.TLSFromFiles(");
+    expect(snippet()).toContain('os.Getenv("KMS_TOKEN")');
+    expect(snippet()).not.toContain("Insecure");
+  });
+
+  it("does not offer unusable token snippets when an mTLS-only environment has no TLS listener", () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={{ ...health, tls_enabled: false }}
+        allowedAuthMethods={["mtls"]}
+      />,
+    );
+    expect(screen.getByText(/Enable TLS before connecting an SDK/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Copy Go snippet" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "TypeScript" })).toBeNull();
   });
 
   it("does not warn while health is loading or when TLS is on", () => {

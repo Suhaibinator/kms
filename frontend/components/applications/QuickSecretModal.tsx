@@ -86,6 +86,7 @@ export function QuickSecretModal({
   const bindId = `${formId}-bind`;
   const expiresMin = useMemo(() => localDatetimeValue(Date.now()), []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: environment options may refresh while this form is open; only a new seed may reset its draft.
   useEffect(() => {
     void identityBoundary;
     formInstance.current += 1;
@@ -113,15 +114,7 @@ export function QuickSecretModal({
       // unmounted while the write was in flight.
       formInstance.current += 1;
     };
-  }, [
-    seedOpen,
-    seedEnvironment,
-    seedKey,
-    seedContentType,
-    identityBoundary,
-    environments,
-    errors.reset,
-  ]);
+  }, [seedOpen, seedEnvironment, seedKey, seedContentType, identityBoundary, errors.reset]);
 
   const environmentProblem = environment ? null : "Choose an environment.";
   const keyProblem = validateKey(key.trim());

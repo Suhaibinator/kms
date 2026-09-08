@@ -72,15 +72,21 @@ func (s *Service) GetParameter(ctx context.Context, pr Principal, ref domain.Ref
 
 // PutParameter writes a new immutable version and moves the current label.
 func (s *Service) PutParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string) (version, revision uint64, err error) {
-	return s.putParameter(ctx, pr, ref, value, contentType, metadata, false)
+	return s.putParameter(ctx, pr, ref, value, contentType, metadata, false, false)
+}
+
+// PutParameterPreservingMetadata writes a value and content type while copying
+// the parameter's current metadata atomically into the new version.
+func (s *Service) PutParameterPreservingMetadata(ctx context.Context, pr Principal, ref domain.Ref, value, contentType string) (version, revision uint64, err error) {
+	return s.putParameter(ctx, pr, ref, value, contentType, "", false, true)
 }
 
 // CreateParameter writes the first version only; existing keys are rejected atomically.
 func (s *Service) CreateParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string) (uint64, uint64, error) {
-	return s.putParameter(ctx, pr, ref, value, contentType, metadata, true)
+	return s.putParameter(ctx, pr, ref, value, contentType, metadata, true, false)
 }
 
-func (s *Service) putParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string, createOnly bool) (version, revision uint64, err error) {
+func (s *Service) putParameter(ctx context.Context, pr Principal, ref domain.Ref, value, contentType, metadata string, createOnly, preserveMetadata bool) (version, revision uint64, err error) {
 	if err := validateRef(ref); err != nil {
 		return 0, 0, err
 	}
@@ -96,8 +102,10 @@ func (s *Service) putParameter(ctx context.Context, pr Principal, ref domain.Ref
 	if err := validateParameterValue(value, contentType); err != nil {
 		return 0, 0, err
 	}
-	if metadata, err = validateMetadataJSON(metadata); err != nil {
-		return 0, 0, err
+	if !preserveMetadata {
+		if metadata, err = validateMetadataJSON(metadata); err != nil {
+			return 0, 0, err
+		}
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpParameterWrite, domain.ResourceParameter, ref)
 	if err != nil {
@@ -109,6 +117,12 @@ func (s *Service) putParameter(ctx context.Context, pr Principal, ref domain.Ref
 			return 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "store does not support create-only parameter writes")
 		}
 		version, revision, err = store.CreateParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
+	} else if preserveMetadata {
+		store, ok := s.store.(storage.ParameterMetadataPreservingStore)
+		if !ok {
+			return 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "store does not support metadata-preserving parameter writes")
+		}
+		version, revision, err = store.PutParameterPreservingMetadata(ctx, ref, value, contentType, pr.Identity.Name)
 	} else {
 		version, revision, err = s.store.PutParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
 	}

@@ -155,6 +155,21 @@ describe("console api additions", () => {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     });
 
+    it("does not let an old stream 401 clear a replacement session", async () => {
+      let resolve!: (response: Response) => void;
+      fetchMock.mockReturnValueOnce(
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+      );
+      const stream = api.subscriberStream(ns, "runtime", { onSnapshot: () => {} });
+      setToken("tok-2");
+
+      resolve(new Response("", { status: 401 }));
+      await expect(stream).rejects.toMatchObject({ code: "unauthenticated", status: 401 });
+      expect(getToken()).toBe("tok-2");
+    });
+
     it("propagates the caller's abort as an AbortError", async () => {
       const controller = new AbortController();
       fetchMock.mockImplementationOnce(

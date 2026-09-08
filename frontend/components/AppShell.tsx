@@ -216,6 +216,16 @@ export function isPaletteShortcut(event: KeyboardEvent): boolean {
   return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k";
 }
 
+/**
+ * Base UI leaves a closing popup in the portal briefly for its exit animation.
+ * Only an open dialog owns focus and may veto the palette shortcut; treating
+ * every mounted popup as active would leave the shortcut disabled after a
+ * modal has already finished closing.
+ */
+function anotherDialogOwnsInteraction(): boolean {
+  return Boolean(document.querySelector('[data-slot="dialog-content"][data-open]'));
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { identity, logout } = useAuth();
@@ -261,7 +271,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isPaletteShortcut(event)) {
         event.preventDefault();
-        setPaletteOpen((open) => !open);
+        // Ctrl/Cmd+K still closes the palette itself. Opening a second dialog
+        // over an editor would bypass that editor's dirty-discard guard, so an
+        // already-open modal gets the shortcut instead.
+        setPaletteOpen((open) => {
+          if (open) return false;
+          return !anotherDialogOwnsInteraction();
+        });
         return;
       }
       if (isShortcutSheetKey(event)) {
@@ -274,7 +290,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const openPalette = () => setPaletteOpen(true);
+  const openPalette = () => {
+    if (!anotherDialogOwnsInteraction()) setPaletteOpen(true);
+  };
 
   return (
     <TooltipProvider delay={300}>

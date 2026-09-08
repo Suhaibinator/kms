@@ -422,16 +422,20 @@ export default function DashboardPage() {
     if (!run.current) return;
 
     const nextFleet: Fleet = { ...NO_FLEET, overviews: {} };
-    if (apps.status === "fulfilled") {
-      nextFleet.applicationCount = (apps.value.applications ?? []).length;
-    }
     if (overview.status === "fulfilled") {
       nextFleet.applications = overview.value.applications ?? [];
-      if (nextFleet.applicationCount === null) {
-        nextFleet.applicationCount = nextFleet.applications.length;
-      }
+      // The fleet endpoint walks every active application, whereas the list
+      // request is a bounded fallback. Keep the header count on the same
+      // active fleet represented by the grid, even beyond the list's 200-row
+      // first page.
+      nextFleet.applicationCount = nextFleet.applications.length;
     } else {
       nextFleet.fleetFailed = true;
+      // Preserve a useful count if the complete fleet request failed. Both
+      // endpoints exclude archived applications by default.
+      if (apps.status === "fulfilled") {
+        nextFleet.applicationCount = (apps.value.applications ?? []).length;
+      }
     }
     const fleetError = [apps, overview].find((r) => r.status === "rejected") as
       | PromiseRejectedResult

@@ -1532,6 +1532,28 @@ func TestApplicationDashboardHTTPWorkflow(t *testing.T) {
 	if cells["dev"].(map[string]any)["value"] != "100" || cells["prod-gcp"].(map[string]any)["value"] != "100" {
 		t.Fatalf("dashboard cells = %s", w.Body.String())
 	}
+
+	// Value-only matrix edits preserve each target's own metadata in storage.
+	for _, env := range []string{"dev", "prod-gcp"} {
+		w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+			"env": env, "app": "payments-api", "key": "rate-limit", "value": "101",
+			"content_type": "integer", "metadata_json": `{"owner":"` + env + `"}`,
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+	w = e.admin(http.MethodPut, "/api/v1/applications/parameters", map[string]any{
+		"application": "payments-api", "key": "rate-limit", "value": "102",
+		"content_type": "integer", "metadata_json": "{}", "preserve_metadata": true,
+		"environments": []string{"dev", "prod-gcp"},
+	})
+	mustStatus(t, w, http.StatusOK)
+	for _, env := range []string{"dev", "prod-gcp"} {
+		w = e.admin(http.MethodGet, "/api/v1/parameters/metadata?env="+env+"&app=payments-api&key=rate-limit", nil)
+		mustStatus(t, w, http.StatusOK)
+		if got := decodeBody(t, w)["metadata_json"]; got != `{"owner":"`+env+`"}` {
+			t.Fatalf("%s metadata = %v", env, got)
+		}
+	}
 }
 
 func TestMethodNotAllowed(t *testing.T) {

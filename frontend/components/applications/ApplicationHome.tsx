@@ -389,12 +389,17 @@ export function ApplicationHome({
   }
 
   /** Quick-add a secret for an alias: the key the alias resolves to, typed like a sibling environment's value. */
-  function openSecret(environment: string, alias: string, then?: QuickSecretSeed["then"]) {
+  function openSecret(
+    environment: string,
+    alias: string,
+    then?: QuickSecretSeed["then"],
+    physicalKey?: string,
+  ) {
     const value = valueFor(environments, environment, alias);
     const contentType = environments
       .flatMap((candidate) => candidate.values)
       .find((candidate) => candidate.alias === alias && candidate.content_type)?.content_type;
-    setSecretSeed({ environment, key: value?.key ?? alias, contentType, then });
+    setSecretSeed({ environment, key: physicalKey ?? value?.key ?? alias, contentType, then });
   }
 
   function openExistingSecret(environment: string, key: string) {
@@ -854,6 +859,10 @@ export function ApplicationHome({
             releaseName={application.release_name}
             aliases={aliases}
             health={health}
+            allowedAuthMethods={
+              environments.find((item) => item.namespace.env === connectEnv)?.namespace
+                .allowed_auth_methods
+            }
           />
         ) : null}
       </Modal>
@@ -898,7 +907,12 @@ export function ApplicationHome({
           replaceQuery({ env: result.namespace.env });
           cloneRefresh.current = reload();
         }}
-        onAddSecret={(environment, alias) => openSecret(environment, alias)}
+        onAddSecret={async (environment, alias, key) => {
+          // Wait until the new environment is reflected in all modal props, so
+          // opening recovery cannot reset a value typed during the refresh.
+          await cloneRefresh.current;
+          openSecret(environment, alias, undefined, key);
+        }}
         onAddParameter={async (environment, key) => {
           // The target must be in the overview before opening the environment picker.
           await cloneRefresh.current;

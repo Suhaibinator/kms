@@ -15,6 +15,8 @@ export interface RolloutPanelProps {
   releaseName: string;
   /** The activation instances are expected to reach; counts are relative to it. */
   activationRevision: number;
+  /** Follow the revision currently reported by the release feed. */
+  followCurrentActivation?: boolean;
   /** Streams/polls only while true (a closed tab must not keep a stream open). */
   enabled: boolean;
   /** Extra line under the progress (the workspace's row cap, for instance). */
@@ -55,6 +57,7 @@ export function RolloutPanel({
   namespace,
   releaseName,
   activationRevision,
+  followCurrentActivation = false,
   enabled,
   caption,
   onRollback,
@@ -66,8 +69,14 @@ export function RolloutPanel({
   useEffect(() => {
     if (refreshToken) void refresh();
   }, [refreshToken, refresh]);
-  const counts = countSubscribers(live.instances, activationRevision);
-  const ordered = sortForRollout(live.instances, activationRevision);
+  // Keep the supplied target until the feed has yielded a snapshot, so a
+  // newly opened tab does not briefly render every row as revision zero.
+  const rolloutRevision =
+    followCurrentActivation && live.lastUpdatedAt !== null
+      ? live.currentRevision
+      : activationRevision;
+  const counts = countSubscribers(live.instances, rolloutRevision);
+  const ordered = sortForRollout(live.instances, rolloutRevision);
   const divergentGuidance = rejectionGuidance("default_mismatch");
 
   return (
@@ -90,7 +99,7 @@ export function RolloutPanel({
             </>
           )}
           <span className="faint text-sm">
-            at <Ident kind="revision" value={String(activationRevision)} />
+            at <Ident kind="revision" value={String(rolloutRevision)} />
           </span>
         </div>
         <div className="rollout-tools">
@@ -143,7 +152,7 @@ export function RolloutPanel({
             </thead>
             <tbody>
               {ordered.map((instance) => {
-                const atCurrent = instance.activation_revision >= activationRevision;
+                const atCurrent = instance.activation_revision >= rolloutRevision;
                 const rejected = instance.state === "rejected" && atCurrent;
                 const guidance = rejected ? rejectionGuidance(instance.rejection_category) : null;
                 return (

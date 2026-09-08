@@ -110,6 +110,8 @@ export default function ReleasesPage() {
   const [nameTouched, setNameTouched] = useState(false);
   const [releases, setReleases] = useState<ReleaseSummary[]>([]);
   const [releasesLoading, setReleasesLoading] = useState(false);
+  const [releasesError, setReleasesError] = useState<unknown>(null);
+  const [releasesErrorScope, setReleasesErrorScope] = useState("");
   const [busyAction, setBusyAction] = useState<BusyReleaseAction>("");
   const [builderOpen, setBuilderOpen] = useState(false);
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
@@ -175,6 +177,9 @@ export default function ReleasesPage() {
 
   useEffect(() => {
     if (!router.isReady) return;
+    // Invalidate even when the next selected release is already loaded: an
+    // older off-page deep-link request must not close that new workspace.
+    linkRun.current += 1;
     setPendingAction((current) => (current?.kind === "rollback" ? null : current));
     const linked = queryRelease ? parseReleaseKey(queryRelease) : null;
     if (linked && queryApp && queryEnv) {
@@ -198,6 +203,7 @@ export default function ReleasesPage() {
   }
 
   function openWorkspace(key: string) {
+    linkRun.current += 1;
     setActivationFailure(null);
     setLinkedSection(null);
     setLinkedCompareKey("");
@@ -206,6 +212,7 @@ export default function ReleasesPage() {
   }
 
   function closeWorkspace() {
+    linkRun.current += 1;
     setSelectedReleaseKey("");
     setLinkedSummary(null);
     setLinkedSection(null);
@@ -235,7 +242,7 @@ export default function ReleasesPage() {
   const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name]) : "";
   const releasePaging = useCursorPagination(releaseScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
-  const settled = loadedScope === releaseRequestScope;
+  const settled = loadedScope === releaseRequestScope || releasesErrorScope === releaseRequestScope;
   const nameFilterError = validateReleaseName(nameDraft.trim());
 
   useEffect(() => {
@@ -252,6 +259,8 @@ export default function ReleasesPage() {
         setReleases([]);
         releasePaging.setNextToken("");
         setReleasesLoading(false);
+        setReleasesError(null);
+        setReleasesErrorScope("");
         return;
       }
       // Keep the loaded list across a visit to the Schemas tab; it is
@@ -265,6 +274,8 @@ export default function ReleasesPage() {
       const controller = new AbortController();
       refreshController.current = controller;
       setReleasesLoading(true);
+      setReleasesError(null);
+      setReleasesErrorScope("");
       try {
         const response = await api.listReleases(
           ns,
@@ -280,6 +291,8 @@ export default function ReleasesPage() {
         releasePaging.setNextToken(response.next_page_token ?? "");
       } catch (error) {
         if (generation === refreshGeneration.current && !isAbortError(error)) {
+          setReleasesError(error);
+          setReleasesErrorScope(releaseRequestScope);
           toast.error(error, "Failed to load releases");
         }
       } finally {
@@ -635,6 +648,20 @@ export default function ReleasesPage() {
               toolbarHint={PAGE_SORT_HINT}
               summary
             />
+          ) : releasesError && releasesErrorScope === releaseRequestScope ? (
+            <EmptyState
+              icon={<Icon.release size={20} />}
+              title="Could not load releases"
+              actions={
+                <Button variant="outline" onClick={() => void refresh(true)}>
+                  Retry
+                </Button>
+              }
+            >
+              <span role="alert">
+                {releasesError instanceof Error ? releasesError.message : String(releasesError)}
+              </span>
+            </EmptyState>
           ) : releases.length === 0 ? (
             <EmptyState
               icon={<Icon.release size={20} />}

@@ -228,7 +228,8 @@ export function SchemaMigrationModal({
         (field.kind === "secret" || PARAMETER_CONTENT_TYPES.includes(field.content_type ?? "")),
     );
   const valuesValid = fields.every(
-    (field) => !exactVersionError(field) && fieldValidity[field.id] !== false,
+    (field) =>
+      !exactVersionError(field) && (field.kind === "secret" || fieldValidity[field.id] !== false),
   );
 
   useEffect(() => {
@@ -1011,6 +1012,12 @@ export function SchemaMigrationModal({
                   value={field.kind}
                   onChange={(event) => {
                     const kind = event.target.value as "parameter" | "secret";
+                    setFieldValidity((current) => {
+                      if (!(field.id in current)) return current;
+                      const next = { ...current };
+                      delete next[field.id];
+                      return next;
+                    });
                     update(field.id, {
                       kind,
                       content_type: kind === "secret" ? undefined : "string",

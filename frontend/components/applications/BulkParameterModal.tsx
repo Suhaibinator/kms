@@ -44,6 +44,7 @@ export function BulkParameterModal({
     value: string;
     content_type: string;
     metadata_json: string;
+    preserve_metadata?: boolean;
     environments: string[];
   }) => Promise<void>;
 }) {
@@ -135,6 +136,7 @@ export function BulkParameterModal({
       value: canonicalParameterValue(value, contentType),
       content_type: contentType,
       metadata_json: "{}",
+      preserve_metadata: Boolean(row?.key),
       environments: selected,
     });
   }

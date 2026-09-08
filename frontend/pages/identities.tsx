@@ -255,7 +255,13 @@ export default function IdentitiesPage() {
   } = useNamespaces();
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(true);
-  // The list is unfiltered, so the cursor scope never changes.
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app", "name"]);
+  const scope = useMemo(
+    () =>
+      prefillReady && prefill.env && prefill.app ? { env: prefill.env, app: prefill.app } : null,
+    [prefill.app, prefill.env, prefillReady],
+  );
   const paging = useCursorPagination("identities");
   const { begin } = useLatestRequest();
 
@@ -314,21 +320,45 @@ export default function IdentitiesPage() {
     async (token: string): Promise<Identity[] | null> => {
       const run = begin();
       setLoading(true);
+      setLoadError(null);
       try {
-        const res = await api.listIdentities(100, token || undefined, { signal: run.signal });
+        let list: Identity[] = [];
+        let nextToken = scope ? undefined : token || undefined;
+        if (scope) {
+          const seen = new Set<string>();
+          do {
+            if (nextToken && seen.has(nextToken)) {
+              throw new Error("Identity pagination repeated a page token.");
+            }
+            if (nextToken) seen.add(nextToken);
+            const res = await api.listIdentities(200, nextToken, { signal: run.signal });
+            list.push(...(res.identities ?? []));
+            nextToken = res.next_page_token || undefined;
+          } while (nextToken);
+          list = list.filter(
+            (identity) =>
+              identity.namespace?.env === scope.env && identity.namespace?.app === scope.app,
+          );
+        } else {
+          const res = await api.listIdentities(100, nextToken, { signal: run.signal });
+          list = res.identities ?? [];
+          nextToken = res.next_page_token || undefined;
+        }
         if (!run.current) return null;
-        const list = res.identities ?? [];
         setIdentities(list);
-        setNextToken(res.next_page_token ?? "");
+        setNextToken(scope ? "" : (nextToken ?? ""));
         return list;
       } catch (err) {
-        if (run.current && !isAbortError(err)) toast.error(err, "Failed to load identities");
+        if (run.current && !isAbortError(err)) {
+          setLoadError(err);
+          toast.error(err, "Failed to load identities");
+        }
         return null;
       } finally {
         if (run.current) setLoading(false);
       }
     },
-    [begin, setNextToken, toast],
+    [begin, scope, setNextToken, toast],
   );
 
   useEffect(() => {
@@ -422,7 +452,6 @@ export default function IdentitiesPage() {
 
   // `?new=1&env=&app=` (the Connect SDK panel's "Create identity" link) opens
   // the create flow once with the namespace prefilled.
-  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app", "name"]);
   const prefillConsumed = useRef(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: openCreate is a plain function of state setters; run once per prefill.
   useEffect(() => {
@@ -689,7 +718,11 @@ export default function IdentitiesPage() {
     <>
       <PageHeader
         title="Identities"
-        subtitle="Connect applications and manage the credentials they use to authenticate to KMS."
+        subtitle={
+          scope
+            ? `Showing identities bound to ${scope.env}/${scope.app}, including revoked identities.`
+            : "Connect applications and manage the credentials they use to authenticate to KMS."
+        }
         actions={<Button onClick={() => openCreate()}>Connect application</Button>}
       />
 
@@ -728,7 +761,17 @@ export default function IdentitiesPage() {
         </div>
       </details>
 
-      {loading ? (
+      {loadError && !loading ? (
+        <EmptyState
+          icon={<Icon.identity size={20} />}
+          title={scope ? "Could not locate bound identities" : "Could not load identities"}
+          actions={<Button onClick={() => void load(paging.pageToken)}>Try again</Button>}
+        >
+          {scope
+            ? `Retry the complete identity scan for ${scope.env}/${scope.app}.`
+            : "Retry the identity list."}
+        </EmptyState>
+      ) : loading ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
           leading={canBulkRevoke ? 1 : 0}
@@ -741,10 +784,12 @@ export default function IdentitiesPage() {
       ) : identities.length === 0 ? (
         <EmptyState
           icon={<Icon.identity size={20} />}
-          title="No identities yet"
+          title={scope ? `No identities bound to ${scope.env}/${scope.app}` : "No identities yet"}
           actions={<Button onClick={() => openCreate()}>Connect application</Button>}
         >
-          Create an application identity and issue its first client certificate.
+          {scope
+            ? "No active or revoked identity is currently bound to this namespace."
+            : "Create an application identity and issue its first client certificate."}
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
@@ -908,15 +953,17 @@ export default function IdentitiesPage() {
         />
       ) : null}
 
-      <Pagination
-        hasNext={paging.hasNext}
-        onNext={paging.next}
-        hasPrevious={paging.hasPrevious}
-        onPrevious={paging.previous}
-        onReset={paging.reset}
-        showReset={paging.hasPrevious}
-        page={paging.page}
-      />
+      {!scope && !loadError ? (
+        <Pagination
+          hasNext={paging.hasNext}
+          onNext={paging.next}
+          hasPrevious={paging.hasPrevious}
+          onPrevious={paging.previous}
+          onReset={paging.reset}
+          showReset={paging.hasPrevious}
+          page={paging.page}
+        />
+      ) : null}
 
       <BulkDeleteDialog
         open={bulkOpen}

@@ -5,6 +5,7 @@ import type { ConnectSdkPanelProps } from "@/components/applications/contracts";
 import CopyButton from "@/components/CopyButton";
 import { Ident } from "@/components/Ident";
 import { Field, Input } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { links } from "@/lib/links";
 import {
@@ -14,6 +15,7 @@ import {
   type SnippetInput,
   tsSnippet,
 } from "@/lib/sdk-snippets";
+import type { AuthMethod } from "@/lib/types";
 
 export type { ConnectSdkPanelProps };
 
@@ -73,6 +75,7 @@ const TROUBLESHOOTING: Array<{ title: string; detail: string }> = [
  */
 export default function ConnectSdkPanel({
   namespace,
+  allowedAuthMethods,
   releaseName,
   aliases,
   health,
@@ -93,6 +96,10 @@ export default function ConnectSdkPanel({
     serverEndpoint && !isWildcardEndpoint(serverEndpoint) ? serverEndpoint : "";
   const endpoint = typed.trim() || reportedEndpoint;
   const tls = health?.tls_enabled !== false;
+  const [preferredMethod, setPreferredMethod] = useState<AuthMethod>("mtls");
+  const configuredMethods: readonly AuthMethod[] = allowedAuthMethods ?? ["mtls", "token"];
+  const methods = configuredMethods.filter((method) => method === "token" || tls);
+  const authMethod = methods.includes(preferredMethod) ? preferredMethod : methods[0];
   const input: SnippetInput = useMemo(
     () => ({
       endpoint,
@@ -101,8 +108,9 @@ export default function ConnectSdkPanel({
       releaseName,
       alias: aliases[0] ?? "",
       tls,
+      authMethod,
     }),
-    [endpoint, namespace.env, namespace.app, releaseName, aliases, tls],
+    [endpoint, namespace.env, namespace.app, releaseName, aliases, tls, authMethod],
   );
   const go = useMemo(() => goSnippet(input), [input]);
   const ts = useMemo(() => tsSnippet(input), [input]);
@@ -132,7 +140,7 @@ export default function ConnectSdkPanel({
           <div>
             <strong>The gRPC listener serves without TLS.</strong> Client tokens and values travel
             in clear text. Only use this against a loopback development server; production clients
-            must use mTLS.
+            must use TLS.
           </div>
         </div>
       ) : null}
@@ -165,34 +173,55 @@ export default function ConnectSdkPanel({
         />
       </Field>
 
-      <Tabs defaultValue="go" className="connect-tabs">
-        <TabsList aria-label="SDK language">
-          <TabsTrigger value="go">Go</TabsTrigger>
-          <TabsTrigger value="ts">TypeScript</TabsTrigger>
-        </TabsList>
-        <TabsContent value="go">
-          <div className="connect-snippet">
-            <div className="connect-snippet-bar">
-              <span className="connect-snippet-lang">Go · kmsclient.ReleaseLoader</span>
-              <CopyButton value={go} label="Copy Go snippet" />
+      {authMethod ? (
+        <Field label="Authentication" hint="Use credentials accepted by this environment.">
+          <AppSelect
+            value={authMethod}
+            onValueChange={(method) => setPreferredMethod(method as AuthMethod)}
+            disabled={methods.length === 1}
+            options={methods.map((method) => ({
+              value: method,
+              label: method === "mtls" ? "mTLS client certificate" : "Token",
+            }))}
+          />
+        </Field>
+      ) : (
+        <div className="connect-warning" role="alert">
+          This environment requires mTLS, but the listener has TLS disabled. Enable TLS before
+          connecting an SDK.
+        </div>
+      )}
+
+      {authMethod ? (
+        <Tabs defaultValue="go" className="connect-tabs">
+          <TabsList aria-label="SDK language">
+            <TabsTrigger value="go">Go</TabsTrigger>
+            <TabsTrigger value="ts">TypeScript</TabsTrigger>
+          </TabsList>
+          <TabsContent value="go">
+            <div className="connect-snippet">
+              <div className="connect-snippet-bar">
+                <span className="connect-snippet-lang">Go · kmsclient.ReleaseLoader</span>
+                <CopyButton value={go} label="Copy Go snippet" />
+              </div>
+              <pre className="connect-code">
+                <code>{go}</code>
+              </pre>
             </div>
-            <pre className="connect-code">
-              <code>{go}</code>
-            </pre>
-          </div>
-        </TabsContent>
-        <TabsContent value="ts">
-          <div className="connect-snippet">
-            <div className="connect-snippet-bar">
-              <span className="connect-snippet-lang">TypeScript · @suhaibinator/kms</span>
-              <CopyButton value={ts} label="Copy TypeScript snippet" />
+          </TabsContent>
+          <TabsContent value="ts">
+            <div className="connect-snippet">
+              <div className="connect-snippet-bar">
+                <span className="connect-snippet-lang">TypeScript · @suhaibinator/kms</span>
+                <CopyButton value={ts} label="Copy TypeScript snippet" />
+              </div>
+              <pre className="connect-code">
+                <code>{ts}</code>
+              </pre>
             </div>
-            <pre className="connect-code">
-              <code>{ts}</code>
-            </pre>
-          </div>
-        </TabsContent>
-      </Tabs>
+          </TabsContent>
+        </Tabs>
+      ) : null}
 
       <div className="connect-links">
         <Link

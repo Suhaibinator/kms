@@ -114,6 +114,11 @@ export function ReleaseWorkspace({
   const previousSummary = summary?.current
     ? sameNameReleases.find((candidate) => candidate.previous)
     : undefined;
+  const currentSummary = sameNameReleases.find((candidate) => candidate.current);
+  // An inactive version has no activation revision of its own. Its rollout
+  // remains a view of this name's current activation.
+  const rolloutActivationRevision =
+    currentSummary?.activation_revision ?? summary?.activation_revision ?? 0;
 
   return (
     <Modal
@@ -320,7 +325,8 @@ export function ReleaseWorkspace({
             <RolloutPanel
               namespace={release.namespace}
               releaseName={release.name}
-              activationRevision={summary.activation_revision}
+              activationRevision={rolloutActivationRevision}
+              followCurrentActivation
               enabled={section === "rollout"}
               caption={
                 summary.current

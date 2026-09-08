@@ -1,3 +1,5 @@
+import { tokenizeJson } from "./json-text";
+
 export interface SchemaDifference {
   path: string;
   change: "added" | "removed" | "changed";
@@ -7,6 +9,30 @@ export interface SchemaDifference {
  * their owning field, so nested additions do not obscure their parent. */
 export interface StructuredSchemaDifference extends SchemaDifference {
   segments: string[];
+}
+
+/** A number marker must not also be a user-supplied object key in either schema. */
+function unusedNumberKey(documents: string[]): string {
+  const keys = new Set<string>();
+  for (const document of documents) {
+    for (const token of tokenizeJson(document)) {
+      if (token.kind === "key") keys.add(JSON.parse(document.slice(token.start, token.end)));
+    }
+  }
+  let key = "\u0000kms.schema-number";
+  while (keys.has(key)) key += "_";
+  return key;
+}
+
+/** Preserve JSON number tokens before JSON.parse can round them to IEEE-754 values. */
+function parseSchema(document: string, numberKey: string): unknown {
+  let encoded = "";
+  for (const token of tokenizeJson(document)) {
+    if (token.kind === "error") throw new Error("Invalid schema JSON");
+    const raw = document.slice(token.start, token.end);
+    encoded += token.kind === "number" ? JSON.stringify({ [numberKey]: raw }) : raw;
+  }
+  return JSON.parse(encoded);
 }
 
 export function structuredSchemaDifferences(
@@ -75,7 +101,8 @@ export function structuredSchemaDifferences(
       visit(prefixA[index], prefixB[index], [...segments, String(index)]);
   }
   try {
-    visit(JSON.parse(before || "{}"), JSON.parse(after), []);
+    const numberKey = unusedNumberKey([before || "{}", after]);
+    visit(parseSchema(before || "{}", numberKey), parseSchema(after, numberKey), []);
   } catch {
     return [{ path: "Schema document", segments: [], change: "changed" }];
   }
