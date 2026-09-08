@@ -294,6 +294,9 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 	if rel.GetName() != name {
 		return nil, nil, fmt.Errorf("release %s: server returned a different release", name)
 	}
+	if rel.GetSchemaVersion() != schemaVersion {
+		return nil, nil, fmt.Errorf("release %s: server returned schema %d, requested %d", name, rel.GetSchemaVersion(), schemaVersion)
+	}
 	// Validate the whole manifest's namespace boundary before fetching any
 	// resource. A malformed foreign pin must not become a resource-existence
 	// oracle or leave the caller with a partially verified candidate.

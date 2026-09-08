@@ -1002,6 +1002,71 @@ func TestEnvReleaseRejectsTamperedManifestBeforeReads(t *testing.T) {
 	}
 }
 
+func TestEnvReleaseValidatesReturnedSchemaBeforeResourceReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, command       string
+		requested, returned uint64
+		wantSuccess         bool
+	}{
+		{name: "env explicit zero rejects schema seven", command: "env", requested: 0, returned: 7},
+		{name: "env explicit seven rejects schema zero", command: "env", requested: 7, returned: 0},
+		{name: "exec explicit zero rejects schema seven", command: "exec", requested: 0, returned: 7},
+		{name: "exec explicit seven rejects schema zero", command: "exec", requested: 7, returned: 0},
+		{name: "env matching positive schema", command: "env", requested: 7, returned: 7, wantSuccess: true},
+		{name: "exec matching positive schema", command: "exec", requested: 7, returned: 7, wantSuccess: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var f *envFixture
+			var launched func() bool
+			if tc.command == "exec" {
+				execFixture := newExecFixture(t, exitOK, nil)
+				f = execFixture.envFixture
+				launched = func() bool { return execFixture.launched.called }
+			} else {
+				f = newEnvFixture(t)
+				launched = func() bool { return false }
+			}
+			f.installRelease()
+			f.releases.release.SchemaVersion = tc.returned
+			setEnvTestReleaseDigest(f.releases.release)
+			selector := strconv.FormatUint(tc.requested, 10)
+			var code int
+			if tc.command == "exec" {
+				code = f.runExec([]string{"--release", "runtime", "--schema-version", selector, "--no-secrets"}, "workload")
+			} else {
+				code = f.run("--release", "runtime", "--schema-version", selector, "--no-secrets")
+			}
+			if tc.wantSuccess {
+				if code != exitOK {
+					t.Fatalf("exit=%d stderr=%s", code, f.stderr())
+				}
+				if tc.command == "exec" && !launched() {
+					t.Fatal("matching release schema did not launch child")
+				}
+				return
+			}
+			if code != exitError {
+				t.Fatalf("exit=%d, want %d; stderr=%s", code, exitError, f.stderr())
+			}
+			want := fmt.Sprintf("server returned schema %d, requested %d", tc.returned, tc.requested)
+			if !strings.Contains(f.stderr(), want) {
+				t.Fatalf("stderr=%q, want %q", f.stderr(), want)
+			}
+			if f.stdout() != "" {
+				t.Fatalf("stdout=%q, want no values", f.stdout())
+			}
+			if got := f.rec.count("GetParameter") + f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); got != 0 {
+				t.Fatalf("foreign schema caused %d resource reads: %+v", got, f.rec.snapshot())
+			}
+			if launched() {
+				t.Fatal("foreign schema launched child")
+			}
+		})
+	}
+}
+
 // TestEnvReleaseRejectsForeignPinsBeforeReads proves the namespace boundary is
 // checked for the complete manifest before any pinned resource is fetched.
 // This avoids both partial candidate resolution and a foreign-resource oracle.
