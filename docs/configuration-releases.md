@@ -535,7 +535,11 @@ access. The loader pins the resolved version for startup, subscriptions,
 reconnects, reconciliation, and the final active check before commit. A known
 track without an activation can remain subscribed until its first release becomes
 active. Unknown-track and permission errors terminate the loader; temporary
-connection failures still retry.
+connection failures still retry. If a retained acknowledgement references an
+activation that is no longer available, the server rejects that acknowledgement
+without closing the watch or recording lifecycle state. SDKs discard only its
+matching sequence and continue watching and reconciling; rejection responses do
+not advance the release cursor.
 
 Generated managed clients supply their embedded digest automatically. Regenerate
 bindings with the updated generator. Generated schemas include a sorted
@@ -547,3 +551,11 @@ This change requires a **fresh database** and updated server, SDKs, and generate
 clients. Previous database baselines are rejected without conversion or deletion.
 Create and provision a new database explicitly; retain any existing database
 separately. Unscoped old clients cannot subscribe to schema-backed releases.
+
+Existing database inspection uses a private temporary copy of the database and
+WAL so a rejected database and its sidecars remain untouched, including
+uncheckpointed WAL contents. Inspection needs temporary space for that copy and
+roughly two sequential reads of the source files. Concurrent changes cause
+bounded retries and then a retry error. A nonempty rollback journal requires
+operator recovery before inspection; KMS does not perform that recovery on the
+original files.
