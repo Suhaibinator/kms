@@ -1524,9 +1524,10 @@ parameter-store release rollback prod/gradethis runtime 1 --schema-version 1 \
 ```
 
 Both commands confirm first. `activate` prints the diff from the currently
-active release to stderr — or `No active release in prod/gradethis; runtime v1
-will become the first.` — and then asks `[y/N]`; `rollback` names the exact
-transition (`roll back release runtime from v3 to v2 in prod/gradethis`) and
+active release to stderr — or `No active release in prod/gradethis; runtime
+schema 1 version 1 will become the first.` — and then asks `[y/N]`; `rollback`
+names the exact transition (`roll back release runtime schema 1 from version 3
+to version 2 in prod/gradethis`) and
 asks the operator to retype `prod/gradethis`. Neither preview is suppressed by
 `--quiet`. A pipeline
 must pass `--yes`, or the command refuses on its non-interactive stdin without
