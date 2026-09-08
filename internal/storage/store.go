@@ -252,17 +252,20 @@ func incompatibleBaseline(format string, args ...any) error {
 }
 
 func inspectBaselinePath(path string) (bool, error) {
-	abs, err := filepath.Abs(path)
+	// SQLite may create WAL/SHM files even in mode=ro. Inspect an isolated
+	// copy instead, including committed pages that have not left the WAL yet.
+	snapshot, cleanup, err := copyBaselineSnapshot(path)
 	if err != nil {
-		return false, fmt.Errorf("resolve database path %q: %w", path, err)
+		return false, err
 	}
-	databaseURI := sqliteFileURI(filepath.ToSlash(abs))
-	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
+	defer cleanup()
+	databaseURI := sqliteFileURI(filepath.ToSlash(snapshot))
+	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=rw"), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
 		SkipDefaultTransaction: true,
 	})
 	if err != nil {
-		return false, incompatibleBaseline("cannot inspect database %q read-only: %v", path, err)
+		return false, incompatibleBaseline("cannot inspect database %q isolated snapshot: %v", path, err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
