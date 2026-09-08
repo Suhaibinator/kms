@@ -26,9 +26,17 @@ _APPLY_STATUSES = {"create", "unchanged", "update", "blocked"}
 
 def make_verify_request(
     *, namespace: str, release: str, profile: str, schema_sha256: str,
+    schema_version: int | None,
     entries: Iterable[VerifyDefaultEntry | Mapping[str, object]],
 ) -> tuple[kms_pb2.VerifyReleaseDefaultsRequest, set[str]]:
     ns = parse_namespace(namespace)
+    if (schema_version is None) == (not schema_sha256):
+        raise errors.ConfigError("exactly one of schema_version or schema_sha256 is required")
+    if schema_version is not None and (
+        isinstance(schema_version, bool) or not isinstance(schema_version, int)
+        or not 0 <= schema_version < 2**64
+    ):
+        raise errors.ConfigError("schema_version must be a uint64 integer")
     if schema_sha256 and not _SHA256.fullmatch(schema_sha256):
         raise errors.ConfigError("schema_sha256 must be lowercase 64-character hex")
     wire_entries = []
@@ -60,7 +68,8 @@ def make_verify_request(
     return (
         kms_pb2.VerifyReleaseDefaultsRequest(
             namespace=to_proto_namespace(ns), name=release, profile=profile,
-            schema_sha256=schema_sha256, entries=wire_entries,
+            schema_sha256=schema_sha256, schema_version=schema_version,
+            entries=wire_entries,
         ),
         seen,
     )
@@ -99,6 +108,7 @@ def verify_result(response, requested: set[str]) -> VerifyReleaseDefaultsResult:
             )
     return VerifyReleaseDefaultsResult(
         response.name, response.version, response.activation_revision,
+        response.schema_version,
         response.schema_matches, tuple(entries), response.match_count,
         response.differs_count, response.missing_in_release_count,
         response.unknown_alias_count, response.secret_alias_count,
@@ -109,6 +119,7 @@ def verify_result(response, requested: set[str]) -> VerifyReleaseDefaultsResult:
 def make_apply_request(
     *, namespace: str, artifact: bytes | bytearray | str, overwrite: bool,
     execute: bool, plan_digest: str, update_definition: bool,
+    schema_version: int | None,
 ) -> kms_pb2.ApplyApplicationDefaultsRequest:
     ns = parse_namespace(namespace)
     if isinstance(artifact, str):
@@ -117,9 +128,15 @@ def make_apply_request(
         artifact = bytes(artifact)
     if not isinstance(artifact, bytes) or not artifact:
         raise errors.ConfigError("defaults artifact is required")
+    if schema_version is not None and (
+        isinstance(schema_version, bool) or not isinstance(schema_version, int)
+        or not 0 <= schema_version < 2**64
+    ):
+        raise errors.ConfigError("schema_version must be a uint64 integer")
     return kms_pb2.ApplyApplicationDefaultsRequest(
         namespace=to_proto_namespace(ns), artifact=artifact, overwrite=overwrite,
         execute=execute, plan_digest=plan_digest, update_definition=update_definition,
+        schema_version=schema_version,
     )
 
 

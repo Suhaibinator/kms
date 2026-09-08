@@ -506,12 +506,13 @@ class Client:
         release: str = "",
         profile: str = "",
         schema_sha256: str = "",
+        schema_version: Optional[int] = None,
         timeout: Optional[float] = None,
     ) -> VerifyReleaseDefaultsResult:
         """Compare value-free default hashes with the active release."""
         request, requested = make_verify_request(
             namespace=namespace, release=release, profile=profile,
-            schema_sha256=schema_sha256, entries=entries,
+            schema_sha256=schema_sha256, schema_version=schema_version, entries=entries,
         )
         try:
             response = self._release_stub.VerifyReleaseDefaults(
@@ -530,12 +531,14 @@ class Client:
         execute: bool = False,
         plan_digest: str = "",
         update_definition: bool = False,
+        schema_version: Optional[int] = None,
         timeout: Optional[float] = None,
     ) -> ApplicationDefaultsApplyResult:
         """Preview or execute a generated parameter-only defaults artifact."""
         request = make_apply_request(
             namespace=namespace, artifact=artifact, overwrite=overwrite,
             execute=execute, plan_digest=plan_digest, update_definition=update_definition,
+            schema_version=schema_version,
         )
         try:
             response = self._admin_stub.ApplyApplicationDefaults(

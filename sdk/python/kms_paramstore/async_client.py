@@ -354,12 +354,13 @@ class AsyncClient:
     async def verify_release_defaults(
         self, *, namespace: str,
         entries: Iterable[VerifyDefaultEntry | Mapping[str, object]], release: str = "",
-        profile: str = "", schema_sha256: str = "", timeout: Optional[float] = None,
+        profile: str = "", schema_sha256: str = "", schema_version: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> VerifyReleaseDefaultsResult:
         self._assert_open()
         request, requested = make_verify_request(
             namespace=namespace, release=release, profile=profile,
-            schema_sha256=schema_sha256, entries=entries,
+            schema_sha256=schema_sha256, schema_version=schema_version, entries=entries,
         )
         try:
             response = await self._release_stub.VerifyReleaseDefaults(
@@ -372,12 +373,14 @@ class AsyncClient:
     async def apply_application_defaults(
         self, *, namespace: str, artifact: "bytes | bytearray | str",
         overwrite: bool = False, execute: bool = False, plan_digest: str = "",
-        update_definition: bool = False, timeout: Optional[float] = None,
+        update_definition: bool = False, schema_version: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> ApplicationDefaultsApplyResult:
         self._assert_open()
         request = make_apply_request(
             namespace=namespace, artifact=artifact, overwrite=overwrite,
             execute=execute, plan_digest=plan_digest, update_definition=update_definition,
+            schema_version=schema_version,
         )
         try:
             response = await self._admin_stub.ApplyApplicationDefaults(

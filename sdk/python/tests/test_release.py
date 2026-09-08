@@ -184,8 +184,15 @@ class _ReleaseStub:
         self.calls: List[_Call] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
+        self.active_requests: List[object] = []
+        self.resolve_requests: List[object] = []
 
-    def GetActiveRelease(self, _request, **_kwargs):
+    def ResolveReleaseSchema(self, request, **_kwargs):
+        self.resolve_requests.append(request)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=1)
+
+    def GetActiveRelease(self, request, **_kwargs):
+        self.active_requests.append(request)
         with self.lock:
             release = kms_pb2.ConfigurationRelease()
             release.CopyFrom(self.release)
@@ -300,6 +307,7 @@ def _loader(monkeypatch, initial, **config):
     client = _Client()
     settings = {
         "name": "runtime",
+        "schema_version": 1,
         "reconcile_interval": 10.0,
         "reconnect_initial": 0.01,
         "reconnect_max": 0.02,
@@ -310,6 +318,44 @@ def _loader(monkeypatch, initial, **config):
         ReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
+
+
+def test_schema_selector_requires_exactly_one_valid_track() -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        ReleaseLoaderConfig(name="runtime")
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        ReleaseLoaderConfig(name="runtime", schema_version=0, schema_sha256="a" * 64)
+    assert ReleaseLoaderConfig(name="runtime", schema_version=0).schema_version == 0
+
+
+def test_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
+    loader, stub, _client = _loader(
+        monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64
+    )
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: loader.status().state == "applied")
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert len(stub.resolve_requests) == 1
+    assert stub.resolve_requests[0].schema_sha256 == "a" * 64
+    assert all(request.schema_version == 1 for request in stub.active_requests)
+    assert wait_until(lambda: bool(stub.registrations and stub.acknowledgements))
+    assert all(request.schema_version == 1 for request in stub.registrations)
+    assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+
+def test_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):
+    matching = _release(1, 10)
+    foreign = _release(2, 20)
+    foreign[0].schema_version = 2
+    foreign[0].digest = release_module._release_digest(foreign[0])
+    loader, _stub, _client = _loader(monkeypatch, matching)
+    loader._offer_candidate(release_module._Candidate(*matching))
+    loader._offer_candidate(release_module._Candidate(*foreign))
+    assert loader._pending_candidate is not None
+    assert loader._pending_candidate.release.schema_version == 1
+    assert loader.status().observed_revision == 10
 
 
 def _run_in_thread(loader, prepare):
@@ -942,6 +988,7 @@ def test_resource_resolution_respects_concurrency_bound(monkeypatch):
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
         name="runtime",
         version=1,
+        schema_version=1,
         entries=entries,
     )
     release.digest = release_module._release_digest(release)

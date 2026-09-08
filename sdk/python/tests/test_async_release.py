@@ -112,8 +112,15 @@ class _AsyncReleaseStub:
         self.calls: List[_AsyncCall] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
+        self.active_requests: List[object] = []
+        self.resolve_requests: List[object] = []
 
-    async def GetActiveRelease(self, _request, **_kwargs):
+    async def ResolveReleaseSchema(self, request, **_kwargs):
+        self.resolve_requests.append(request)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=1)
+
+    async def GetActiveRelease(self, request, **_kwargs):
+        self.active_requests.append(request)
         release = kms_pb2.ConfigurationRelease()
         release.CopyFrom(self.release)
         return kms_pb2.GetActiveReleaseResponse(
@@ -235,6 +242,7 @@ def _loader(monkeypatch, initial, **config):
     client = _AsyncClient()
     settings = {
         "name": "runtime",
+        "schema_version": 1,
         "reconcile_interval": 10.0,
         "reconnect_initial": 0.01,
         "reconnect_max": 0.02,
@@ -245,6 +253,49 @@ def _loader(monkeypatch, initial, **config):
         AsyncReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
+
+
+def test_async_schema_selector_requires_exactly_one_valid_track() -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        AsyncReleaseLoaderConfig(name="runtime")
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        AsyncReleaseLoaderConfig(
+            name="runtime", schema_version=0, schema_sha256="a" * 64
+        )
+    assert AsyncReleaseLoaderConfig(name="runtime", schema_version=0).schema_version == 0
+
+
+def test_async_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch, _release(1, 10), schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: _Prepared()))
+        await _wait_for(lambda: loader.status().state == "applied")
+        loader.stop()
+        await task
+        assert len(stub.resolve_requests) == 1
+        assert stub.resolve_requests[0].schema_sha256 == "a" * 64
+        assert all(request.schema_version == 1 for request in stub.active_requests)
+        assert stub.registrations and stub.acknowledgements
+        assert all(request.schema_version == 1 for request in stub.registrations)
+        assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+    asyncio.run(scenario())
+
+
+def test_async_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):
+    matching = _release(1, 10)
+    foreign = _release(2, 20)
+    foreign[0].schema_version = 2
+    foreign[0].digest = release_module._release_digest(foreign[0])
+    loader, _stub, _client = _loader(monkeypatch, matching)
+    loader._offer_candidate(release_module._Candidate(*matching))
+    loader._offer_candidate(release_module._Candidate(*foreign))
+    assert loader._candidate_queue.qsize() == 1
+    assert loader._candidate_queue.get_nowait().release.schema_version == 1
+    assert loader.status().observed_revision == 10
 
 
 def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):

@@ -62,10 +62,10 @@ class GeneratedConfigStore(ConfigBinding[_RootConfig]):
         return cast(Snapshot, super().current)
 
     def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[_RootConfig]:
-        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)
 
     async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[_RootConfig]:
-        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)
 
     def defaults_artifact(self, profile: str) -> str:
         return _encode_defaults_artifact(profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, parameters=self.encode_defaults_groups())

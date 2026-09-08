@@ -240,6 +240,7 @@ class VerifyReleaseDefaultsResult:
     release_name: str
     release_version: int
     activation_revision: int
+    schema_version: int
     schema_matches: bool
     entries: Tuple[VerifyDefaultVerdict, ...]
     match_count: int

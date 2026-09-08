@@ -280,6 +280,8 @@ class ReleaseLoaderConfig:
 
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
+    schema_version: Optional[int] = None
+    schema_sha256: str = ""
     reconcile_interval: float = 60.0
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
@@ -293,6 +295,18 @@ class ReleaseLoaderConfig:
     request_timeout: Optional[float] = None
 
     def __post_init__(self) -> None:
+        if (self.schema_version is None) == (not self.schema_sha256):
+            raise errors.ConfigError(
+                "exactly one of release schema_version or schema_sha256 is required"
+            )
+        if self.schema_version is not None and (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or not 0 <= self.schema_version < 2**64
+        ):
+            raise errors.ConfigError("release schema_version must be a uint64 integer")
+        if self.schema_sha256 and not _valid_sha256_hex(self.schema_sha256):
+            raise errors.ConfigError("release schema_sha256 must be lowercase 64-character hex")
         object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
@@ -349,6 +363,7 @@ class ReleaseLoader:
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
+        self._schema_version = config.schema_version
 
         self._run_lock = threading.Lock()
         self._running = False
@@ -469,6 +484,7 @@ class ReleaseLoader:
             thread_name_prefix="kms-release-resolve",
         )
         try:
+            self._ensure_schema_version()
             initial = self._read_active()
         except Exception:
             with self._run_lock:
@@ -561,11 +577,34 @@ class ReleaseLoader:
 
     # --- candidate lifecycle ---------------------------------------------
 
+    def _ensure_schema_version(self) -> None:
+        if self._schema_version is not None:
+            return
+        try:
+            response = self._stub.ResolveReleaseSchema(
+                kms_pb2.ResolveReleaseSchemaRequest(
+                    namespace=to_proto_namespace(self._namespace),
+                    name=self._config.name,
+                    schema_sha256=self._config.schema_sha256,
+                ),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        self._schema_version = response.schema_version
+
+    def _require_schema_version(self) -> int:
+        if self._schema_version is None:
+            raise ReleaseLoaderError("release schema has not been resolved")
+        return self._schema_version
+
     def _read_active(self) -> _Candidate:
         try:
             response = self._stub.GetActiveRelease(
                 kms_pb2.GetActiveReleaseRequest(
-                    namespace=to_proto_namespace(self._namespace), name=self._config.name
+                    namespace=to_proto_namespace(self._namespace), name=self._config.name,
+                    schema_version=self._require_schema_version(),
                 ),
                 metadata=self._client._auth_metadata(),
                 timeout=self._client._call_timeout(self._config.request_timeout),
@@ -576,6 +615,8 @@ class ReleaseLoader:
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
         if not candidate.release.name:  # type: ignore[attr-defined]
+            return
+        if candidate.release.schema_version != self._require_schema_version():
             return
         accepted = False
         with self._candidate_cond:
@@ -738,6 +779,7 @@ class ReleaseLoader:
             or release.name != self._config.name
             or release.namespace.env != self._namespace.env
             or release.namespace.app != self._namespace.app
+            or release.schema_version != self._require_schema_version()
         ):
             raise _CandidateFailure("version_mismatch", "release identity mismatch")
         try:
@@ -984,6 +1026,7 @@ class ReleaseLoader:
                 client_name=self._client_name,
                 instance_id=self._instance_id,
                 last_seen_revision=last_seen,
+                schema_version=self._require_schema_version(),
             )
         )
 
@@ -1068,6 +1111,7 @@ class ReleaseLoader:
             timestamp_unix_ms=_now_ms(),
             applied_divergent=state == "applied" and divergence[0],
             divergent_field_count=divergence[1] if state == "applied" and divergence[0] else 0,
+            schema_version=self._require_schema_version(),
         )
         with self._ack_cond:
             current = self._ack_latest.get(state)

@@ -59,6 +59,8 @@ class AsyncReleaseLoaderConfig:
 
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
+    schema_version: Optional[int] = None
+    schema_sha256: str = ""
     reconcile_interval: float = 60.0
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
@@ -72,6 +74,18 @@ class AsyncReleaseLoaderConfig:
     request_timeout: Optional[float] = None
 
     def __post_init__(self) -> None:
+        if (self.schema_version is None) == (not self.schema_sha256):
+            raise errors.ConfigError(
+                "exactly one of release schema_version or schema_sha256 is required"
+            )
+        if self.schema_version is not None and (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or not 0 <= self.schema_version < 2**64
+        ):
+            raise errors.ConfigError("release schema_version must be a uint64 integer")
+        if self.schema_sha256 and not _valid_sha256_hex(self.schema_sha256):
+            raise errors.ConfigError("release schema_sha256 must be lowercase 64-character hex")
         object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
@@ -99,6 +113,7 @@ class AsyncReleaseLoader:
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
+        self._schema_version = config.schema_version
         self._running = False
         self._stop_event = asyncio.Event()
         self._candidate_queue: "asyncio.Queue[_Candidate]" = asyncio.Queue(maxsize=1)
@@ -191,6 +206,8 @@ class AsyncReleaseLoader:
                 namespace = await namespace
             self._namespace = namespace
 
+            await self._ensure_schema_version()
+
             try:
                 initial = await self._read_active()
             except Exception:
@@ -262,8 +279,32 @@ class AsyncReleaseLoader:
         await stop_event.wait()
         self.stop()
 
+    async def _ensure_schema_version(self) -> None:
+        if self._schema_version is not None:
+            return
+        try:
+            response = await self._stub.ResolveReleaseSchema(
+                kms_pb2.ResolveReleaseSchemaRequest(
+                    namespace=to_proto_namespace(self._require_namespace()),
+                    name=self._config.name,
+                    schema_sha256=self._config.schema_sha256,
+                ),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        self._schema_version = response.schema_version
+
+    def _require_schema_version(self) -> int:
+        if self._schema_version is None:
+            raise ReleaseStartupError("release schema has not been resolved")
+        return self._schema_version
+
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
         if self._stop_event.is_set() or not candidate.release.name:
+            return
+        if candidate.release.schema_version != self._require_schema_version():
             return
         if candidate.revision and candidate.revision < self._last_seen_revision:
             return
@@ -422,6 +463,7 @@ class AsyncReleaseLoader:
             or release.name != self._config.name
             or release.namespace.env != namespace.env
             or release.namespace.app != namespace.app
+            or release.schema_version != self._require_schema_version()
         ):
             raise _CandidateFailure("version_mismatch")
         try:
@@ -587,6 +629,7 @@ class AsyncReleaseLoader:
                 kms_pb2.GetActiveReleaseRequest(
                     namespace=to_proto_namespace(self._require_namespace()),
                     name=self._config.name,
+                    schema_version=self._require_schema_version(),
                 ),
                 metadata=self._client._auth_metadata(),
                 timeout=self._client._call_timeout(self._config.request_timeout),
@@ -660,6 +703,7 @@ class AsyncReleaseLoader:
                         client_name=self._client_name,
                         instance_id=self._instance_id,
                         last_seen_revision=self._last_seen_revision,
+                        schema_version=self._require_schema_version(),
                     )
                 )
             )
@@ -776,6 +820,7 @@ class AsyncReleaseLoader:
             timestamp_unix_ms=_now_ms(),
             applied_divergent=state == "applied" and divergence[0],
             divergent_field_count=divergence[1] if state == "applied" and divergence[0] else 0,
+            schema_version=self._require_schema_version(),
         )
         current = self._ack_latest.get(state)
         if current is None or current[1].activation_revision <= candidate.revision:
