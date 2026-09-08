@@ -492,3 +492,90 @@ it("clears stale control drafts on an explicit restore without remounting the fo
   view.rerender(<SchemaForm {...props} resetKey="restored" />);
   expect(screen.getByRole("textbox", { name: "count" })).toHaveValue("10");
 });
+
+it("distinguishes omitted, empty, populated and null arrays without changing other values", () => {
+  render(
+    <Harness
+      initial={'{"keep":"unchanged"}'}
+      schema={{
+        type: "object",
+        properties: {
+          keep: { type: "string" },
+          urls: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
+        },
+      }}
+    />,
+  );
+  const state = screen.getByRole("combobox", { name: "urls state" });
+  expect(state).toHaveValue("unset");
+  expect(screen.getByText("Not set · property omitted")).toBeVisible();
+  fireEvent.change(state, { target: { value: "set" } });
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
+    keep: "unchanged",
+    urls: [],
+  });
+  expect(screen.getByText("Empty array · 0 items")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Add urls item" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "urls item 1" }), {
+    target: { value: "https://example.com" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Remove urls item 1" }));
+  expect(state).toHaveValue("set");
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
+    keep: "unchanged",
+    urls: [],
+  });
+  fireEvent.change(state, { target: { value: "null" } });
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({
+    keep: "unchanged",
+    urls: null,
+  });
+  fireEvent.change(state, { target: { value: "unset" } });
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ keep: "unchanged" });
+});
+
+it("validates required and nonempty arrays separately and supports object lists", () => {
+  render(
+    <Harness
+      initial="{}"
+      schema={{
+        type: "object",
+        required: ["rows"],
+        properties: {
+          rows: {
+            type: "array",
+            minItems: 1,
+            items: { type: "object", properties: { name: { type: "string" } } },
+          },
+        },
+      }}
+    />,
+  );
+  const state = screen.getByRole("combobox", { name: "rows state" });
+  expect(state).toHaveAttribute("aria-invalid", "true");
+  expect(screen.queryByRole("option", { name: "Null" })).toBeNull();
+  fireEvent.change(state, { target: { value: "set" } });
+  expect(state).toHaveAttribute("aria-invalid", "true");
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ rows: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Add rows item" }));
+  expect(state).not.toHaveAttribute("aria-invalid");
+  fireEvent.click(screen.getByRole("button", { name: "Remove rows item 1" }));
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({ rows: [] });
+  fireEvent.change(state, { target: { value: "unset" } });
+  expect(JSON.parse(screen.getByTestId("out").textContent!)).toEqual({});
+});
+
+it("exposes null for type unions and disables array state changes with the editor", () => {
+  render(
+    <Harness
+      initial={'{"urls":null}'}
+      disabled
+      schema={{
+        type: "object",
+        properties: { urls: { type: ["array", "null"], items: { type: "string" } } },
+      }}
+    />,
+  );
+  expect(screen.getByRole("combobox", { name: "urls state" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "urls state" })).toHaveValue("null");
+});

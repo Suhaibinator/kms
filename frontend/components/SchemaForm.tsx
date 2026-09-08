@@ -566,15 +566,90 @@ export function SchemaForm({
         const items = Array.isArray(current) ? current : [];
         const error = errorFor(field, null);
         const hint = hintFor(field, current);
-        const removeItem = (index: number) =>
-          commit(
-            field.path,
-            items.filter((_, position) => position !== index),
+        const nullable =
+          field.nullable ||
+          (Array.isArray(field.schema.type) && field.schema.type.includes("null"));
+        const state =
+          current === undefined
+            ? "unset"
+            : current === null
+              ? "null"
+              : Array.isArray(current)
+                ? "set"
+                : "invalid";
+        const replaceList = (next: unknown) => {
+          // Item indices can be reused after a clear, unset or removal. Do not
+          // overlay the replacement list with old numeric/JSON input drafts.
+          setDrafts((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).filter(
+                ([draftKey]) => draftKey !== key && !draftKey.startsWith(`${key} `),
+              ),
+            ),
           );
+          commit(field.path, next);
+        };
+        const stateControl = (
+          <div className="row-wrap">
+            <select
+              id={`${controlId}-state`}
+              className="native-select w-full rounded-md border border-input bg-input/30 px-3 py-2 sm:w-48"
+              aria-label={`${label} state`}
+              aria-invalid={error ? true : undefined}
+              disabled={disabled}
+              value={state}
+              onChange={(event) =>
+                replaceList(
+                  event.target.value === "unset"
+                    ? undefined
+                    : event.target.value === "null"
+                      ? null
+                      : [],
+                )
+              }
+              onBlur={onBlur}
+            >
+              <option value="unset">Not set</option>
+              <option value="set">Set</option>
+              {nullable && <option value="null">Null</option>}
+              {state === "null" && !nullable && (
+                <option value="null" disabled>
+                  Null (not allowed)
+                </option>
+              )}
+              {state === "invalid" && (
+                <option value="invalid" disabled>
+                  Invalid value
+                </option>
+              )}
+            </select>
+            <span className="faint text-sm" role="status">
+              {state === "unset"
+                ? "Not set · property omitted"
+                : state === "null"
+                  ? "Null · explicit null value"
+                  : state === "set"
+                    ? items.length === 0
+                      ? "Empty array · 0 items"
+                      : `${items.length} item${items.length === 1 ? "" : "s"}`
+                    : "Not an array · use JSON to inspect"}
+            </span>
+          </div>
+        );
+        const removeItem = (index: number) =>
+          replaceList(items.filter((_, position) => position !== index));
         if (field.item === "object" && field.itemField) {
           const itemField = field.itemField;
           return (
-            <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+            <Field
+              key={key}
+              label={label}
+              htmlFor={`${controlId}-state`}
+              required={field.required}
+              hint={hint}
+              error={error}
+            >
+              {stateControl}
               <ul className="schema-form-list" aria-label={`${label} items`}>
                 {items.map((_, index) => {
                   const item = itemAt(field, index);
@@ -609,7 +684,15 @@ export function SchemaForm({
           );
         }
         return (
-          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+          <Field
+            key={key}
+            label={label}
+            htmlFor={`${controlId}-state`}
+            required={field.required}
+            hint={hint}
+            error={error}
+          >
+            {stateControl}
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
                 const itemKey = pathKey([...field.path, String(index)]);
