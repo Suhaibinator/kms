@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -40,19 +41,22 @@ type DefaultsParameterExpectation struct {
 }
 
 type DefaultsApplyTransaction struct {
-	Namespace            domain.NamespaceRef
-	NamespaceID          int64
-	ReleaseName          string
-	SchemaVersion        uint64
-	SchemaDigest         string
-	Contract             []domain.ApplicationContractField
-	UpdateDefinition     bool
-	DesiredSchemaVersion uint64
-	DesiredContract      []domain.ApplicationContractField
-	ResolutionState      []DefaultsResolutionState
-	Resources            []DefaultsResourceIdentity
-	Parameters           []DefaultsParameterExpectation
-	CreatedBy            string
+	ExpectedApplicationSchemaVersion uint64
+	ExpectedApplicationContract      []domain.ApplicationContractField
+	ExpectedApplicationUpdatedAt     time.Time
+	Namespace                        domain.NamespaceRef
+	NamespaceID                      int64
+	ReleaseName                      string
+	SchemaVersion                    uint64
+	SchemaDigest                     string
+	Contract                         []domain.ApplicationContractField
+	UpdateDefinition                 bool
+	DesiredSchemaVersion             uint64
+	DesiredContract                  []domain.ApplicationContractField
+	ResolutionState                  []DefaultsResolutionState
+	Resources                        []DefaultsResourceIdentity
+	Parameters                       []DefaultsParameterExpectation
+	CreatedBy                        string
 }
 
 type DefaultsAppliedWrite struct {

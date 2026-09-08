@@ -149,6 +149,9 @@ func TestFirstReleaseAdoptsApplicationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, err := service.GetApplication(ctx, admin, "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
 	app.Contract, err = store.GetConfigurationSchemaContract(ctx, "worker", "runtime", 0)
 	if err != nil || len(app.Contract) != 1 || app.Contract[0].Alias != "settings" || app.Contract[0].ContentType != "integer" {
 		t.Fatalf("adopted application = %+v err=%v", app, err)

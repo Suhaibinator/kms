@@ -83,6 +83,15 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 	if app.ReleaseName != in.ReleaseName || app.ArchivedAt != nil {
 		return defaultsStale()
 	}
+	if in.UpdateDefinition {
+		expectedContract, err := canonicalSchemaContract(in.ExpectedApplicationContract)
+		if err != nil {
+			return err
+		}
+		if app.SchemaVersion != int64(in.ExpectedApplicationSchemaVersion) || app.ContractJSON != expectedContract || app.UpdatedAt != fmtTime(in.ExpectedApplicationUpdatedAt) {
+			return defaultsStale()
+		}
+	}
 	var ns namespaceModel
 	if err := tx.Where("env = ? AND app = ? AND id = ?", in.Namespace.Env, in.Namespace.App, in.NamespaceID).First(&ns).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

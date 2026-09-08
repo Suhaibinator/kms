@@ -333,3 +333,81 @@ func TestApplicationDefaultsParserDelegatesToSDK(t *testing.T) {
 		t.Fatalf("server parser diverged from SDK: %v", err)
 	}
 }
+
+type defaultsDefinitionRaceStore struct {
+	*storage.SQLStore
+	beforeApply func()
+}
+
+func (s *defaultsDefinitionRaceStore) ApplyDefaults(ctx context.Context, in storage.DefaultsApplyTransaction) ([]storage.DefaultsAppliedWrite, error) {
+	s.beforeApply()
+	return s.SQLStore.ApplyDefaults(ctx, in)
+}
+
+func TestDefaultsDefinitionUpdateRejectsConcurrentRepin(t *testing.T) {
+	for _, stage := range []string{"before_execute", "before_transaction", "aba"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newConsoleTestService(t)
+			admin := adminPrincipal()
+			app := seedConsoleApp(t, svc, admin, "dev")
+			intermediate, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"intermediate"}`, "{}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"target"}`, "{}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := configstore.ParseDefaultsArtifact(consoleDefaultsArtifact(t, `{"host":"changed"}`, "9"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact.SchemaSHA256 = target.Digest
+			raw, err := configstore.EncodeDefaultsArtifact(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := domain.DefaultsApplyInput{Namespace: domain.NamespaceRef{Env: "dev", App: app.Name}, Artifact: raw, Overwrite: true, UpdateDefinition: true}
+			preview, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := app.SchemaVersion
+			expected := intermediate.Version
+			race := func() {
+				app.SchemaVersion = intermediate.Version
+				if _, err := st.UpdateApplication(ctx, app); err != nil {
+					t.Fatal(err)
+				}
+				if stage == "aba" {
+					app.SchemaVersion = original
+					expected = original
+					if _, err := st.UpdateApplication(ctx, app); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if stage == "before_execute" {
+				race()
+			} else {
+				svc.store = &defaultsDefinitionRaceStore{SQLStore: st, beforeApply: race}
+			}
+			before, _ := st.CurrentRevision(ctx)
+			in.Execute = true
+			in.PlanDigest = preview.PlanDigest
+			if _, err := svc.ApplyApplicationDefaults(ctx, admin, in); !errors.Is(err, domain.ErrAborted) {
+				t.Fatalf("concurrent default repin was overwritten: %v", err)
+			}
+			persisted, err := st.GetApplication(ctx, app.Name)
+			if err != nil || persisted.SchemaVersion != expected {
+				t.Fatalf("racing definition lost: %+v %v", persisted, err)
+			}
+			after, _ := st.CurrentRevision(ctx)
+			if before != after {
+				t.Fatal("stale definition update wrote parameters")
+			}
+
+		})
+	}
+}

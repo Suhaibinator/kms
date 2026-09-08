@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
@@ -41,19 +42,22 @@ type defaultsPlanDigestEntry struct {
 }
 
 type defaultsPlanDigestInput struct {
-	ArtifactDigest       string                             `json:"artifact_digest"`
-	NamespaceID          int64                              `json:"namespace_id"`
-	ReleaseName          string                             `json:"release_name"`
-	SchemaVersion        uint64                             `json:"schema_version"`
-	Contract             []domain.ApplicationContractField  `json:"contract"`
-	DesiredSchemaVersion uint64                             `json:"desired_schema_version"`
-	DesiredContract      []domain.ApplicationContractField  `json:"desired_contract"`
-	UpdateDefinition     bool                               `json:"update_definition"`
-	Resolution           []storage.DefaultsResolutionState  `json:"resolution"`
-	Resources            []storage.DefaultsResourceIdentity `json:"resources"`
-	Entries              []defaultsPlanDigestEntry          `json:"entries"`
-	MissingSecrets       []string                           `json:"missing_secrets"`
-	Overwrite            bool                               `json:"overwrite"`
+	ExpectedApplicationSchemaVersion uint64                             `json:"expected_application_schema_version,omitempty"`
+	ExpectedApplicationContract      []domain.ApplicationContractField  `json:"expected_application_contract,omitempty"`
+	ExpectedApplicationUpdatedAt     time.Time                          `json:"expected_application_updated_at,omitempty"`
+	ArtifactDigest                   string                             `json:"artifact_digest"`
+	NamespaceID                      int64                              `json:"namespace_id"`
+	ReleaseName                      string                             `json:"release_name"`
+	SchemaVersion                    uint64                             `json:"schema_version"`
+	Contract                         []domain.ApplicationContractField  `json:"contract"`
+	DesiredSchemaVersion             uint64                             `json:"desired_schema_version"`
+	DesiredContract                  []domain.ApplicationContractField  `json:"desired_contract"`
+	UpdateDefinition                 bool                               `json:"update_definition"`
+	Resolution                       []storage.DefaultsResolutionState  `json:"resolution"`
+	Resources                        []storage.DefaultsResourceIdentity `json:"resources"`
+	Entries                          []defaultsPlanDigestEntry          `json:"entries"`
+	MissingSecrets                   []string                           `json:"missing_secrets"`
+	Overwrite                        bool                               `json:"overwrite"`
 }
 
 func (s *Service) defaultsApplyStore() (storage.DefaultsApplyStore, error) {
@@ -251,6 +255,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		DesiredContract:      append([]domain.ApplicationContractField(nil), desiredApp.Contract...),
 		ResolutionState:      resolution, Resources: resources,
 	}
+	if in.UpdateDefinition {
+		transaction.ExpectedApplicationSchemaVersion = persistedApp.SchemaVersion
+		transaction.ExpectedApplicationContract = persistedApp.Contract
+		transaction.ExpectedApplicationUpdatedAt = persistedApp.UpdatedAt
+	}
 	digestEntries := make([]defaultsPlanDigestEntry, 0, len(artifact.Parameters))
 	blocked := 0
 	keys := make(map[string]string, len(artifact.Parameters))
@@ -328,6 +337,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		DesiredContract:      desiredApp.Contract, UpdateDefinition: in.UpdateDefinition,
 		Resolution: resolution, Resources: resources, Entries: digestEntries,
 		MissingSecrets: result.MissingSecrets, Overwrite: in.Overwrite,
+	}
+	if in.UpdateDefinition {
+		digestInput.ExpectedApplicationSchemaVersion = persistedApp.SchemaVersion
+		digestInput.ExpectedApplicationContract = persistedApp.Contract
+		digestInput.ExpectedApplicationUpdatedAt = persistedApp.UpdatedAt
 	}
 	digestJSON, err := json.Marshal(digestInput, json.Deterministic(true))
 	if err != nil {
