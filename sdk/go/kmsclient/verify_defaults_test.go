@@ -80,8 +80,9 @@ func TestVerifyReleaseDefaultsPassedRequiresSchemaAndAllMatch(t *testing.T) {
 		Entries: []*kmsv1.VerifyEntryVerdict{{Alias: "database", Verdict: VerifyVerdictMatch}},
 	}, nil)
 	options := VerifyReleaseDefaultsOptions{
-		Namespace: "prod/app",
-		Entries:   []VerifyDefaultsEntry{{Alias: "database", ContentType: "json", SHA256: testHashA}},
+		Namespace:    "prod/app",
+		SchemaSHA256: testHashS,
+		Entries:      []VerifyDefaultsEntry{{Alias: "database", ContentType: "json", SHA256: testHashA}},
 	}
 	passed, err := client.VerifyReleaseDefaults(context.Background(), options)
 	if err != nil || !passed.Passed() {
@@ -132,8 +133,9 @@ func TestVerifyReleaseDefaultsValidatesRequests(t *testing.T) {
 		{
 			name:    "both schema selectors",
 			options: VerifyReleaseDefaultsOptions{Namespace: "prod/app", SchemaSHA256: testHashS, SchemaVersion: &schemaVersion},
-			want:    "at most one",
+			want:    "exactly one",
 		},
+		{name: "missing schema selector", options: VerifyReleaseDefaultsOptions{Namespace: "prod/app"}, want: "exactly one"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,7 +153,8 @@ func TestVerifyReleaseDefaultsValidatesRequests(t *testing.T) {
 func TestVerifyReleaseDefaultsValidatesResponses(t *testing.T) {
 	client, server := newUnboundTestClient(t, Config{})
 	options := VerifyReleaseDefaultsOptions{
-		Namespace: "prod/app",
+		Namespace:    "prod/app",
+		SchemaSHA256: testHashS,
 		Entries: []VerifyDefaultsEntry{
 			{Alias: "database", ContentType: "json", SHA256: testHashA},
 			{Alias: "limits", ContentType: "json", SHA256: testHashB},
@@ -217,14 +220,14 @@ func TestVerifyReleaseDefaultsMapsResourceExhaustedToRateLimited(t *testing.T) {
 	client, server := newUnboundTestClient(t, Config{})
 	server.QueueVerifyReleaseDefaultsResponse(nil, status.Error(codes.ResourceExhausted, "verify budget exhausted"))
 	_, err := client.VerifyReleaseDefaults(context.Background(), VerifyReleaseDefaultsOptions{
-		Namespace: "prod/app",
-		Entries:   []VerifyDefaultsEntry{{Alias: "database", SHA256: testHashA}},
+		Namespace: "prod/app", SchemaSHA256: testHashS,
+		Entries: []VerifyDefaultsEntry{{Alias: "database", SHA256: testHashA}},
 	})
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("error = %v, want ErrRateLimited", err)
 	}
 	server.QueueVerifyReleaseDefaultsResponse(nil, status.Error(codes.PermissionDenied, "verify-defaults not granted"))
-	_, err = client.VerifyReleaseDefaults(context.Background(), VerifyReleaseDefaultsOptions{Namespace: "prod/app"})
+	_, err = client.VerifyReleaseDefaults(context.Background(), VerifyReleaseDefaultsOptions{Namespace: "prod/app", SchemaSHA256: testHashS})
 	if !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("error = %v, want ErrPermissionDenied", err)
 	}

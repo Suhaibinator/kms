@@ -16,6 +16,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -45,6 +46,7 @@ type releaseLoaderServer struct {
 	secretFetches          int
 	resolveSchemaVersion   uint64
 	resolveSchemaCalls     int
+	watchErr               error
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
 	watchKills  chan struct{}
@@ -243,6 +245,12 @@ func (s *releaseLoaderServer) WatchRelease(stream kmsv1.ConfigurationReleaseServ
 		return err
 	}
 	s.watchRegs <- first.GetRegister()
+	s.mu.Lock()
+	watchErr := s.watchErr
+	s.mu.Unlock()
+	if watchErr != nil {
+		return watchErr
+	}
 	recvErr := make(chan error, 1)
 	go func() {
 		// Record each acknowledgement before the next Recv so a following EOF
@@ -898,6 +906,85 @@ func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *tes
 	}
 	if err := <-runErr; err == nil || !strings.Contains(err.Error(), ReleaseRejectPrepareFailed) {
 		t.Fatalf("Run error = %v, want %s", err, ReleaseRejectPrepareFailed)
+	}
+}
+
+func TestReleaseLoaderStartsInactiveTrackAndAppliesFirstActivation(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(1, `{"enabled":true}`)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	applied := make(chan ReleaseSnapshot, 1)
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(_ context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
+			applied <- snapshot
+			return &testPreparedRelease{done: make(chan struct{})}, nil
+		})
+	}()
+	select {
+	case registration := <-server.watchRegs:
+		if registration.SchemaVersion == nil || registration.GetSchemaVersion() != 0 || registration.GetLastSeenRevision() != 0 {
+			t.Fatalf("registration = %+v, want inactive schema-zero track", registration)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("inactive release track did not register a watch")
+	}
+	server.setActive(release, 1)
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Event:    &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: release}},
+		Revision: 1,
+	}
+	select {
+	case snapshot := <-applied:
+		if snapshot.Version() != 1 || snapshot.SchemaVersion() != 0 {
+			t.Fatalf("snapshot identity = version %d schema %d", snapshot.Version(), snapshot.SchemaVersion())
+		}
+	case err := <-runErr:
+		t.Fatalf("Run returned before first activation: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first activation was not applied")
+	}
+	cancel()
+	if err := <-runErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run cancellation error = %v", err)
+	}
+}
+
+func TestReleaseLoaderSurfacesPermanentWatchRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		code codes.Code
+		want error
+	}{
+		{name: "unknown numeric track", code: codes.NotFound, want: ErrNotFound},
+		{name: "permission denied", code: codes.PermissionDenied, want: ErrPermissionDenied},
+		{name: "invalid registration", code: codes.InvalidArgument, want: ErrInvalidArgument},
+		{name: "unauthenticated", code: codes.Unauthenticated, want: ErrUnauthenticated},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			server.watchErr = status.Error(test.code, test.name)
+			loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+				t.Fatal("permanently rejected watch prepared a release")
+				return nil, nil
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Run error = %v, want %v", err, test.want)
+			}
+		})
 	}
 }
 

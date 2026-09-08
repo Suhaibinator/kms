@@ -145,15 +145,14 @@ func VerifyDefaults(ctx context.Context, client VerifyClient, in VerifyInput, op
 		entries = append(entries, kmsclient.VerifyDefaultsEntry{Alias: alias, ContentType: entry.ContentType, SHA256: hash})
 		contentTypes[alias] = entry.ContentType
 	}
-	schemaSHA256 := in.SchemaSHA256
-	if opts.SchemaVersion != nil {
-		schemaSHA256 = ""
+	if (in.SchemaSHA256 == "") == (opts.SchemaVersion == nil) {
+		return VerifyResult{}, errors.New("configstore: verify requires exactly one of the artifact schema digest or VerifyOptions.SchemaVersion")
 	}
 	response, err := client.VerifyReleaseDefaults(ctx, kmsclient.VerifyReleaseDefaultsOptions{
 		Namespace:     opts.Namespace,
 		Release:       opts.Release,
 		Profile:       opts.Profile,
-		SchemaSHA256:  schemaSHA256,
+		SchemaSHA256:  in.SchemaSHA256,
 		SchemaVersion: opts.SchemaVersion,
 		Entries:       entries,
 	})

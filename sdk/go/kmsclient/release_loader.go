@@ -377,24 +377,30 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	}
 
 	initial, err := l.getActive(ctx, ns)
-	if err != nil {
+	haveInitial := err == nil
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("kmsclient: load initial active release: %w", err)
 	}
-	if initial.release == nil {
+	if haveInitial && initial.release == nil {
 		return errors.New("kmsclient: active release response was empty")
 	}
-	if initial.release.GetSchemaVersion() != l.trackSchemaVersion {
+	if haveInitial && initial.release.GetSchemaVersion() != l.trackSchemaVersion {
 		return errors.New("kmsclient: active release response schema track mismatch")
 	}
-	l.lastSeen.Store(initial.revision)
+	if haveInitial {
+		l.lastSeen.Store(initial.revision)
+	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	events := make(chan releaseCandidate, 1)
 	gracefulWatchStop := make(chan struct{})
 	watchDone := make(chan struct{})
+	watchFatal := make(chan error, 1)
 	go func() {
 		defer close(watchDone)
-		l.watchLoop(runCtx, ns, events, gracefulWatchStop)
+		if watchErr := l.watchLoop(runCtx, ns, events, gracefulWatchStop); watchErr != nil {
+			watchFatal <- watchErr
+		}
 	}()
 	defer func() {
 		cancelRun()
@@ -448,7 +454,9 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 		start(candidate)
 	}
 
-	queue(initial)
+	if haveInitial {
+		queue(initial)
+	}
 	ticker := time.NewTicker(l.cfg.ReconcileInterval)
 	defer ticker.Stop()
 
@@ -463,6 +471,8 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 			return ctx.Err()
 		case candidate := <-events:
 			queue(candidate)
+		case watchErr := <-watchFatal:
+			return fmt.Errorf("kmsclient: release watch failed: %w", watchErr)
 		case result := <-results:
 			inFlight = false
 			activeCancel = nil
@@ -1050,21 +1060,24 @@ func waitForReleaseWatchStop(ctx context.Context, cancel context.CancelFunc, don
 	<-done
 }
 
-func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) {
+func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) error {
 	attempt := 0
 	stopping := false
 	for ctx.Err() == nil {
 		receivedEvent, stopped, err := l.watchSession(ctx, ns, events, gracefulStop)
 		if stopped {
-			return
+			return nil
 		}
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		if stopping {
 			// The one immediate graceful-shutdown reconnect failed. There is
 			// no live stream on which the queued acknowledgement can be sent.
-			return
+			return nil
+		}
+		if terminalReleaseWatchError(err) {
+			return mapError(err)
 		}
 		if receivedEvent {
 			attempt = 0
@@ -1077,13 +1090,21 @@ func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events c
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return nil
 		case <-gracefulStop:
 			timer.Stop()
 			stopping = true
 		case <-timer.C:
 		}
 	}
+	return nil
+}
+
+func terminalReleaseWatchError(err error) bool {
+	mapped := mapError(err)
+	return errors.Is(mapped, ErrInvalidArgument) || errors.Is(mapped, ErrNotFound) ||
+		errors.Is(mapped, ErrPermissionDenied) || errors.Is(mapped, ErrUnauthenticated) ||
+		errors.Is(mapped, ErrFailedPrecondition)
 }
 
 func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) (bool, bool, error) {

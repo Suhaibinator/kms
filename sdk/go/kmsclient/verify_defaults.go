@@ -114,8 +114,8 @@ func (c *Client) VerifyReleaseDefaults(
 		}
 		entries = append(entries, &kmsv1.VerifyEntry{Alias: alias, ContentType: entry.ContentType, Sha256: entry.SHA256})
 	}
-	if options.SchemaSHA256 != "" && options.SchemaVersion != nil {
-		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify requires at most one of schema sha256 and schema version")
+	if (options.SchemaSHA256 == "") == (options.SchemaVersion == nil) {
+		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify requires exactly one of schema sha256 and schema version")
 	}
 	if options.SchemaSHA256 != "" && !validLowerHex64(options.SchemaSHA256) {
 		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: invalid schema sha256")

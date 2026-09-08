@@ -131,6 +131,42 @@ func TestVerifyDefaultsRejectsMissingGroupAndBadInputs(t *testing.T) {
 	}
 }
 
+func TestVerifyDefaultsRequiresExactlyOneSchemaSelector(t *testing.T) {
+	client := &fakeVerifyClient{}
+	in := verifyTestInput()
+	version := uint64(0)
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app", SchemaVersion: &version}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("both selectors error = %v", err)
+	}
+	in.SchemaSHA256 = ""
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app"}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("missing selector error = %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("invalid selectors reached client: %d calls", len(client.calls))
+	}
+}
+
+func TestVerifyDefaultsAcceptsExplicitSchemaZeroWithoutArtifactDigest(t *testing.T) {
+	client := &fakeVerifyClient{response: kmsclient.VerifyReleaseDefaultsResult{
+		SchemaMatches: true,
+		Entries: []kmsclient.VerifyDefaultsVerdict{
+			{Alias: "limits", Verdict: kmsclient.VerifyVerdictMatch},
+			{Alias: "database", Verdict: kmsclient.VerifyVerdictMatch},
+			{Alias: "banner", Verdict: kmsclient.VerifyVerdictMatch},
+		},
+	}}
+	in := verifyTestInput()
+	in.SchemaSHA256 = ""
+	version := uint64(0)
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app", SchemaVersion: &version}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.calls) != 1 || client.calls[0].SchemaVersion == nil || *client.calls[0].SchemaVersion != 0 || client.calls[0].SchemaSHA256 != "" {
+		t.Fatalf("selector = digest %q version %v", client.calls[0].SchemaSHA256, client.calls[0].SchemaVersion)
+	}
+}
+
 func TestVerifyDefaultsWrapsRateLimitWithGuidance(t *testing.T) {
 	client := &fakeVerifyClient{err: fmt.Errorf("%w: budget spent", kmsclient.ErrRateLimited)}
 	_, err := VerifyDefaults(context.Background(), client, verifyTestInput(), VerifyOptions{Namespace: "prod/app"})
