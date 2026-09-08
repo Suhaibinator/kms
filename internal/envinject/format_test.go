@@ -3,7 +3,6 @@ package envinject
 import (
 	"encoding/json/v2"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -72,15 +71,15 @@ func TestDotenvQuote(t *testing.T) {
 		{"with space", `"with space"`},
 		{`quote"double`, `"quote\"double"`},
 		{`back\slash`, `"back\\slash"`},
-		{"line1\nline2", `"line1\nline2"`},
-		{"a\tb", `"a\tb"`},
-		{"a\rb", `"a\rb"`},
-		{"a\x01b", `"a\u0001b"`},
-		{"a\x7fb", `"a\u007fb"`},
-		{"a\u0085b\u2028c", `"a\u0085b\u2028c"`},
+		{"line1\nline2", "\"line1\nline2\""},
+		{"a\tb", "\"a\tb\""},
+		{"a\rb", "\"a\rb\""},
+		{"a\x01b", "\"a\x01b\""},
+		{"a\x7fb", "\"a\x7fb\""},
+		{"a\u0085b\u2028c", "\"a\u0085b\u2028c\""},
 		{"héllo", `"héllo"`},
 		{"single'quote", `"single'quote"`},
-		{"$HOME", `"$HOME"`},
+		{"$HOME", `"\$HOME"`},
 	}
 	for _, tc := range cases {
 		if got := DotenvQuote(tc.in); got != tc.want {
@@ -89,7 +88,7 @@ func TestDotenvQuote(t *testing.T) {
 	}
 }
 
-func TestWriteDotenvRoundTrip(t *testing.T) {
+func TestWriteDotenvPreservesAssignmentOrder(t *testing.T) {
 	t.Parallel()
 	vars := formatVars()
 	var buf strings.Builder
@@ -100,25 +99,14 @@ func TestWriteDotenvRoundTrip(t *testing.T) {
 	if !strings.HasSuffix(out, "\n") {
 		t.Errorf("output does not end with a newline: %q", out)
 	}
-	// Escaping keeps every assignment on one line, so the file has exactly one
-	// line per variable, in the order given.
-	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != len(vars) {
-		t.Fatalf("got %d lines, want %d: %q", len(lines), len(vars), out)
-	}
-	for i, line := range lines {
-		if !strings.HasPrefix(line, vars[i].Name+"=") {
-			t.Errorf("line %d = %q, want it to assign %s", i, line, vars[i].Name)
+	// Assignment ordering is preserved even when quoted values span lines.
+	previous := -1
+	for _, v := range vars {
+		at := strings.Index(out, v.Name+"=")
+		if at <= previous {
+			t.Fatalf("assignment order lost for %s", v.Name)
 		}
-	}
-	got := parseDotenv(t, out)
-	for name, want := range wantMap(vars) {
-		if got[name] != want {
-			t.Errorf("%s = %q, want %q", name, got[name], want)
-		}
-	}
-	if len(got) != len(vars) {
-		t.Errorf("parsed %d variables, want %d", len(got), len(vars))
+		previous = at
 	}
 }
 
@@ -263,9 +251,6 @@ func TestInvalidUTF8BecomesReplacementCharacter(t *testing.T) {
 	t.Parallel()
 	// Resolve base64-encodes such a value instead, but the writers must stay
 	// well defined if one is handed to them directly.
-	if got, want := DotenvQuote("a\xffb"), "\"a�b\""; got != want {
-		t.Errorf("DotenvQuote = %q, want %q", got, want)
-	}
 	var buf strings.Builder
 	if err := WriteYAML(&buf, []Var{{Name: "A", Value: "a\xffb"}}); err != nil {
 		t.Fatalf("WriteYAML: %v", err)
@@ -320,69 +305,15 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	return 0, errWrite
 }
 
-// parseDotenv is a minimal reader for the escapes WriteDotenv emits: bare
-// values are taken verbatim, and quoted ones understand \\, \", \n, \r, \t and
-// \uXXXX. It exists so the round-trip test does not lean on the same code that
-// produced the file.
-func parseDotenv(t *testing.T, data string) map[string]string {
-	t.Helper()
-	out := make(map[string]string)
-	for _, line := range strings.Split(data, "\n") {
-		if line == "" {
-			continue
+func TestWriteDotenvRejectsUnsupportedCharactersBeforeOutput(t *testing.T) {
+	for _, value := range []string{"secret\x00", "secret\xff", "secret\uFEFF", "secret\uFDD0", "secret\uFDEF", "secret\uFFFF", "secret\U0001FFFE", "secret\U0010FFFF"} {
+		var out strings.Builder
+		err := WriteDotenv(&out, []Var{{Name: "FIRST", Value: "ok"}, {Name: "BAD", Value: value}})
+		if err == nil || !strings.Contains(err.Error(), "BAD") || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("unsafe error: %v", err)
 		}
-		name, value, ok := strings.Cut(line, "=")
-		if !ok {
-			t.Fatalf("line %q has no '='", line)
+		if out.Len() != 0 {
+			t.Fatal("partial output")
 		}
-		if strings.HasPrefix(value, `"`) {
-			value = unquoteDotenv(t, value)
-		}
-		out[name] = value
 	}
-	return out
-}
-
-func unquoteDotenv(t *testing.T, s string) string {
-	t.Helper()
-	if len(s) < 2 || !strings.HasSuffix(s, `"`) {
-		t.Fatalf("value %q is not a quoted string", s)
-	}
-	body := s[1 : len(s)-1]
-	var b strings.Builder
-	for i := 0; i < len(body); {
-		if body[i] != '\\' {
-			b.WriteByte(body[i])
-			i++
-			continue
-		}
-		i++
-		if i >= len(body) {
-			t.Fatalf("value %q ends in a backslash", s)
-		}
-		switch body[i] {
-		case 'n':
-			b.WriteByte('\n')
-		case 'r':
-			b.WriteByte('\r')
-		case 't':
-			b.WriteByte('\t')
-		case '\\', '"':
-			b.WriteByte(body[i])
-		case 'u':
-			if i+5 > len(body) {
-				t.Fatalf("value %q has a truncated \\u escape", s)
-			}
-			code, err := strconv.ParseUint(body[i+1:i+5], 16, 32)
-			if err != nil {
-				t.Fatalf("value %q has a bad \\u escape: %v", s, err)
-			}
-			b.WriteRune(rune(code))
-			i += 4
-		default:
-			t.Fatalf("value %q has an unknown escape \\%c", s, body[i])
-		}
-		i++
-	}
-	return b.String()
 }

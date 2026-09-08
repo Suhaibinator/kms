@@ -128,3 +128,41 @@ func TestWriteDotenvBareValuesSourceCleanly(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteDotenvLiteralShell also proves substitutions have no side effects.
+func TestWriteDotenvLiteralShell(t *testing.T) {
+	sh := lookShell(t)
+	marker := filepath.Join(t.TempDir(), "executed")
+	vars := dotenvRoundTripVars()
+	vars = append(vars, Var{Name: "MARKER_DOLLAR", Value: "$(touch " + ShellQuote(marker) + ")"}, Var{Name: "MARKER_BACKTICK", Value: "`touch " + ShellQuote(marker) + "`"})
+
+	var buf strings.Builder
+	if err := WriteDotenv(&buf, vars); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(path, []byte(buf.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vars {
+		out, err := exec.Command(sh, "-c", `set -a; . "$1"; printf '%s' "$`+v.Name+`"`, "sh", path).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(out) != v.Value {
+			t.Errorf("%s did not round-trip: got %q, want %q", v.Name, out, v.Value)
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("substitution executed: %v", err)
+	}
+}
+
+// Both real readers exercise exactly this supported-value corpus.
+func dotenvRoundTripVars() []Var {
+	vars := formatVars()
+	for _, value := range append(shellValues(), "trailing\\", "  padded \t", "\r\n", "\uFDCF\uFDF0\U0001FFFD") {
+		vars = append(vars, Var{Name: "V" + strings.Repeat("X", len(vars)), Value: value})
+	}
+	return vars
+}

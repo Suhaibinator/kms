@@ -1167,7 +1167,7 @@ namespace.
 | `binding-key rotate /env/app/key` | `--expected-current-version` | Obtains the old and replacement keys separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits a CAS guard. An explicit positive expected version avoids a metadata read; when omitted, the CLI reads current metadata. It clones only current into one new version protected by the replacement; historical versions retain the old key. The server proves the old key before rejecting a byte-for-byte unchanged replacement. |
 | `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
 | `secret purge-unbound-versions /env/app/key` | — | **Irreversible, admin only.** Previews every non-destroyed unbound version (including disabled, expired, and corrupt rows), prints the exact set, confirms, then replays the mandatory revision/version-set guards and destroys it even if releases pin those versions. |
-| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
+| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--preserve-env`, `--allow-unsafe-env-names` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
 Binding keys are opaque valid UTF-8 strings containing 32 to 1024 bytes. The CLI reads
@@ -1249,7 +1249,9 @@ own namespace; cross-namespace release entries are invalid.
 | Store key (namespace mode) | uppercase; `/`, `-`, and `.` fold to `_` | `billing/stripe-key` → `BILLING_STRIPE_KEY` |
 | Release alias (`--release`) | uppercase; `-` folds to `_` | `stripe-key` → `STRIPE_KEY` |
 
-`--env-prefix APP_` is prepended verbatim to every name (`APP_STRIPE_KEY`). A
+`--env-prefix APP_` is prepended verbatim to every name (`APP_STRIPE_KEY`). An
+application-specific prefix satisfies the unsafe-name policy when the final
+name is allowed; arbitrary prefixes can still produce a blocked name. A
 name that would start with a digit has no legal spelling as a shell variable
 and is refused, naming the flag that fixes it — an `--env-prefix` always begins
 with a letter or underscore. Two entries that map to one name are refused as
@@ -1279,6 +1281,22 @@ child environment. Release mode always requires a complete snapshot and
 rejects this flag. Unbound secrets need normal identity authorization only.
 
 #### The command's environment
+
+Both `exec` and every `env` format reject known runtime-control variable names
+by default. The policy checks the final name, case-insensitively, after the
+prefix and any binary `_B64` suffix. It covers loader families (`LD_`, `DYLD_`),
+shell and language-runtime hooks, executable-selection hooks, and TLS trust
+configuration. For example, `node_options` is refused as `NODE_OPTIONS`;
+`--env-prefix APP_` produces the allowed `APP_NODE_OPTIONS`. `LD_PRELOAD_B64`
+remains blocked by its family, while `NODE_OPTIONS_B64` is allowed.
+
+For intentionally trusted configuration, `--allow-unsafe-env-names` bypasses
+only this name policy. It does not bypass credential scrubbing, collisions,
+size limits, or output quoting. This is a maintained denylist of known hooks,
+not a sandbox against application-specific environment controls. It does not
+remove runtime-control variables already present in the parent environment.
+Existing injected-wins precedence and `--preserve-env` behavior are unchanged;
+`--preserve-env` alone does not permit an unsafe selected name.
 
 `exec` merges the store's variables into the environment it inherited:
 
@@ -1323,8 +1341,21 @@ Use `--token-file` in production.
 `--format` selects `dotenv` (the default), `export`, `json`, or `yaml`. The
 global `-o json` selects `json`; combining it with a different `--format` is a
 usage error. Each format quotes for its own reader: `export` uses POSIX single
-quotes, `dotenv` leaves unambiguous values bare (so `set -a; . file` works) and
-JSON-quotes the rest, and `yaml` double-quotes every value.
+quotes, `dotenv` leaves unambiguous values bare and double-quotes the rest
+using POSIX shell and systemd `EnvironmentFile=` escaping, and `yaml`
+double-quotes every value. Prefer `--format export` for shell-specific output.
+Default dotenv output is also safe for `set -a; . file`: dollar signs and
+backticks are escaped, so substitutions remain literal. Backslashes and double
+quotes are escaped; newlines, tabs, and carriage returns remain literal inside
+quotes. Quoted assignments can therefore span multiple lines.
+
+Compatibility change: dotenv no longer uses JSON control-character escapes.
+Its supported readers are POSIX shells and systemd `EnvironmentFile=`, not
+arbitrary third-party dotenv parsers. Dotenv rejects U+FEFF and Unicode
+noncharacters before writing any assignments; use `exec` or `--format export`
+for these values. NUL-containing or invalid UTF-8 values are still base64-encoded
+by resolution under a `_B64` name. Previously accepted unsafe variable names now
+fail unless renamed, safely prefixed, or explicitly allowed.
 
 Because the output *is* the secret material, `env` refuses to write it to an
 interactive terminal:

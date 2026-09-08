@@ -980,3 +980,27 @@ The security boundary explicitly does not protect against:
   this is a security document, not an HA design, and the service makes no
   claims about surviving host failure without external backup (see
   [`operations.md`](operations.md)).
+
+### Environment injection and generated files
+
+`exec` and `env` reject a maintained set of known runtime-control names after
+prefixing and binary encoding, case-insensitively. This includes dynamic loader,
+shell, language-runtime, command-execution, and TLS-trust hooks. An
+application-specific `--env-prefix` can produce allowed names;
+`--allow-unsafe-env-names` explicitly permits trusted runtime configuration.
+The override never disables credential scrubbing or output quoting. The policy
+is not a complete boundary against application-specific hooks, and inherited
+runtime settings and existing environment precedence remain unchanged.
+
+Default dotenv output escapes shell substitutions and preserves supported
+values literally through POSIX shells and systemd `EnvironmentFile=`. Multiline
+values stay multiline; unsupported systemd characters fail before output.
+Third-party dotenv parser compatibility is not guaranteed. See
+[operations](operations.md#env-output) for the format contract and migration
+changes. Re-evaluate security findings against the implemented policy and
+reader tests; the denylist alone does not prove all environment-driven code
+execution impossible.
+
+The opt-in Linux reader test requires a working user systemd manager:
+`KMS_TEST_SYSTEMD=1 go test ./internal/envinject -run TestWriteDotenvSystemd -count=1 -v`.
+Once enabled, manager or reader failures fail the test rather than skipping it.

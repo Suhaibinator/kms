@@ -2,6 +2,7 @@ package envinject
 
 import (
 	"encoding/json/jsontext"
+	"fmt"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -11,8 +12,15 @@ import (
 const hexDigits = "0123456789abcdef"
 
 // WriteDotenv writes "NAME=value" lines, quoting each value only when it needs
-// it. The output is meant to be read back by a dotenv parser.
+// it. Values round-trip through POSIX shells and systemd EnvironmentFile=;
+// arbitrary third-party dotenv parsers may implement different quoting rules.
 func WriteDotenv(w io.Writer, vars []Var) error {
+	// Validate the whole document before writing even its first assignment.
+	for _, v := range vars {
+		if !validDotenvValue(v.Value) {
+			return fmt.Errorf("environment variable %s contains characters unsupported by dotenv EnvironmentFile output; use exec or --format export", v.Name)
+		}
+	}
 	var buf []byte
 	for _, v := range vars {
 		buf = append(buf, v.Name...)
@@ -42,7 +50,7 @@ func WriteExport(w io.Writer, vars []Var) error {
 // indented two spaces and terminated with a newline.
 func WriteJSON(w io.Writer, vars []Var) error {
 	// AllowInvalidUTF8 keeps a stray byte from failing the whole write; it is
-	// mangled to U+FFFD, exactly as the dotenv and YAML writers do. Resolve
+	// mangled to U+FFFD, exactly as the YAML writer does. Resolve
 	// never produces one, since such a value is base64-encoded instead.
 	enc := jsontext.NewEncoder(w, jsontext.WithIndent("  "), jsontext.AllowInvalidUTF8(true))
 	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
@@ -83,15 +91,37 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// DotenvQuote returns s ready for the right-hand side of a dotenv assignment.
-// Values made only of unambiguous characters are left bare, which also makes
-// them safe for "set -a; . file"; anything else is written as a double-quoted
-// string with JSON escapes, which common dotenv parsers read back exactly.
+// validDotenvValue implements systemd's EnvironmentFile Unicode contract.
+func validDotenvValue(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r == 0 || r == '\uFEFF' || (r >= '\uFDD0' && r <= '\uFDEF') || r&0xFFFF >= 0xFFFE {
+			return false
+		}
+	}
+	return true
+}
+
+// DotenvQuote quotes a value for POSIX shell and systemd double-quoted
+// assignments. Control characters stay literal, including multiline values.
+// WriteDotenv validates the character repertoire before calling this helper.
 func DotenvQuote(s string) string {
 	if isBareDotenv(s) {
 		return s
 	}
-	return string(appendQuoted(nil, s))
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\', '"', '$', '`':
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // isBareDotenv reports whether s can be written without quotes.

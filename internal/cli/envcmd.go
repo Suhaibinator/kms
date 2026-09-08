@@ -40,6 +40,7 @@ type envSelection struct {
 	noSecrets              bool
 	envPrefix              string
 	allowIncompleteSecrets bool
+	allowUnsafeEnvNames    bool
 }
 
 // addEnvSelectionFlags registers the selection flags on fs.
@@ -48,6 +49,7 @@ func addEnvSelectionFlags(fs *flag.FlagSet, sel *envSelection) {
 	fs.StringVar(&sel.release, "release", "", "inject the entries of the active release `NAME` (exact versions, verified digests) instead of the namespace's current values")
 	fs.BoolVar(&sel.noSecrets, "no-secrets", false, "inject parameters only")
 	fs.StringVar(&sel.envPrefix, "env-prefix", "", "prepend this `prefix` to every variable name")
+	fs.BoolVar(&sel.allowUnsafeEnvNames, "allow-unsafe-env-names", false, "allow known runtime-control variable names (trusted configuration only)")
 	fs.BoolVar(&sel.allowIncompleteSecrets, "allow-incomplete-secrets", false, "namespace mode only: omit secrets that are bound, with a warning")
 }
 
@@ -185,7 +187,8 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 	}
 
 	rules := envinject.Rules{
-		Prefix: sel.envPrefix, MaxEntryBytes: maxEnvEntryBytes, MaxTotalBytes: maxEnvTotalBytes,
+		AllowUnsafeNames: sel.allowUnsafeEnvNames,
+		Prefix:           sel.envPrefix, MaxEntryBytes: maxEnvEntryBytes, MaxTotalBytes: maxEnvTotalBytes,
 	}
 	out.vars, out.notes, err = envinject.Resolve(items, rules)
 	if err != nil {
@@ -432,7 +435,7 @@ func (c *CLI) cmdEnv(args []string) int {
 	out := fs.String("out", "", "write to this private `file` (0600) instead of stdout; refuses to replace an existing file")
 	force := fs.Bool("force", false, "replace an existing --out file")
 	c.setUsage(fs, "env ENV/APP [flags]",
-		"Print the namespace's parameters and secrets as environment variable assignments, for `source <(parameter-store env ENV/APP --format export)` or an EnvironmentFile=. Secret-inclusive resolution fails before output if any selected secret is unavailable; --no-secrets intentionally selects parameters only, while namespace mode may opt into warned omission with --allow-incomplete-secrets. Source incomplete output only into a clean environment because omitted assignments cannot unset inherited values. Same selection, naming and token flags as exec; only the injected variables are printed.", false)
+		"Print the namespace's parameters and secrets as environment variable assignments, for `source <(parameter-store env ENV/APP --format export)` or an EnvironmentFile=. Secret-inclusive resolution fails before output if any selected secret is unavailable; --no-secrets intentionally selects parameters only, while namespace mode may opt into warned omission with --allow-incomplete-secrets. Source incomplete output only into a clean environment because omitted assignments cannot unset inherited values. Known runtime-control names are refused unless --allow-unsafe-env-names is explicitly given. Default dotenv uses literal shell/systemd quoting, including multiline values; arbitrary dotenv parsers may differ. Same selection, naming and token flags as exec; only the injected variables are printed.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

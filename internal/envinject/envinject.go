@@ -64,9 +64,47 @@ type Note struct {
 
 // Rules configures Resolve.
 type Rules struct {
-	Prefix        string // validated with ValidPrefix; prepended verbatim
-	MaxEntryBytes int    // 0 = unlimited; counts len(Name)+1+len(Value)
-	MaxTotalBytes int    // 0 = unlimited; sum of entry bytes
+	AllowUnsafeNames bool   // explicitly permit known runtime-control names
+	Prefix           string // validated with ValidPrefix; prepended verbatim
+	MaxEntryBytes    int    // 0 = unlimited; counts len(Name)+1+len(Value)
+	MaxTotalBytes    int    // 0 = unlimited; sum of entry bytes
+}
+
+// unsafeExactNames and unsafeNamePrefixes are a maintained mitigation for known
+// runtime hooks, not a sandbox against application-specific environment controls.
+var unsafeExactNames = strings.Fields(`
+PATH ENV BASH_ENV SHELLOPTS BASHOPTS IFS PS4 CDPATH
+GCONV_PATH HOSTALIASES LOCPATH NLSPATH RESOLV_HOST_CONF GLIBC_TUNABLES
+NODE_OPTIONS NODE_EXTRA_CA_CERTS
+PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONEXECUTABLE
+PERL5OPT PERL5LIB PERLLIB RUBYOPT RUBYLIB
+CLASSPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS DOTNET_STARTUP_HOOKS
+CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH
+COR_ENABLE_PROFILING COR_PROFILER COR_PROFILER_PATH
+DOTNET_ENABLE_PROFILING DOTNET_PROFILER DOTNET_PROFILER_PATH
+GIT_SSH GIT_SSH_COMMAND GIT_EXTERNAL_DIFF GIT_PAGER LESSOPEN LESSCLOSE PAGER EDITOR VISUAL
+PATHEXT COMSPEC
+SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE REQUESTS_CA_BUNDLE OPENSSL_CONF OPENSSL_MODULES
+`)
+
+var unsafeNamePrefixes = []string{
+	"LD_", "DYLD_", "BASH_FUNC_",
+	"CORECLR_PROFILER_PATH_", "COR_PROFILER_PATH_", "DOTNET_PROFILER_PATH_",
+}
+
+// UnsafeName reports whether name is a known runtime-control variable. Matching
+// is case-insensitive and applies to the final name, including any binary suffix.
+func UnsafeName(name string) bool {
+	name = strings.ToUpper(name)
+	if slices.Contains(unsafeExactNames, name) {
+		return true
+	}
+	for _, prefix := range unsafeNamePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // MapKey maps a store key to an environment variable name, without a prefix.
@@ -185,6 +223,7 @@ func IsBinary(value []byte) bool {
 // starts with a digit is accepted only when rules.Prefix is set, since the
 // prefix is applied first and always begins with a letter or underscore.
 // Binary values are base64-encoded under "<NAME>_B64" and reported as notes.
+// Known unsafe final names are refused unless rules.AllowUnsafeNames is set.
 func Resolve(items []Item, rules Rules) ([]Var, []Note, error) {
 	if !ValidPrefix(rules.Prefix) {
 		return nil, nil, fmt.Errorf("invalid --env-prefix %q: must match [A-Za-z_][A-Za-z0-9_]*", rules.Prefix)
@@ -223,6 +262,9 @@ func Resolve(items []Item, rules Rules) ([]Var, []Note, error) {
 			value = base64.StdEncoding.EncodeToString(item.Value)
 		} else {
 			value = string(item.Value)
+		}
+		if !rules.AllowUnsafeNames && UnsafeName(name) {
+			return nil, nil, fmt.Errorf("%q maps to unsafe environment variable %s: use --env-prefix with an application-specific prefix producing an allowed name, or explicitly pass --allow-unsafe-env-names", source, name)
 		}
 		if prev, ok := sources[name]; ok {
 			return nil, nil, fmt.Errorf("%q and %q both map to environment variable %s", prev, source, name)
