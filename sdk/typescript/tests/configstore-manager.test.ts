@@ -141,26 +141,30 @@ describe("ManagedConfigManager", () => {
         },
         controller.signal,
       );
-      await waitFor(() => transport.registration !== undefined);
+      try {
+        await waitFor(() => transport.registration !== undefined);
 
-      transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}', schemaVersion), 2n);
-      await secondPreparing.promise;
-      transport.activate(makeRelease(3n, '{"hot":3,"restart":"a"}', schemaVersion), 3n);
-      await waitFor(() => manager.status().observed.version === 3n);
+        transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}', schemaVersion), 2n);
+        await secondPreparing.promise;
+        transport.activate(makeRelease(3n, '{"hot":3,"restart":"a"}', schemaVersion), 3n);
+        await waitFor(() => manager.status().observed.version === 3n);
 
-      expect(manager.status().observed).toMatchObject({
-        namespace: "prod/api",
-        name: "runtime",
-        version: 3n,
-        activationRevision: 3n,
-        schemaVersion,
-        digest: "",
-      });
+        expect(manager.status().observed).toMatchObject({
+          namespace: "prod/api",
+          name: "runtime",
+          version: 3n,
+          activationRevision: 3n,
+          schemaVersion,
+          digest: "",
+        });
 
-      releaseSecond.resolve();
-      await waitFor(() => manager.status().applied.version === 3n);
-      controller.abort();
-      await manager.wait();
+        releaseSecond.resolve();
+        await waitFor(() => manager.status().applied.version === 3n);
+      } finally {
+        releaseSecond.resolve();
+        controller.abort();
+        await manager.wait();
+      }
     },
   );
 

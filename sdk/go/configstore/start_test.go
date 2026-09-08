@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,6 +187,7 @@ func TestStatusPreservesSelectedTrackWhileNewerActivationIsQueued(t *testing.T) 
 			defer cancel()
 			secondPreparing := make(chan struct{})
 			releaseSecond := make(chan struct{})
+			releaseSecondOnce := sync.OnceFunc(func() { close(releaseSecond) })
 			manager, err := Start(ctx, client, Options{
 				Release: "runtime", SchemaVersion: &schemaVersion,
 				Contract:  []ContractEntry{{Alias: "settings", Kind: ContractKindParameter, ContentType: "json"}},
@@ -200,6 +202,13 @@ func TestStatusPreservesSelectedTrackWhileNewerActivationIsQueued(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() {
+				releaseSecondOnce()
+				cancel()
+				if waitErr := manager.Wait(); waitErr != nil {
+					t.Errorf("Wait() during cleanup = %v", waitErr)
+				}
+			})
 			if _, err := server.WaitForReleaseSubscribe(2 * time.Second); err != nil {
 				t.Fatal(err)
 			}
@@ -237,17 +246,13 @@ func TestStatusPreservesSelectedTrackWhileNewerActivationIsQueued(t *testing.T) 
 				t.Fatalf("queued observed identity = %+v", observed)
 			}
 
-			close(releaseSecond)
+			releaseSecondOnce()
 			deadline = time.Now().Add(2 * time.Second)
 			for manager.Status().Applied.Version() != 3 && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
 			if got := manager.Status().Applied.Version(); got != 3 {
 				t.Fatalf("applied version = %d, want 3", got)
-			}
-			cancel()
-			if err := manager.Wait(); err != nil {
-				t.Fatal(err)
 			}
 		})
 	}
