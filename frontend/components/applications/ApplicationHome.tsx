@@ -886,6 +886,7 @@ export function ApplicationHome({
           <ConnectSdkPanel
             namespace={{ env: connectEnv, app: application.name }}
             releaseName={application.release_name}
+            schemaVersion={schemaVersion}
             aliases={aliases}
             health={health}
             allowedAuthMethods={

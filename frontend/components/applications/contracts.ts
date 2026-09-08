@@ -82,6 +82,8 @@ export interface ConnectSdkPanelProps {
   /** Credential methods accepted by this environment, independently of transport TLS. */
   allowedAuthMethods?: readonly AuthMethod[];
   releaseName: string;
+  /** Exact schema track selected on the application page. */
+  schemaVersion: number;
   /** Contract aliases; the snippet reads the first one. */
   aliases: string[];
   /** null while health has not loaded; `tls_enabled: false` shows a warning. */

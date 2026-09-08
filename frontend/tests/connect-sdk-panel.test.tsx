@@ -38,13 +38,16 @@ describe("sdk snippets", () => {
       env: "prod",
       app: "gradethis",
       releaseName: "runtime",
+      schemaVersion: 1,
       alias: "rate_limits",
       tls: true,
     };
     const go = goSnippet(input);
     expect(go).toContain('Endpoint:  "kms.prod.internal:8443"');
     expect(go).toContain('Namespace: "prod/gradethis"');
-    expect(go).toContain('Name: "runtime"');
+    expect(go).toContain('Name:          "runtime"');
+    expect(go).toContain("schemaVersion := uint64(1)");
+    expect(go).toContain("SchemaVersion: &schemaVersion");
     expect(go).toContain('candidate.Parameter("rate_limits")');
     expect(go).toContain("kmsclient.MTLSFromFiles(");
     expect(go).toContain('os.Getenv("KMS_CLIENT_CERT_FILE")');
@@ -55,7 +58,8 @@ describe("sdk snippets", () => {
     const ts = tsSnippet(input);
     expect(ts).toContain('process.env.KMS_ENDPOINT ?? "kms.prod.internal:8443"');
     expect(ts).toContain('namespace: "prod/gradethis"');
-    expect(ts).toContain('createReleaseLoader({ name: "runtime" })');
+    expect(ts).toContain('name: "runtime"');
+    expect(ts).toContain("schemaVersion: 1n");
     expect(ts).toContain('snapshot.parameter("rate_limits")');
     expect(ts).toContain("mtlsFromFiles(");
     expect(ts).toContain("process.env.KMS_CLIENT_CERT_FILE!");
@@ -69,6 +73,7 @@ describe("sdk snippets", () => {
       env: "dev",
       app: "a",
       releaseName: "runtime",
+      schemaVersion: 0,
       alias: "",
       tls: false,
     };
@@ -77,6 +82,8 @@ describe("sdk snippets", () => {
     expect(goSnippet(input)).toContain('candidate.Parameter("alias")');
     expect(tsSnippet(input)).toContain("insecure: true");
     expect(tsSnippet(input)).not.toContain("mtlsFromFiles");
+    expect(goSnippet(input)).toContain("schemaVersion := uint64(0)");
+    expect(tsSnippet(input)).toContain("schemaVersion: 0n");
   });
 });
 
@@ -87,11 +94,19 @@ describe("ConnectSdkPanel", () => {
 
   it("shows the Go snippet by default with the health endpoint, then switches to TypeScript", () => {
     render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={health}
+      />,
     );
 
     expect(screen.getByRole("tab", { name: "Go" })).toHaveAttribute("aria-selected", "true");
     expect(snippet()).toContain('Endpoint:  "kms.prod.internal:8443"');
+    expect(snippet()).toContain("schemaVersion := uint64(2)");
+    expect(snippet()).toContain("SchemaVersion: &schemaVersion");
     expect(snippet()).toContain('candidate.Parameter("rate_limits")');
     expect(screen.getByRole("button", { name: "Copy Go snippet" })).toBeVisible();
     expect(screen.getByLabelText("gRPC endpoint")).toHaveAttribute(
@@ -100,13 +115,20 @@ describe("ConnectSdkPanel", () => {
     );
 
     fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
-    expect(snippet()).toContain('createReleaseLoader({ name: "runtime" })');
+    expect(snippet()).toContain('name: "runtime"');
+    expect(snippet()).toContain("schemaVersion: 2n");
     expect(screen.getByRole("button", { name: "Copy TypeScript snippet" })).toBeVisible();
   });
 
   it("links to identity creation with the namespace prefilled and to the mTLS runbook", () => {
     render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={health}
+      />,
     );
     expect(
       screen.getByRole("link", { name: "Create identity for prod/gradethis" }),
@@ -124,6 +146,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={{ ...health, tls_enabled: false }}
       />,
@@ -138,6 +161,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={health}
         allowedAuthMethods={["token"]}
@@ -159,6 +183,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={health}
         allowedAuthMethods={["mtls", "token"]}
@@ -176,6 +201,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={{ ...health, tls_enabled: false }}
         allowedAuthMethods={["mtls"]}
@@ -188,18 +214,36 @@ describe("ConnectSdkPanel", () => {
 
   it("does not warn while health is loading or when TLS is on", () => {
     const { rerender } = render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={null} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={null}
+      />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
     rerender(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={health}
+      />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("allows a destination override even when health is unavailable", () => {
     render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={null} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={null}
+      />,
     );
     const input = screen.getByLabelText("gRPC endpoint");
     fireEvent.change(input, { target: { value: "kms.reachable:8443" } });
@@ -212,6 +256,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={{ ...health, grpc_addr: "" }}
       />,
@@ -247,6 +292,7 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel
         namespace={ns}
         releaseName="runtime"
+        schemaVersion={2}
         aliases={aliases}
         health={{ ...health, grpc_addr: "[::]:8443" }}
       />,
@@ -259,7 +305,13 @@ describe("ConnectSdkPanel", () => {
     unmount();
 
     render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={health}
+      />,
     );
     expect(screen.getByLabelText("gRPC endpoint")).toHaveValue("[2001:db8::10]:9443");
     expect(snippet()).toContain("[2001:db8::10]:9443");
@@ -267,7 +319,13 @@ describe("ConnectSdkPanel", () => {
 
   it("lists the three usual failures", () => {
     render(
-      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={2}
+        aliases={aliases}
+        health={health}
+      />,
     );
     fireEvent.click(screen.getByText("Not receiving the release?"));
     expect(screen.getByText(/Identity not bound to this namespace/)).toBeVisible();

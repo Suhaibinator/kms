@@ -477,6 +477,39 @@ describe("ApplicationsPage", () => {
     await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
   });
 
+  it.each([0, 1, 2])(
+    "puts the selected v%i track in copyable SDK loaders",
+    async (schemaVersion) => {
+      const overview = clone(ready);
+      overview.application.schema_version = schemaVersion;
+      render(
+        <ApplicationHome
+          overview={overview}
+          schemaVersion={schemaVersion}
+          loading={false}
+          reload={vi.fn()}
+          env="dev"
+          ship={null}
+          tab={null}
+          rollback={null}
+        />,
+      );
+
+      const menu = await openMore();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Connect SDK" }));
+      const environments = await screen.findByRole("menu", { name: "Connect SDK" });
+      fireEvent.click(within(environments).getByRole("menuitem", { name: "dev" }));
+      const dialog = await screen.findByRole("dialog", { name: "Connect SDK" });
+      expect(dialog.querySelector("pre code")).toHaveTextContent(
+        `schemaVersion := uint64(${schemaVersion})`,
+      );
+      fireEvent.click(within(dialog).getByRole("tab", { name: "TypeScript" }));
+      expect(dialog.querySelector("pre code")).toHaveTextContent(
+        `schemaVersion: ${schemaVersion}n,`,
+      );
+    },
+  );
+
   it("?ship=alias opens the ship modal prefilled for the first non-production environment", async () => {
     mocks.query = { app: ready.application.name, ship: "rate_limits" };
     mocks.applicationOverview.mockResolvedValue(ready);

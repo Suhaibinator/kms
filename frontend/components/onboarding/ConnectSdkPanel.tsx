@@ -77,6 +77,7 @@ export default function ConnectSdkPanel({
   namespace,
   allowedAuthMethods,
   releaseName,
+  schemaVersion,
   aliases,
   health,
 }: ConnectSdkPanelProps) {
@@ -106,11 +107,12 @@ export default function ConnectSdkPanel({
       env: namespace.env,
       app: namespace.app,
       releaseName,
+      schemaVersion,
       alias: aliases[0] ?? "",
       tls,
       authMethod,
     }),
-    [endpoint, namespace.env, namespace.app, releaseName, aliases, tls, authMethod],
+    [endpoint, namespace.env, namespace.app, releaseName, schemaVersion, aliases, tls, authMethod],
   );
   const go = useMemo(() => goSnippet(input), [input]);
   const ts = useMemo(() => tsSnippet(input), [input]);
