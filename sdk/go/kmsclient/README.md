@@ -197,7 +197,8 @@ together rather than through independent key callbacks:
 
 ```go
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
-    Name: "runtime",
+    Name:         "runtime",
+    SchemaSHA256: applicationSchemaSHA256,
 
     BindingKeys: map[string]kmsclient.BindingKey{"openai_api_key": kmsclient.NewBindingKey(openAIBindingKey)},
 })
@@ -209,6 +210,12 @@ err = loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnapsh
     return decodeValidateAndPrepare(ctx, snapshot)
 })
 ```
+
+Every loader selects exactly one schema track. Generated stores pass their
+schema digest automatically. Low-level callers may instead set
+`SchemaVersion` to a pointer; a non-nil pointer to zero explicitly selects the
+schema-free track. A digest is resolved once and remains pinned across watch
+reconnects, reconciliation, and later `Run` calls on the loader.
 
 The snapshot exposes the release version, activation revision, deterministic
 digest, schema pin, and exact alias-keyed resource pins. Resolved maps are
