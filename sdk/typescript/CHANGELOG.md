@@ -8,6 +8,9 @@ a minor release may contain documented breaking changes.
 
 ### Changed
 
+- **Breaking:** require Next.js 16 for the optional Next.js adapter peer.
+  Drop Next.js 14 and 15 compatibility jobs; retain React 18 and 19 coverage.
+
 - **Breaking:** remove per-secret access tokens from reads, writes, metadata,
   declarative values, and release loaders. Remove `secretToken`,
   `generateAccessToken`, and `secretTokenProvider` options; writes return only
