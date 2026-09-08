@@ -160,6 +160,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema contract")
 	}
 	desiredApp.Contract = desiredContract
+	app.Contract = desiredContract
 	for _, parameter := range artifact.Parameters {
 		if err := validateParameterValue(parameter.Value, parameter.ContentType); err != nil {
 			return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "defaults parameter %q does not parse as %s", parameter.Alias, parameter.ContentType)

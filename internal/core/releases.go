@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
@@ -416,6 +417,9 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 	rel, err := rs.GetConfigurationRelease(ctx, track, version)
 	if err != nil {
 		return nil, err
+	}
+	if rel.Track() != track {
+		return nil, domain.Errorf(domain.ErrFailedPrecondition, "release does not match requested schema track")
 	}
 	return s.validatePersistedReleaseEntries(ctx, pr, rs, track.Namespace, rel, authorizeEntries, true)
 }
@@ -888,6 +892,21 @@ func normalizeConfigurationSchema(application, releaseName, schemaJSON, metadata
 	schemaJSON = string(compactSchema)
 	if _, err := compileSchema(schemaJSON); err != nil {
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid Draft 2020-12 JSON Schema")
+	}
+	var document map[string]jsontext.Value
+	if err := json.Unmarshal([]byte(schemaJSON), &document); err == nil {
+		if raw, ok := document["x-kms-contract"]; ok {
+			var fields []domain.ApplicationContractField
+			if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+				return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "x-kms-contract must be an array of contract fields")
+			}
+			if len(fields) > maxReleaseEntries {
+				return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "schema contract exceeds entry limit")
+			}
+			if _, err := normalizeApplication(domain.Application{Name: application, ReleaseName: releaseName, Contract: fields}); err != nil {
+				return domain.ConfigurationSchema{}, err
+			}
+		}
 	}
 	return domain.ConfigurationSchema{Application: application, ReleaseName: releaseName, Schema: schemaJSON, Digest: sha256Hex([]byte(schemaJSON)), Metadata: metadata}, nil
 }

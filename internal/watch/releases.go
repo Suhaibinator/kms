@@ -216,6 +216,10 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 					continue
 				}
 				rel, err := rs.GetConfigurationRelease(ctx, reg.Track(), e.Version)
+				if errors.Is(err, domain.ErrNotFound) {
+					canReplay = false
+					break
+				}
 				if err != nil {
 					return ReleaseBacklog{}, err
 				}

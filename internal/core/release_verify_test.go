@@ -114,8 +114,8 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		t.Fatal(err)
 	}
 	app.Contract = append(app.Contract, domain.ApplicationContractField{Alias: "future_cfg", Kind: domain.ReleaseEntryParameter, ContentType: "string"})
-	if _, err := st.UpdateApplication(ctx, app); err != nil {
-		t.Fatal(err)
+	if _, err := st.UpdateApplication(ctx, app); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("established contract must be immutable: %v", err)
 	}
 	return &verifyFixture{st: st, svc: svc, admin: admin, ns: ns, release: active, schema: schema}
 }
@@ -184,19 +184,20 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 			t.Errorf("%s verdict = %s, want %s", e.Alias, e.Verdict, want[e.Alias])
 		}
 	}
-	if out.Summary != (domain.VerifyDefaultsSummary{Match: 1, Differs: 2, MissingInRelease: 1, UnknownAlias: 1, SecretAlias: 1, Unverified: 1}) {
+	if out.Summary != (domain.VerifyDefaultsSummary{Match: 1, Differs: 2, MissingInRelease: 0, UnknownAlias: 2, SecretAlias: 1, Unverified: 1}) {
 		t.Fatalf("summary = %+v", out.Summary)
 	}
 
-	// A wrong schema digest is reported, not rejected; an omitted digest is
-	// simply not checked.
+	// Unknown digests fail without selecting another track. A numeric selector
+	// explicitly verifies the already selected schema.
 	in.SchemaSHA256 = wrong
-	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || out.SchemaMatches {
+	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); !errors.Is(err, domain.ErrNotFound) || out.SchemaMatches {
 		t.Fatalf("wrong schema: matches=%v err=%v", out.SchemaMatches, err)
 	}
 	in.SchemaSHA256 = ""
-	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || out.SchemaMatches {
-		t.Fatalf("omitted schema: matches=%v err=%v", out.SchemaMatches, err)
+	in.SchemaVersion = &f.schema.Version
+	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || !out.SchemaMatches {
+		t.Fatalf("numeric schema: matches=%v err=%v", out.SchemaMatches, err)
 	}
 
 	// Audit carries counts only.
@@ -208,7 +209,7 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 	if first.Decision != "allow" || first.ResourceKey != "runtime" || first.ResourceVersion != f.release.Release.Version {
 		t.Fatalf("audit event = %+v", first)
 	}
-	for _, want := range []string{`"entry_count":"6"`, `"match_count":"1"`, `"differs_count":"2"`, `"missing_count":"1"`, `"unknown_alias_count":"1"`, `"secret_alias_count":"1"`, `"unsupported_count":"0"`, `"unverified_count":"1"`, `"schema_matches":"true"`, `"limited":"false"`} {
+	for _, want := range []string{`"entry_count":"6"`, `"match_count":"1"`, `"differs_count":"2"`, `"missing_count":"0"`, `"unknown_alias_count":"2"`, `"secret_alias_count":"1"`, `"unsupported_count":"0"`, `"unverified_count":"1"`, `"schema_matches":"true"`, `"limited":"false"`} {
 		if !strings.Contains(first.Metadata, want) {
 			t.Errorf("audit metadata missing %s: %s", want, first.Metadata)
 		}

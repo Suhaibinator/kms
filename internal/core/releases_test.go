@@ -98,17 +98,17 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 		t.Fatalf("activate2=%+v changed=%v err=%v", a2, changed, err)
 	}
 	const connectionID = "core-test-connection"
-	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
+	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: schema.Version}, "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
 		t.Fatal(err)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
 	if err != nil {
 		t.Fatalf("historical superseded acknowledgement: %v", err)
 	}
 	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "unrelated"}, "1", "integer", "{}", "admin"); err != nil {
 		t.Fatal(err)
 	}
-	acks, _, activeRevision, err := svc.ListReleaseSubscribers(ctx, pr, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, storage.ListPage{})
+	acks, _, activeRevision, err := svc.ListReleaseSubscribers(ctx, pr, domain.ReleaseFilter{Namespace: ns, Name: "runtime", SchemaVersion: &schema.Version}, storage.ListPage{})
 	if err != nil || len(acks) != 1 || acks[0].Diagnostic != "[redacted]" {
 		t.Fatalf("redacted acknowledgements=%+v err=%v", acks, err)
 	}
@@ -118,7 +118,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if activeRevision != a2.ActivationRevision {
 		t.Fatalf("subscriber current revision=%d want active release revision %d", activeRevision, a2.ActivationRevision)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("fabricated revision err=%v", err)
 	}

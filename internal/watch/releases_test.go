@@ -312,3 +312,62 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 		t.Fatalf("closed release remains: %+v", rows)
 	}
 }
+
+func TestReleaseQueueRejectsForeignTrackBeforeCoalescing(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "live"}[ready], func(t *testing.T) {
+			ns := domain.NamespaceRef{Env: "prod", App: "app"}
+			sub := &ReleaseSubscription{reg: ReleaseRegistration{Namespace: ns, NamespaceID: 7, Name: "runtime", SchemaVersion: 1}, ready: ready, events: make(chan ReleaseEvent, 1)}
+			matching := domain.ChangeLogEntry{ResourceType: domain.ResourceConfigurationRelease, Ref: domain.Ref{NS: ns, Key: "runtime"}, NamespaceID: 7, SchemaVersion: 1, Version: 2, Revision: 10}
+			sub.offer(matching)
+			foreign := matching
+			foreign.SchemaVersion = 2
+			foreign.Revision = 11
+			sub.offer(foreign)
+			foreign = matching
+			foreign.NamespaceID = 8
+			foreign.Revision = 12
+			sub.offer(foreign)
+			if !ready {
+				sub.activate(ReleaseBacklog{})
+			}
+			select {
+			case event := <-sub.Events():
+				if event.SchemaVersion != 1 || event.NamespaceID != 7 || event.Revision != 10 {
+					t.Fatalf("foreign event superseded matching candidate: %+v", event)
+				}
+			default:
+				t.Fatal("matching candidate was lost")
+			}
+		})
+	}
+}
+
+func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
+	st, ns := releaseWatchStore(t)
+	ctx := context.Background()
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: ns.App, ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "inactive-schema", Metadata: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(st, nil, Options{})
+	reg := releaseWatchRegistration(t, st, ns)
+	reg.SchemaVersion = schema.Version
+	sub, err := hub.SubscribeRelease(ctx, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if len(sub.Backlog().Events) != 0 {
+		t.Fatal("inactive track fabricated a release")
+	}
+	select {
+	case <-sub.Done():
+		t.Fatal("inactive track closed")
+	default:
+	}
+	reg.SchemaVersion++
+	if _, err := hub.SubscribeRelease(ctx, reg); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown track: %v", err)
+	}
+}

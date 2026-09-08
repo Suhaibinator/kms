@@ -136,10 +136,12 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		schema, err = rs.GetConfigurationSchemaByDigest(ctx, app.Name, releaseName, in.SchemaSHA256)
 	}
 	if err != nil {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
 		return domain.VerifyReleaseDefaultsResult{}, err
 	}
 	app.Contract, err = rs.GetConfigurationSchemaContract(ctx, app.Name, releaseName, schema.Version)
 	if err != nil {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
 		return domain.VerifyReleaseDefaultsResult{}, err
 	}
 	track := domain.ReleaseTrack{Namespace: in.Namespace, Name: releaseName, SchemaVersion: schema.Version}

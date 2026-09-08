@@ -99,6 +99,32 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		t.Fatalf("duplicate schema code = %s err=%v, want AlreadyExists", status.Code(err), err)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
+	for name, call := range map[string]func() error{
+		"get": func() error {
+			_, e := releases.GetRelease(adminCtx(), &kmsv1.GetReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+		"active": func() error {
+			_, e := releases.GetActiveRelease(adminCtx(), &kmsv1.GetActiveReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime"})
+			return e
+		},
+		"activate": func() error {
+			_, e := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+		"validate": func() error {
+			_, e := releases.ValidateRelease(adminCtx(), &kmsv1.ValidateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+	} {
+		if err := call(); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("%s missing schema: %v", name, err)
+		}
+	}
+	resolved, err := releases.ResolveReleaseSchema(adminCtx(), &kmsv1.ResolveReleaseSchemaRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaSha256: pinnedSchema.Digest})
+	if err != nil || resolved.GetSchemaVersion() != pinnedSchema.Version {
+		t.Fatalf("resolve schema: %+v %v", resolved, err)
+	}
 	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -379,8 +405,8 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if resp.GetName() != "runtime" || resp.GetVersion() != created.GetRelease().GetVersion() || resp.GetActivationRevision() != active.GetActivationRevision() {
 		t.Fatalf("verify identity = %+v", resp)
 	}
-	if resp.GetSchemaMatches() {
-		t.Fatal("no schema digest was supplied; schema_matches must be false")
+	if !resp.GetSchemaMatches() || resp.GetSchemaVersion() != 0 {
+		t.Fatal("explicit schema-free track must match")
 	}
 	verdicts := map[string]string{}
 	for _, e := range resp.GetEntries() {
