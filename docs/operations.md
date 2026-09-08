@@ -651,7 +651,9 @@ One-time credentials keep their table-mode rules:
   one document.
 
 The documents themselves, by command. "items of X" means the list envelope
-above with `X` as each element:
+above with `X` as each element. Every release `schema_version` field listed
+below is present even when its value is `0`, which identifies the schema-free
+track:
 
 | Command | JSON document |
 |---|---|
@@ -687,14 +689,14 @@ above with `X` as each element:
 | `admin policy list` | items of that same object |
 | `admin policy delete` | `{name, deleted}` |
 | `admin ca show` | `{cert_pem}`, or `{ca_file}` with `--out` |
-| `release create` | `{namespace, name, version, digest}` |
+| `release create` | `{namespace, name, schema_version, version, digest}` |
 | `release validate` | `{valid, errors}`, error `{alias, code, schema_pointer, message}` |
-| `release show` | `{namespace, name, version, schema, digest, created_at, entries}` — `schema` is `{id, version}` or `null`; entry `{alias, kind, path, version, content_type, parameter_digest}`. Activation state is not part of a manifest; `release list` reports `current`/`previous` |
-| `release list` | items of `{name, version, current, previous, revision, digest, created_at}` |
-| `release diff` | `{from: {name, version}, to: {name, version}, added, removed, changed}` — `added`/`removed` are release entries, `changed` is `{alias, from, to}` |
-| `release activate`, `release rollback` | `{namespace, name, version, previous_version, revision, changed}` |
-| `release subscribers` | items of `{identity, client, instance, received, prepared, applied, rejected, lag, connected}` — each lifecycle state is `{release_version, activation_revision, rejection_category}` or `null` |
-| `release verify-defaults` | `{name, version, activation_revision, schema, clean, entries, counts}`, entry `{alias, verdict}`, counts `{match, differs, missing_in_release, unknown_alias, secret_alias, unsupported_content_type, unverified}` |
+| `release show` | `{namespace, name, schema_version, version, schema, digest, created_at, entries}` — `schema` is `{version}` or `null`; entry `{alias, kind, path, version, content_type, parameter_digest}`. Activation state is not part of a manifest; `release list` reports `current`/`previous` |
+| `release list` | items of `{name, schema_version, version, current, previous, revision, digest, created_at}` |
+| `release diff` | `{from: {name, schema_version, version}, to: {name, schema_version, version}, added, removed, changed}` — `added`/`removed` are release entries, `changed` is `{alias, from, to}` |
+| `release activate`, `release rollback` | `{namespace, name, schema_version, version, previous_version, revision, changed}` |
+| `release subscribers` | items of `{identity, client, instance, schema_version, received, prepared, applied, rejected, lag, connected}` — each lifecycle state is `{release_version, activation_revision, rejection_category}` or `null`; `lag` is the difference between the track's active global revision and the newest revision reported by the instance |
+| `release verify-defaults` | `{name, schema_version, version, activation_revision, schema, clean, entries, counts}`, entry `{alias, verdict}`, counts `{match, differs, missing_in_release, unknown_alias, secret_alias, unsupported_content_type, unverified}` |
 | `release schema create` | `{application, release_name, version, digest}` |
 | `release schema show` | `{application, release_name, version, digest, schema}` — `schema` is the schema document itself, not a string |
 | `release schema list` | items of `{application, release_name, version, digest, created_at}` |
