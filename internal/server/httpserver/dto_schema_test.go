@@ -1,7 +1,9 @@
 package httpserver
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -27,12 +29,10 @@ func TestSchemaDTOContractPresence(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			encoded, err := json.Marshal(toSchemaDTO(domain.ConfigurationSchema{Contract: test.contract}))
-			if err != nil {
-				t.Fatal(err)
-			}
+			response := httptest.NewRecorder()
+			writeJSON(response, http.StatusOK, toSchemaDTO(domain.ConfigurationSchema{Contract: test.contract}))
 			var object map[string]any
-			if err := json.Unmarshal(encoded, &object); err != nil {
+			if err := json.Unmarshal(response.Body.Bytes(), &object); err != nil {
 				t.Fatal(err)
 			}
 			got, set := object["contract"]

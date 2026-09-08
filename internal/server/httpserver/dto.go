@@ -586,7 +586,7 @@ type schemaDTO struct {
 	MetadataJSON    string                             `json:"metadata_json"`
 	CreatedBy       string                             `json:"created_by"`
 	CreatedAtUnixMS int64                              `json:"created_at_unix_ms"`
-	Contract        *[]domain.ApplicationContractField `json:"contract,omitempty"`
+	Contract        *[]domain.ApplicationContractField `json:"contract,omitzero"`
 }
 
 func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
