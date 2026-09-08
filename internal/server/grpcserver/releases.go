@@ -397,6 +397,18 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			release := e.Release
 			if release.Name == "" {
 				release, err = h.s.svc.GetConfigurationRelease(ctx, pr, reg.Track(), e.Version)
+				if errors.Is(err, domain.ErrNotFound) {
+					// Retention may prune an activation already dequeued for delivery.
+					// Only a still-authorized, active track in this same namespace
+					// incarnation can recover by reconnecting for replay or a snapshot.
+					if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+						return h.s.mapErr(ctx, err)
+					}
+					if _, err := h.s.svc.GetActiveConfigurationRelease(ctx, pr, reg.Track()); err != nil {
+						return h.s.mapErr(ctx, err)
+					}
+					return h.s.mapErr(ctx, domain.Errorf(domain.ErrAborted, "release delivery history changed; reconnect to resume"))
+				}
 				if err != nil {
 					return h.s.mapErr(ctx, err)
 				}
