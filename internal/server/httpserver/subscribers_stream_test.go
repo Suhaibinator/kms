@@ -116,7 +116,7 @@ func TestReleaseSubscriberStream(t *testing.T) {
 
 	// A subscriber connecting wakes the stream into a fresh snapshot.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
-	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), ns, "runtime", "api", "i1", "admin", "conn-1", true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, "api", "i1", "admin", "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 	frame, err = readFrame(t, reader)
@@ -342,7 +342,7 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 	// Wake the stream: the refresh it triggers must refuse to send a snapshot to
 	// a principal whose certificate is gone.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
-	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), ns, "runtime", "api", "i1", "admin", "conn-1", true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, "api", "i1", "admin", "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 

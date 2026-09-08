@@ -37,7 +37,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	body := migrationHTTPBody(t, e)
 	ctx, pr := context.Background(), consoleAdmin()
 	ns := domain.NamespaceRef{App: "gradethis", Env: "dev"}
-	source, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	source, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	if result["executed"] != true || result["release"] == nil || result["activation"] == nil {
 		t.Fatalf("unexpected apply: %v", result)
 	}
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

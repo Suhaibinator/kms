@@ -75,16 +75,17 @@ func (e *testEnv) ackInstance(env, instance, state, category string) {
 	ctx := context.Background()
 	ns := domain.NamespaceRef{Env: env, App: "gradethis"}
 	pr := consoleAdmin()
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	track := domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}
+	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, track)
 	if err != nil {
 		e.t.Fatalf("active release for ack: %v", err)
 	}
 	conn := "conn-" + instance
-	if err := e.svc.SetReleaseSubscriberConnected(ctx, ns, "runtime", "api", instance, pr.Identity.Name, conn, true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", instance, pr.Identity.Name, conn, true); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
-		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
+		Namespace: ns, ReleaseName: "runtime", SchemaVersion: 1, ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: instance, ConnectionID: conn, State: state, RejectionCategory: category,
 	}); err != nil {
 		e.t.Fatal(err)
