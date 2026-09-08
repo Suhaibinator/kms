@@ -188,15 +188,24 @@ for (const [name, route] of [
     await expect(rows.first()).toBeVisible();
     // In one evaluate: a per-row round trip re-resolves the locator and races
     // any re-render between them.
-    const tall = await rows.evaluateAll((nodes) =>
-      nodes
-        .map((node) => ({
-          height: node.getBoundingClientRect().height,
-          text: (node.textContent ?? "").slice(0, 40),
-        }))
-        .filter((row) => row.height > 60),
+    const brokenActions = await rows.evaluateAll((nodes) =>
+      nodes.flatMap((node) => {
+        const actions = node.querySelector<HTMLElement>(".row-actions");
+        if (!actions) return [];
+        const cell = actions.closest("td");
+        if (!cell) return [{ text: (node.textContent ?? "").slice(0, 40), reason: "no cell" }];
+        const cellBox = cell.getBoundingClientRect();
+        const buttons = [...actions.children].map((button) => button.getBoundingClientRect());
+        const lines = new Set(buttons.map((button) => Math.round(button.top)));
+        const overflows = buttons.some(
+          (button) => button.left < cellBox.left - 0.5 || button.right > cellBox.right + 0.5,
+        );
+        return lines.size > 1 || overflows
+          ? [{ text: (node.textContent ?? "").slice(0, 40), reason: "wrapped or overflowed" }]
+          : [];
+      }),
     );
-    expect(tall).toEqual([]);
+    expect(brokenActions).toEqual([]);
   });
 }
 
