@@ -62,3 +62,32 @@ func TestManagementSelectionDoesNotRepinApplication(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestApplicationMetadataUpdatePreservesFirstReleaseContract(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newConsoleTestService(t)
+	app, err := svc.CreateApplication(ctx, adminPrincipal(), domain.Application{Name: "adoption", ReleaseName: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	if _, err := svc.CreateNamespace(ctx, adminPrincipal(), ns, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{NS: ns, Key: "setting"}
+	if _, _, err := svc.PutParameter(ctx, adminPrincipal(), ref, "1", "integer", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateConfigurationRelease(ctx, adminPrincipal(), domain.CreateConfigurationReleaseInput{Namespace: ns, Name: app.ReleaseName, Entries: []domain.ReleaseEntrySelector{{Alias: "setting", Kind: domain.ReleaseEntryParameter, Ref: ref}}}); err != nil {
+		t.Fatal(err)
+	}
+	app, err = st.GetApplication(ctx, app.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Description = "updated"
+	updated, err := svc.UpdateApplication(ctx, adminPrincipal(), app)
+	if err != nil || updated.Description != "updated" || len(updated.Contract) != 1 || updated.SchemaVersion != 0 {
+		t.Fatalf("metadata update: %+v %v", updated, err)
+	}
+}

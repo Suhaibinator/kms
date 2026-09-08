@@ -147,7 +147,20 @@ func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domai
 		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application release name is immutable")
 	}
 	if app.SchemaVersion != current.SchemaVersion {
-		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by release schema migration or defaults apply --update-definition")
+		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by defaults apply --update-definition")
+	}
+	// The first release can establish a track contract after the application
+	// was created without one. Preserve it when updating that empty definition's
+	// descriptive fields, instead of attempting to replace it with an empty list.
+	if len(app.Contract) == 0 && len(current.Contract) == 0 {
+		rs, err := s.releaseStore()
+		if err != nil {
+			return domain.Application{}, err
+		}
+		app.Contract, err = rs.GetConfigurationSchemaContract(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+		if err != nil {
+			return domain.Application{}, err
+		}
 	}
 	if err := s.validateApplicationSchema(ctx, app); err != nil {
 		return domain.Application{}, err

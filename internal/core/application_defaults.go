@@ -346,22 +346,11 @@ func applicationContractFromArtifact(artifact []configstore.ContractEntry) []dom
 }
 
 func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, application, releaseName, digest string) (domain.ConfigurationSchema, error) {
-	page := storage.ListPage{Limit: 100}
-	for {
-		schemas, next, err := store.ListConfigurationSchemas(ctx, application, releaseName, page)
-		if err != nil {
-			return domain.ConfigurationSchema{}, err
-		}
-		for _, schema := range schemas {
-			if schema.Digest == digest {
-				return schema, nil
-			}
-		}
-		if next == "" {
-			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema for %s/%s before updating the application definition", application, releaseName)
-		}
-		page.Token = next
+	schema, err := store.GetConfigurationSchemaByDigest(ctx, application, releaseName, digest)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema for %s/%s before updating the application definition", application, releaseName)
 	}
+	return schema, err
 }
 
 func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.NamespaceRef, plan defaultsPlan, eventType, decision string) {
