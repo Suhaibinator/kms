@@ -242,6 +242,7 @@ func (auditEventModel) TableName() string { return "audit_events" }
 // changeLogDDL) to guarantee INTEGER PRIMARY KEY AUTOINCREMENT; this struct is
 // used only for queries.
 type changeLogModel struct {
+	SchemaVersion        int64   `gorm:"column:schema_version;not null;default:0"`
 	Revision             int64   `gorm:"column:revision;primaryKey;autoIncrement"`
 	ResourceType         string  `gorm:"column:resource_type;not null"`
 	NamespaceID          int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
@@ -265,7 +266,7 @@ type configurationReleaseModel struct {
 	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	Name          string         `gorm:"column:name;not null;uniqueIndex:idx_release_ns_name_ver,priority:2"`
 	VersionNumber int64          `gorm:"column:version_number;not null;uniqueIndex:idx_release_ns_name_ver,priority:3"`
-	SchemaVersion int64          `gorm:"column:schema_version;not null;default:0"`
+	SchemaVersion int64          `gorm:"column:schema_version;not null;default:0;uniqueIndex:idx_release_ns_name_ver,priority:4"`
 	Digest        string         `gorm:"column:digest;not null"`
 	MetadataJSON  string         `gorm:"column:metadata_json;not null;default:{}"`
 	CreatedBy     string         `gorm:"column:created_by;not null;default:''"`
@@ -296,6 +297,7 @@ type configurationReleaseEntryModel struct {
 func (configurationReleaseEntryModel) TableName() string { return "configuration_release_entries" }
 
 type configurationReleaseLabelModel struct {
+	SchemaVersion      int64          `gorm:"column:schema_version;not null;primaryKey;autoIncrement:false"`
 	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false"`
 	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey"`
@@ -312,6 +314,7 @@ func (configurationReleaseLabelModel) TableName() string { return "configuration
 // the longer release-retention window without keeping ordinary watch history
 // forever.
 type configurationReleaseActivationModel struct {
+	SchemaVersion int64          `gorm:"column:schema_version;not null;index:idx_release_activation_lookup,priority:4"`
 	Revision      int64          `gorm:"column:revision;primaryKey;autoIncrement:false"`
 	NamespaceID   int64          `gorm:"column:namespace_id;not null;index:idx_release_activation_lookup,priority:1"`
 	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
@@ -325,6 +328,7 @@ func (configurationReleaseActivationModel) TableName() string {
 }
 
 type configurationSchemaModel struct {
+	ContractJSON    *string          `gorm:"column:contract_json"`
 	ApplicationName string           `gorm:"column:application_name;not null;primaryKey;uniqueIndex:idx_schema_digest,priority:1"`
 	Application     applicationModel `gorm:"foreignKey:ApplicationName;references:Name;constraint:OnDelete:RESTRICT"`
 	ReleaseName     string           `gorm:"column:release_name;not null;primaryKey;uniqueIndex:idx_schema_digest,priority:2"`
@@ -339,6 +343,7 @@ type configurationSchemaModel struct {
 func (configurationSchemaModel) TableName() string { return "configuration_schemas" }
 
 type releaseSubscriberStateModel struct {
+	SchemaVersion      int64          `gorm:"column:schema_version;not null;primaryKey;autoIncrement:false"`
 	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_subscriber_page,priority:1"`
 	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_subscriber_page,priority:2"`
@@ -363,6 +368,7 @@ type releaseSubscriberStateModel struct {
 func (releaseSubscriberStateModel) TableName() string { return "release_subscriber_states" }
 
 type releaseSubscriberConnectionModel struct {
+	SchemaVersion   int64          `gorm:"column:schema_version;not null;primaryKey;autoIncrement:false"`
 	NamespaceID     int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_connection_page,priority:1"`
 	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	ReleaseName     string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_connection_page,priority:2"`
@@ -407,6 +413,8 @@ var autoMigrateModels = []any{
 	&policyModel{},
 	&auditEventModel{},
 	&configurationReleaseModel{},
+	&configurationReleaseCounterModel{},
+	&schemaFreeContractModel{},
 	&configurationReleaseEntryModel{},
 	&configurationReleaseLabelModel{},
 	&configurationReleaseActivationModel{},
@@ -544,6 +552,7 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 		affectedVersions = nil
 	}
 	return domain.ChangeLogEntry{
+		SchemaVersion:    uint64(m.SchemaVersion),
 		Revision:         uint64(m.Revision),
 		ResourceType:     m.ResourceType,
 		NamespaceID:      m.NamespaceID,
@@ -626,3 +635,23 @@ func i2b(i int64) bool { return i != 0 }
 // nowUTC returns the current time truncated to what the DB representation can
 // hold, so returned domain values match subsequently-read ones exactly.
 func nowUTC() time.Time { return parseTime(fmtTime(time.Now())) }
+
+// Counter survives history retention and belongs to a namespace incarnation.
+type configurationReleaseCounterModel struct {
+	NamespaceID   int64          `gorm:"primaryKey;autoIncrement:false"`
+	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID;constraint:OnDelete:CASCADE"`
+	ReleaseName   string         `gorm:"primaryKey"`
+	SchemaVersion int64          `gorm:"primaryKey;autoIncrement:false"`
+	LastVersion   int64          `gorm:"not null"`
+}
+
+func (configurationReleaseCounterModel) TableName() string { return "configuration_release_counters" }
+
+type schemaFreeContractModel struct {
+	ApplicationName string           `gorm:"primaryKey"`
+	Application     applicationModel `gorm:"foreignKey:ApplicationName;references:Name;constraint:OnDelete:CASCADE"`
+	ReleaseName     string           `gorm:"primaryKey"`
+	ContractJSON    string           `gorm:"not null"`
+}
+
+func (schemaFreeContractModel) TableName() string { return "schema_free_contracts" }

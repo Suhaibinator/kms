@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"time"
 
 	"gorm.io/gorm"
 )
@@ -10,14 +9,7 @@ import (
 // inspectSupportedBaselineDB never changes operator data. Version 1 is accepted
 // only when its exact physical schema and all token columns are safe to remove.
 func inspectSupportedBaselineDB(db *gorm.DB) (bool, error) {
-	empty, currentErr := inspectBaselineDB(db)
-	if currentErr == nil {
-		return empty, nil
-	}
-	if err := verifyTokenFreeLegacyBaseline(db); err != nil {
-		return false, err
-	}
-	return false, nil
+	return inspectBaselineDB(db)
 }
 
 func verifyTokenFreeLegacyBaseline(db *gorm.DB) error {
@@ -55,26 +47,5 @@ func verifyTokenFreeLegacyBaseline(db *gorm.DB) error {
 }
 
 func upgradeSecretTokenSchema(db *gorm.DB) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := verifyBaselineDB(tx); err == nil {
-			return nil
-		}
-		// Recheck after acquiring the write lock, so a concurrent old writer cannot
-		// add token protection between inspection and the schema upgrade.
-		if err := verifyTokenFreeLegacyBaseline(tx); err != nil {
-			return err
-		}
-		for _, ddl := range []string{
-			"ALTER TABLE secrets DROP COLUMN access_token_hash",
-			"ALTER TABLE secret_versions DROP COLUMN has_access_token",
-		} {
-			if err := tx.Exec(ddl).Error; err != nil {
-				return fmt.Errorf("remove unused secret-token column: %w", err)
-			}
-		}
-		if err := tx.Model(&schemaMigrationModel{}).Where("version = 1").Updates(map[string]any{"version": schemaVersion, "applied_at": fmtTime(time.Now())}).Error; err != nil {
-			return err
-		}
-		return verifyBaselineDB(tx)
-	})
+	return verifyBaselineDB(db)
 }

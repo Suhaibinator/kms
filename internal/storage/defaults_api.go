@@ -14,6 +14,7 @@ type DefaultsApplyStore interface {
 }
 
 type DefaultsResolutionState struct {
+	SchemaVersion      uint64
 	Environment        string
 	NamespaceID        int64
 	ActiveVersion      uint64

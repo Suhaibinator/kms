@@ -73,12 +73,11 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 		}
 		return err
 	}
-	contract, err := contractJSON(in.Contract)
+	contract, err := canonicalSchemaContract(in.Contract)
 	if err != nil {
 		return err
 	}
-	if app.ReleaseName != in.ReleaseName || app.ArchivedAt != nil ||
-		uint64(app.SchemaVersion) != in.SchemaVersion || app.ContractJSON != contract {
+	if app.ReleaseName != in.ReleaseName || app.ArchivedAt != nil {
 		return defaultsStale()
 	}
 	var ns namespaceModel
@@ -101,6 +100,19 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 			return err
 		}
 		if schema.Digest != in.SchemaDigest {
+			return defaultsStale()
+		}
+	}
+	if !in.UpdateDefinition {
+		adopted, err := adoptSchemaContractTx(tx, in.Namespace.App, in.ReleaseName, in.SchemaVersion, in.Contract)
+		if err != nil {
+			return err
+		}
+		actual, err := canonicalSchemaContract(adopted.Contract)
+		if err != nil {
+			return err
+		}
+		if actual != contract {
 			return defaultsStale()
 		}
 	}
@@ -134,7 +146,7 @@ func verifyDefaultsResolution(tx *gorm.DB, in DefaultsApplyTransaction) error {
 		}
 		var latest int64
 		if err := tx.Model(&configurationReleaseModel{}).
-			Where("namespace_id = ? AND name = ?", expected.NamespaceID, in.ReleaseName).
+			Where("namespace_id = ? AND name = ? AND schema_version = ?", expected.NamespaceID, in.ReleaseName, expected.SchemaVersion).
 			Select("COALESCE(MAX(version_number), 0)").Scan(&latest).Error; err != nil {
 			return err
 		}
@@ -142,7 +154,7 @@ func verifyDefaultsResolution(tx *gorm.DB, in DefaultsApplyTransaction) error {
 			return defaultsStale()
 		}
 		var active configurationReleaseLabelModel
-		err := tx.Where("namespace_id = ? AND release_name = ? AND label = ?", expected.NamespaceID, in.ReleaseName, domain.LabelCurrent).First(&active).Error
+		err := tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", expected.NamespaceID, in.ReleaseName, expected.SchemaVersion, domain.LabelCurrent).First(&active).Error
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			if expected.ActiveVersion != 0 || expected.ActivationRevision != 0 {

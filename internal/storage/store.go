@@ -23,9 +23,9 @@ import (
 	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
-// schemaVersion 2 removes unused per-secret access-token columns.
-// Only the exact token-free version-1 baseline can be upgraded.
-const schemaVersion = 2
+// schemaVersion 3 introduces independent schema tracks. Previous baselines
+// are rejected without mutation; this release requires a fresh database.
+const schemaVersion = 3
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -48,6 +48,7 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	value          TEXT,
 	content_type   TEXT NOT NULL DEFAULT '',
 	version_number INTEGER NOT NULL DEFAULT 0,
+ schema_version INTEGER NOT NULL DEFAULT 0,
 	affected_versions_json TEXT NOT NULL DEFAULT '[]',
 	label          TEXT NOT NULL DEFAULT '',
 	created_at     TEXT NOT NULL

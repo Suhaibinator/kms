@@ -68,20 +68,20 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 				return err
 			}
 		}
-		var maxVersion int64
-		if err := tx.Model(&configurationReleaseModel{}).
-			Where("namespace_id = ? AND name = ?", nsID, release.Name).
-			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVersion).Error; err != nil {
+		var counter configurationReleaseCounterModel
+		err = tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ?", nsID, release.Name, release.SchemaVersion).First(&counter).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		maxVersion := counter.LastVersion
 		if options.application != nil && maxVersion != 0 {
-			latest, err := getConfigurationRelease(tx, release.Namespace, release.Name, uint64(maxVersion))
+			latest, err := getConfigurationRelease(tx, release.Track(), uint64(maxVersion))
 			if err != nil {
 				return err
 			}
 			if sameCanonicalRelease(latest, release) {
 				var latestModel configurationReleaseModel
-				if err := tx.Where("namespace_id = ? AND name = ? AND version_number = ?", nsID, release.Name, maxVersion).First(&latestModel).Error; err != nil {
+				if err := tx.Where("namespace_id = ? AND name = ? AND schema_version = ? AND version_number = ?", nsID, release.Name, release.SchemaVersion, maxVersion).First(&latestModel).Error; err != nil {
 					return err
 				}
 				if err := validateReleasePinsTx(tx, latestModel.ID); err != nil {
@@ -113,6 +113,10 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 				}
 				return domain.Errorf(domain.ErrAlreadyExists, "configuration release %s/%s version %d", release.Namespace, release.Name, maxVersion+1)
 			}
+			return err
+		}
+		counter = configurationReleaseCounterModel{NamespaceID: nsID, ReleaseName: release.Name, SchemaVersion: int64(release.SchemaVersion), LastVersion: m.VersionNumber}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}}, DoUpdates: clause.AssignmentColumns([]string{"last_version"})}).Create(&counter).Error; err != nil {
 			return err
 		}
 		for _, entry := range release.Entries {
@@ -156,28 +160,28 @@ func verifyApplicationReleaseState(tx *gorm.DB, nsID int64, in ApplicationReleas
 		}
 		return err
 	}
-	contract, err := contractJSON(in.Contract)
+	contract, err := canonicalSchemaContract(in.Contract)
 	if err != nil {
 		return err
 	}
-	if app.ArchivedAt != nil || app.ReleaseName != in.Release.Name || uint64(app.SchemaVersion) != in.Release.SchemaVersion || app.ContractJSON != contract {
+	if app.ArchivedAt != nil || app.ReleaseName != in.Release.Name {
 		return applicationReleaseStale()
 	}
 	if in.NamespaceID != nsID {
 		return applicationReleaseStale()
 	}
 	var schema configurationSchemaModel
-	if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", app.Name, app.ReleaseName, app.SchemaVersion).First(&schema).Error; err != nil {
+	if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", app.Name, app.ReleaseName, in.Release.SchemaVersion).First(&schema).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return applicationReleaseStale()
 		}
 		return err
 	}
-	if schema.Digest != in.SchemaDigest {
+	if schema.Digest != in.SchemaDigest || schema.ContractJSON == nil || *schema.ContractJSON != contract {
 		return applicationReleaseStale()
 	}
 	var active configurationReleaseLabelModel
-	err = tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, in.Release.Name, domain.LabelCurrent).First(&active).Error
+	err = tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, in.Release.Name, in.Release.SchemaVersion, domain.LabelCurrent).First(&active).Error
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		if in.ExpectedActiveVersion != 0 || in.ExpectedActivationRevision != 0 {
@@ -235,23 +239,24 @@ func sameCanonicalRelease(a, b domain.ConfigurationRelease) bool {
 	return reflect.DeepEqual(normalize(a), normalize(b))
 }
 
-func (s *SQLStore) GetConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error) {
+func (s *SQLStore) GetConfigurationRelease(ctx context.Context, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error) {
 	var out domain.ConfigurationRelease
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
-		out, err = getConfigurationRelease(tx, ns, name, version)
+		out, err = getConfigurationRelease(tx, track, version)
 		return err
 	}, &sql.TxOptions{ReadOnly: true})
 	return out, err
 }
 
-func getConfigurationRelease(db *gorm.DB, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error) {
+func getConfigurationRelease(db *gorm.DB, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error) {
+	ns, name := track.Namespace, track.Name
 	nsID, err := resolveNamespaceID(db, ns)
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
 	var m configurationReleaseModel
-	q := db.Where("namespace_id = ? AND name = ?", nsID, name)
+	q := db.Where("namespace_id = ? AND name = ? AND schema_version = ?", nsID, name, track.SchemaVersion)
 	if version == 0 {
 		q = q.Order("configuration_releases.version_number DESC")
 	} else {
@@ -293,7 +298,8 @@ func releaseFromModelAndEntries(ns domain.NamespaceRef, m configurationReleaseMo
 	}
 }
 
-func (s *SQLStore) GetActiveConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string) (domain.ActiveConfigurationRelease, error) {
+func (s *SQLStore) GetActiveConfigurationRelease(ctx context.Context, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
+	ns, name := track.Namespace, track.Name
 	var out domain.ActiveConfigurationRelease
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		nsID, err := resolveNamespaceID(tx, ns)
@@ -301,18 +307,18 @@ func (s *SQLStore) GetActiveConfigurationRelease(ctx context.Context, ns domain.
 			return err
 		}
 		var cur configurationReleaseLabelModel
-		if err := tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, name, domain.LabelCurrent).First(&cur).Error; err != nil {
+		if err := tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, name, track.SchemaVersion, domain.LabelCurrent).First(&cur).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return domain.Errorf(domain.ErrNotFound, "active configuration release %s/%s", ns, name)
 			}
 			return err
 		}
-		rel, err := getConfigurationRelease(tx, ns, name, uint64(cur.VersionNumber))
+		rel, err := getConfigurationRelease(tx, track, uint64(cur.VersionNumber))
 		if err != nil {
 			return err
 		}
 		var prev configurationReleaseLabelModel
-		if err := tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, name, domain.LabelPrevious).First(&prev).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, name, track.SchemaVersion, domain.LabelPrevious).First(&prev).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		out = domain.ActiveConfigurationRelease{Release: rel, ActivationRevision: uint64(cur.ActivationRevision), PreviousVersion: uint64(prev.VersionNumber)}
@@ -321,7 +327,8 @@ func (s *SQLStore) GetActiveConfigurationRelease(ctx context.Context, ns domain.
 	return out, err
 }
 
-func (s *SQLStore) CountConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string) (uint64, error) {
+func (s *SQLStore) CountConfigurationReleases(ctx context.Context, filter domain.ReleaseFilter) (uint64, error) {
+	ns, name := filter.Namespace, filter.Name
 	var count int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		nsID, err := resolveNamespaceID(tx, ns)
@@ -332,6 +339,9 @@ func (s *SQLStore) CountConfigurationReleases(ctx context.Context, ns domain.Nam
 		if name != "" {
 			q = q.Where("name = ?", name)
 		}
+		if filter.SchemaVersion != nil {
+			q = q.Where("schema_version = ?", *filter.SchemaVersion)
+		}
 		return q.Count(&count).Error
 	})
 	if err != nil {
@@ -340,7 +350,8 @@ func (s *SQLStore) CountConfigurationReleases(ctx context.Context, ns domain.Nam
 	return uint64(count), nil
 }
 
-func (s *SQLStore) ListConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string, page ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
+func (s *SQLStore) ListConfigurationReleases(ctx context.Context, filter domain.ReleaseFilter, page ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
+	ns, name := filter.Namespace, filter.Name
 	limit := clampLimit(page.Limit)
 	after, err := decodeIntToken(page.Token)
 	if err != nil {
@@ -356,6 +367,9 @@ func (s *SQLStore) ListConfigurationReleases(ctx context.Context, ns domain.Name
 		q := tx.Where("namespace_id = ?", nsID)
 		if name != "" {
 			q = q.Where("name = ?", name)
+		}
+		if filter.SchemaVersion != nil {
+			q = q.Where("schema_version = ?", *filter.SchemaVersion)
 		}
 		if after > 0 {
 			q = q.Where("id < ?", after)
@@ -386,29 +400,33 @@ func (s *SQLStore) ListConfigurationReleases(ctx context.Context, ns domain.Name
 		if err := tx.Where("namespace_id = ? AND release_name IN ?", nsID, releaseNames).Find(&labels).Error; err != nil {
 			return err
 		}
-		type lk struct{ name, label string }
+		type lk struct {
+			name, label string
+			schema      int64
+		}
 		lm := map[lk]configurationReleaseLabelModel{}
 		for _, l := range labels {
-			lm[lk{l.ReleaseName, l.Label}] = l
+			lm[lk{l.ReleaseName, l.Label, l.SchemaVersion}] = l
 		}
 		conditions := make([]string, 0, len(rows))
 		activationArgs := make([]any, 0, len(rows)*2+1)
 		activationArgs = append(activationArgs, nsID)
 		for _, row := range rows {
-			conditions = append(conditions, "(release_name = ? AND version_number = ?)")
-			activationArgs = append(activationArgs, row.Name, row.VersionNumber)
+			conditions = append(conditions, "(release_name = ? AND schema_version = ? AND version_number = ?)")
+			activationArgs = append(activationArgs, row.Name, row.SchemaVersion, row.VersionNumber)
 		}
 		var activations []configurationReleaseActivationModel
 		if err := tx.Where("namespace_id = ? AND ("+strings.Join(conditions, " OR ")+")", activationArgs...).Order("revision DESC").Find(&activations).Error; err != nil {
 			return err
 		}
 		type ak struct {
+			schema  int64
 			name    string
 			version int64
 		}
 		latestActivation := make(map[ak]uint64, len(activations))
 		for _, a := range activations {
-			k := ak{a.ReleaseName, a.VersionNumber}
+			k := ak{a.SchemaVersion, a.ReleaseName, a.VersionNumber}
 			if latestActivation[k] == 0 {
 				latestActivation[k] = uint64(a.Revision)
 			}
@@ -424,16 +442,17 @@ func (s *SQLStore) ListConfigurationReleases(ctx context.Context, ns domain.Name
 		out = make([]domain.ConfigurationReleaseSummary, 0, len(rows))
 		for _, m := range rows {
 			rel := releaseFromModelAndEntries(ns, m, entriesByRelease[m.ID])
-			cur := lm[lk{m.Name, domain.LabelCurrent}]
-			prev := lm[lk{m.Name, domain.LabelPrevious}]
-			out = append(out, domain.ConfigurationReleaseSummary{Release: rel, Current: cur.VersionNumber == m.VersionNumber, Previous: prev.VersionNumber == m.VersionNumber, ActivationRevision: latestActivation[ak{m.Name, m.VersionNumber}]})
+			cur := lm[lk{m.Name, domain.LabelCurrent, m.SchemaVersion}]
+			prev := lm[lk{m.Name, domain.LabelPrevious, m.SchemaVersion}]
+			out = append(out, domain.ConfigurationReleaseSummary{Release: rel, Current: cur.VersionNumber == m.VersionNumber, Previous: prev.VersionNumber == m.VersionNumber, ActivationRevision: latestActivation[ak{m.SchemaVersion, m.Name, m.VersionNumber}]})
 		}
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
 	return out, next, err
 }
 
-func (s *SQLStore) ConfigurationReleaseActivationExists(ctx context.Context, ns domain.NamespaceRef, name string, version, revision uint64) (bool, error) {
+func (s *SQLStore) ConfigurationReleaseActivationExists(ctx context.Context, track domain.ReleaseTrack, version, revision uint64) (bool, error) {
+	ns, name := track.Namespace, track.Name
 	exists := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		nsID, err := resolveNamespaceID(tx, ns)
@@ -441,7 +460,7 @@ func (s *SQLStore) ConfigurationReleaseActivationExists(ctx context.Context, ns 
 			return err
 		}
 		var count int64
-		if err := tx.Table("configuration_release_activations").Where("revision = ? AND namespace_id = ? AND release_name = ? AND version_number = ?", revision, nsID, name, version).Count(&count).Error; err != nil {
+		if err := tx.Table("configuration_release_activations").Where("revision = ? AND namespace_id = ? AND release_name = ? AND schema_version = ? AND version_number = ?", revision, nsID, name, track.SchemaVersion, version).Count(&count).Error; err != nil {
 			return err
 		}
 		// The activation-history table is authoritative in the greenfield 0.3
@@ -453,7 +472,8 @@ func (s *SQLStore) ConfigurationReleaseActivationExists(ctx context.Context, ns 
 	return exists, err
 }
 
-func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64, expectedCurrent *uint64) (domain.ActiveConfigurationRelease, bool, error) {
+func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, track domain.ReleaseTrack, version uint64, expectedCurrent *uint64) (domain.ActiveConfigurationRelease, bool, error) {
+	ns, name := track.Namespace, track.Name
 	var out domain.ActiveConfigurationRelease
 	changed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -462,14 +482,14 @@ func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, ns domain.N
 			return err
 		}
 		var target configurationReleaseModel
-		if err := tx.Where("namespace_id = ? AND name = ? AND version_number = ?", nsID, name, version).First(&target).Error; err != nil {
+		if err := tx.Where("namespace_id = ? AND name = ? AND schema_version = ? AND version_number = ?", nsID, name, track.SchemaVersion, version).First(&target).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return domain.Errorf(domain.ErrNotFound, "configuration release %s/%s version %d", ns, name, version)
 			}
 			return err
 		}
 		var current configurationReleaseLabelModel
-		err = tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, name, domain.LabelCurrent).First(&current).Error
+		err = tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, name, track.SchemaVersion, domain.LabelCurrent).First(&current).Error
 		currentVersion := uint64(0)
 		if err == nil {
 			currentVersion = uint64(current.VersionNumber)
@@ -492,30 +512,30 @@ func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, ns domain.N
 				return err
 			}
 			var prev configurationReleaseLabelModel
-			if err := tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, name, domain.LabelPrevious).First(&prev).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			if err := tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, name, track.SchemaVersion, domain.LabelPrevious).First(&prev).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
 			out = domain.ActiveConfigurationRelease{Release: rel, ActivationRevision: uint64(current.ActivationRevision), PreviousVersion: uint64(prev.VersionNumber)}
 			return nil
 		}
-		rev, err := appendChange(tx, &changeLogModel{ResourceType: domain.ResourceConfigurationRelease, Env: ns.Env, App: ns.App, Key: name, ChangeType: "activate", VersionNumber: int64(version)})
+		rev, err := appendChange(tx, &changeLogModel{SchemaVersion: int64(track.SchemaVersion), ResourceType: domain.ResourceConfigurationRelease, Env: ns.Env, App: ns.App, Key: name, ChangeType: "activate", VersionNumber: int64(version)})
 		if err != nil {
 			return err
 		}
 		if err := tx.Omit(clause.Associations).Create(&configurationReleaseActivationModel{
-			Revision: int64(rev), NamespaceID: nsID, ReleaseName: name,
+			Revision: int64(rev), NamespaceID: nsID, ReleaseName: name, SchemaVersion: int64(track.SchemaVersion),
 			VersionNumber: int64(version), ActivatedAt: fmtTime(time.Now()),
 		}).Error; err != nil {
 			return err
 		}
 		if currentVersion != 0 {
-			prev := configurationReleaseLabelModel{NamespaceID: nsID, ReleaseName: name, Label: domain.LabelPrevious, VersionNumber: int64(currentVersion), ActivationRevision: current.ActivationRevision}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "label"}}, DoUpdates: clause.AssignmentColumns([]string{"version_number", "activation_revision"})}).Create(&prev).Error; err != nil {
+			prev := configurationReleaseLabelModel{NamespaceID: nsID, ReleaseName: name, SchemaVersion: int64(track.SchemaVersion), Label: domain.LabelPrevious, VersionNumber: int64(currentVersion), ActivationRevision: current.ActivationRevision}
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}, {Name: "label"}}, DoUpdates: clause.AssignmentColumns([]string{"version_number", "activation_revision"})}).Create(&prev).Error; err != nil {
 				return err
 			}
 		}
-		cur := configurationReleaseLabelModel{NamespaceID: nsID, ReleaseName: name, Label: domain.LabelCurrent, VersionNumber: int64(version), ActivationRevision: int64(rev)}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "label"}}, DoUpdates: clause.AssignmentColumns([]string{"version_number", "activation_revision"})}).Create(&cur).Error; err != nil {
+		cur := configurationReleaseLabelModel{NamespaceID: nsID, ReleaseName: name, SchemaVersion: int64(track.SchemaVersion), Label: domain.LabelCurrent, VersionNumber: int64(version), ActivationRevision: int64(rev)}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}, {Name: "label"}}, DoUpdates: clause.AssignmentColumns([]string{"version_number", "activation_revision"})}).Create(&cur).Error; err != nil {
 			return err
 		}
 		rel, err := releaseFromModel(tx, ns, target)
@@ -663,6 +683,34 @@ func createConfigurationSchemaTx(tx *gorm.DB, schema domain.ConfigurationSchema)
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"application %s owns schemas under release %q", schema.Application, app.ReleaseName)
 	}
+	annotation, present, err := schemaAnnotationContract(schema.Schema)
+	if err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	var adopted *string
+	if present {
+		c, err := canonicalSchemaContract(annotation)
+		if err != nil {
+			return domain.ConfigurationSchema{}, err
+		}
+		if schema.Contract != nil {
+			supplied, err := canonicalSchemaContract(schema.Contract)
+			if err != nil {
+				return domain.ConfigurationSchema{}, err
+			}
+			if supplied != c {
+				return domain.ConfigurationSchema{}, domain.ErrFailedPrecondition
+			}
+		}
+		schema.Contract = annotation
+		adopted = &c
+	} else if schema.Contract != nil {
+		c, err := canonicalSchemaContract(schema.Contract)
+		if err != nil {
+			return domain.ConfigurationSchema{}, err
+		}
+		adopted = &c
+	}
 	var max int64
 	if err := tx.Model(&configurationSchemaModel{}).
 		Where("application_name = ? AND release_name = ?", schema.Application, schema.ReleaseName).
@@ -672,7 +720,7 @@ func createConfigurationSchemaTx(tx *gorm.DB, schema domain.ConfigurationSchema)
 	now := nowUTC()
 	m := configurationSchemaModel{
 		ApplicationName: schema.Application, ReleaseName: schema.ReleaseName,
-		VersionNumber: max + 1, SchemaJSON: schema.Schema, Digest: schema.Digest,
+		VersionNumber: max + 1, SchemaJSON: schema.Schema, Digest: schema.Digest, ContractJSON: adopted,
 		MetadataJSON: zeroOr(schema.Metadata, "{}"), CreatedBy: schema.CreatedBy, CreatedAt: fmtTime(now),
 	}
 	if err := tx.Omit(clause.Associations).Create(&m).Error; err != nil {
@@ -706,7 +754,11 @@ func (s *SQLStore) GetConfigurationSchema(ctx context.Context, application, rele
 }
 
 func schemaFromModel(m configurationSchemaModel) domain.ConfigurationSchema {
-	return domain.ConfigurationSchema{Application: m.ApplicationName, ReleaseName: m.ReleaseName, Version: uint64(m.VersionNumber), Schema: m.SchemaJSON, Digest: m.Digest, Metadata: m.MetadataJSON, CreatedBy: m.CreatedBy, CreatedAt: parseTime(m.CreatedAt)}
+	var contract []domain.ApplicationContractField
+	if m.ContractJSON != nil {
+		_ = json.Unmarshal([]byte(*m.ContractJSON), &contract)
+	}
+	return domain.ConfigurationSchema{Contract: contract, Application: m.ApplicationName, ReleaseName: m.ReleaseName, Version: uint64(m.VersionNumber), Schema: m.SchemaJSON, Digest: m.Digest, Metadata: m.MetadataJSON, CreatedBy: m.CreatedBy, CreatedAt: parseTime(m.CreatedAt)}
 }
 
 func (s *SQLStore) ListConfigurationSchemas(ctx context.Context, application, releaseName string, page ListPage) ([]domain.ConfigurationSchema, string, error) {
@@ -788,8 +840,8 @@ func (s *SQLStore) UpsertReleaseAcknowledgement(ctx context.Context, ack domain.
 		// generation and aborts without resurrecting state.
 		var connection releaseSubscriberConnectionModel
 		err = tx.Where(
-			"namespace_id = ? AND release_name = ? AND client_name = ? AND instance_id = ? AND identity = ?",
-			nsID, ack.ReleaseName, ack.ClientName, ack.InstanceID, ack.Identity,
+			"namespace_id = ? AND release_name = ? AND schema_version = ? AND client_name = ? AND instance_id = ? AND identity = ?",
+			nsID, ack.ReleaseName, ack.SchemaVersion, ack.ClientName, ack.InstanceID, ack.Identity,
 		).First(&connection).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) || err == nil && (connection.Connected == 0 || connection.ConnectionID != ack.ConnectionID) {
 			return domain.Errorf(domain.ErrAborted, "release subscriber connection changed; retry on the active stream")
@@ -798,22 +850,24 @@ func (s *SQLStore) UpsertReleaseAcknowledgement(ctx context.Context, ack domain.
 			return err
 		}
 
-		m := releaseSubscriberStateModel{NamespaceID: nsID, ReleaseName: ack.ReleaseName, ClientName: ack.ClientName, InstanceID: ack.InstanceID, State: ack.State, Identity: ack.Identity, ReleaseVersion: int64(ack.ReleaseVersion), ActivationRevision: int64(ack.ActivationRevision), RejectionCategory: ack.RejectionCategory, Diagnostic: ack.Diagnostic, ClientTimestamp: fmtTime(ack.ClientTimestamp), ServerTimestamp: fmtTime(ack.ServerTimestamp), Connected: 1, AppliedDivergent: b2i(ack.AppliedDivergent), DivergentFieldCount: int64(ack.DivergentFieldCount)}
+		m := releaseSubscriberStateModel{NamespaceID: nsID, ReleaseName: ack.ReleaseName, SchemaVersion: int64(ack.SchemaVersion), ClientName: ack.ClientName, InstanceID: ack.InstanceID, State: ack.State, Identity: ack.Identity, ReleaseVersion: int64(ack.ReleaseVersion), ActivationRevision: int64(ack.ActivationRevision), RejectionCategory: ack.RejectionCategory, Diagnostic: ack.Diagnostic, ClientTimestamp: fmtTime(ack.ClientTimestamp), ServerTimestamp: fmtTime(ack.ServerTimestamp), Connected: 1, AppliedDivergent: b2i(ack.AppliedDivergent), DivergentFieldCount: int64(ack.DivergentFieldCount)}
 		return tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}, {Name: "state"}},
+			Columns:   []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}, {Name: "state"}},
 			DoUpdates: clause.AssignmentColumns([]string{"release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp", "server_timestamp", "connected", "disconnected_at", "applied_divergent", "divergent_field_count"}),
 			Where:     clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "excluded.activation_revision > release_subscriber_states.activation_revision OR (excluded.activation_revision = release_subscriber_states.activation_revision AND excluded.server_timestamp >= release_subscriber_states.server_timestamp)"}}},
 		}).Create(&m).Error
 	})
 }
 
-func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.NamespaceRef, name string, page ListPage) ([]domain.ReleaseAcknowledgement, string, error) {
+func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domain.ReleaseFilter, page ListPage) ([]domain.ReleaseAcknowledgement, string, error) {
+	ns, name := filter.Namespace, filter.Name
 	limit := clampLimit(page.Limit)
 	cursor, err := decodeReleaseAcknowledgementCursor(page.Token)
 	if err != nil {
 		return nil, "", err
 	}
 	type acknowledgementRow struct {
+		SchemaVersion       int64
 		ReleaseName         string
 		ReleaseVersion      int64
 		ActivationRevision  int64
@@ -830,7 +884,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		DivergentFieldCount int64
 	}
 	query := `WITH subscriber_rows AS (
-		SELECT s.release_name, s.release_version, s.activation_revision,
+		SELECT s.schema_version, s.release_name, s.release_version, s.activation_revision,
 			s.client_name, s.instance_id, s.identity, s.state,
 			s.rejection_category, s.diagnostic, s.client_timestamp,
 			s.server_timestamp, COALESCE(c.connected, s.connected) AS connected,
@@ -839,19 +893,21 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		LEFT JOIN release_subscriber_connections c
 			ON c.namespace_id = s.namespace_id
 			AND c.release_name = s.release_name
+ AND c.schema_version = s.schema_version
 			AND c.client_name = s.client_name
 			AND c.instance_id = s.instance_id
 			AND c.identity = s.identity
-		WHERE s.namespace_id = ? AND (? = '' OR s.release_name = ?)
+		WHERE s.namespace_id = ? AND (? = '' OR s.release_name = ?) AND (? IS NULL OR s.schema_version = ?)
 		UNION ALL
-		SELECT c.release_name, 0, 0, c.client_name, c.instance_id,
+		SELECT c.schema_version, c.release_name, 0, 0, c.client_name, c.instance_id,
 			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0
 		FROM release_subscriber_connections c
-		WHERE c.namespace_id = ? AND (? = '' OR c.release_name = ?)
+		WHERE c.namespace_id = ? AND (? = '' OR c.release_name = ?) AND (? IS NULL OR c.schema_version = ?)
 			AND NOT EXISTS (
 				SELECT 1 FROM release_subscriber_states s
 				WHERE s.namespace_id = c.namespace_id
 					AND s.release_name = c.release_name
+ AND s.schema_version = c.schema_version
 					AND s.client_name = c.client_name
 					AND s.instance_id = c.instance_id
 					AND s.identity = c.identity
@@ -866,13 +922,13 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 			return err
 		}
 		queryText := query
-		args := []any{nsID, name, name, nsID, name, name}
+		args := []any{nsID, name, name, filter.SchemaVersion, filter.SchemaVersion, nsID, name, name, filter.SchemaVersion, filter.SchemaVersion}
 		if cursor.ServerTimestamp != "" {
 			queryText += ` WHERE server_timestamp < ? OR
-			(server_timestamp = ? AND (release_name, client_name, instance_id, identity, state) > (?, ?, ?, ?, ?))`
-			args = append(args, cursor.ServerTimestamp, cursor.ServerTimestamp, cursor.ReleaseName, cursor.ClientName, cursor.InstanceID, cursor.Identity, cursor.State)
+			(server_timestamp = ? AND (release_name, schema_version, client_name, instance_id, identity, state) > (?, ?, ?, ?, ?, ?))`
+			args = append(args, cursor.ServerTimestamp, cursor.ServerTimestamp, cursor.ReleaseName, cursor.SchemaVersion, cursor.ClientName, cursor.InstanceID, cursor.Identity, cursor.State)
 		}
-		queryText += ` ORDER BY server_timestamp DESC, release_name ASC, client_name ASC, instance_id ASC, identity ASC, state ASC LIMIT ?`
+		queryText += ` ORDER BY server_timestamp DESC, release_name ASC, schema_version ASC, client_name ASC, instance_id ASC, identity ASC, state ASC LIMIT ?`
 		args = append(args, limit+1)
 		var rows []acknowledgementRow
 		if err := tx.Raw(queryText, args...).Scan(&rows).Error; err != nil {
@@ -884,11 +940,11 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		}
 		out = make([]domain.ReleaseAcknowledgement, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
+			out = append(out, domain.ReleaseAcknowledgement{SchemaVersion: uint64(row.SchemaVersion), Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
 		}
 		if hasMore {
 			last := rows[len(rows)-1]
-			next, err = encodeReleaseAcknowledgementCursor(releaseAcknowledgementCursor{ServerTimestamp: last.ServerTimestamp, ReleaseName: last.ReleaseName, ClientName: last.ClientName, InstanceID: last.InstanceID, Identity: last.Identity, State: last.State})
+			next, err = encodeReleaseAcknowledgementCursor(releaseAcknowledgementCursor{SchemaVersion: last.SchemaVersion, ServerTimestamp: last.ServerTimestamp, ReleaseName: last.ReleaseName, ClientName: last.ClientName, InstanceID: last.InstanceID, Identity: last.Identity, State: last.State})
 			return err
 		}
 		return nil
@@ -897,6 +953,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 }
 
 type releaseAcknowledgementCursor struct {
+	SchemaVersion   int64  `json:"schema_version"`
 	Version         int    `json:"v"`
 	ServerTimestamp string `json:"server_timestamp"`
 	ReleaseName     string `json:"release_name"`
@@ -907,7 +964,7 @@ type releaseAcknowledgementCursor struct {
 }
 
 func encodeReleaseAcknowledgementCursor(cursor releaseAcknowledgementCursor) (string, error) {
-	cursor.Version = 2
+	cursor.Version = 3
 	b, err := json.Marshal(cursor)
 	if err != nil {
 		return "", err
@@ -921,7 +978,7 @@ func decodeReleaseAcknowledgementCursor(token string) (releaseAcknowledgementCur
 		return releaseAcknowledgementCursor{}, err
 	}
 	var cursor releaseAcknowledgementCursor
-	if err := json.Unmarshal([]byte(raw), &cursor); err != nil || cursor.Version != 2 || cursor.ServerTimestamp == "" {
+	if err := json.Unmarshal([]byte(raw), &cursor); err != nil || cursor.Version != 3 || cursor.ServerTimestamp == "" {
 		return releaseAcknowledgementCursor{}, domain.Errorf(domain.ErrInvalidArgument, "invalid page token")
 	}
 	return cursor, nil
@@ -934,15 +991,15 @@ func (s *SQLStore) SetReleaseInstanceConnected(ctx context.Context, connection d
 		if err != nil {
 			return err
 		}
-		stateScope := tx.Model(&releaseSubscriberStateModel{}).Where("namespace_id = ? AND release_name = ? AND client_name = ? AND instance_id = ? AND identity = ?", nsID, connection.ReleaseName, connection.ClientName, connection.InstanceID, connection.Identity)
+		stateScope := tx.Model(&releaseSubscriberStateModel{}).Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND client_name = ? AND instance_id = ? AND identity = ?", nsID, connection.ReleaseName, connection.SchemaVersion, connection.ClientName, connection.InstanceID, connection.Identity)
 		if connection.Connected {
-			model := releaseSubscriberConnectionModel{NamespaceID: nsID, ReleaseName: connection.ReleaseName, ClientName: connection.ClientName, InstanceID: connection.InstanceID, Identity: connection.Identity, ConnectionID: connection.ConnectionID, Connected: 1, ConnectedAt: at, ServerTimestamp: at}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}}, DoUpdates: clause.AssignmentColumns([]string{"connection_id", "connected", "connected_at", "disconnected_at", "server_timestamp"})}).Create(&model).Error; err != nil {
+			model := releaseSubscriberConnectionModel{NamespaceID: nsID, ReleaseName: connection.ReleaseName, SchemaVersion: int64(connection.SchemaVersion), ClientName: connection.ClientName, InstanceID: connection.InstanceID, Identity: connection.Identity, ConnectionID: connection.ConnectionID, Connected: 1, ConnectedAt: at, ServerTimestamp: at}
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "schema_version"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}}, DoUpdates: clause.AssignmentColumns([]string{"connection_id", "connected", "connected_at", "disconnected_at", "server_timestamp"})}).Create(&model).Error; err != nil {
 				return err
 			}
 			return stateScope.Updates(map[string]any{"connected": 1, "disconnected_at": nil}).Error
 		}
-		res := tx.Model(&releaseSubscriberConnectionModel{}).Where("namespace_id = ? AND release_name = ? AND client_name = ? AND instance_id = ? AND identity = ? AND connection_id = ?", nsID, connection.ReleaseName, connection.ClientName, connection.InstanceID, connection.Identity, connection.ConnectionID).Updates(map[string]any{"connected": 0, "disconnected_at": at, "server_timestamp": at})
+		res := tx.Model(&releaseSubscriberConnectionModel{}).Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND client_name = ? AND instance_id = ? AND identity = ? AND connection_id = ?", nsID, connection.ReleaseName, connection.SchemaVersion, connection.ClientName, connection.InstanceID, connection.Identity, connection.ConnectionID).Updates(map[string]any{"connected": 0, "disconnected_at": at, "server_timestamp": at})
 		if res.Error != nil || res.RowsAffected == 0 {
 			return res.Error
 		}
@@ -969,7 +1026,7 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 	if err != nil {
 		return ReleaseReference{}, err
 	}
-	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
+	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
 	if version > 0 {
 		q = q.Where("e.resource_version=?", version)
 	}
@@ -1019,25 +1076,26 @@ func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuratio
 				SELECT 1 FROM configuration_release_labels l
 				WHERE l.namespace_id=configuration_release_activations.namespace_id
 				AND l.release_name=configuration_release_activations.release_name
-				AND l.activation_revision=configuration_release_activations.revision
+				AND l.schema_version=configuration_release_activations.schema_version
+ AND l.activation_revision=configuration_release_activations.revision
 			)`, cutoff).Error; err != nil {
 			return err
 		}
 		res := tx.Exec(`DELETE FROM configuration_releases
 			WHERE created_at < ?
-			AND id NOT IN (SELECT r.id FROM configuration_releases r JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.version_number=r.version_number)
+			AND id NOT IN (SELECT r.id FROM configuration_releases r JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number)
 			AND id NOT IN (
 				SELECT id FROM (
-					SELECT r.id, ROW_NUMBER() OVER (PARTITION BY r.namespace_id,r.name ORDER BY r.version_number DESC) AS rn
+					SELECT r.id, ROW_NUMBER() OVER (PARTITION BY r.namespace_id,r.name,r.schema_version ORDER BY r.version_number DESC) AS rn
 					FROM configuration_releases r
 					WHERE NOT EXISTS (
 						SELECT 1 FROM configuration_release_labels l
-						WHERE l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.version_number=r.version_number
+						WHERE l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number
 					)
 				) WHERE rn <= ?
 			)
-			AND NOT EXISTS (SELECT 1 FROM configuration_release_activations a WHERE a.namespace_id=configuration_releases.namespace_id AND a.release_name=configuration_releases.name AND a.version_number=configuration_releases.version_number)
-			AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.resource_type=? AND c.namespace_id=configuration_releases.namespace_id AND c.key=configuration_releases.name AND c.version_number=configuration_releases.version_number AND c.change_type='activate')`, cutoff, retainVersions, domain.ResourceConfigurationRelease)
+			AND NOT EXISTS (SELECT 1 FROM configuration_release_activations a WHERE a.namespace_id=configuration_releases.namespace_id AND a.release_name=configuration_releases.name AND a.schema_version=configuration_releases.schema_version AND a.version_number=configuration_releases.version_number)
+			AND NOT EXISTS (SELECT 1 FROM change_log c WHERE c.resource_type=? AND c.namespace_id=configuration_releases.namespace_id AND c.key=configuration_releases.name AND c.schema_version=configuration_releases.schema_version AND c.version_number=configuration_releases.version_number AND c.change_type='activate')`, cutoff, retainVersions, domain.ResourceConfigurationRelease)
 		deleted = res.RowsAffected
 		return res.Error
 	})

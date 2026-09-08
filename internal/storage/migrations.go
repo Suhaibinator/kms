@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"gorm.io/gorm"
@@ -30,26 +31,29 @@ type MigrationParameterWrite struct {
 	Version                        uint64
 }
 type ApplicationMigrationTransaction struct {
-	Resources             []MigrationResource
-	Namespace             domain.NamespaceRef
-	Snapshot              string
-	Contract              []domain.ApplicationContractField
-	Release               domain.ConfigurationRelease
-	Writes                []MigrationParameterWrite
-	ExpectedActiveVersion uint64
-	Audit                 domain.AuditEvent
-	ResourceAudits        []domain.AuditEvent
+	SourceSchemaVersion              uint64
+	ExpectedSourceVersion            uint64
+	ExpectedSourceActivationRevision uint64
+	Resources                        []MigrationResource
+	Namespace                        domain.NamespaceRef
+	Snapshot                         string
+	Contract                         []domain.ApplicationContractField
+	Release                          domain.ConfigurationRelease
+	Writes                           []MigrationParameterWrite
+	ExpectedActiveVersion            uint64
+	Audit                            domain.AuditEvent
+	ResourceAudits                   []domain.AuditEvent
 }
 type ApplicationMigrationStore interface {
-	ApplicationMigrationSnapshot(context.Context, domain.NamespaceRef, ...MigrationResource) (MigrationSnapshot, error)
+	ApplicationMigrationSnapshot(context.Context, domain.ReleaseTrack, domain.ReleaseTrack, ...MigrationResource) (MigrationSnapshot, error)
 	ApplyApplicationMigration(context.Context, ApplicationMigrationTransaction) (domain.ActiveConfigurationRelease, error)
 }
 
-func (s *SQLStore) ApplicationMigrationSnapshot(ctx context.Context, ns domain.NamespaceRef, resources ...MigrationResource) (MigrationSnapshot, error) {
+func (s *SQLStore) ApplicationMigrationSnapshot(ctx context.Context, sourceTrack, targetTrack domain.ReleaseTrack, resources ...MigrationResource) (MigrationSnapshot, error) {
 	var out MigrationSnapshot
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
-		out, err = migrationSnapshot(tx, ns, resources...)
+		out, err = migrationSnapshot(tx, sourceTrack, targetTrack, resources...)
 		return err
 	})
 	return out, err
@@ -57,7 +61,11 @@ func (s *SQLStore) ApplicationMigrationSnapshot(ctx context.Context, ns domain.N
 
 // migrationSnapshot reads only definition/environment facts and the referenced
 // resource versions. It never scans parameter or release history.
-func migrationSnapshot(tx *gorm.DB, ns domain.NamespaceRef, resources ...MigrationResource) (MigrationSnapshot, error) {
+func migrationSnapshot(tx *gorm.DB, sourceTrack, targetTrack domain.ReleaseTrack, resources ...MigrationResource) (MigrationSnapshot, error) {
+	ns := sourceTrack.Namespace
+	if targetTrack.Namespace != ns || targetTrack.Name != sourceTrack.Name {
+		return MigrationSnapshot{}, domain.ErrInvalidArgument
+	}
 	h := sha256.New()
 	hashQuery := func(q string, args ...any) error {
 		var rows []map[string]any
@@ -71,13 +79,23 @@ func migrationSnapshot(tx *gorm.DB, ns domain.NamespaceRef, resources ...Migrati
 		_, err = h.Write(b)
 		return err
 	}
-	queries := []string{
-		`SELECT * FROM applications WHERE name=? ORDER BY id`,
-		`SELECT * FROM namespaces WHERE app=? ORDER BY id`,
-		`SELECT r.namespace_id,r.release_name,r.label,r.version_number,r.activation_revision,v.schema_version,v.digest FROM configuration_release_labels r JOIN namespaces n ON n.id=r.namespace_id JOIN configuration_releases v ON v.namespace_id=r.namespace_id AND v.name=r.release_name AND v.version_number=r.version_number WHERE n.app=? ORDER BY r.namespace_id,r.release_name,r.label`,
+	if err := hashQuery(`SELECT * FROM applications WHERE name=?`, ns.App); err != nil {
+		return MigrationSnapshot{}, err
 	}
-	for _, q := range queries {
-		if err := hashQuery(q, ns.App); err != nil {
+	if err := hashQuery(`SELECT * FROM namespaces WHERE app=? AND env=?`, ns.App, ns.Env); err != nil {
+		return MigrationSnapshot{}, err
+	}
+	for _, track := range []domain.ReleaseTrack{sourceTrack, targetTrack} {
+		if err := hashQuery(`SELECT * FROM configuration_schemas WHERE application_name=? AND release_name=? AND version_number=?`, ns.App, track.Name, track.SchemaVersion); err != nil {
+			return MigrationSnapshot{}, err
+		}
+		if err := hashQuery(`SELECT * FROM schema_free_contracts WHERE application_name=? AND release_name=? AND ?=0`, ns.App, track.Name, track.SchemaVersion); err != nil {
+			return MigrationSnapshot{}, err
+		}
+		if err := hashQuery(`SELECT r.* FROM configuration_release_labels r JOIN namespaces n ON n.id=r.namespace_id WHERE n.app=? AND n.env=? AND r.release_name=? AND r.schema_version=? ORDER BY r.label`, ns.App, ns.Env, track.Name, track.SchemaVersion); err != nil {
+			return MigrationSnapshot{}, err
+		}
+		if err := hashQuery(`SELECT r.* FROM configuration_release_counters r JOIN namespaces n ON n.id=r.namespace_id WHERE n.app=? AND n.env=? AND r.release_name=? AND r.schema_version=?`, ns.App, ns.Env, track.Name, track.SchemaVersion); err != nil {
 			return MigrationSnapshot{}, err
 		}
 	}
@@ -126,22 +144,26 @@ func migrationSnapshot(tx *gorm.DB, ns domain.NamespaceRef, resources ...Migrati
 func (s *SQLStore) ApplyApplicationMigration(ctx context.Context, in ApplicationMigrationTransaction) (domain.ActiveConfigurationRelease, error) {
 	var out domain.ActiveConfigurationRelease
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		state, err := migrationSnapshot(tx, in.Namespace, in.Resources...)
+		state, err := migrationSnapshot(tx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}, in.Release.Track(), in.Resources...)
 		if err != nil {
 			return err
 		}
 		if state.Digest != in.Snapshot {
 			return applicationReleaseStale()
 		}
-		contract, err := contractJSON(in.Contract)
+		nsID, err := resolveNamespaceID(tx, in.Namespace)
 		if err != nil {
 			return err
 		}
-		if err = tx.Model(&applicationModel{}).Where("name = ?", in.Namespace.App).Updates(map[string]any{
-			"schema_version": in.Release.SchemaVersion,
-			"contract_json":  contract,
-			"updated_at":     fmtTime(nowUTC()),
-		}).Error; err != nil {
+		var source configurationReleaseLabelModel
+		err = tx.Where("namespace_id = ? AND release_name = ? AND schema_version = ? AND label = ?", nsID, in.Release.Name, in.SourceSchemaVersion, domain.LabelCurrent).First(&source).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if uint64(source.VersionNumber) != in.ExpectedSourceVersion || uint64(source.ActivationRevision) != in.ExpectedSourceActivationRevision {
+			return applicationReleaseStale()
+		}
+		if _, err := adoptSchemaContractTx(tx, in.Namespace.App, in.Release.Name, in.Release.SchemaVersion, in.Contract); err != nil {
 			return err
 		}
 		for _, w := range in.Writes {
@@ -160,7 +182,7 @@ func (s *SQLStore) ApplyApplicationMigration(ctx context.Context, in Application
 		if err != nil {
 			return err
 		}
-		out, _, err = scoped.ActivateConfigurationRelease(ctx, in.Namespace, release.Name, release.Version, &in.ExpectedActiveVersion)
+		out, _, err = scoped.ActivateConfigurationRelease(ctx, release.Track(), release.Version, &in.ExpectedActiveVersion)
 		if err != nil {
 			return err
 		}
