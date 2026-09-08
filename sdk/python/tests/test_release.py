@@ -1045,6 +1045,9 @@ def test_active_precommit_fence_includes_full_track(
 
     thread, raised = _run_in_thread(loader, prepare)
     assert wait_until(lambda: initial.commits == 1)
+    # Initial commit can precede watch registration; this fake only broadcasts
+    # to existing calls and does not send the server's registration snapshot.
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
     stub.activate(_release(2, 20, schema_version=schema_version))
     assert wait_until(lambda: stale.aborts == 1)
     assert loader.status().applied_version == 1
