@@ -562,6 +562,7 @@ class ReleaseLoader:
             self._relay_thread.start()
 
         applied_once = False
+        contract_failed = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
         try:
             if initial is not None:
@@ -613,6 +614,9 @@ class ReleaseLoader:
                                 "unable to reconcile the initial active configuration release"
                             ) from None
                         self._set_transport_failure("active_check_failed")
+        except ReleaseCommitError:
+            contract_failed = True
+            raise
         finally:
             self.stop()
             self._relay_done.set()
@@ -623,11 +627,14 @@ class ReleaseLoader:
             if self._executor is not None:
                 self._executor.shutdown(wait=True, cancel_futures=True)
             with self._run_lock:
+                # Capture this run's failure before a new run may reset it.
+                watch_error = self._watch_error
                 if self._run_generation == run_generation:
                     self._running = False
-            # Keep a terminal watch failure authoritative even when cancellation
-            # makes preparation fail or the application stops during cleanup.
-            self._raise_watch_error()
+            # A terminal watch failure outranks cancellation/preparation errors,
+            # but commit/abort violations must retain their safety diagnostics.
+            if watch_error is not None and not contract_failed:
+                raise watch_error
 
     # --- candidate lifecycle ---------------------------------------------
 

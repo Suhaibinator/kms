@@ -215,6 +215,7 @@ class AsyncReleaseLoader:
         self._retry_identity = None
         self._graceful_watch_stop = asyncio.Event()
         self._watch_done = asyncio.Event()
+        contract_failed = False
         try:
             namespace = self._client._resolve_namespace_arg(self._config.namespace)
             if inspect.isawaitable(namespace):
@@ -302,12 +303,16 @@ class AsyncReleaseLoader:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+        except ReleaseCommitError:
+            contract_failed = True
+            raise
         finally:
             self._watch_call = None
             self._running = False
-            # Preserve the mapped watch failure after cooperative cancellation,
-            # including application cancellation or failure during preparation.
-            self._raise_watch_error()
+            # A terminal watch failure outranks cancellation/preparation errors,
+            # but commit/abort violations must retain their safety diagnostics.
+            if not contract_failed:
+                self._raise_watch_error()
 
     async def _relay_stop(self, stop_event: asyncio.Event) -> None:
         await stop_event.wait()

@@ -1705,3 +1705,97 @@ def test_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fails):
         proceed.set()
         loader.stop()
         thread.join(3)
+
+
+def test_terminal_watch_error_survives_concurrent_run_restart(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    processed = threading.Event()
+    finish_first = threading.Event()
+    first_unlocked = threading.Event()
+    second_started = threading.Event()
+    process = loader._process_candidate
+    run_lock = loader._run_lock
+
+    class RestartBoundaryLock:
+        def __enter__(self):
+            run_lock.acquire()
+
+        def __exit__(self, *_args):
+            first_finished = loader._run_generation == 1 and not loader._running
+            second_running = loader._run_generation == 2 and loader._running
+            run_lock.release()
+            if first_finished:
+                first_unlocked.set()
+                assert second_started.wait(2)
+            if second_running:
+                second_started.set()
+
+    def held_process(candidate, prepare):
+        outcome = process(candidate, prepare)
+        if loader._run_generation == 1:
+            processed.set()
+            assert finish_first.wait(2)
+        return outcome
+
+    monkeypatch.setattr(loader, "_run_lock", RestartBoundaryLock())
+    monkeypatch.setattr(loader, "_process_candidate", held_process)
+    first, first_errors = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    second = None
+    try:
+        assert processed.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        loader.stop()
+        finish_first.set()
+        assert first_unlocked.wait(2)
+
+        def prepare_second(_cancel, _snapshot):
+            loader.stop()
+            return _Prepared()
+
+        second, second_errors = _run_in_thread(loader, prepare_second)
+        first.join(2)
+        second.join(2)
+        assert not first.is_alive() and not second.is_alive()
+        assert not second_errors
+        assert len(first_errors) == 1
+        assert isinstance(first_errors[0], kms_paramstore.PermissionDeniedError)
+    finally:
+        finish_first.set()
+        second_started.set()
+        loader.stop()
+        first.join(3)
+        if second is not None:
+            second.join(3)
+
+
+@pytest.mark.parametrize("failure", ["commit", "abort"])
+def test_terminal_watch_does_not_mask_lifecycle_contract_failure(monkeypatch, failure):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+    class BrokenPrepared(_Prepared):
+        def commit(self):
+            self.commits += 1
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            raise RuntimeError("commit failed")
+
+        def abort(self):
+            self.aborts += 1
+            raise RuntimeError("abort failed")
+
+    prepared = BrokenPrepared()
+
+    def prepare(cancel, _snapshot):
+        assert wait_until(lambda: bool(stub.calls))
+        if failure == "abort":
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            assert cancel.wait(2)
+        return prepared
+
+    with pytest.raises(ReleaseCommitError, match=failure):
+        loader.run(prepare)
+    assert isinstance(loader._watch_error, kms_paramstore.PermissionDeniedError)
+    assert prepared.commits == (1 if failure == "commit" else 0)
+    assert prepared.aborts == (1 if failure == "abort" else 0)
+    assert loader.status().last_failure_category == "internal"

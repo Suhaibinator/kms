@@ -1263,3 +1263,30 @@ def test_async_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fai
             await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_async_terminal_watch_does_not_mask_abort_contract_failure(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+        class BrokenAbort(_Prepared):
+            def abort(self):
+                self.aborts += 1
+                raise RuntimeError("abort failed")
+
+        prepared = BrokenAbort()
+
+        async def prepare(cancel, _snapshot):
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await cancel.wait()
+            return prepared
+
+        with pytest.raises(ReleaseCommitError, match="abort"):
+            await asyncio.wait_for(loader.run(prepare), 2)
+        assert isinstance(loader._watch_error, kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == 1
+        assert loader.status().last_failure_category == "internal"
+
+    asyncio.run(scenario())
