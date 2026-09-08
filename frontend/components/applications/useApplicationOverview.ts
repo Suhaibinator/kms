@@ -90,6 +90,18 @@ export function releaseMovements(prev: ApplicationOverview, next: ApplicationOve
 
 const changedToastId = (name: string) => `overview-changed:${name}`;
 
+function slotMatchesRequest(
+  slot: OverviewSlot | null,
+  name: string,
+  schemaVersion: number | undefined,
+): slot is OverviewSlot {
+  return Boolean(
+    slot?.name === name &&
+      (slot.schemaVersion === schemaVersion ||
+        (schemaVersion !== undefined && slot.data?.application.schema_version === schemaVersion)),
+  );
+}
+
 export function useApplicationOverview(
   name: string,
   { paused = false, schemaVersion }: { paused?: boolean; schemaVersion?: number } = {},
@@ -130,9 +142,7 @@ export function useApplicationOverview(
     loadingRef.current = true;
     setLoading(true);
     setSlot((current) =>
-      current?.name === name &&
-      (current.schemaVersion === schemaVersion ||
-        (schemaVersion !== undefined && current.data?.application.schema_version === schemaVersion))
+      slotMatchesRequest(current, name, schemaVersion)
         ? { ...current, schemaVersion, status: "loading" }
         : { name, schemaVersion, status: "loading", data: null },
     );
@@ -240,7 +250,7 @@ export function useApplicationOverview(
   }, [name, reload, toast, schemaVersion]);
 
   return {
-    slot: slot?.name === name && slot.schemaVersion === schemaVersion ? slot : null,
+    slot: slotMatchesRequest(slot, name, schemaVersion) ? slot : null,
     loading,
     reload,
     freshness,
