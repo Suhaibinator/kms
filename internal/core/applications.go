@@ -165,6 +165,7 @@ func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domai
 	if err := s.validateApplicationSchema(ctx, app); err != nil {
 		return domain.Application{}, err
 	}
+	ctx = storage.WithApplicationDefinitionExpectation(ctx, current)
 	out, err := store.UpdateApplication(ctx, app)
 	if err == nil {
 		s.auditName(ctx, pr, "application.update", domain.ResourceApplication, app.Name, "allow", nil)

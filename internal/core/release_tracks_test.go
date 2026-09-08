@@ -70,6 +70,15 @@ func TestApplicationMetadataUpdatePreservesFirstReleaseContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	app.Description = "before adoption"
+	app, err = svc.UpdateApplication(ctx, adminPrincipal(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err := st.GetConfigurationSchemaContract(ctx, app.Name, app.ReleaseName, 0)
+	if err != nil || contract != nil {
+		t.Fatalf("metadata update prematurely adopted empty contract: %#v %v", contract, err)
+	}
 	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
 	if _, err := svc.CreateNamespace(ctx, adminPrincipal(), ns, "", nil); err != nil {
 		t.Fatal(err)
@@ -89,5 +98,53 @@ func TestApplicationMetadataUpdatePreservesFirstReleaseContract(t *testing.T) {
 	updated, err := svc.UpdateApplication(ctx, adminPrincipal(), app)
 	if err != nil || updated.Description != "updated" || len(updated.Contract) != 1 || updated.SchemaVersion != 0 {
 		t.Fatalf("metadata update: %+v %v", updated, err)
+	}
+}
+
+type applicationDefinitionRaceStore struct {
+	*storage.SQLStore
+	beforeUpdate func()
+}
+
+func (s *applicationDefinitionRaceStore) UpdateApplication(ctx context.Context, app domain.Application) (domain.Application, error) {
+	s.beforeUpdate()
+	return s.SQLStore.UpdateApplication(ctx, app)
+}
+func TestApplicationMetadataUpdateRejectsConcurrentRepin(t *testing.T) {
+	for _, aba := range []bool{false, true} {
+		t.Run(map[bool]string{false: "repin", true: "aba"}[aba], func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newConsoleTestService(t)
+			admin := adminPrincipal()
+			app := seedConsoleApp(t, svc, admin, "dev")
+			schema, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"concurrent"}`, "{}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := app
+			svc.store = &applicationDefinitionRaceStore{SQLStore: st, beforeUpdate: func() {
+				app.SchemaVersion = schema.Version
+				if _, err := st.UpdateApplication(ctx, app); err != nil {
+					t.Fatal(err)
+				}
+				if aba {
+					if _, err := st.UpdateApplication(ctx, original); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			original.Description = "metadata update"
+			if _, err := svc.UpdateApplication(ctx, admin, original); !errors.Is(err, domain.ErrAborted) {
+				t.Fatalf("metadata update overwrote concurrent definition: %v", err)
+			}
+			persisted, err := st.GetApplication(ctx, app.Name)
+			want := schema.Version
+			if aba {
+				want = original.SchemaVersion
+			}
+			if err != nil || persisted.SchemaVersion != want {
+				t.Fatalf("lost racing definition: %+v %v", persisted, err)
+			}
+		})
 	}
 }

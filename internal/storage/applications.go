@@ -178,8 +178,13 @@ func (s *SQLStore) UpdateApplication(ctx context.Context, app domain.Application
 		return domain.Application{}, err
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, err := adoptSchemaContractTx(tx, app.Name, app.ReleaseName, app.SchemaVersion, app.Contract); err != nil {
+		if err := verifyApplicationDefinitionExpectation(ctx, tx, app.Name); err != nil {
 			return err
+		}
+		if app.Contract != nil {
+			if _, err := adoptSchemaContractTx(tx, app.Name, app.ReleaseName, app.SchemaVersion, app.Contract); err != nil {
+				return err
+			}
 		}
 		res := tx.Model(&applicationModel{}).
 			Where("name = ? AND release_name = ? AND archived_at IS NULL", app.Name, app.ReleaseName).
