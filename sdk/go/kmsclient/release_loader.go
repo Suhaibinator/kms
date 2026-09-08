@@ -399,6 +399,10 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 		defer close(watchDone)
 		if watchErr := l.watchLoop(runCtx, ns, events, gracefulWatchStop); watchErr != nil {
 			watchFatal <- watchErr
+			// The run loop may be blocked in a reconciliation read. Cancel
+			// preparation and that read as soon as the watch rejects the
+			// subscription, rather than waiting for the loop to receive the error.
+			cancelRun()
 		}
 	}()
 	defer func() {
