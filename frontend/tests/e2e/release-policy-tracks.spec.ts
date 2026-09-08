@@ -95,3 +95,59 @@ test("denied discovery permits a deliberate numeric schema choice without fallin
     await expect(input).toHaveValue(version);
   }
 });
+
+test("changing release names resets schema discovery to the new track scope", async ({ page }) => {
+  await mockConsole(page, incidentState());
+  let releaseNamedDiscovery!: () => void;
+  const namedDiscovery = new Promise<void>((resolve) => {
+    releaseNamedDiscovery = resolve;
+  });
+  await page.route("**/api/v1/releases/schema-versions?**", async (route) => {
+    const name = new URL(route.request().url()).searchParams.get("name") ?? "";
+    if (name === "runtime") await namedDiscovery;
+    await route.fulfill({
+      json: {
+        schema_versions: name === "runtime" ? [2, 1] : name === "other" ? [4, 3] : [5, 4, 2, 1],
+        next_page_token: "",
+      },
+    });
+  });
+  const requests: { name: string; schema: string }[] = [];
+  await page.route("**/api/v1/releases?**", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    requests.push({ name: query.get("name") ?? "", schema: query.get("schema_version") ?? "" });
+    await route.fulfill({ json: { releases: [], next_page_token: "" } });
+  });
+  await page.goto("/releases?app=gradethis&env=prod");
+  const selector = page.getByRole("combobox", { name: "Schema version" });
+  const filter = page.getByRole("textbox", { name: "Release name" });
+  await expect(page).toHaveURL(/schema_version=5/);
+  await expect.poll(() => requests.at(-1)).toEqual({ name: "", schema: "5" });
+  await filter.fill("runtime");
+  await page.getByRole("button", { name: "Apply filter" }).click();
+  await expect(page).toHaveURL(/name=runtime/);
+  await expect(page).not.toHaveURL(/schema_version=/);
+  await expect(page.getByRole("button", { name: "New release" })).toBeDisabled();
+  expect(requests.filter(({ name }) => name === "runtime")).toEqual([]);
+  releaseNamedDiscovery();
+  await expect(selector).toHaveValue("2");
+  await expect.poll(() => requests.at(-1)).toEqual({ name: "runtime", schema: "2" });
+  await selector.selectOption("0");
+  await expect.poll(() => requests.at(-1)).toEqual({ name: "runtime", schema: "0" });
+  await filter.fill("other");
+  await page.getByRole("button", { name: "Apply filter" }).click();
+  await expect(selector).toHaveValue("4");
+  await expect.poll(() => requests.at(-1)).toEqual({ name: "other", schema: "4" });
+  await filter.fill("");
+  await page.getByRole("button", { name: "Apply filter" }).click();
+  await expect(selector).toHaveValue("5");
+  await expect.poll(() => requests.at(-1)).toEqual({ name: "", schema: "5" });
+  expect(
+    requests
+      .filter(({ name }) => name === "runtime")
+      .every(({ schema }) => schema === "2" || schema === "0"),
+  ).toBe(true);
+  expect(
+    requests.filter(({ name }) => name === "other").every(({ schema }) => schema === "4"),
+  ).toBe(true);
+});

@@ -8,7 +8,13 @@ import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
-  replace: vi.fn(async () => true),
+  replace: vi.fn(
+    async (
+      _url: { pathname: string; query: Record<string, string> },
+      _as?: unknown,
+      _options?: unknown,
+    ) => true,
+  ),
   listReleases: vi.fn(),
   validateRelease: vi.fn(),
   getActiveRelease: vi.fn(),
@@ -305,6 +311,67 @@ describe("ReleasesPage", () => {
       undefined,
       expect.anything(),
     );
+  });
+
+  it("selects the scoped newest schema after changing a persisted broad name filter", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    let resolveNamed!: (result: { schema_versions: number[]; next_page_token: string }) => void;
+    const named = new Promise<{ schema_versions: number[]; next_page_token: string }>((resolve) => {
+      resolveNamed = resolve;
+    });
+    mocks.releaseSchemaVersions.mockImplementation(async (_ns, name) =>
+      name ? named : { schema_versions: [5, 2, 1], next_page_token: "" },
+    );
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ schema_version: "5" }) }),
+        undefined,
+        expect.anything(),
+      ),
+    );
+    mocks.query = mocks.replace.mock.lastCall?.[0].query ?? {};
+    rerender(<ReleasesPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("textbox", { name: "Release name" }), {
+      target: { value: "runtime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    const filterQuery = mocks.replace.mock.lastCall?.[0].query ?? {};
+    expect(filterQuery).toEqual({ app: "payments", env: "prod", name: "runtime" });
+    // Until the router and scoped discovery settle, the old schema cannot be
+    // used for a read or release builder under the newly entered name.
+    expect(screen.getByRole("button", { name: "New release" })).toBeDisabled();
+    mocks.query = filterQuery;
+    rerender(<ReleasesPage />);
+    expect(screen.getByRole("button", { name: "New release" })).toBeDisabled();
+    expect(mocks.listReleases.mock.calls.some((call) => call[1] === "runtime")).toBe(false);
+    await act(async () => resolveNamed({ schema_versions: [2, 1], next_page_token: "" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+    );
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: { app: "payments", env: "prod", name: "runtime", schema_version: "2" },
+      }),
+      undefined,
+      expect.anything(),
+    );
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenLastCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        2,
+      ),
+    );
+    expect(
+      mocks.listReleases.mock.calls
+        .filter((call) => call[1] === "runtime")
+        .every((call) => call[5] === 2),
+    ).toBe(true);
   });
 
   it("rollback uses the selected schema previous release", async () => {

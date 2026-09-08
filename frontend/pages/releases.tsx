@@ -159,7 +159,14 @@ export default function ReleasesPage() {
     : (explicitSchema ??
       linkedSchema ??
       (tracks.versions === null ? undefined : (tracks.versions[0] ?? 0)));
-  const trackReady = schemaVersion !== undefined && !invalidSchema;
+  // Local filters update before the router; only use schema discovery for
+  // the exact address currently represented by both.
+  const trackReady =
+    schemaVersion !== undefined &&
+    !invalidSchema &&
+    ns.env === queryEnv &&
+    ns.app === queryApp &&
+    name === queryName;
   // biome-ignore lint/correctness/useExhaustiveDependencies: discard a manual draft when its namespace or name changes, even if the selected number is unchanged.
   useEffect(() => {
     setSchemaDraft(schemaVersion === undefined ? "" : String(schemaVersion));
@@ -172,11 +179,20 @@ export default function ReleasesPage() {
       return;
     }
     if (!router.isReady || !queryApp || !queryEnv || !trackReady) return;
-    const target = JSON.stringify([queryApp, queryEnv, schemaVersion]);
+    const target = JSON.stringify([queryApp, queryEnv, queryName, schemaVersion]);
     if (schemaURLRequest.current === target) return;
     schemaURLRequest.current = target;
     void replaceQuery({ schema_version: String(schemaVersion) });
-  }, [router.isReady, queryApp, queryEnv, trackReady, querySchema, schemaVersion, replaceQuery]);
+  }, [
+    router.isReady,
+    queryApp,
+    queryEnv,
+    queryName,
+    trackReady,
+    querySchema,
+    schemaVersion,
+    replaceQuery,
+  ]);
   const appliedFilters = useRef({ app: ns.app, env: ns.env, name, schema: schemaVersion });
   // Namespace/name can change optimistically from local controls. Schema changes
   // come from the URL, so retain its prior value until the effect invalidates work.
@@ -487,7 +503,13 @@ export default function ReleasesPage() {
     setLinkedSummary(null);
     setName(next);
     loadedReleaseScope.current = "";
-    replaceQuery({ name: next, release: "" });
+    replaceQuery({
+      name: next,
+      ...(next !== queryName ? { schema_version: "" } : {}),
+      release: "",
+      section: "",
+      compare: "",
+    });
   }
 
   async function validate(release: ConfigurationRelease) {
