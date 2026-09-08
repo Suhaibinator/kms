@@ -347,14 +347,18 @@ func TestGenerateSecretOnlyRootHasValidEmptySchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	var schema struct {
-		Required   []string       `json:"required"`
-		Properties map[string]any `json:"properties"`
+		Required   []string        `json:"required"`
+		Properties map[string]any  `json:"properties"`
+		Contract   []contractEntry `json:"x-kms-contract"`
 	}
 	if err := json.Unmarshal(artifacts.Schema, &schema); err != nil {
 		t.Fatal(err)
 	}
 	if schema.Required == nil || len(schema.Required) != 0 || schema.Properties == nil || len(schema.Properties) != 0 {
 		t.Fatalf("secret-only schema = required:%#v properties:%#v", schema.Required, schema.Properties)
+	}
+	if len(schema.Contract) != 1 || schema.Contract[0] != (contractEntry{Alias: "token", Kind: "secret"}) {
+		t.Fatalf("secret-only schema contract = %#v", schema.Contract)
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), "secret_only.gen.go", artifacts.Binding, parser.AllErrors); err != nil {
 		t.Fatalf("secret-only binding is invalid Go: %v", err)

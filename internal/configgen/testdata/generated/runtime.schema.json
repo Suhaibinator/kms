@@ -121,5 +121,22 @@
       ],
       "type": "object"
     }
-  }
+  },
+  "x-kms-contract": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "database_password",
+      "kind": "secret",
+      "content_type": ""
+    },
+    {
+      "alias": "rate_limits",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ]
 }

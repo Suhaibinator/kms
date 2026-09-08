@@ -39,5 +39,22 @@
       ],
       "type": "object"
     }
-  }
+  },
+  "x-kms-contract": [
+    {
+      "alias": "common_token",
+      "kind": "secret",
+      "content_type": ""
+    },
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ]
 }

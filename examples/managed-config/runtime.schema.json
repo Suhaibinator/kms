@@ -48,5 +48,22 @@
       ],
       "type": "object"
     }
-  }
+  },
+  "x-kms-contract": [
+    {
+      "alias": "api_key",
+      "kind": "secret",
+      "content_type": ""
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "server",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ]
 }

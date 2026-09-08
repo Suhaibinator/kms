@@ -23,5 +23,17 @@
       ],
       "type": "object"
     }
-  }
+  },
+  "x-kms-contract": [
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "token",
+      "kind": "secret",
+      "content_type": ""
+    }
+  ]
 }
