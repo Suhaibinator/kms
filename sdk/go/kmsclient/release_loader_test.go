@@ -683,10 +683,58 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 
 func TestReleaseLoaderConfigurationAndLoaderFormattingRedactBindingKeys(t *testing.T) {
 	const canary = "binding-key-format-canary"
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	zero, positive := uint64(0), uint64(23)
+	for _, test := range []struct {
+		name          string
+		schemaVersion *uint64
+		schemaSHA256  string
+		wantSelector  string
+		wantJSON      string
+	}{
+		{name: "zero", schemaVersion: &zero, wantSelector: `schema_version=0 schema_sha256=""`, wantJSON: `{"name":"runtime","schema_version":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "positive", schemaVersion: &positive, wantSelector: `schema_version=23 schema_sha256=""`, wantJSON: `{"name":"runtime","schema_version":23,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "unset", wantSelector: `schema_version=<unset> schema_sha256=""`, wantJSON: `{"name":"runtime","reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "digest", schemaSHA256: digest, wantSelector: `schema_version=<unset> schema_sha256="` + digest + `"`, wantJSON: `{"name":"runtime","schema_sha256":"` + digest + `","reconcile_interval":"0s","max_concurrent_fetches":0}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := ReleaseLoaderConfig{
+				Name:             "runtime",
+				SchemaVersion:    test.schemaVersion,
+				SchemaSHA256:     test.schemaSHA256,
+				BindingKeys:      map[string]BindingKey{"password": NewBindingKey(canary)},
+				ValidateManifest: func(context.Context, ReleaseManifest) error { panic(canary) },
+			}
+			want := `ReleaseLoaderConfig{name="runtime" ` + test.wantSelector + ` reconcile_interval=0s max_concurrent_fetches=0 instance_id=""}`
+			for format, rendered := range map[string]string{
+				"String":   cfg.String(),
+				"GoString": cfg.GoString(),
+				"%v":       fmt.Sprintf("%v", cfg),
+				"%+v":      fmt.Sprintf("%+v", cfg),
+				"%#v":      fmt.Sprintf("%#v", cfg),
+				"%s":       fmt.Sprintf("%s", cfg),
+			} {
+				if rendered != want {
+					t.Errorf("%s = %q, want %q", format, rendered, want)
+				}
+			}
+			if rendered := fmt.Sprintf("%q", cfg); rendered != fmt.Sprintf("%q", want) {
+				t.Errorf("%%q = %q, want quoted %q", rendered, want)
+			}
+			encoded, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.wantJSON {
+				t.Errorf("JSON = %s, want %s", encoded, test.wantJSON)
+			}
+		})
+	}
+
 	server, _ := newExactProtectionResolution(t, false)
 	client := newReleaseTestClient(t, server)
 	cfg := ReleaseLoaderConfig{
-		Name: "runtime", SchemaVersion: new(uint64), BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
+		Name: "runtime", SchemaVersion: &positive, BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
 
 		ValidateManifest: func(context.Context, ReleaseManifest) error { return nil },
 	}

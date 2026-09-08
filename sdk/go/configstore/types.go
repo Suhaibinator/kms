@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,8 +97,12 @@ func (o Options) safeProjection() optionsJSON {
 
 // String omits callbacks, providers, and credential containers.
 func (o Options) String() string {
-	return fmt.Sprintf("Options{release=%q contract_entries=%d reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
-		o.Release, len(o.Contract), o.ReconcileInterval, o.MaxConcurrentFetches, o.InstanceID)
+	schemaVersion := "<unset>"
+	if o.SchemaVersion != nil {
+		schemaVersion = strconv.FormatUint(*o.SchemaVersion, 10)
+	}
+	return fmt.Sprintf("Options{release=%q schema_version=%s schema_sha256=%q contract_entries=%d reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		o.Release, schemaVersion, o.SchemaSHA256, len(o.Contract), o.ReconcileInterval, o.MaxConcurrentFetches, o.InstanceID)
 }
 
 func (o Options) GoString() string { return o.String() }

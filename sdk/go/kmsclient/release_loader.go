@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,8 +101,12 @@ func (c ReleaseLoaderConfig) safeProjection() releaseLoaderConfigJSON {
 
 // String omits all credential containers and callbacks.
 func (c ReleaseLoaderConfig) String() string {
-	return fmt.Sprintf("ReleaseLoaderConfig{name=%q schema_version=%v schema_sha256=%q reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
-		c.Name, c.SchemaVersion, c.SchemaSHA256, c.ReconcileInterval, c.MaxConcurrentFetches, c.InstanceID)
+	schemaVersion := "<unset>"
+	if c.SchemaVersion != nil {
+		schemaVersion = strconv.FormatUint(*c.SchemaVersion, 10)
+	}
+	return fmt.Sprintf("ReleaseLoaderConfig{name=%q schema_version=%s schema_sha256=%q reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		c.Name, schemaVersion, c.SchemaSHA256, c.ReconcileInterval, c.MaxConcurrentFetches, c.InstanceID)
 }
 
 func (c ReleaseLoaderConfig) GoString() string { return c.String() }
