@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -247,12 +249,12 @@ func TestReleaseSubscriberPresentationSeparatesSchemaTracksSharingIdentityAndIns
 	}
 
 	var output bytes.Buffer
-	writeReleaseSubscriberInstances(&output, instances, 2)
+	writeReleaseSubscriberInstances(&output, instances, map[uint64]uint64{1: 2, 2: 2})
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
 	if len(lines) != 3 {
 		t.Fatalf("output rows = %d, want header plus 2 identities:\n%s", len(lines), output.String())
 	}
-	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|SCHEMA|RECEIVED|PREPARED|APPLIED|REJECTED|LAG|CONNECTED" {
+	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|SCHEMA|RECEIVED|PREPARED|APPLIED|REJECTED|REVISION|LAG|CONNECTED" {
 		t.Fatalf("header = %q", got)
 	}
 	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|1|v1/r1|-|-|-|1|false" {
@@ -260,6 +262,135 @@ func TestReleaseSubscriberPresentationSeparatesSchemaTracksSharingIdentityAndIns
 	}
 	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-a|shared-client|same-instance|2|-|-|v2/r2|-|0|true" {
 		t.Fatalf("schema-2 row = %q", got)
+	}
+}
+
+type releaseSubscriberAdminStub struct {
+	kmsv1.UnimplementedAdminServiceServer
+	response *kmsv1.ListReleaseSubscribersResponse
+	err      error
+	calls    []*kmsv1.ListReleaseSubscribersRequest
+}
+
+func (s *releaseSubscriberAdminStub) ListReleaseSubscribers(_ context.Context, req *kmsv1.ListReleaseSubscribersRequest) (*kmsv1.ListReleaseSubscribersResponse, error) {
+	s.calls = append(s.calls, proto.Clone(req).(*kmsv1.ListReleaseSubscribersRequest))
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
+}
+
+type releaseSubscriberActiveStub struct {
+	kmsv1.UnimplementedConfigurationReleaseServiceServer
+	revisions map[uint64]uint64
+	errors    map[uint64]error
+	calls     []uint64
+}
+
+func (s *releaseSubscriberActiveStub) GetActiveRelease(_ context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
+	schemaVersion := req.GetSchemaVersion()
+	s.calls = append(s.calls, schemaVersion)
+	if err := s.errors[schemaVersion]; err != nil {
+		return nil, err
+	}
+	revision, ok := s.revisions[schemaVersion]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "track has no active release")
+	}
+	return &kmsv1.GetActiveReleaseResponse{
+		Release:            &kmsv1.ConfigurationRelease{Namespace: req.GetNamespace(), Name: req.GetName(), SchemaVersion: schemaVersion},
+		ActivationRevision: revision,
+	}, nil
+}
+
+func TestReleaseSubscribersUnfilteredUsesEachTrackActiveRevision(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		// Unfiltered listings intentionally cannot report one track's revision.
+		CurrentRevision: 0,
+		Subscribers: []*kmsv1.ReleaseSubscriberState{
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 0, State: domain.ReleaseStateApplied, ActivationRevision: 4},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1, State: domain.ReleaseStateReceived, ActivationRevision: 9},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1, State: domain.ReleaseStateApplied, ActivationRevision: 10},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 2, State: domain.ReleaseStateApplied, ActivationRevision: 30},
+		},
+	}}
+	active := &releaseSubscriberActiveStub{revisions: map[uint64]uint64{1: 20, 2: 35}, errors: map[uint64]error{}}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+		kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitOK {
+		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+	var page struct {
+		Items []releaseSubscriberJSON `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(c.stdout()), &page); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, c.stdout())
+	}
+	if len(page.Items) != 3 {
+		t.Fatalf("items=%d, want three schema-distinct instances: %+v", len(page.Items), page.Items)
+	}
+	wantLag := map[uint64]uint64{0: 0, 1: 10, 2: 5}
+	for _, item := range page.Items {
+		if item.Identity != "client" || item.Client != "worker" || item.Instance != "same" {
+			t.Fatalf("duplicate client identity was altered: %+v", item)
+		}
+		if item.Lag != wantLag[item.SchemaVersion] {
+			t.Fatalf("schema %d lag=%d, want %d", item.SchemaVersion, item.Lag, wantLag[item.SchemaVersion])
+		}
+	}
+	counts := map[uint64]int{}
+	for _, schemaVersion := range active.calls {
+		counts[schemaVersion]++
+	}
+	if len(active.calls) != 3 || counts[0] != 1 || counts[1] != 1 || counts[2] != 1 {
+		t.Fatalf("active lookups=%v, want one exact lookup per represented track", active.calls)
+	}
+}
+
+func TestReleaseSubscribersFilteredUsesListRevisionWithoutExtraRead(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		CurrentRevision: 20,
+		Subscribers: []*kmsv1.ReleaseSubscriberState{{
+			Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1,
+			State: domain.ReleaseStateApplied, ActivationRevision: 10,
+		}},
+	}}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--schema-version", "1", "--output", "json", "--insecure"}); code != exitOK {
+		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+	if len(admin.calls) != 1 || admin.calls[0].SchemaVersion == nil || admin.calls[0].GetSchemaVersion() != 1 {
+		t.Fatalf("subscriber request schema selector=%+v", admin.calls)
+	}
+	if !strings.Contains(c.stdout(), `"lag": 10`) && !strings.Contains(c.stdout(), `"lag":10`) {
+		t.Fatalf("output does not use filtered track revision: %s", c.stdout())
+	}
+}
+
+func TestReleaseSubscribersFailsBeforeOutputWhenTrackRevisionCannotBeRead(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		Subscribers: []*kmsv1.ReleaseSubscriberState{{Identity: "client", ClientName: "worker", InstanceId: "one", SchemaVersion: 7, State: domain.ReleaseStateApplied}},
+	}}
+	active := &releaseSubscriberActiveStub{
+		revisions: map[uint64]uint64{},
+		errors:    map[uint64]error{7: status.Error(codes.PermissionDenied, "cannot read release")},
+	}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+		kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitPermissionDenied {
+		t.Fatalf("exit=%d, want %d; stderr=%s", code, exitPermissionDenied, c.stderr())
+	}
+	if c.stdout() != "" {
+		t.Fatalf("stdout=%q, want no misleading partial output", c.stdout())
 	}
 }
 

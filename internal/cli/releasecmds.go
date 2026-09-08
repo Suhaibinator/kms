@@ -980,7 +980,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	var schema optionalUint64
 	fs.Var(&schema, "schema-version", "filter by release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release subscribers ENV/APP NAME [flags]",
-		"Show per-instance release lifecycle state and activation lag.", false)
+		"Show per-instance release lifecycle state and active release revision lag.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -1021,12 +1021,52 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			break
 		}
 	}
+	currentRevisions := map[uint64]uint64{}
+	if schema.set {
+		currentRevisions[schema.value] = currentRevision
+	} else {
+		currentRevisions, err = releaseSubscriberTrackRevisions(cf.authCtx(ctx), kmsv1.NewConfigurationReleaseServiceClient(conn), ns, pos[1], instances)
+		if err != nil {
+			return c.failErr("release subscribers", err)
+		}
+	}
 	if c.jsonOutput() {
 		// Every page has been followed, so there is no token to hand back.
-		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevision), "")
+		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevisions), "")
 	}
-	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevision)
+	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevisions)
 	return 0
+}
+
+// releaseSubscriberTrackRevisions resolves each schema track represented in an
+// unfiltered subscriber listing. The listing's current_revision is zero when
+// it spans tracks, so using it for every row would hide real revision lag.
+func releaseSubscriberTrackRevisions(ctx context.Context, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus) (map[uint64]uint64, error) {
+	revisions := make(map[uint64]uint64)
+	for key := range instances {
+		if _, resolved := revisions[key.schemaVersion]; resolved {
+			continue
+		}
+		schemaVersion := key.schemaVersion
+		active, err := client.GetActiveRelease(ctx, &kmsv1.GetActiveReleaseRequest{
+			Namespace: ns, Name: name, SchemaVersion: &schemaVersion,
+		})
+		if status.Code(err) == codes.NotFound {
+			revisions[schemaVersion] = 0
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get active release for schema %d: %w", schemaVersion, err)
+		}
+		if active.GetRelease() == nil {
+			return nil, fmt.Errorf("get active release for schema %d: server returned an empty release", schemaVersion)
+		}
+		if active.GetRelease().GetSchemaVersion() != schemaVersion {
+			return nil, fmt.Errorf("get active release for schema %d: server returned schema %d", schemaVersion, active.GetRelease().GetSchemaVersion())
+		}
+		revisions[schemaVersion] = active.GetActivationRevision()
+	}
+	return revisions, nil
 }
 
 type releaseSubscriberInstanceStatus struct {
@@ -1091,8 +1131,9 @@ func sortedReleaseSubscriberKeys(instances map[releaseSubscriberInstanceKey]*rel
 	return keys
 }
 
-// releaseSubscriberLag is how many activations an instance is behind the
-// namespace's current revision.
+// releaseSubscriberLag is the difference between the active release's global
+// revision for this schema track and the newest revision reported by the
+// instance. Global revisions can include changes outside this track.
 func releaseSubscriberLag(instance *releaseSubscriberInstanceStatus, currentRevision uint64) uint64 {
 	if currentRevision > instance.latestRevision {
 		return currentRevision - instance.latestRevision
@@ -1134,7 +1175,7 @@ func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseS
 	}
 }
 
-func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) []releaseSubscriberJSON {
+func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) []releaseSubscriberJSON {
 	items := make([]releaseSubscriberJSON, 0, len(instances))
 	for _, key := range sortedReleaseSubscriberKeys(instances) {
 		instance := instances[key]
@@ -1146,7 +1187,7 @@ func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*
 			Prepared:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStatePrepared]),
 			Applied:       releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateApplied]),
 			Rejected:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateRejected]),
-			Lag:           releaseSubscriberLag(instance, currentRevision),
+			Lag:           releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]),
 			Connected:     instance.connected,
 			SchemaVersion: instance.schemaVersion,
 		})
@@ -1154,7 +1195,7 @@ func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*
 	return items
 }
 
-func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) {
+func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) {
 	keys := sortedReleaseSubscriberKeys(instances)
 	rows := make([][]string, 0, len(keys))
 	for _, key := range keys {
@@ -1165,11 +1206,11 @@ func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscribe
 			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateApplied]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateRejected]),
-			strconv.FormatUint(releaseSubscriberLag(instance, currentRevision), 10),
+			strconv.FormatUint(releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]), 10),
 			strconv.FormatBool(instance.connected),
 		})
 	}
-	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "LAG", "CONNECTED"}, rows)
+	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "REVISION LAG", "CONNECTED"}, rows)
 }
 
 func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {
