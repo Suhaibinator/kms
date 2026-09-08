@@ -624,6 +624,12 @@ export interface ReleaseAcknowledgement {
   appliedDivergent: boolean;
   divergentFieldCount: number;
   schemaVersion: bigint;
+  /**
+   * Client-assigned generation of this retained acknowledgement. The server
+   * echoes it when rejecting an unavailable activation so a delayed response
+   * cannot discard a newer acknowledgement for the same lifecycle state.
+   */
+  sequence: bigint;
 }
 
 export interface WatchReleaseRequest {
@@ -641,11 +647,31 @@ export interface ReleaseActivationEvent {
   release: ConfigurationRelease | undefined;
 }
 
+/**
+ * The activation referenced by this acknowledgement is no longer available.
+ * No lifecycle state was persisted. This does not close the subscription or
+ * change the active release, and never advances the stream revision cursor.
+ */
+export interface ReleaseAcknowledgementRejectedEvent {
+  namespace: NamespaceRef | undefined;
+  name: string;
+  schemaVersion: bigint;
+  version: bigint;
+  activationRevision: bigint;
+  clientName: string;
+  instanceId: string;
+  state: string;
+  sequence: bigint;
+  /** activation_unavailable */
+  reason: string;
+}
+
 export interface WatchReleaseEvent {
   event:
     | { $case: "snapshot"; value: ReleaseSnapshotEvent }
     | { $case: "activation"; value: ReleaseActivationEvent }
     | { $case: "heartbeat"; value: Heartbeat }
+    | { $case: "acknowledgementRejected"; value: ReleaseAcknowledgementRejectedEvent }
     | undefined;
   /** Global changelog revision assigned by activation. */
   revision: bigint;
@@ -9791,6 +9817,7 @@ function createBaseReleaseAcknowledgement(): ReleaseAcknowledgement {
     appliedDivergent: false,
     divergentFieldCount: 0,
     schemaVersion: 0n,
+    sequence: 0n,
   };
 }
 
@@ -9846,6 +9873,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
       writer.uint32(104).uint64(message.schemaVersion);
+    }
+    if (message.sequence !== 0n) {
+      if (BigInt.asUintN(64, message.sequence) !== message.sequence) {
+        throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.sequence);
     }
     return writer;
   },
@@ -9967,6 +10000,14 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
             message.schemaVersion = reader.uint64() as bigint;
             continue;
           }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.sequence = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -10026,6 +10067,7 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         : isSet(object.schema_version)
         ? BigInt(object.schema_version)
         : 0n,
+      sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
     };
   },
 
@@ -10070,6 +10112,9 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     if (message.schemaVersion !== 0n) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
+    if (message.sequence !== 0n) {
+      obj.sequence = message.sequence.toString();
+    }
     return obj;
   },
 
@@ -10099,6 +10144,7 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
       : 0n;
+    message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
     return message;
   },
 };
@@ -10348,6 +10394,264 @@ export const ReleaseActivationEvent: MessageFns<ReleaseActivationEvent> = {
   },
 };
 
+function createBaseReleaseAcknowledgementRejectedEvent(): ReleaseAcknowledgementRejectedEvent {
+  return {
+    namespace: undefined,
+    name: "",
+    schemaVersion: 0n,
+    version: 0n,
+    activationRevision: 0n,
+    clientName: "",
+    instanceId: "",
+    state: "",
+    sequence: 0n,
+    reason: "",
+  };
+}
+
+export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgementRejectedEvent> = {
+  encode(message: ReleaseAcknowledgementRejectedEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.version);
+    }
+    if (message.activationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.activationRevision) !== message.activationRevision) {
+        throw new globalThis.Error("value provided for field message.activationRevision of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.activationRevision);
+    }
+    if (message.clientName !== "") {
+      writer.uint32(50).string(message.clientName);
+    }
+    if (message.instanceId !== "") {
+      writer.uint32(58).string(message.instanceId);
+    }
+    if (message.state !== "") {
+      writer.uint32(66).string(message.state);
+    }
+    if (message.sequence !== 0n) {
+      if (BigInt.asUintN(64, message.sequence) !== message.sequence) {
+        throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.sequence);
+    }
+    if (message.reason !== "") {
+      writer.uint32(82).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReleaseAcknowledgementRejectedEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReleaseAcknowledgementRejectedEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.activationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.clientName = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.instanceId = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.state = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.sequence = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ReleaseAcknowledgementRejectedEvent {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      activationRevision: isSet(object.activationRevision)
+        ? BigInt(object.activationRevision)
+        : isSet(object.activation_revision)
+        ? BigInt(object.activation_revision)
+        : 0n,
+      clientName: isSet(object.clientName)
+        ? globalThis.String(object.clientName)
+        : isSet(object.client_name)
+        ? globalThis.String(object.client_name)
+        : "",
+      instanceId: isSet(object.instanceId)
+        ? globalThis.String(object.instanceId)
+        : isSet(object.instance_id)
+        ? globalThis.String(object.instance_id)
+        : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+    };
+  },
+
+  toJSON(message: ReleaseAcknowledgementRejectedEvent): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.activationRevision !== 0n) {
+      obj.activationRevision = message.activationRevision.toString();
+    }
+    if (message.clientName !== "") {
+      obj.clientName = message.clientName;
+    }
+    if (message.instanceId !== "") {
+      obj.instanceId = message.instanceId;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.sequence !== 0n) {
+      obj.sequence = message.sequence.toString();
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ReleaseAcknowledgementRejectedEvent>): ReleaseAcknowledgementRejectedEvent {
+    return ReleaseAcknowledgementRejectedEvent.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ReleaseAcknowledgementRejectedEvent>): ReleaseAcknowledgementRejectedEvent {
+    const message = createBaseReleaseAcknowledgementRejectedEvent();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.name = object.name ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.activationRevision = (object.activationRevision !== undefined && object.activationRevision !== null)
+      ? BigInt(object.activationRevision)
+      : 0n;
+    message.clientName = object.clientName ?? "";
+    message.instanceId = object.instanceId ?? "";
+    message.state = object.state ?? "";
+    message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
 function createBaseWatchReleaseEvent(): WatchReleaseEvent {
   return { event: undefined, revision: 0n };
 }
@@ -10363,6 +10667,9 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
         break;
       case "heartbeat":
         Heartbeat.encode(message.event.value, writer.uint32(26).fork()).join();
+        break;
+      case "acknowledgementRejected":
+        ReleaseAcknowledgementRejectedEvent.encode(message.event.value, writer.uint32(42).fork()).join();
         break;
     }
     if (message.revision !== 0n) {
@@ -10411,6 +10718,17 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
             message.event = { $case: "heartbeat", value: Heartbeat.decode(reader, reader.uint32()) };
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.event = {
+              $case: "acknowledgementRejected",
+              value: ReleaseAcknowledgementRejectedEvent.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
           case 4: {
             if (tag !== 32) {
               break;
@@ -10439,6 +10757,16 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
         ? { $case: "activation", value: ReleaseActivationEvent.fromJSON(object.activation) }
         : isSet(object.heartbeat)
         ? { $case: "heartbeat", value: Heartbeat.fromJSON(object.heartbeat) }
+        : isSet(object.acknowledgementRejected)
+        ? {
+          $case: "acknowledgementRejected",
+          value: ReleaseAcknowledgementRejectedEvent.fromJSON(object.acknowledgementRejected),
+        }
+        : isSet(object.acknowledgement_rejected)
+        ? {
+          $case: "acknowledgementRejected",
+          value: ReleaseAcknowledgementRejectedEvent.fromJSON(object.acknowledgement_rejected),
+        }
         : undefined,
       revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
     };
@@ -10452,6 +10780,8 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
       obj.activation = ReleaseActivationEvent.toJSON(message.event.value);
     } else if (message.event?.$case === "heartbeat") {
       obj.heartbeat = Heartbeat.toJSON(message.event.value);
+    } else if (message.event?.$case === "acknowledgementRejected") {
+      obj.acknowledgementRejected = ReleaseAcknowledgementRejectedEvent.toJSON(message.event.value);
     }
     if (message.revision !== 0n) {
       obj.revision = message.revision.toString();
@@ -10480,6 +10810,15 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
       case "heartbeat": {
         if (object.event?.value !== undefined && object.event?.value !== null) {
           message.event = { $case: "heartbeat", value: Heartbeat.fromPartial(object.event.value) };
+        }
+        break;
+      }
+      case "acknowledgementRejected": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = {
+            $case: "acknowledgementRejected",
+            value: ReleaseAcknowledgementRejectedEvent.fromPartial(object.event.value),
+          };
         }
         break;
       }
@@ -19766,5 +20105,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 615cd0658530bdbb4f10c4e6054947dd908a1884c43573650a1061f3ea03cb87
+// source-sha256: 97ee70e2dc73a0c4557976b69c29db9c4a77f47880cc352efd066a3d30457fe8
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

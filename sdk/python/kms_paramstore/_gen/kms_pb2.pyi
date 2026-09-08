@@ -762,7 +762,7 @@ class ReleaseWatchRegistration(_message.Message):
     def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseAcknowledgement(_message.Message):
-    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version")
+    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -776,6 +776,7 @@ class ReleaseAcknowledgement(_message.Message):
     APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
@@ -789,7 +790,8 @@ class ReleaseAcknowledgement(_message.Message):
     applied_divergent: bool
     divergent_field_count: int
     schema_version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    sequence: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ..., sequence: _Optional[int] = ...) -> None: ...
 
 class WatchReleaseRequest(_message.Message):
     __slots__ = ("register", "acknowledgement")
@@ -811,17 +813,43 @@ class ReleaseActivationEvent(_message.Message):
     release: ConfigurationRelease
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
 
+class ReleaseAcknowledgementRejectedEvent(_message.Message):
+    __slots__ = ("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    name: str
+    schema_version: int
+    version: int
+    activation_revision: int
+    client_name: str
+    instance_id: str
+    state: str
+    sequence: int
+    reason: str
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., sequence: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
+
 class WatchReleaseEvent(_message.Message):
-    __slots__ = ("snapshot", "activation", "heartbeat", "revision")
+    __slots__ = ("snapshot", "activation", "heartbeat", "acknowledgement_rejected", "revision")
     SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
     ACTIVATION_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
+    ACKNOWLEDGEMENT_REJECTED_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     snapshot: ReleaseSnapshotEvent
     activation: ReleaseActivationEvent
     heartbeat: Heartbeat
+    acknowledgement_rejected: ReleaseAcknowledgementRejectedEvent
     revision: int
-    def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., acknowledgement_rejected: _Optional[_Union[ReleaseAcknowledgementRejectedEvent, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class ApplicationContractField(_message.Message):
     __slots__ = ("alias", "kind", "content_type")
