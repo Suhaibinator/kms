@@ -191,4 +191,37 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 			t.Fatalf("track schema %d current = %v, %v", want.schema, current, err)
 		}
 	}
+	// An otherwise valid activation from schema 1 cannot be acknowledged on
+	// schema 2's stream. Closing that stream must leave schema 1's identical
+	// client/instance registration connected and able to receive updates.
+	if err := newStream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{
+		Namespace: wireNS, Name: name, SchemaVersion: firstSchema.Version, Version: oldUpdate.GetVersion(), ActivationRevision: oldUpdateRevision,
+		ClientName: "same-client", InstanceId: "same-instance", State: "applied",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, err := newStream.Recv()
+		if err == nil {
+			continue
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("foreign-track acknowledgement = %v, want InvalidArgument", err)
+		}
+		break
+	}
+	lastOldUpdate := create(firstSchema.Version, "workers-count", "6", "integer")
+	activate(lastOldUpdate, 2)
+	receive(replay, firstSchema.Version, 3)
+	waitForManagedState(t, func() bool {
+		result, err := admin.ListReleaseSubscribers(auth, &kmsv1.ListReleaseSubscribersRequest{Namespace: wireNS, ReleaseName: name})
+		if err != nil {
+			return false
+		}
+		connected := map[uint64]bool{}
+		for _, row := range result.GetSubscribers() {
+			connected[row.GetSchemaVersion()] = connected[row.GetSchemaVersion()] || row.GetConnected()
+		}
+		return connected[firstSchema.Version] && !connected[secondSchema.Version]
+	}, "foreign-track acknowledgement disconnects only its registered track")
 }
