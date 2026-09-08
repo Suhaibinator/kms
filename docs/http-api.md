@@ -557,6 +557,8 @@ recorded as well.
 `POST /api/v1/applications/{application}/schema-migration` is an admin-only
 preview/apply operation for one existing environment with an active release.
 It uses a registered schema in the application's release lineage.
+`source_schema_version` is required, including an explicit `0` when upgrading
+from a schema-free track; `schema_version` identifies the registered destination.
 
 ```json
 {

@@ -519,6 +519,10 @@ Exact release reads and activation requests require `schema_version`. List
 requests can omit the filter to inspect all tracks, and every result identifies
 its schema. CLI release operations expose `--schema-version`.
 
+Schema-free defaults artifacts retain the `schema_sha256` field with an empty
+string and require an explicit schema-0 selection for import. Generated artifacts
+keep their nonempty digest; they cannot be imported as schema-free defaults.
+
 Low-level Go, TypeScript, and Python loaders accept either an exact schema
 version or a schema SHA-256 digest, never both. `ResolveReleaseSchema` resolves
 the digest under release-read authorization; clients do not need schema-admin
