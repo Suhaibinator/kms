@@ -583,6 +583,7 @@ describe("ShipModal", () => {
     expect(panel).toHaveTextContent(`v${conflictWritten}`);
     expect(panel).toHaveTextContent(`${releaseName}@${conflictRelease}`);
     expect(panel).toHaveTextContent("created, not activated");
+    expect(within(panel).getAllByText(`schema v${preview.preview.schema_version}`)).toHaveLength(3);
     expect(within(panel).queryByRole("button", { name: /activate anyway/i })).toBeNull();
     expect(props.onShipped).toHaveBeenCalledWith(conflict, "prod");
 

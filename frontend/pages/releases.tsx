@@ -631,7 +631,9 @@ export default function ReleasesPage() {
       wantedComparison &&
       release.name === wantedComparison.name &&
       release.version === wantedComparison.version &&
-      release.schema_version === (wantedComparison.schema_version ?? schemaVersion),
+      release.schema_version === (wantedComparison.schema_version ?? schemaVersion) &&
+      release.namespace.env === ns.env &&
+      release.namespace.app === ns.app,
   );
   const linkedComparisonMatches = Boolean(
     wantedComparison &&
@@ -639,7 +641,9 @@ export default function ReleasesPage() {
       linkedComparison.release.name === wantedComparison.name &&
       linkedComparison.release.version === wantedComparison.version &&
       linkedComparison.release.schema_version ===
-        (wantedComparison.schema_version ?? schemaVersion),
+        (wantedComparison.schema_version ?? schemaVersion) &&
+      linkedComparison.release.namespace.env === ns.env &&
+      linkedComparison.release.namespace.app === ns.app,
   );
   const loadedComparison = matchingComparisons.length === 1 || linkedComparisonMatches;
   const resolvedCompareKey =
@@ -910,7 +914,11 @@ export default function ReleasesPage() {
                     return (
                       <tr key={releaseKey(release)}>
                         <td data-label="Release">
-                          <ReleaseIdent name={release.name} version={release.version} />
+                          <ReleaseIdent
+                            name={release.name}
+                            version={release.version}
+                            schemaVersion={release.schema_version}
+                          />
                         </td>
                         <td data-label="State">
                           {summary.current ? (

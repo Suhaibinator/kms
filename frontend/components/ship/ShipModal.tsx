@@ -838,6 +838,7 @@ export default function ShipModal({
             <ConflictPanel
               environment={environment}
               releaseName={application.release_name}
+              schemaVersion={preview?.schema_version ?? application.schema_version}
               baseVersion={preview?.base_version ?? 0}
               conflict={conflict}
               disabled={false}

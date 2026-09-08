@@ -16,6 +16,7 @@ export interface ShipConflict {
 export interface ConflictPanelProps {
   environment: string;
   releaseName: string;
+  schemaVersion: number;
   /** What the preview was taken against. */
   baseVersion: number;
   conflict: ShipConflict;
@@ -33,6 +34,7 @@ export interface ConflictPanelProps {
 export function ConflictPanel({
   environment,
   releaseName,
+  schemaVersion,
   baseVersion,
   conflict,
   disabled,
@@ -59,12 +61,12 @@ export function ConflictPanel({
           {current !== undefined ? (
             <>
               {" "}
-              to <ReleaseIdent name={releaseName} version={current} />
+              to <ReleaseIdent name={releaseName} version={current} schemaVersion={schemaVersion} />
             </>
           ) : null}{" "}
           while you were previewing against{" "}
           {baseVersion > 0 ? (
-            <ReleaseIdent name={releaseName} version={baseVersion} />
+            <ReleaseIdent name={releaseName} version={baseVersion} schemaVersion={schemaVersion} />
           ) : (
             <span>no active release</span>
           )}
@@ -92,7 +94,12 @@ export function ConflictPanel({
         <dd>
           {release ? (
             <>
-              <ReleaseIdent name={release.name} version={release.version} /> created, not activated
+              <ReleaseIdent
+                name={release.name}
+                version={release.version}
+                schemaVersion={schemaVersion}
+              />{" "}
+              created, not activated
             </>
           ) : (
             <span className="faint">not created</span>

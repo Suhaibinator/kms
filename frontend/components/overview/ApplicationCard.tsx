@@ -64,7 +64,12 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
                 </Link>
                 <span className="fleet-env-release">
                   {active ? (
-                    <ReleaseIdent name={active.name} version={active.version} tooltip={false} />
+                    <ReleaseIdent
+                      name={active.name}
+                      version={active.version}
+                      schemaVersion={active.schema_version}
+                      tooltip={false}
+                    />
                   ) : overview === undefined ? (
                     <span className="faint">—</span>
                   ) : (

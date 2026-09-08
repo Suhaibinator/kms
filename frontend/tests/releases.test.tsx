@@ -437,7 +437,7 @@ describe("ReleasesPage", () => {
 
     const { rerender } = render(<ReleasesPage />);
     expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
-    expect(versions()).toEqual(["releaseruntime@2", "releaseruntime@1"]);
+    expect(versions()).toEqual(["releaseruntime@2schema v1", "releaseruntime@1schema v1"]);
     expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 releases");
 
     fireEvent.click(screen.getByRole("button", { name: "Release" }));
@@ -453,7 +453,7 @@ describe("ReleasesPage", () => {
     // The URL is the source of truth, so land the router on what the click asked for.
     mocks.query = { app: "payments", env: "prod", sort: "release", dir: "asc" };
     rerender(<ReleasesPage />);
-    expect(versions()).toEqual(["releaseruntime@1", "releaseruntime@2"]);
+    expect(versions()).toEqual(["releaseruntime@1schema v1", "releaseruntime@2schema v1"]);
     expect(screen.getByRole("button", { name: "Release" }).closest("th")).toHaveAttribute(
       "aria-sort",
       "ascending",
@@ -835,6 +835,61 @@ describe("ReleasesPage", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(within(workspace).getByText(/new-digest/)).toBeVisible();
+  });
+
+  it("refetches an off-page comparison after namespace history navigation", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      schema_version: "1",
+      release: "runtime@1:1",
+      section: "compare",
+      compare: "runtime@1:3",
+    };
+    mocks.listReleases.mockImplementation(async (namespace: { env: string; app: string }) => ({
+      releases: [
+        {
+          release: { ...releaseV1, namespace },
+          current: true,
+          previous: false,
+          activation_revision: 7,
+        },
+      ],
+      next_page_token: "older",
+    }));
+    mocks.getRelease.mockImplementation(async (namespace: { env: string; app: string }) => ({
+      release: { ...releaseV2, namespace, version: 3 },
+    }));
+
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        3,
+        1,
+        expect.anything(),
+      ),
+    );
+
+    mocks.query = { ...mocks.query, env: "dev" };
+    rerender(<ReleasesPage />);
+
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(
+        { env: "dev", app: "payments" },
+        "runtime",
+        3,
+        1,
+        expect.anything(),
+      ),
+    );
+    const comparisonNamespaces = mocks.getRelease.mock.calls
+      .filter((call) => call[2] === 3)
+      .map((call) => call[0]);
+    expect(comparisonNamespaces).toContainEqual({ env: "prod", app: "payments" });
+    expect(comparisonNamespaces).toContainEqual({ env: "dev", app: "payments" });
   });
 
   it("renders validation failures in the workspace violations table", async () => {
