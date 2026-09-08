@@ -234,6 +234,49 @@ func TestBaselineSnapshotDetectsSidecarReplacementAndAppearance(t *testing.T) {
 	}
 }
 
+func TestBaselineSnapshotInfoCapturesIdentityBeforePathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "database-wal")
+	if err := os.WriteFile(path, []byte("wal bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// File.Stat captures the handle's identity immediately on every platform.
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, statErr := file.Stat()
+	closeErr := file.Close()
+	if statErr != nil || closeErr != nil {
+		t.Fatalf("capture original handle: stat=%v close=%v", statErr, closeErr)
+	}
+	captured, err := baselineSnapshotInfo(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the original alive under another name to rule out file-ID reuse.
+	// Do not compare captured before replacement: that would mask lazy loading.
+	if err := os.Rename(path, filepath.Join(dir, "original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("wal bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, want.ModTime(), want.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if !sameBaselineFile(captured, want) {
+		t.Fatal("captured identity changed when its path was replaced")
+	}
+	var copied bytes.Buffer
+	if _, changed, err := readBaselineSnapshotFile(path, captured, &copied); err != nil || !changed {
+		t.Fatalf("replaced WAL: changed=%v err=%v", changed, err)
+	}
+	if copied.Len() != 0 {
+		t.Fatal("read replacement contents before rejecting its identity")
+	}
+}
+
 func TestBaselineSnapshotCleansTemporaryFilesAfterFailure(t *testing.T) {
 	tempRoot := t.TempDir()
 	t.Setenv("TMPDIR", tempRoot)

@@ -47,6 +47,13 @@ func baselineSnapshotInfo(path string) (os.FileInfo, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("baseline inspection requires regular file %q", path)
 	}
+	// On Windows Lstat defers loading the file ID until SameFile is called.
+	// Resolve it now, while capturing the snapshot, rather than letting a later
+	// comparison load the ID of a replacement at the same path. SameFile uses
+	// a no-follow metadata handle there; it does not read a symlink's target.
+	if !os.SameFile(info, info) {
+		return nil, fmt.Errorf("cannot capture baseline file identity for %q", path)
+	}
 	return info, nil
 }
 
