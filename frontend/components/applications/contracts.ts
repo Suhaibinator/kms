@@ -19,7 +19,7 @@ import { validateContractField } from "@/lib/validation";
 /** What a setup-panel step (or a finding's Fix) asks the application page to do. */
 export type SetupAction =
   | { kind: "create-app" }
-  | { kind: "edit-definition" }
+  | { kind: "manage-contract" }
   | { kind: "register-schema" }
   | { kind: "add-environment" }
   | { kind: "fill-values"; env: string; alias?: string }

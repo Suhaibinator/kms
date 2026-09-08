@@ -4,12 +4,7 @@ import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import {
-  type AlignmentIssue,
-  type ContractEntry,
-  checkContractAlignment,
-  deriveContractFromSchema,
-} from "@/lib/contract-derive";
+import { type AlignmentIssue, checkContractAlignment } from "@/lib/contract-derive";
 import type { FixAction } from "@/lib/readiness";
 import type { ApplicationOverview, Finding, FindingCode } from "@/lib/types";
 import { ActionMenu } from "./ActionMenu";
@@ -49,7 +44,7 @@ export function mergeAlignment(overview: ApplicationOverview): Alignment {
 
 export function DefinitionCard({
   overview,
-  onEdit,
+  onManageReleases,
   onDeriveSchema,
   onUpgrade,
   latestSchemaVersion,
@@ -57,8 +52,8 @@ export function DefinitionCard({
   overview: ApplicationOverview;
   onUpgrade?: () => void;
   latestSchemaVersion?: number;
-  /** Opens the definition modal, optionally with a derived contract prefilled. */
-  onEdit: (prefill?: ContractEntry[]) => void;
+  /** Open release creation for this selected track. */
+  onManageReleases: () => void;
   /** Register a schema derived from the contract and pin it. */
   onDeriveSchema: () => void;
 }) {
@@ -68,7 +63,7 @@ export function DefinitionCard({
 
   function onFix(action: FixAction) {
     if (action === "pin_schema") onDeriveSchema();
-    else onEdit();
+    else onManageReleases();
   }
 
   return (
@@ -121,6 +116,10 @@ export function DefinitionCard({
             {application.contract.filter((f) => f.kind === "parameter").length} parameters ·{" "}
             {application.contract.filter((f) => f.kind === "secret").length} secrets
           </p>
+          <p className="faint text-sm">
+            Contracts are immutable after adoption. Create a first release to establish an unadopted
+            track, or upgrade to a new track to change its contract.
+          </p>
           <details>
             <summary className="text-sm cursor-pointer">View contract</summary>
             <div className="row-wrap">
@@ -158,21 +157,11 @@ export function DefinitionCard({
             }
             items={[
               {
-                key: "derive-contract",
-                label: "Derive contract from schema",
-                disabled: !overview.schema_json,
-                onSelect: () =>
-                  onEdit(
-                    deriveContractFromSchema(overview.schema_json ?? "", application.contract)
-                      .contract,
-                  ),
-              },
-              {
                 key: "derive-schema",
                 label: "Derive schema from contract",
                 onSelect: onDeriveSchema,
               },
-              { key: "edit", label: "Edit contract", onSelect: () => onEdit() },
+              { key: "releases", label: "Manage releases", onSelect: onManageReleases },
             ]}
           />
         </div>

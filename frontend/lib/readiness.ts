@@ -55,7 +55,7 @@ export type FixAction =
 
 export const FIX_LABEL: Record<FixAction, string> = {
   add_environment: "Add environment",
-  edit_contract: "Edit contract",
+  edit_contract: "Manage releases",
   pin_schema: "Pin schema",
   open_release: "Open release",
   ship: "Ship",
@@ -122,7 +122,7 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
   no_environments: () =>
     "This application has no environments yet. Add one to start setting values.",
   contract_empty: () =>
-    "The contract lists no aliases, so nothing can be shipped. Define the aliases the application reads, or derive them from an active release.",
+    "This track lists no aliases. Create its first release to establish an unadopted contract, or use a new schema track if its empty contract is already established.",
   schema_unpinned: () =>
     "No schema is pinned. Releases will not be validated against a shape before activation.",
   schema_missing: (p) => {
@@ -141,7 +141,7 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
   contract_type_mismatch: (p) =>
     `Contract alias ${alias(p)} is ${str(p, "content_type") ?? "one type"} but the schema expects ${str(p, "schema_type") ?? "another"}.`,
   contract_release_mismatch: () =>
-    "The contract was edited after the active release was created. New releases must match the contract; the active one no longer does.",
+    "The active release differs from this track's immutable contract. Manage its releases to inspect the mismatch.",
   release_pin_stale: (p) =>
     `The active release pins ${alias(p)} to a version that no longer exists or is disabled. Ship a new release.`,
   resource_missing: (p) =>

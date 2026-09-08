@@ -37,7 +37,6 @@ import {
   type ResourceRef,
   SECRET_ALREADY_EXISTS_MESSAGE,
 } from "@/lib/api";
-import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
 import { valueFor, valueForKey } from "@/lib/overview";
@@ -225,7 +224,7 @@ export function ApplicationHome({
   const [cloneSeed, setCloneSeed] = useState<CloneSeed | null>(null);
   const [cloneOpen, setCloneOpen] = useState(false);
   const cloneRefresh = useRef<Promise<void> | null>(null);
-  const [definition, setDefinition] = useState<{ prefill: ContractEntry[] | null } | null>(null);
+  const [definitionOpen, setDefinitionOpen] = useState(false);
   const [deriveOpen, setDeriveOpen] = useState(false);
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -391,10 +390,25 @@ export function ApplicationHome({
     setParameterTarget({ env: environment, app: application.name, key });
   }
 
+  function manageContract(environment = defaultShipEnv) {
+    if (!environment) {
+      setEnvironmentOpen(true);
+      return;
+    }
+    void router.push(
+      links.releases({
+        app: application.name,
+        env: environment,
+        name: application.release_name,
+        schemaVersion,
+      }),
+    );
+  }
+
   function onSetupAction(action: SetupAction) {
     switch (action.kind) {
-      case "edit-definition":
-        setDefinition({ prefill: null });
+      case "manage-contract":
+        manageContract();
         break;
       case "register-schema":
         setDeriveOpen(true);
@@ -436,7 +450,7 @@ export function ApplicationHome({
         setEnvironmentOpen(true);
         break;
       case "edit_contract":
-        setDefinition({ prefill: null });
+        manageContract(scopeEnv);
         break;
       case "pin_schema":
         setDeriveOpen(true);
@@ -553,7 +567,7 @@ export function ApplicationHome({
           Edit definition
         </>
       ),
-      onSelect: () => setDefinition({ prefill: null }),
+      onSelect: () => setDefinitionOpen(true),
     },
     environmentItem(
       "connect-sdk",
@@ -614,6 +628,9 @@ export function ApplicationHome({
                 aria-label="Schema version"
                 value={schemaVersion}
                 onChange={(event) => {
+                  setDefinitionOpen(false);
+                  setDeriveOpen(false);
+                  setDefaultsEnv(null);
                   setShipTarget(null);
                   setRollbackEnv(null);
                   setMigrationEnv(null);
@@ -697,7 +714,7 @@ export function ApplicationHome({
       )}
       <DefinitionCard
         overview={overview}
-        onEdit={(prefill) => setDefinition({ prefill: prefill ?? null })}
+        onManageReleases={() => manageContract()}
         onDeriveSchema={() => setDeriveOpen(true)}
         latestSchemaVersion={latestSchema?.version}
         onUpgrade={
@@ -762,7 +779,7 @@ export function ApplicationHome({
                 onConnect: setConnectEnv,
                 onImportDefaults: setDefaultsEnv,
                 onMigrateSchema: setMigrationEnv,
-                onEditContract: () => setDefinition({ prefill: null }),
+                onEditContract: manageContract,
                 onFix,
               }}
             />
@@ -930,14 +947,11 @@ export function ApplicationHome({
         }}
       />
       <ApplicationDefinitionModal
-        open={!archived && definition !== null}
+        open={!archived && definitionOpen}
         application={application}
-        schemaJson={overview.schema_json}
-        environments={environments}
-        prefillContract={definition?.prefill ?? null}
-        onClose={() => setDefinition(null)}
+        onClose={() => setDefinitionOpen(false)}
         onSaved={() => {
-          setDefinition(null);
+          setDefinitionOpen(false);
           void reload();
         }}
       />

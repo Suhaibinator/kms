@@ -695,6 +695,76 @@ describe("ApplicationsPage", () => {
     expect(screen.queryByText(ready.application.description)).toBeNull();
   });
 
+  it.each([0, 1, 2])(
+    "routes contract setup to selected v%i and focused environment",
+    async (schemaVersion) => {
+      const overview = clone(ready);
+      overview.application.schema_version = schemaVersion;
+      overview.application.contract = [];
+      overview.status = "setup";
+      overview.findings = [{ code: "contract_empty", severity: "warning", scope: {}, params: {} }];
+      render(
+        <ApplicationHome
+          overview={overview}
+          loading={false}
+          reload={vi.fn()}
+          env="prod"
+          ship={null}
+          tab={null}
+          rollback={null}
+        />,
+      );
+      const checklist = screen.getByText("Define the contract").closest("li") as HTMLElement;
+      fireEvent.click(within(checklist).getByRole("button", { name: "Manage releases" }));
+      expect(mocks.push).toHaveBeenCalledWith(
+        links.releases({
+          app: overview.application.name,
+          env: "prod",
+          name: overview.application.release_name,
+          schemaVersion,
+        }),
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      const definition = screen.getByRole("region", { name: "Definition" });
+      fireEvent.click(within(definition).getByRole("button", { name: "Fix" }));
+      const menu = await screen.findByRole("menu");
+      expect(within(menu).queryByRole("menuitem", { name: "Edit contract" })).toBeNull();
+      expect(
+        within(menu).queryByRole("menuitem", { name: "Derive contract from schema" }),
+      ).toBeNull();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Manage releases" }));
+      expect(mocks.push).toHaveBeenLastCalledWith(
+        links.releases({
+          app: overview.application.name,
+          env: "prod",
+          name: overview.application.release_name,
+          schemaVersion,
+        }),
+      );
+    },
+  );
+
+  it("starts contract setup by adding an environment when none exist", () => {
+    const overview = clone(setup);
+    overview.environments = [];
+    overview.application.contract = [];
+    render(
+      <ApplicationHome
+        overview={overview}
+        loading={false}
+        reload={vi.fn()}
+        env={null}
+        ship={null}
+        tab={null}
+        rollback={null}
+      />,
+    );
+    const checklist = screen.getByText("Define the contract").closest("li") as HTMLElement;
+    fireEvent.click(within(checklist).getByRole("button", { name: "Manage releases" }));
+    expect(screen.getByRole("dialog", { name: /Add environment to/ })).toBeVisible();
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
   it("shows the definition and setup findings for an application with no environments", async () => {
     mocks.query = { app: setup.application.name };
     mocks.applicationOverview.mockResolvedValue(setup);

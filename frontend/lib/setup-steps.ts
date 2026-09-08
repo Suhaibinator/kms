@@ -128,14 +128,14 @@ export function deriveSetupSteps({
     detail: !app
       ? "The aliases the application reads, each a parameter or a secret."
       : contractCount === 0
-        ? "The contract is empty, so nothing can be shipped."
+        ? "Create a first release to establish an unadopted track. Established contracts are immutable; changing one requires a new schema track."
         : alignment.length > 0
           ? `${plural(contractCount, "alias", "aliases")}; ${plural(alignment.length, "alignment finding")} against the schema.`
           : `${plural(contractCount, "alias", "aliases")} aligned with the schema.`,
     done: contractDone,
     action:
       app && !contractDone
-        ? { label: "Edit contract", action: { kind: "edit-definition" } }
+        ? { label: "Manage releases", action: { kind: "manage-contract" } }
         : undefined,
   });
 

@@ -373,13 +373,13 @@ describe("EnvironmentPipeline", () => {
     expect(within(column).queryByRole("link", { name: /other keys/ })).toBeNull();
   });
 
-  it("offers Edit contract when the contract has no aliases", () => {
+  it("offers Manage releases when the contract has no aliases", () => {
     const overview = clone(incident);
     env(overview, "dev").values = [];
     renderPipeline(overview);
     const column = screen.getByRole("region", { name: "dev environment" });
     expect(within(column).getByText("The contract has no aliases.")).toBeVisible();
-    fireEvent.click(within(column).getByRole("button", { name: "Edit contract" }));
+    fireEvent.click(within(column).getByRole("button", { name: "Manage releases" }));
     expect(callbacks.onEditContract).toHaveBeenCalledWith("dev");
   });
 

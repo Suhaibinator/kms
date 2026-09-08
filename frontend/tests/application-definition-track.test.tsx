@@ -14,37 +14,51 @@ vi.mock("@/lib/api", () => ({
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 beforeEach(() => vi.clearAllMocks());
-it("preserves the persisted contract and schema on description-only edits from another track", async () => {
-  const stored = ready.application as Application;
-  const selected = {
-    ...stored,
-    schema_version: stored.schema_version + 1,
-    contract: [{ alias: "extra", kind: "parameter" as const, content_type: "string" }],
-  };
-  mocks.getApplication.mockResolvedValue({ application: stored });
-  mocks.updateApplication.mockResolvedValue({
-    application: { ...stored, description: "updated description" },
-  });
-  render(
-    <ApplicationDefinitionModal
-      open
-      application={selected}
-      environments={[]}
-      onClose={vi.fn()}
-      onSaved={vi.fn()}
-    />,
-  );
-  fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
-    target: { value: "updated description" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Save definition" }));
-  await waitFor(() =>
-    expect(mocks.updateApplication).toHaveBeenCalledWith({
-      name: stored.name,
-      release_name: stored.release_name,
-      schema_version: stored.schema_version,
-      contract: stored.contract,
-      description: "updated description",
-    }),
-  );
-});
+it.each([
+  [2, 1],
+  [1, 0],
+  [0, 2],
+])(
+  "keeps selected track %i read-only and preserves stored default %i",
+  async (selectedVersion, storedVersion) => {
+    const stored: Application = {
+      ...(ready.application as Application),
+      schema_version: storedVersion,
+      contract: [],
+    };
+    const selected = {
+      ...stored,
+      schema_version: selectedVersion,
+      contract: [{ alias: "extra", kind: "parameter" as const, content_type: "string" }],
+    };
+    mocks.getApplication.mockResolvedValue({ application: stored });
+    mocks.updateApplication.mockResolvedValue({
+      application: { ...stored, description: "updated description" },
+    });
+    render(
+      <ApplicationDefinitionModal
+        open
+        application={selected}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Add alias" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /Alias/ })).toBeNull();
+    expect(screen.getByText("extra")).toBeVisible();
+    expect(screen.getByText(/Established contracts are immutable/)).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "updated description" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save definition" }));
+    await waitFor(() =>
+      expect(mocks.updateApplication).toHaveBeenCalledWith({
+        name: stored.name,
+        release_name: stored.release_name,
+        schema_version: stored.schema_version,
+        contract: stored.contract,
+        description: "updated description",
+      }),
+    );
+  },
+);

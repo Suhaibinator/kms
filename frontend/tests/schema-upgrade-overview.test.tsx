@@ -14,7 +14,7 @@ it("keeps the contract collapsed and exposes current/latest schema with an upgra
   const { container } = render(
     <DefinitionCard
       overview={overview}
-      onEdit={vi.fn()}
+      onManageReleases={vi.fn()}
       onDeriveSchema={vi.fn()}
       latestSchemaVersion={8}
       onUpgrade={upgrade}
