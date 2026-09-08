@@ -26,7 +26,6 @@ function listLink(base: string, ns?: NamespaceRef, keyPrefix?: string): string {
 }
 
 export interface ApplicationLinkOptions {
-
   schemaVersion?: number;
   /** Focus (scroll to) this environment's pipeline column. */
   env?: string;

@@ -278,7 +278,9 @@ export default function SubscribersPage() {
                         <td data-label="Client">
                           {s.client_name}
                           {s.release_name ? (
-                            <div className="faint text-sm">Release: {s.release_name}@{s.schema_version ?? 0}</div>
+                            <div className="faint text-sm">
+                              Release: {s.release_name}@{s.schema_version ?? 0}
+                            </div>
                           ) : null}
                           {s.instance_id ? (
                             <div className="faint text-sm mono">{s.instance_id}</div>

@@ -470,7 +470,13 @@ describe("ReleasesPage", () => {
     fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
     fireEvent.click(within(confirm).getByRole("button", { name: "Activate release" }));
     await waitFor(() =>
-      expect(mocks.activateRelease).toHaveBeenCalledWith(releaseV2.namespace, "runtime", 2, releaseV2.schema_version, 1),
+      expect(mocks.activateRelease).toHaveBeenCalledWith(
+        releaseV2.namespace,
+        "runtime",
+        2,
+        releaseV2.schema_version,
+        1,
+      ),
     );
     expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1);
     await waitFor(() =>
@@ -1150,7 +1156,13 @@ describe("ReleasesPage", () => {
   });
 
   it("opens a ?release= deep link that is not in the loaded page by fetching it", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1:1", schema_version: "1" };
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1:1",
+      schema_version: "1",
+    };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",
@@ -1164,7 +1176,12 @@ describe("ReleasesPage", () => {
 
     render(<ReleasesPage />);
     const dialog = await screen.findByRole("dialog", { name: "Release runtime@1" });
-    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1, 1);
+    expect(mocks.getRelease).toHaveBeenCalledWith(
+      { env: "prod", app: "payments" },
+      "runtime",
+      1,
+      1,
+    );
     expect(within(dialog).getByText("previous")).toBeVisible();
 
     // Closing writes the parameter back out of the URL.
@@ -1201,7 +1218,13 @@ describe("ReleasesPage", () => {
   });
 
   it("keeps a loaded selection open when an older off-page deep link fails", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1:1", schema_version: "1" };
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1:1",
+      schema_version: "1",
+    };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",

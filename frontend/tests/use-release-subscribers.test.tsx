@@ -103,7 +103,12 @@ describe("useReleaseSubscribers", () => {
 
     await waitFor(() => expect(result.current.instances).toHaveLength(1));
     expect(mocks.releaseSubscribers).toHaveBeenCalledWith(
-      ns, "runtime", 1000, undefined, { signal: expect.any(AbortSignal) }, 0,
+      ns,
+      "runtime",
+      1000,
+      undefined,
+      { signal: expect.any(AbortSignal) },
+      0,
     );
     expect(result.current.instances[0]?.state).toBe("prepared");
     expect(result.current.currentRevision).toBe(41);

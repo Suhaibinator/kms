@@ -485,7 +485,10 @@ export const api = {
     schemaVersion?: number,
   ): Promise<ApplicationOverview> {
     const env = envs && envs.length > 0 ? envs.join(",") : undefined;
-    return apiFetch(`/applications/overview${qs({ name, env, schema_version: schemaVersion })}`, request);
+    return apiFetch(
+      `/applications/overview${qs({ name, env, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   // The rows-free fleet form: every application with per-environment status.
   fleetOverview(request?: ApiRequestOptions): Promise<FleetOverview> {
@@ -951,7 +954,10 @@ export const api = {
     schemaVersion: number,
     request?: ApiRequestOptions,
   ): Promise<{ release: ConfigurationRelease }> {
-    return apiFetch(`/releases/get${qs({ env: ns.env, app: ns.app, name, version, schema_version: schemaVersion })}`, request);
+    return apiFetch(
+      `/releases/get${qs({ env: ns.env, app: ns.app, name, version, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   getActiveRelease(
     ns: NamespaceRef,
@@ -963,7 +969,10 @@ export const api = {
     activation_revision: number;
     previous_version: number;
   }> {
-    return apiFetch(`/releases/active${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion })}`, request);
+    return apiFetch(
+      `/releases/active${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   validateRelease(
     ns: NamespaceRef,
@@ -985,7 +994,13 @@ export const api = {
   ): Promise<ActivateReleaseResponse> {
     return apiFetch("/releases/activate", {
       method: "POST",
-      body: { namespace: ns, name, version, schema_version: schemaVersion, expected_current_version: expected },
+      body: {
+        namespace: ns,
+        name,
+        version,
+        schema_version: schemaVersion,
+        expected_current_version: expected,
+      },
     });
   },
   // Re-activates the previous version of `name`. A 409 means the active
@@ -1014,7 +1029,9 @@ export const api = {
   subscriberStream(
     ns: NamespaceRef,
     name: string,
-    schemaVersionOrOpts: number | { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
+    schemaVersionOrOpts:
+      | number
+      | { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
     maybeOpts?: { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
   ): Promise<void> {
     const schemaVersion = typeof schemaVersionOrOpts === "number" ? schemaVersionOrOpts : 0;

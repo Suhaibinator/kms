@@ -287,7 +287,15 @@ export default function ShipModal({
     } finally {
       if (run.current) setPreviewLoading(false);
     }
-  }, [application.name, application.schema_version, changes, environment, key, previewRequest, ready]);
+  }, [
+    application.name,
+    application.schema_version,
+    changes,
+    environment,
+    key,
+    previewRequest,
+    ready,
+  ]);
 
   // Auto dry-run: 400 ms after the last edit, once every row parses.
   useEffect(() => {

@@ -110,7 +110,11 @@ export function useApplicationOverview(
   });
   // What the page is showing, written the moment it is set rather than on
   // render, so the background check never compares against a stale commit.
-  const shownRef = useRef<{ name: string; schemaVersion?: number; data: ApplicationOverview } | null>(null);
+  const shownRef = useRef<{
+    name: string;
+    schemaVersion?: number;
+    data: ApplicationOverview;
+  } | null>(null);
   const loadingRef = useRef(false);
   // Bumped when a reload starts; a check that began before it is discarded.
   const generationRef = useRef(0);
@@ -134,9 +138,10 @@ export function useApplicationOverview(
     );
     try {
       const requestOptions = { signal: run.signal };
-      const data = schemaVersion === undefined
-        ? await api.applicationOverview(name, undefined, requestOptions)
-        : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
+      const data =
+        schemaVersion === undefined
+          ? await api.applicationOverview(name, undefined, requestOptions)
+          : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
       if (!run.current) return;
       shownRef.current = { name, schemaVersion, data };
       setSlot({ name, schemaVersion, status: "success", data });
@@ -155,9 +160,11 @@ export function useApplicationOverview(
         return;
       }
       setSlot((current) => ({
-        name, schemaVersion,
+        name,
+        schemaVersion,
         status: "error",
-        data: current?.name === name && current.schemaVersion === schemaVersion ? current.data : null,
+        data:
+          current?.name === name && current.schemaVersion === schemaVersion ? current.data : null,
       }));
       setFreshness((current) => ({ ...current, staleReason: "failed" }));
       toast.error(error, "Failed to load application");
@@ -189,7 +196,8 @@ export function useApplicationOverview(
         document.hidden ||
         loadingRef.current ||
         controller ||
-        shown?.name !== name || shown.schemaVersion !== schemaVersion
+        shown?.name !== name ||
+        shown.schemaVersion !== schemaVersion
       ) {
         return;
       }
@@ -197,9 +205,10 @@ export function useApplicationOverview(
       controller = new AbortController();
       try {
         const requestOptions = { signal: controller.signal };
-        const latest = schemaVersion === undefined
-          ? await api.applicationOverview(name, undefined, requestOptions)
-          : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
+        const latest =
+          schemaVersion === undefined
+            ? await api.applicationOverview(name, undefined, requestOptions)
+            : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
         // A reload that started meanwhile supersedes this comparison.
         if (disposed || generationRef.current !== generation || loadingRef.current) return;
         const moved = releaseMovements(shown.data, latest);

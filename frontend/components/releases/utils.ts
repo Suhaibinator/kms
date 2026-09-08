@@ -7,14 +7,20 @@ import {
   validateReleaseName,
 } from "@/lib/validation";
 
-export function releaseKey(release: { name: string; version: number; schema_version?: number }): string {
+export function releaseKey(release: {
+  name: string;
+  version: number;
+  schema_version?: number;
+}): string {
   return release.schema_version === undefined
     ? `${release.name}@${release.version}`
     : `${release.name}@${release.schema_version}:${release.version}`;
 }
 
 /** Inverse of releaseKey: `runtime@12` → {name, version}; null when malformed. */
-export function parseReleaseKey(key: string): { name: string; version: number; schema_version?: number } | null {
+export function parseReleaseKey(
+  key: string,
+): { name: string; version: number; schema_version?: number } | null {
   const at = key.lastIndexOf("@");
   if (at <= 0 || at === key.length - 1) return null;
   const name = key.slice(0, at);
@@ -24,7 +30,8 @@ export function parseReleaseKey(key: string): { name: string; version: number; s
   const schema_version = parts.length === 2 ? Number(parts[0]) : undefined;
   const version = Number(parts.at(-1));
   if (!Number.isSafeInteger(version) || version < 1) return null;
-  if (schema_version !== undefined && (!Number.isSafeInteger(schema_version) || schema_version < 0)) return null;
+  if (schema_version !== undefined && (!Number.isSafeInteger(schema_version) || schema_version < 0))
+    return null;
   return { name, version, schema_version };
 }
 

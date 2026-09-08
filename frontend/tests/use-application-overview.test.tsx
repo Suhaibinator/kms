@@ -157,9 +157,11 @@ describe("useApplicationOverview", () => {
 
   it("keeps the returned track mounted while its resolved schema is canonicalized", async () => {
     let resolveCanonical!: (value: ApplicationOverview) => void;
-    mocks.applicationOverview
-      .mockResolvedValueOnce(ready)
-      .mockReturnValueOnce(new Promise((resolve) => { resolveCanonical = resolve; }));
+    mocks.applicationOverview.mockResolvedValueOnce(ready).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCanonical = resolve;
+      }),
+    );
     const { result, rerender } = renderHook(
       ({ schemaVersion }: { schemaVersion?: number }) =>
         useApplicationOverview("gradethis", { schemaVersion }),

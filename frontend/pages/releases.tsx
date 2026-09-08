@@ -163,7 +163,12 @@ export default function ReleasesPage() {
         : { app: queryApp, env: queryEnv },
     );
     const applied = appliedFilters.current;
-    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name || schemaVersion !== applied.schema) {
+    if (
+      queryApp !== applied.app ||
+      queryEnv !== applied.env ||
+      queryName !== applied.name ||
+      schemaVersion !== applied.schema
+    ) {
       activationRequest.abort();
       setBusyAction("");
       setPendingAction(null);
@@ -334,7 +339,8 @@ export default function ReleasesPage() {
       ({ release }) =>
         release.name === deepLink.name &&
         release.version === deepLink.version &&
-        (deepLink.schema_version === undefined || release.schema_version === deepLink.schema_version),
+        (deepLink.schema_version === undefined ||
+          release.schema_version === deepLink.schema_version),
     );
     const wanted = releaseKey(deepLink);
     setDeepLink(null);
@@ -342,7 +348,10 @@ export default function ReleasesPage() {
       const resolved = releaseKey(matching[0].release);
       setSelectedReleaseKey(resolved);
       if (resolved !== queryRelease) {
-        replaceQuery({ release: resolved, schema_version: String(matching[0].release.schema_version) });
+        replaceQuery({
+          release: resolved,
+          schema_version: String(matching[0].release.schema_version),
+        });
       }
       return;
     }
@@ -350,11 +359,18 @@ export default function ReleasesPage() {
     void (async () => {
       try {
         const [{ release }, active] = await Promise.all([
-          api.getRelease(ns, deepLink.name, deepLink.version, deepLink.schema_version ?? schemaVersion ?? 0),
-          api.getActiveRelease(ns, deepLink.name, deepLink.schema_version ?? schemaVersion ?? 0).catch((error: unknown) => {
-            if (error instanceof ApiError && error.code === "not_found") return null;
-            throw error;
-          }),
+          api.getRelease(
+            ns,
+            deepLink.name,
+            deepLink.version,
+            deepLink.schema_version ?? schemaVersion ?? 0,
+          ),
+          api
+            .getActiveRelease(ns, deepLink.name, deepLink.schema_version ?? schemaVersion ?? 0)
+            .catch((error: unknown) => {
+              if (error instanceof ApiError && error.code === "not_found") return null;
+              throw error;
+            }),
         ]);
         if (run !== linkRun.current) return;
         const current = active?.release.version === release.version;
@@ -404,7 +420,12 @@ export default function ReleasesPage() {
     const target = releaseKey(release);
     setBusyAction(`validate:${target}`);
     try {
-      const result = await api.validateRelease(release.namespace, release.name, release.version, release.schema_version);
+      const result = await api.validateRelease(
+        release.namespace,
+        release.name,
+        release.version,
+        release.schema_version,
+      );
       if (result.valid) {
         toast.success(`${target} is valid`);
         if (activationFailure?.operation === "Validation" && activationFailure.target === target) {
@@ -438,7 +459,12 @@ export default function ReleasesPage() {
     setBusyAction("activate");
     try {
       const active = await api
-        .getActiveRelease(summary.release.namespace, summary.release.name, summary.release.schema_version, { signal: run.signal })
+        .getActiveRelease(
+          summary.release.namespace,
+          summary.release.name,
+          summary.release.schema_version,
+          { signal: run.signal },
+        )
         .catch((error: unknown) => {
           if (error instanceof ApiError && error.code === "not_found") return null;
           throw error;
@@ -497,11 +523,15 @@ export default function ReleasesPage() {
       ? linkedSummary
       : null);
   const currentNamedRelease = releases.find(
-    (summary) => summary.current && summary.release.name === name &&
+    (summary) =>
+      summary.current &&
+      summary.release.name === name &&
       (schemaVersion === undefined || summary.release.schema_version === schemaVersion),
   );
   const previousNamedRelease = releases.find(
-    (summary) => summary.previous && summary.release.name === name &&
+    (summary) =>
+      summary.previous &&
+      summary.release.name === name &&
       summary.release.schema_version === currentNamedRelease?.release.schema_version,
   );
   const pendingCurrentRelease = pendingAction?.kind === "activate" ? pendingAction.current : null;
@@ -509,23 +539,28 @@ export default function ReleasesPage() {
 
   const wantedComparison = parseReleaseKey(linkedCompareKey);
   const matchingComparisons = releases.filter(
-    ({ release }) => wantedComparison && release.name === wantedComparison.name &&
+    ({ release }) =>
+      wantedComparison &&
+      release.name === wantedComparison.name &&
       release.version === wantedComparison.version &&
-      (wantedComparison.schema_version === undefined || release.schema_version === wantedComparison.schema_version),
+      (wantedComparison.schema_version === undefined ||
+        release.schema_version === wantedComparison.schema_version),
   );
   const linkedComparisonMatches = Boolean(
-    wantedComparison && linkedComparison &&
-    linkedComparison.release.name === wantedComparison.name &&
-    linkedComparison.release.version === wantedComparison.version &&
-    (wantedComparison.schema_version === undefined ||
-      linkedComparison.release.schema_version === wantedComparison.schema_version),
+    wantedComparison &&
+      linkedComparison &&
+      linkedComparison.release.name === wantedComparison.name &&
+      linkedComparison.release.version === wantedComparison.version &&
+      (wantedComparison.schema_version === undefined ||
+        linkedComparison.release.schema_version === wantedComparison.schema_version),
   );
   const loadedComparison = matchingComparisons.length === 1 || linkedComparisonMatches;
-  const resolvedCompareKey = matchingComparisons.length === 1
-    ? releaseKey(matchingComparisons[0].release)
-    : linkedComparisonMatches && linkedComparison
-      ? releaseKey(linkedComparison.release)
-      : linkedCompareKey;
+  const resolvedCompareKey =
+    matchingComparisons.length === 1
+      ? releaseKey(matchingComparisons[0].release)
+      : linkedComparisonMatches && linkedComparison
+        ? releaseKey(linkedComparison.release)
+        : linkedCompareKey;
   useEffect(() => {
     setComparisonError(null);
     const wanted = parseReleaseKey(linkedCompareKey);
@@ -543,7 +578,9 @@ export default function ReleasesPage() {
     const controller = new AbortController();
     setComparisonLoading(true);
     void api
-      .getRelease(ns, wanted.name, wanted.version, wanted.schema_version ?? schemaVersion ?? 0, { signal: controller.signal })
+      .getRelease(ns, wanted.name, wanted.version, wanted.schema_version ?? schemaVersion ?? 0, {
+        signal: controller.signal,
+      })
       .then(
         ({ release }) => {
           if (!cancelled) {
@@ -845,7 +882,9 @@ export default function ReleasesPage() {
         comparisonLoading={comparisonLoading}
         comparisonError={comparisonError}
         releases={
-          linkedComparison && matchingComparisons.length === 0 ? [...releases, linkedComparison] : releases
+          linkedComparison && matchingComparisons.length === 0
+            ? [...releases, linkedComparison]
+            : releases
         }
         busyAction={busyAction}
         activationFailure={activationFailure}

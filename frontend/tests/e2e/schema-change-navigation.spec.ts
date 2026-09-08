@@ -6,7 +6,10 @@ test("switches duplicate release versions by the schema URL identity", async ({ 
   await mockConsole(page, incidentState());
   const track1 = structuredClone(ready);
   const track2 = structuredClone(ready);
-  for (const [version, overview] of [[1, track1], [2, track2]] as const) {
+  for (const [version, overview] of [
+    [1, track1],
+    [2, track2],
+  ] as const) {
     overview.application.schema_version = version;
     overview.application.description = `schema track ${version}`;
     for (const environment of overview.environments) {
@@ -20,14 +23,23 @@ test("switches duplicate release versions by the schema URL identity", async ({ 
     const version = Number(new URL(route.request().url()).searchParams.get("schema_version"));
     return route.fulfill({ json: version === 2 ? track2 : track1 });
   });
-  await page.route("**/api/v1/configuration-schemas?**", (route) => route.fulfill({ json: {
-    schemas: [1, 2].map((version) => ({
-      application: "gradethis", release_name: "runtime", version,
-      digest: `sha256:track${version}`, schema_json: "{}", metadata_json: "{}",
-      created_by: "admin", created_at_unix_ms: version,
-    })),
-    next_page_token: "",
-  } }));
+  await page.route("**/api/v1/configuration-schemas?**", (route) =>
+    route.fulfill({
+      json: {
+        schemas: [1, 2].map((version) => ({
+          application: "gradethis",
+          release_name: "runtime",
+          version,
+          digest: `sha256:track${version}`,
+          schema_json: "{}",
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: version,
+        })),
+        next_page_token: "",
+      },
+    }),
+  );
 
   await page.goto("/applications?app=gradethis&schema_version=1");
   await expect(page.getByText("schema track 1")).toBeVisible();

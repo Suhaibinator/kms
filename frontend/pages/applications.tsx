@@ -52,8 +52,12 @@ export default function ApplicationsPage() {
   const paging = useCursorPagination(`applications:${archiveFilter}`);
   const [writing, setWriting] = useState(false);
   const selectedSchema = query.schema_version === null ? undefined : Number(query.schema_version);
-  const schemaVersion = Number.isSafeInteger(selectedSchema) && selectedSchema! >= 0 ? selectedSchema : undefined;
-  const { slot, loading, reload, freshness } = useApplicationOverview(name, { paused: writing, schemaVersion });
+  const schemaVersion =
+    Number.isSafeInteger(selectedSchema) && selectedSchema! >= 0 ? selectedSchema : undefined;
+  const { slot, loading, reload, freshness } = useApplicationOverview(name, {
+    paused: writing,
+    schemaVersion,
+  });
 
   useEffect(() => {
     if (!ready || !name || schemaVersion !== undefined || !slot?.data) return;

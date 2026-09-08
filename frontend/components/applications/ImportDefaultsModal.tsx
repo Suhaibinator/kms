@@ -307,8 +307,8 @@ export function ImportDefaultsModal({
             ) : null}
             {preview.definition_changed ? (
               <div className="warn-panel text-sm">
-                The imported contract or schema digest differs from the application definition.
-                Use an artifact that matches the selected schema track before importing.
+                The imported contract or schema digest differs from the application definition. Use
+                an artifact that matches the selected schema track before importing.
               </div>
             ) : null}
             {preview.missing_secrets.length > 0 ? (

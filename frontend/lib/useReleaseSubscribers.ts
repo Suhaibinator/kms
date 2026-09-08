@@ -80,7 +80,12 @@ export function useReleaseSubscribers(
     const run = request.begin();
     try {
       const page = await api.releaseSubscribers(
-        { env, app }, name, 1000, undefined, { signal: run.signal }, schemaVersion,
+        { env, app },
+        name,
+        1000,
+        undefined,
+        { signal: run.signal },
+        schemaVersion,
       );
       if (!run.current) return;
       setInstances(groupSubscriberInstances(page.subscribers ?? []));

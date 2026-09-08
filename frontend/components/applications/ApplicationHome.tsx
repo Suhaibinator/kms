@@ -652,7 +652,9 @@ export function ApplicationHome({
                 }}
               >
                 {schemas.map((schema) => (
-                  <option key={schema.version} value={schema.version}>v{schema.version}</option>
+                  <option key={schema.version} value={schema.version}>
+                    v{schema.version}
+                  </option>
                 ))}
                 {!schemas.some((schema) => schema.version === 0) ? (
                   <option value={0}>v0 · schema-free</option>

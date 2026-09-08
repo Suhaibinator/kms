@@ -75,7 +75,12 @@ export default function RollbackDialog({
       }
       setCheck({ kind: "loading" });
       try {
-        const result = await api.validateRelease(namespace, name, candidate.previous_version, active?.schema_version ?? 0);
+        const result = await api.validateRelease(
+          namespace,
+          name,
+          candidate.previous_version,
+          active?.schema_version ?? 0,
+        );
         if (signal.aborted) return;
         if (result.valid) setCheck({ kind: "valid" });
         else if (result.errors.length > 0) setCheck({ kind: "invalid", violations: result.errors });
