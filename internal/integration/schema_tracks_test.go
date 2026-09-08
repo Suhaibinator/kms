@@ -140,6 +140,20 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sdk.Close() }()
+	unknown, err := kmsclient.NewReleaseLoader(sdk, kmsclient.ReleaseLoaderConfig{
+		Name: name, SchemaVersion: integrationSchemaVersion(secondSchema.Version + 1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownCtx, stopUnknown := context.WithTimeout(ctx, 2*time.Second)
+	err = unknown.Run(unknownCtx, func(context.Context, kmsclient.ReleaseSnapshot) (kmsclient.PreparedRelease, error) {
+		return nil, errors.New("unknown schema received a candidate")
+	})
+	stopUnknown()
+	if !errors.Is(err, kmsclient.ErrNotFound) {
+		t.Fatalf("unknown schema did not fail promptly: %v", err)
+	}
 	loader, err := kmsclient.NewReleaseLoader(sdk, kmsclient.ReleaseLoaderConfig{
 		Name: name, SchemaSHA256: secondSchema.Digest, InstanceID: "sdk-waiting", ReconcileInterval: 20 * time.Millisecond,
 	})
