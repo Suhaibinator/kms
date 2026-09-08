@@ -416,12 +416,16 @@ object — secrets never appear in a schema (see
 
 `POST /api/v1/applications/ship` performs the console's "Quick change" as one
 request: write new parameter versions, create a release whose entries pin
-them, and activate it with a compare-and-swap guard.
+them, and activate it with a compare-and-swap guard. The required
+`schema_version` selects the exact track and its persisted contract; use `0`
+for schema-free. Omitted or `null` selectors return `invalid_argument` (400),
+including dry runs, before any resource, release, or activation changes.
 
 ```json
 {
   "application": "gradethis",
   "environment": "prod",
+  "schema_version": 1,
   "changes": [
     { "alias": "rate_limits", "value": "20", "content_type": "integer" },
     { "alias": "database", "version": 3 },
@@ -624,11 +628,14 @@ registers schemas nor creates secrets.
 #### Clone an environment
 
 `POST /api/v1/applications/environments/clone` creates an additional
-environment for an application, optionally seeded from an existing one:
+environment for an application, optionally seeded from an existing one.
+The required `schema_version` selects the source track and its persisted
+contract; use `0` for schema-free. Omitted or `null` selectors return
+`invalid_argument` (400) before creating a namespace or copying resources:
 
 ```json
 { "application": "gradethis", "source_env": "dev", "target_env": "prod",
-  "copy_values": true, "auth_methods": ["mtls"], "description": "Production" }
+  "schema_version": 1, "copy_values": true, "auth_methods": ["mtls"], "description": "Production" }
 ```
 
 →
@@ -654,9 +661,10 @@ must exist (404). The target namespace is created when missing, with the
 source's `allowed_auth_methods` unless `auth_methods` is given; an existing
 target namespace is attached (`namespace_created: false`), not an error. The
 item list is the application contract resolved to keys with the alias → key
-rule in the source environment, or — when the contract is empty — every
-parameter and secret present in the source, keyed by its own name. Per item,
-`action` is decided in this order:
+rule in the selected source track. Only a track whose contract has never
+been established falls back to every parameter and secret present in the
+source, keyed by its own name. An established empty contract copies no
+resources. Per item, `action` is decided in this order:
 
 - `exists` — the key already exists in the target (whatever its kind) and is
   **left untouched**; clone never overwrites;

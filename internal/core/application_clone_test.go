@@ -26,7 +26,7 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	pr := adminPrincipal()
 	seedConsoleApp(t, svc, pr)
 
-	result, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{Application: "gradethis", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true, Description: "Production"})
+	result, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true, Description: "Production"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	}
 
 	// A second clone attaches the existing namespace and never overwrites.
-	again, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{Application: "gradethis", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true})
+	again, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: domain.NamespaceRef{Env: "qa", App: "gradethis"}, Key: "database"}, `{}`, "json", "{}", "admin"); err != nil {
 		t.Fatal(err)
 	}
-	sparse, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{Application: "gradethis", SourceEnv: "qa", TargetEnv: "staging", CopyValues: false})
+	sparse, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "qa", TargetEnv: "staging", CopyValues: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,17 +84,17 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	}
 
 	for _, in := range []domain.CloneEnvironmentInput{
-		{Application: "gradethis", SourceEnv: "dev", TargetEnv: "dev"},
-		{Application: "gradethis", SourceEnv: "Bad Env", TargetEnv: "x"},
+		{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "dev", TargetEnv: "dev"},
+		{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "Bad Env", TargetEnv: "x"},
 	} {
 		if _, err := svc.CloneApplicationEnvironment(ctx, pr, in); !errors.Is(err, domain.ErrInvalidArgument) {
 			t.Fatalf("clone %+v error = %v", in, err)
 		}
 	}
-	if _, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{Application: "gradethis", SourceEnv: "nowhere", TargetEnv: "x"}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "nowhere", TargetEnv: "x"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing source error = %v", err)
 	}
-	if _, err := svc.CloneApplicationEnvironment(ctx, clientPrincipal("c"), domain.CloneEnvironmentInput{Application: "gradethis", SourceEnv: "dev", TargetEnv: "x"}); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := svc.CloneApplicationEnvironment(ctx, clientPrincipal("c"), domain.CloneEnvironmentInput{SchemaVersion: new(uint64(1)), Application: "gradethis", SourceEnv: "dev", TargetEnv: "x"}); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("non-admin error = %v", err)
 	}
 	events, _, _ := st.ListAudit(ctx, domain.AuditFilter{EventType: "application.environment_clone"}, storage.ListPage{Limit: 10})
@@ -154,7 +154,7 @@ func TestCloneApplicationEnvironmentWithoutContractCopiesEverything(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	result, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{Application: "legacy", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true, AuthMethods: []domain.AuthMethod{domain.AuthMethodToken}})
+	result, err := svc.CloneApplicationEnvironment(ctx, pr, domain.CloneEnvironmentInput{SchemaVersion: new(uint64(0)), Application: "legacy", SourceEnv: "dev", TargetEnv: "prod", CopyValues: true, AuthMethods: []domain.AuthMethod{domain.AuthMethodToken}})
 	if err != nil {
 		t.Fatal(err)
 	}

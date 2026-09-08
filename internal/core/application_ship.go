@@ -47,6 +47,9 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	if err := s.requireAdmin(ctx, pr, "application.ship", domain.ResourceApplication, in.Application); err != nil {
 		return domain.ShipResult{}, err
 	}
+	if in.SchemaVersion == nil {
+		return domain.ShipResult{}, domain.Errorf(domain.ErrInvalidArgument, "ship requires an explicit schema_version (0 for schema-free)")
+	}
 	if err := keyutil.ValidateApp(in.Application); err != nil {
 		return domain.ShipResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}

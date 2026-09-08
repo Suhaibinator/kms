@@ -19,7 +19,7 @@ func migrationFixture(t *testing.T) (*Service, *storage.SQLStore, domain.Applica
 	pr := adminPrincipal()
 	app := seedConsoleApp(t, svc, pr, "dev", "prod")
 	for _, env := range []string{"dev", "prod"} {
-		r, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: app.Name, Environment: env})
+		r, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{SchemaVersion: &app.SchemaVersion, Application: app.Name, Environment: env})
 		if err != nil || r.Status != domain.ShipStatusActivated {
 			t.Fatalf("seed ship: %+v %v", r, err)
 		}

@@ -145,9 +145,10 @@ type kmsverifyFixture struct {
 	admin core.Principal
 	ns    domain.NamespaceRef
 	// otherNS is a second real namespace the verify policy does not cover.
-	otherNS     domain.NamespaceRef
-	sdkContract []configstore.ContractEntry
-	spec        kmsverify.Spec[fixtureconfig.Config]
+	otherNS       domain.NamespaceRef
+	schemaVersion uint64
+	sdkContract   []configstore.ContractEntry
+	spec          kmsverify.Spec[fixtureconfig.Config]
 
 	// verifyToken belongs to the unbound verify-only identity.
 	verifyName  string
@@ -226,7 +227,7 @@ func setupKMSVerifyFixture(t *testing.T) *kmsverifyFixture {
 		}
 	}
 
-	shipped, err := env.svc.ShipApplicationChange(ctx, admin, domain.ShipInput{Application: kmsverifyApp, Environment: kmsverifyEnv})
+	shipped, err := env.svc.ShipApplicationChange(ctx, admin, domain.ShipInput{SchemaVersion: &schema.Version, Application: kmsverifyApp, Environment: kmsverifyEnv})
 	if err != nil {
 		t.Fatalf("ship first release: %v", err)
 	}
@@ -235,7 +236,7 @@ func setupKMSVerifyFixture(t *testing.T) *kmsverifyFixture {
 	}
 
 	f := &kmsverifyFixture{
-		env: env, ctx: ctx, admin: admin, ns: ns, otherNS: otherNS, sdkContract: sdkContract,
+		env: env, ctx: ctx, admin: admin, ns: ns, otherNS: otherNS, schemaVersion: schema.Version, sdkContract: sdkContract,
 		spec: kmsverify.Spec[fixtureconfig.Config]{
 			Defaults: func(profile string) (*fixtureconfig.Config, error) {
 				if profile != kmsverifyProfile {
@@ -314,7 +315,7 @@ func (f *kmsverifyFixture) verifyEnv(t *testing.T) kmsverify.Env {
 func (f *kmsverifyFixture) shipRuntime(t *testing.T, value string, expectedActive uint64) uint64 {
 	t.Helper()
 	shipped, err := f.env.svc.ShipApplicationChange(f.ctx, f.admin, domain.ShipInput{
-		Application: kmsverifyApp, Environment: kmsverifyEnv, ExpectedActiveVersion: &expectedActive,
+		SchemaVersion: &f.schemaVersion, Application: kmsverifyApp, Environment: kmsverifyEnv, ExpectedActiveVersion: &expectedActive,
 		Changes: []domain.ShipChange{{Alias: "runtime", Value: &value}},
 	})
 	if err != nil {

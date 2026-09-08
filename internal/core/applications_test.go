@@ -411,7 +411,7 @@ func TestArchivedApplicationRejectsMutationsUntilUnarchived(t *testing.T) {
 	if _, err := service.CreateNamespace(ctx, admin, domain.NamespaceRef{Env: "prod", App: app.Name}, "", nil); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("archived environment create error = %v", err)
 	}
-	if _, err := service.ShipApplicationChange(ctx, admin, domain.ShipInput{Application: app.Name, Environment: "prod", DryRun: true}); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := service.ShipApplicationChange(ctx, admin, domain.ShipInput{SchemaVersion: &app.SchemaVersion, Application: app.Name, Environment: "prod", DryRun: true}); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("archived ship error = %v", err)
 	}
 	if _, err := service.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{

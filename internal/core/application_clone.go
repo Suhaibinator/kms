@@ -21,6 +21,9 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 	if err := s.requireAdmin(ctx, pr, "application.environment_clone", domain.ResourceApplication, in.Application); err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
+	if in.SchemaVersion == nil {
+		return domain.CloneEnvironmentResult{}, domain.Errorf(domain.ErrInvalidArgument, "clone requires an explicit schema_version (0 for schema-free)")
+	}
 	if err := keyutil.ValidateApp(in.Application); err != nil {
 		return domain.CloneEnvironmentResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}

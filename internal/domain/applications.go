@@ -231,7 +231,7 @@ type ShipChange struct {
 }
 
 type ShipInput struct {
-	SchemaVersion         *uint64
+	SchemaVersion         *uint64 // Required; 0 selects the schema-free track.
 	Application           string
 	Environment           string
 	Changes               []ShipChange
@@ -304,7 +304,7 @@ type ShipResult struct {
 // --- clone ------------------------------------------------------------------
 
 type CloneEnvironmentInput struct {
-	SchemaVersion *uint64
+	SchemaVersion *uint64 // Required; 0 selects the schema-free track.
 	Application   string
 	SourceEnv     string
 	TargetEnv     string

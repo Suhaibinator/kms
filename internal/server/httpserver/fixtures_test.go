@@ -139,7 +139,7 @@ func TestConsoleFixtures(t *testing.T) {
 		e.ackInstance("prod", "prod-2", domain.ReleaseStateApplied, "")
 		capture("overview-ready", e.admin(http.MethodGet, "/api/v1/applications/overview?name=gradethis", nil))
 		fixtures["ship-preview"] = fixtureFromResponse(t, e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-			"application": "gradethis", "environment": "prod", "dry_run": true, "expected_active_version": 1,
+			"schema_version": 1, "application": "gradethis", "environment": "prod", "dry_run": true, "expected_active_version": 1,
 			"changes": []map[string]any{{"alias": "rate_limits", "value": "12"}},
 		}))
 	}
@@ -177,7 +177,7 @@ func TestConsoleFixtures(t *testing.T) {
 		e.createNS("dev", "reports", "token")
 		w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{"env": "dev", "app": "reports", "key": "bucket", "value": "reports-nightly", "content_type": "string", "metadata_json": "{}"})
 		mustStatus(t, w, http.StatusOK)
-		w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{"application": "reports", "environment": "dev", "changes": []map[string]any{{"alias": "bucket", "value": "reports-nightly-v2"}}})
+		w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{"schema_version": 0, "application": "reports", "environment": "dev", "changes": []map[string]any{{"alias": "bucket", "value": "reports-nightly-v2"}}})
 		mustStatus(t, w, http.StatusOK)
 		capture("overview-incident", e.admin(http.MethodGet, "/api/v1/applications/overview?name=gradethis", nil))
 		fixtures["fleet"] = fixtureFromResponse(t, e.admin(http.MethodGet, "/api/v1/applications/overview", nil))
