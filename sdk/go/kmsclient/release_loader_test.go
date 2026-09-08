@@ -1009,7 +1009,9 @@ func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure
 	gracefulStop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		loader.watchLoop(ctx, ns, make(chan releaseCandidate, 1), gracefulStop)
+		if err := loader.watchLoop(ctx, ns, make(chan releaseCandidate, 1), gracefulStop); err != nil {
+			t.Errorf("graceful watch shutdown: %v", err)
+		}
 		close(done)
 	}()
 
