@@ -621,7 +621,7 @@ export function ApplicationHome({
                     schema_version: event.target.value,
                     ship: "",
                     rollback: "",
-                    migrate: "",
+                    migrate: migrate ?? "",
                   });
                 }}
               >

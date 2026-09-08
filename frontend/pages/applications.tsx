@@ -2,6 +2,7 @@ import { parseSchemaVersion } from "@/lib/schema";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SchemaUpgradeSource } from "@/components/applications/SchemaUpgradeSource";
 import { ApplicationHome } from "@/components/applications/ApplicationHome";
 import { ApplicationHomeSkeleton } from "@/components/applications/ApplicationHomeSkeleton";
 import {
@@ -53,15 +54,31 @@ export default function ApplicationsPage() {
   const paging = useCursorPagination(`applications:${archiveFilter}`);
   const [writing, setWriting] = useState(false);
   const schemaVersion = parseSchemaVersion(query.schema_version);
+  const migrationDestination = parseSchemaVersion(query.migrate);
+  const choosingUpgradeSource =
+    migrationDestination !== undefined &&
+    migrationDestination > 0 &&
+    (schemaVersion === undefined || schemaVersion >= migrationDestination);
   const invalidSchema =
     query.schema_version !== null && query.schema_version !== "" && schemaVersion === undefined;
-  const { slot, loading, reload, freshness } = useApplicationOverview(invalidSchema ? "" : name, {
-    paused: writing,
-    schemaVersion,
-  });
+  const { slot, loading, reload, freshness } = useApplicationOverview(
+    invalidSchema || choosingUpgradeSource ? "" : name,
+    {
+      paused: writing,
+      schemaVersion,
+    },
+  );
 
   useEffect(() => {
-    if (!ready || !name || invalidSchema || schemaVersion !== undefined || !slot?.data) return;
+    if (
+      !ready ||
+      !name ||
+      invalidSchema ||
+      choosingUpgradeSource ||
+      schemaVersion !== undefined ||
+      !slot?.data
+    )
+      return;
     void router.replace(
       {
         pathname: "/applications",
@@ -70,7 +87,7 @@ export default function ApplicationsPage() {
       undefined,
       { shallow: true, scroll: false },
     );
-  }, [ready, name, invalidSchema, schemaVersion, slot?.data, router]);
+  }, [ready, name, invalidSchema, choosingUpgradeSource, schemaVersion, slot?.data, router]);
 
   const loadApplications = useCallback(
     async (pageToken: string) => {
@@ -218,6 +235,33 @@ export default function ApplicationsPage() {
       <EmptyState title="Invalid schema version">
         Use a nonnegative safe integer; 0 selects schema-free.
       </EmptyState>
+    );
+  }
+
+  if (
+    migrationDestination &&
+    (choosingUpgradeSource ||
+      (slot?.data &&
+        !slot.data.environments.some(
+          (environment) =>
+            environment.release.active && (!query.env || environment.namespace.env === query.env),
+        )))
+  ) {
+    return (
+      <SchemaUpgradeSource
+        application={name}
+        destination={migrationDestination}
+        onSelect={(sourceSchema, environment) =>
+          void replaceQuery({
+            schema_version: String(sourceSchema),
+            env: environment,
+            migrate: String(migrationDestination),
+            ship: "",
+            rollback: "",
+          })
+        }
+        onCancel={() => void replaceQuery({ migrate: "" })}
+      />
     );
   }
 
