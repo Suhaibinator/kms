@@ -26,7 +26,9 @@ with a no-echo prompt, and a newly entered key is confirmed twice. There is no
 binding-key file flag, file environment variable, directory convention, or
 server-side recovery copy. `parameter-store exec` removes the exact
 `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` variables, as well as the existing
-before starting the child.
+before starting the child. Separately, `exec` and `env` refuse known unsafe
+runtime-control names by default; `--allow-unsafe-env-names` bypasses that name
+policy but never disables binding-credential scrubbing.
 
 A binding key is not the mTLS client private key. `KMS_CLIENT_KEY_FILE` keeps
 its existing meaning as the filesystem path to that authentication key.

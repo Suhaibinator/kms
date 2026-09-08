@@ -408,6 +408,18 @@ same set instead of running anything.
 parameter-store exec prod/gradethis --release runtime -- ./server
 ```
 
+Both commands reject known unsafe environment names such as `NODE_OPTIONS`
+and the `LD_` family. Use an application-specific `--env-prefix APP_` that
+produces allowed names, or explicitly opt into trusted runtime configuration
+with `--allow-unsafe-env-names`. This denylist does not cover every possible
+application hook or scrub inherited runtime settings.
+
+Default dotenv output safely preserves literal values through POSIX shells and
+systemd `EnvironmentFile=`, including multiline quoted values. It no longer
+uses JSON control-character escapes, and arbitrary dotenv parsers may differ.
+Prefer `--format export` for shell-specific output. See
+[the output contract](docs/operations.md#env-output) for character restrictions.
+
 Secret-inclusive `env` and `exec` invocations fail closed if any selected
 secret is bound. Use `--no-secrets` for an
 intentional parameter-only run. Namespace mode can explicitly opt into a
