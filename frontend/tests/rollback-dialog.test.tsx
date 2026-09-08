@@ -112,9 +112,10 @@ describe("RollbackDialog", () => {
         app: incident.application.name,
         env: "prod",
         name,
-        release: `${name}@${active.previous_version}`,
+        schemaVersion: active.schema_version,
+        release: `${name}@${active.schema_version}:${active.previous_version}`,
         section: "compare",
-        compare: `${name}@${active.version}`,
+        compare: `${name}@${active.schema_version}:${active.version}`,
       }),
     );
     fireEvent.click(within(dialog()).getByRole("link", { name: /^See what changes/ }));
@@ -161,7 +162,10 @@ describe("RollbackDialog", () => {
     expect(check).toHaveTextContent("can no longer be activated");
     expect(
       within(check).getByRole("link", { name: "Activate a different version…" }),
-    ).toHaveAttribute("href", `/releases?app=${incident.application.name}&env=prod&name=${name}`);
+    ).toHaveAttribute(
+      "href",
+      `/releases?app=${incident.application.name}&env=prod&name=${name}&schema_version=${active.schema_version}`,
+    );
     // The violation row links to the secret it names, keyed from the active release's entries.
     const entry = active.entries.find((candidate) => candidate.alias === "db_password");
     expect(within(check).getByRole("link", { name: "Open db_password" })).toHaveAttribute(

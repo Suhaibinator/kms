@@ -86,11 +86,13 @@ export function ReleaseSection({
             <ReleaseIdent
               name={active.name}
               version={active.version}
+              schemaVersion={active.schema_version}
               href={links.releases({
                 app: ns.app,
                 env: ns.env,
                 name: active.name,
-                release: `${active.name}@${active.version}`,
+                release: releaseKey(active),
+                schemaVersion: active.schema_version,
               })}
             />
             <Ident kind="revision" value={String(active.activation_revision)} />
@@ -105,7 +107,8 @@ export function ReleaseSection({
                   app: ns.app,
                   env: ns.env,
                   name: active.name,
-                  release: releaseKey({ name: active.name, version: latest }),
+                  release: releaseKey({ ...active, version: latest }),
+                  schemaVersion: active.schema_version,
                 })}
               >
                 latest v{latest} not active
@@ -117,12 +120,14 @@ export function ReleaseSection({
                 <ReleaseIdent
                   name={active.name}
                   version={active.previous_version}
+                  schemaVersion={active.schema_version}
                   tooltip={false}
                   href={links.releases({
                     app: ns.app,
                     env: ns.env,
                     name: active.name,
-                    release: `${active.name}@${active.previous_version}`,
+                    release: releaseKey({ ...active, version: active.previous_version }),
+                    schemaVersion: active.schema_version,
                   })}
                 />
               </span>

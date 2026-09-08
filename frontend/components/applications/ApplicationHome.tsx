@@ -1,3 +1,4 @@
+import { useSchemaRegistry } from "@/lib/useSchemaRegistry";
 import {
   Archive,
   ArchiveRestore,
@@ -44,7 +45,6 @@ import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
-  ConfigurationSchema,
   Finding,
   HealthResponse,
   ReleaseEntryKind,
@@ -234,36 +234,9 @@ export function ApplicationHome({
   const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
-  const [latestSchema, setLatestSchema] = useState<ConfigurationSchema | null>(null);
-  const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
-  const {
-    name: schemaApplication,
-    release_name: schemaRelease,
-    schema_version: pinnedSchema,
-  } = overview.application;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Clear registry data when its application or release identity changes.
-  useEffect(() => {
-    setLatestSchema(null);
-    setSchemas([]);
-  }, [schemaApplication, schemaRelease]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: A changed schema pin invalidates the registry lookup after an upgrade.
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .listSchemas(schemaApplication, schemaRelease)
-      .then((page) => {
-        if (!cancelled) {
-          setSchemas(page.schemas ?? []);
-          setLatestSchema(page.schemas[0] ?? null);
-        }
-      })
-      .catch(() => {
-        /* Upgrade dialog reports schema-loading failures. */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [schemaApplication, schemaRelease, pinnedSchema]);
+  const registry = useSchemaRegistry(overview.application.name, overview.application.release_name);
+  const schemas = registry.schemas ?? [];
+  const latestSchema = schemas[0] ?? null;
 
   const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
   const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
@@ -492,7 +465,8 @@ export function ApplicationHome({
             app: application.name,
             env: scopeEnv,
             name: application.release_name,
-            release: active ? `${active.name}@${active.version}` : undefined,
+            release: active ? releaseKey(active) : undefined,
+            schemaVersion,
           }),
         );
         break;
@@ -973,6 +947,7 @@ export function ApplicationHome({
         existingSchemaJson={overview.schema_json}
         onClose={() => setDeriveOpen(false)}
         onPinned={() => {
+          registry.reload();
           setDeriveOpen(false);
           void reload();
         }}

@@ -1,3 +1,4 @@
+import { parseSchemaVersion } from "@/lib/schema";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -51,16 +52,16 @@ export default function ApplicationsPage() {
   const [archiveFilter, setArchiveFilter] = useState<ApplicationArchiveFilter>("exclude");
   const paging = useCursorPagination(`applications:${archiveFilter}`);
   const [writing, setWriting] = useState(false);
-  const selectedSchema = query.schema_version === null ? undefined : Number(query.schema_version);
-  const schemaVersion =
-    Number.isSafeInteger(selectedSchema) && selectedSchema! >= 0 ? selectedSchema : undefined;
-  const { slot, loading, reload, freshness } = useApplicationOverview(name, {
+  const schemaVersion = parseSchemaVersion(query.schema_version);
+  const invalidSchema =
+    query.schema_version !== null && query.schema_version !== "" && schemaVersion === undefined;
+  const { slot, loading, reload, freshness } = useApplicationOverview(invalidSchema ? "" : name, {
     paused: writing,
     schemaVersion,
   });
 
   useEffect(() => {
-    if (!ready || !name || schemaVersion !== undefined || !slot?.data) return;
+    if (!ready || !name || invalidSchema || schemaVersion !== undefined || !slot?.data) return;
     void router.replace(
       {
         pathname: "/applications",
@@ -69,7 +70,7 @@ export default function ApplicationsPage() {
       undefined,
       { shallow: true, scroll: false },
     );
-  }, [ready, name, schemaVersion, slot?.data, router]);
+  }, [ready, name, invalidSchema, schemaVersion, slot?.data, router]);
 
   const loadApplications = useCallback(
     async (pageToken: string) => {
@@ -209,6 +210,14 @@ export default function ApplicationsPage() {
           try again.
         </EmptyState>
       </>
+    );
+  }
+
+  if (invalidSchema) {
+    return (
+      <EmptyState title="Invalid schema version">
+        Use a nonnegative safe integer; 0 selects schema-free.
+      </EmptyState>
     );
   }
 

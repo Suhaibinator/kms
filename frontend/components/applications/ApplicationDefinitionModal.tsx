@@ -95,7 +95,7 @@ export function ApplicationDefinitionModal({
         description,
         release_name: application.release_name,
         schema_version: stored.schema_version,
-        contract,
+        contract: shapeOf(contract) === shapeOf(application.contract) ? stored.contract : contract,
       });
       toast.success("Definition updated");
       onSaved(updated);
@@ -156,7 +156,7 @@ export function ApplicationDefinitionModal({
               {application.name}/{application.release_name}@{application.schema_version}
             </span>
           ) : (
-            "not pinned"
+            "v0 · schema-free"
           )}
           . Apply defaults with definition updates to change this pin.
         </div>

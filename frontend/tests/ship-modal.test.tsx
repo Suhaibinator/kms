@@ -512,7 +512,7 @@ describe("ShipModal", () => {
     expect(within(panel).queryByRole("button", { name: "Retry activation" })).toBeNull();
     expect(within(panel).getByRole("link", { name: `Open v${next} in Releases` })).toHaveAttribute(
       "href",
-      `/releases?app=${app.name}&env=dev&name=${releaseName}&release=${encodeURIComponent(`${releaseName}@${next}`)}`,
+      `/releases?app=${app.name}&env=dev&name=${releaseName}&schema_version=${app.schema_version}&release=${encodeURIComponent(`${releaseName}@${app.schema_version}:${next}`)}`,
     );
     expect(props.onShipped).toHaveBeenCalledWith(notActivated, "dev");
 

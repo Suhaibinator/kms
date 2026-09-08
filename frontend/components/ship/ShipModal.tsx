@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ShipModalProps } from "@/components/applications/contracts";
+import { releaseKey } from "@/components/releases/utils";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
@@ -556,8 +557,13 @@ export default function ShipModal({
   const title =
     phase === "rollout" && activation ? (
       <span className="ship-title">
-        Shipped <ReleaseIdent name={application.release_name} version={activation.version} /> to{" "}
-        <Ident kind="ns" value={`${environment}/${application.name}`} />
+        Shipped{" "}
+        <ReleaseIdent
+          name={application.release_name}
+          version={activation.version}
+          schemaVersion={application.schema_version}
+        />{" "}
+        to <Ident kind="ns" value={`${environment}/${application.name}`} />
       </span>
     ) : (
       <span className="ship-title">
@@ -572,7 +578,11 @@ export default function ShipModal({
         app: application.name,
         env: environment,
         name: result.release.name,
-        release: `${result.release.name}@${result.release.version}`,
+        release: releaseKey({
+          ...result.release,
+          schema_version: preview?.schema_version ?? application.schema_version,
+        }),
+        schemaVersion: preview?.schema_version ?? application.schema_version,
       })
     : null;
 
@@ -765,7 +775,11 @@ export default function ShipModal({
               <strong>
                 {result.release ? (
                   <>
-                    <ReleaseIdent name={result.release.name} version={result.release.version} />{" "}
+                    <ReleaseIdent
+                      name={result.release.name}
+                      version={result.release.version}
+                      schemaVersion={preview?.schema_version ?? application.schema_version}
+                    />{" "}
                     created, not activated.
                   </>
                 ) : (
@@ -840,6 +854,7 @@ export default function ShipModal({
                   <ReleaseIdent
                     name={rolledBack.release.name}
                     version={rolledBack.release.version}
+                    schemaVersion={rolledBack.release.schema_version}
                   />{" "}
                   at <Ident kind="revision" value={String(rolledBack.activation_revision)} />.
                 </div>
@@ -850,14 +865,23 @@ export default function ShipModal({
                       <ReleaseIdent
                         name={application.release_name}
                         version={activation.previousVersion}
+                        schemaVersion={application.schema_version}
                       />{" "}
                       →{" "}
-                      <ReleaseIdent name={application.release_name} version={activation.version} />
+                      <ReleaseIdent
+                        name={application.release_name}
+                        version={activation.version}
+                        schemaVersion={application.schema_version}
+                      />
                     </>
                   ) : (
                     <>
                       First activation of{" "}
-                      <ReleaseIdent name={application.release_name} version={activation.version} />
+                      <ReleaseIdent
+                        name={application.release_name}
+                        version={activation.version}
+                        schemaVersion={application.schema_version}
+                      />
                     </>
                   )}
                   {result?.parameters.length ? (

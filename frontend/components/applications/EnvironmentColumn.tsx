@@ -112,7 +112,12 @@ export function EnvironmentColumn({
             {
               key: "releases",
               label: "Releases",
-              href: links.releases({ app: ns.app, env: ns.env, name: application.release_name }),
+              href: links.releases({
+                app: ns.app,
+                env: ns.env,
+                name: application.release_name,
+                schemaVersion: application.schema_version,
+              }),
             },
             { key: "connect", label: "Connect SDK", onSelect: () => callbacks.onConnect(ns.env) },
             ...(callbacks.onImportDefaults

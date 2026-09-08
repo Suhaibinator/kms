@@ -173,15 +173,25 @@ export default function RollbackDialog({
   }
 
   const previous = target?.previous_version ?? 0;
-  const releasesHref = links.releases({ app: namespace.app, env: namespace.env, name });
+  const releasesHref = links.releases({
+    app: namespace.app,
+    env: namespace.env,
+    name,
+    schemaVersion: active?.schema_version,
+  });
   // Compare the actual activation pair; inactive intermediate versions are unrelated.
   const compareHref = links.releases({
     app: namespace.app,
     env: namespace.env,
     name,
-    release: releaseKey({ name, version: previous }),
+    schemaVersion: active?.schema_version,
+    release: releaseKey({ name, version: previous, schema_version: active?.schema_version }),
     section: "compare",
-    compare: releaseKey({ name, version: target?.version ?? 0 }),
+    compare: releaseKey({
+      name,
+      version: target?.version ?? 0,
+      schema_version: active?.schema_version,
+    }),
   });
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
   // Rolling back a rollback is a re-activation; the title says which.
@@ -233,10 +243,15 @@ export default function RollbackDialog({
         <div className="danger-panel">
           {target && previous > 0 ? (
             <>
-              Re-activate <ReleaseIdent name={name} version={previous} /> in{" "}
-              <Ident kind="env" value={namespace.env} /> in place of{" "}
-              <ReleaseIdent name={name} version={target.version} />. Subscribers receive a new
-              activation revision; nothing is deleted.{" "}
+              Re-activate{" "}
+              <ReleaseIdent name={name} version={previous} schemaVersion={active?.schema_version} />{" "}
+              in <Ident kind="env" value={namespace.env} /> in place of{" "}
+              <ReleaseIdent
+                name={name}
+                version={target.version}
+                schemaVersion={active?.schema_version}
+              />
+              . Subscribers receive a new activation revision; nothing is deleted.{" "}
               <Link
                 href={compareHref}
                 className="text-link"
@@ -274,13 +289,19 @@ export default function RollbackDialog({
           ) : check.kind === "valid" ? (
             <span className="row-wrap text-sm">
               <Badge kind="success">valid</Badge>
-              <ReleaseIdent name={name} version={previous} /> is valid and can be activated.
+              <ReleaseIdent name={name} version={previous} schemaVersion={active?.schema_version} />{" "}
+              is valid and can be activated.
             </span>
           ) : check.kind === "invalid" ? (
             <div>
               <div className="row-wrap text-sm">
                 <Badge kind="danger">invalid</Badge>
-                <ReleaseIdent name={name} version={previous} /> can no longer be activated.
+                <ReleaseIdent
+                  name={name}
+                  version={previous}
+                  schemaVersion={active?.schema_version}
+                />{" "}
+                can no longer be activated.
               </div>
               <div className="mt-3">
                 <ViolationTable violations={check.violations} resolveHref={resolveHref} />
@@ -316,7 +337,8 @@ export default function RollbackDialog({
           </div>
         ) : outcome.kind === "already" ? (
           <div className="info-panel mt-3" role="status">
-            <ReleaseIdent name={name} version={previous} /> is already active; nothing changed.
+            <ReleaseIdent name={name} version={previous} schemaVersion={active?.schema_version} />{" "}
+            is already active; nothing changed.
           </div>
         ) : outcome.kind === "error" ? (
           <div className="danger-panel mt-3" role="alert">

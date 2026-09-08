@@ -27,11 +27,11 @@ describe("crumbs", () => {
         href: "/secrets/detail?env=dev&app=gradethis&key=db_password",
       },
     ]);
-    expect(crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 12).slice(3)).toEqual([
-      { label: "Releases", href: "/releases?app=gradethis&env=prod&name=runtime" },
+    expect(crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 12, 2).slice(3)).toEqual([
+      { label: "Releases", href: "/releases?app=gradethis&env=prod&name=runtime&schema_version=2" },
       {
-        ident: { kind: "release", value: "runtime@12" },
-        href: "/releases?app=gradethis&env=prod&name=runtime&release=runtime%4012",
+        ident: { kind: "release", value: "runtime@2:12" },
+        href: "/releases?app=gradethis&env=prod&name=runtime&schema_version=2&release=runtime%402%3A12",
       },
     ]);
   });

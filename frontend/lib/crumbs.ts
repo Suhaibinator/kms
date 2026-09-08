@@ -47,14 +47,14 @@ function secret(ref: ResourceRef): Crumb[] {
   ];
 }
 
-function release(ns: NamespaceRef, name: string, version: number): Crumb[] {
-  const key = `${name}@${version}`;
+function release(ns: NamespaceRef, name: string, version: number, schemaVersion: number): Crumb[] {
+  const key = `${name}@${schemaVersion}:${version}`;
   return [
     ...environment(ns),
-    { label: "Releases", href: links.releases({ app: ns.app, env: ns.env, name }) },
+    { label: "Releases", href: links.releases({ app: ns.app, env: ns.env, name, schemaVersion }) },
     {
       ident: { kind: "release", value: key },
-      href: links.releases({ app: ns.app, env: ns.env, name, release: key }),
+      href: links.releases({ app: ns.app, env: ns.env, name, schemaVersion, release: key }),
     },
   ];
 }

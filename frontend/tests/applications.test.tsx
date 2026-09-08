@@ -882,7 +882,7 @@ describe("ApplicationsPage", () => {
   it("keeps the latest schema across unrelated overview reloads and refreshes only schema inputs", async () => {
     mocks.listSchemas.mockResolvedValue({
       schemas: [{ version: 8 }],
-      next_page_token: "older-schemas",
+      next_page_token: "",
     });
     const props = {
       overview: ready,
@@ -903,11 +903,11 @@ describe("ApplicationsPage", () => {
     const changed = clone(ready);
     changed.application.schema_version += 1;
     view.rerender(<ApplicationHome {...props} overview={changed} />);
-    expect(mocks.listSchemas).toHaveBeenCalledTimes(2);
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Latest: v8/)).toBeVisible();
     changed.application.name = "another-app";
     view.rerender(<ApplicationHome {...props} overview={clone(changed)} />);
-    expect(mocks.listSchemas).toHaveBeenCalledTimes(3);
+    expect(mocks.listSchemas).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/Latest: v8/)).not.toBeInTheDocument();
   });
 });

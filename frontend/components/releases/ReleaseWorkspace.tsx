@@ -64,7 +64,13 @@ export function ReleaseWorkspace({
     () =>
       release
         ? releases
-            .filter((candidate) => candidate.release.name === release.name)
+            .filter(
+              (candidate) =>
+                candidate.release.name === release.name &&
+                candidate.release.schema_version === release.schema_version &&
+                candidate.release.namespace.env === release.namespace.env &&
+                candidate.release.namespace.app === release.namespace.app,
+            )
             .sort((a, b) => b.release.version - a.release.version)
         : [],
     [release, releases],
@@ -125,7 +131,11 @@ export function ReleaseWorkspace({
       mobileFullScreen
       open={Boolean(release)}
       workspace
-      title={release ? `Release ${release.name}@${release.version}` : "Release details"}
+      title={
+        release
+          ? `Release ${release.name}@${release.version} · schema v${release.schema_version}`
+          : "Release details"
+      }
       onClose={onClose}
     >
       {release && summary ? (
@@ -198,7 +208,7 @@ export function ReleaseWorkspace({
                 <div className="stat-value-sm mono">
                   {release.schema_version
                     ? `${release.namespace.app}/${release.name}@${release.schema_version}`
-                    : "none"}
+                    : "v0 · schema-free"}
                 </div>
               </div>
             </div>

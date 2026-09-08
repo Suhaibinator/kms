@@ -252,7 +252,7 @@ function RegisterSchemaDialog({
   );
 }
 
-export function SchemaRegistry() {
+export function SchemaRegistry({ onRegistered }: { onRegistered?: () => void }) {
   const toast = useToast();
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const [loading, setLoading] = useState(true);
@@ -446,6 +446,7 @@ export function SchemaRegistry() {
         open={registerOpen}
         onClose={() => setRegisterOpen(false)}
         onCreated={(schema) => {
+          onRegistered?.();
           setSelectedSchema(schema);
           // Retarget filters rather than leave the new registration invisible.
           if (

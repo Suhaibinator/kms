@@ -100,7 +100,7 @@ export function DefinitionCard({
             </div>
           )}
           <p className="faint text-sm">
-            Current: {pinned ? `v${application.schema_version}` : "none"}
+            Current: {pinned ? `v${application.schema_version}` : "v0 · schema-free"}
             {latestSchemaVersion ? ` · Latest: v${latestSchemaVersion}` : ""}
           </p>
           {onUpgrade && (

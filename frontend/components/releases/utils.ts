@@ -1,4 +1,5 @@
 import { displayPath } from "@/lib/format";
+import { schemaVersionError } from "@/lib/schema";
 import type { ConfigurationRelease, CreateReleaseRequest } from "@/lib/types";
 import {
   validateAlias,
@@ -54,6 +55,10 @@ export function releaseDefinitionError(definition: string): string | null {
   if (typeof draft.name !== "string" || draft.name === "" || !Array.isArray(draft.entries)) {
     return "Definition requires name and entries.";
   }
+  if (draft.schema_version !== undefined) {
+    const schemaError = schemaVersionError(draft.schema_version);
+    if (schemaError) return schemaError;
+  }
   const nameError = validateReleaseName(draft.name);
   if (nameError) return nameError;
   for (const entry of draft.entries as unknown[]) {
@@ -73,11 +78,13 @@ export function releaseDefinitionError(definition: string): string | null {
 }
 
 export function parseReleaseDefinition(definition: string): CreateReleaseRequest {
+  const error = releaseDefinitionError(definition);
+  if (error) throw new Error(error);
   const parsed = JSON.parse(definition) as CreateReleaseRequest;
   return {
     namespace: parsed.namespace,
     name: parsed.name,
-    schema_version: parsed.schema_version ? Number(parsed.schema_version) : undefined,
+    schema_version: parsed.schema_version,
     entries: parsed.entries,
     metadata_json: parsed.metadata_json ?? "{}",
   };
