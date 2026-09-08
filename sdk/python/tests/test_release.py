@@ -358,6 +358,12 @@ def test_schema_selector_requires_exactly_one_valid_track() -> None:
     assert ReleaseLoaderConfig(name="runtime", schema_version=0).schema_version == 0
 
 
+@pytest.mark.parametrize("digest", ["A" * 64, "a" * 63 + "F"])
+def test_schema_digest_selector_rejects_uppercase_before_start(digest: str) -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="lowercase"):
+        ReleaseLoaderConfig(name="runtime", schema_sha256=digest)
+
+
 def test_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
     loader, stub, _client = _loader(
         monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64

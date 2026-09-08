@@ -92,7 +92,10 @@ class AsyncReleaseLoaderConfig:
             or not 0 <= self.schema_version < 2**64
         ):
             raise errors.ConfigError("release schema_version must be a uint64 integer")
-        if self.schema_sha256 and not _valid_sha256_hex(self.schema_sha256):
+        if self.schema_sha256 and (
+            not _valid_sha256_hex(self.schema_sha256)
+            or self.schema_sha256 != self.schema_sha256.lower()
+        ):
             raise errors.ConfigError("release schema_sha256 must be lowercase 64-character hex")
         object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
