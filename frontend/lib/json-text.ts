@@ -103,12 +103,18 @@ export function tokenizeJson(text: string): Token[] {
     if (c === CH_QUOTE) {
       let j = i + 1;
       let closed = false;
+      let valid = true;
       while (j < n) {
         const d = text.charCodeAt(j);
         if (d === CH_BACKSLASH) {
+          const escaped = text[j + 1];
+          if (escaped === "u") {
+            if (!/^[0-9a-fA-F]{4}$/.test(text.slice(j + 2, j + 6))) valid = false;
+          } else if (!escaped || !'"\\/bfnrt'.includes(escaped)) valid = false;
           j += text.charCodeAt(j + 1) === CH_LF ? 1 : 2;
           continue;
         }
+        if (d < CH_SPACE) valid = false;
         if (d === CH_LF) break;
         j += 1;
         if (d === CH_QUOTE) {
@@ -117,7 +123,7 @@ export function tokenizeJson(text: string): Token[] {
         }
       }
       if (j > n) j = n;
-      push(closed ? "string" : "error", i, j);
+      push(closed && valid ? "string" : "error", i, j);
       i = j;
       continue;
     }
@@ -210,7 +216,10 @@ type Expect = "value" | "key" | "colon" | "more" | "end";
 function describe(text: string, token: Token): string {
   if (token.kind === "error") {
     const raw = text.slice(token.start, token.end);
-    if (raw.startsWith('"')) return "Unterminated string";
+    if (raw.startsWith('"'))
+      return raw.endsWith('"') && raw.length > 1
+        ? "Invalid string escape or control character"
+        : "Unterminated string";
     const shown = raw.length > 24 ? `${raw.slice(0, 24)}…` : raw;
     return `Unexpected "${shown}"`;
   }

@@ -2,12 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { AppProps } from "next/app";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
+import type { Identity } from "@/lib/types";
 import App from "@/pages/_app";
 
 const mocks = vi.hoisted(() => ({
   whoami: vi.fn(),
   login: vi.fn(),
   token: null as string | null,
+  cachedIdentity: { name: "cached", kind: "admin" } as Identity | null,
   replace: vi.fn(async () => true),
   clearToken: vi.fn(),
   storeIdentity: vi.fn(),
@@ -54,7 +57,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     },
     clearToken: mocks.clearToken,
     storeIdentity: mocks.storeIdentity,
-    loadIdentity: () => ({ name: "cached", kind: "admin" }),
+    loadIdentity: () => mocks.cachedIdentity,
   };
 });
 
@@ -104,6 +107,7 @@ function retryAction(): () => void {
 describe("AuthProvider session restore", () => {
   beforeEach(() => {
     mocks.token = null;
+    mocks.cachedIdentity = { name: "cached", kind: "admin" };
     mocks.whoami.mockReset();
     mocks.login.mockReset();
     mocks.replace.mockClear();
@@ -114,6 +118,7 @@ describe("AuthProvider session restore", () => {
     mocks.storeIdentity.mockClear();
     for (const fn of Object.values(mocks.toast)) fn.mockClear();
     latest = null;
+    resetNamespaceMemory();
     window.history.replaceState(null, "", "/");
   });
 
@@ -199,24 +204,51 @@ describe("AuthProvider session restore", () => {
     expect(screen.getByTestId("authenticated")).toHaveTextContent("true");
   });
 
-  it("still signs in when the follow-up whoami fails for a non-auth reason", async () => {
+  it("clears namespace memory when a new identity signs in", async () => {
+    rememberNamespace({ env: "old", app: "session" });
+    mocks.login.mockResolvedValue({ identity: { name: "a", kind: "client" } });
+    mocks.whoami.mockResolvedValue({
+      name: "a",
+      kind: "client",
+      namespace: { env: "prod", app: "billing" },
+    });
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId("ready")).toHaveTextContent("true"));
+
+    await act(async () => {
+      await latest?.login("tok");
+    });
+    expect(lastNamespace()).toBeNull();
+  });
+
+  it("keeps a successful login pending until its access scope can be retried", async () => {
     mocks.login.mockResolvedValue({ identity: { name: "a", kind: "admin" } });
     mocks.whoami.mockRejectedValue(new ApiError("unavailable", "offline", 0));
 
     renderProvider();
     await waitFor(() => expect(screen.getByTestId("ready")).toHaveTextContent("true"));
 
-    let identity: Awaited<ReturnType<Auth["login"]>> | undefined;
     await act(async () => {
-      identity = await latest?.login("tok");
+      await expect(latest?.login("tok")).rejects.toMatchObject({
+        name: "SessionVerificationError",
+      });
     });
 
-    // The token survived, so the partial identity is a real session; the next
-    // page load fills in the namespace.
-    expect(identity).toMatchObject({ name: "a", kind: "admin" });
-    expect(identity).not.toHaveProperty("namespace.env");
-    expect(mocks.storeIdentity).toHaveBeenCalledWith({ name: "a", kind: "admin" });
+    expect(latest?.authenticated).toBe(true);
+    expect(latest?.ready).toBe(false);
+    expect(latest?.verificationPending).toBe(true);
+    expect(mocks.storeIdentity).not.toHaveBeenCalled();
     expect(screen.getByTestId("identity")).toHaveTextContent("a");
+
+    mocks.whoami.mockResolvedValue({
+      name: "a",
+      kind: "admin",
+      namespace: { env: "prod", app: "billing" },
+    });
+    act(() => latest?.retryVerification());
+    await waitFor(() => expect(latest?.ready).toBe(true));
+    expect(latest?.verificationPending).toBe(false);
+    expect(latest?.identity?.namespace).toEqual({ env: "prod", app: "billing" });
   });
 
   it("keeps the login response's auth method when whoami cannot confirm it", async () => {
@@ -228,12 +260,177 @@ describe("AuthProvider session restore", () => {
     renderProvider();
     await waitFor(() => expect(screen.getByTestId("ready")).toHaveTextContent("true"));
 
-    let identity: Awaited<ReturnType<Auth["login"]>> | undefined;
     await act(async () => {
-      identity = await latest?.login("tok");
+      await expect(latest?.login("tok")).rejects.toMatchObject({
+        name: "SessionVerificationError",
+      });
     });
 
-    expect(identity).toMatchObject({ name: "a", kind: "admin", auth_method: "mtls" });
+    expect(latest?.identity).toMatchObject({ name: "a", kind: "admin", auth_method: "mtls" });
+  });
+
+  it("ignores a restore response superseded by a newer login", async () => {
+    mocks.token = "token-a";
+    let resolveRestore!: (identity: unknown) => void;
+    mocks.whoami.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRestore = resolve;
+      }),
+    );
+    renderProvider();
+    await waitFor(() => expect(mocks.whoami).toHaveBeenCalledTimes(1));
+
+    mocks.login.mockResolvedValue({ identity: { name: "b", kind: "client" } });
+    mocks.whoami.mockResolvedValue({
+      name: "b",
+      kind: "client",
+      namespace: { env: "prod", app: "b" },
+    });
+    await act(async () => {
+      await latest?.login("token-b");
+    });
+    await act(async () => {
+      resolveRestore({ name: "a", kind: "admin" });
+    });
+
+    expect(mocks.token).toBe("token-b");
+    expect(latest?.identity?.name).toBe("b");
+  });
+
+  it("does not restore a session after logout while verification is pending", async () => {
+    mocks.token = "token-a";
+    let resolveRestore!: (identity: unknown) => void;
+    mocks.whoami.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRestore = resolve;
+      }),
+    );
+    renderProvider();
+    await waitFor(() => expect(mocks.whoami).toHaveBeenCalledTimes(1));
+
+    act(() => latest?.logout());
+    await act(async () => {
+      resolveRestore({ name: "a", kind: "admin" });
+    });
+
+    expect(latest?.authenticated).toBe(false);
+    expect(latest?.identity).toBeNull();
+  });
+
+  it("does not sign in from a login response that resolves after logout", async () => {
+    let resolveLogin!: (response: unknown) => void;
+    mocks.login.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveLogin = resolve;
+      }),
+    );
+    renderProvider();
+    await waitFor(() => expect(latest?.ready).toBe(true));
+
+    const login = latest?.login("token-a");
+    act(() => latest?.logout());
+    await act(async () => {
+      resolveLogin({ identity: { name: "a", kind: "admin" } });
+      await expect(login).rejects.toMatchObject({ name: "AbortError" });
+    });
+
+    expect(mocks.token).toBeNull();
+    expect(latest?.authenticated).toBe(false);
+    expect(mocks.whoami).not.toHaveBeenCalled();
+  });
+
+  it("settles readiness when a real 401 event rejects the startup token", async () => {
+    mocks.token = "expired";
+    let rejectRestore!: (error: unknown) => void;
+    mocks.whoami.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectRestore = reject;
+      }),
+    );
+    renderProvider();
+    await waitFor(() => expect(mocks.whoami).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      mocks.token = null;
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    });
+    await act(async () => {
+      rejectRestore(new ApiError("unauthenticated", "expired", 401));
+    });
+
+    expect(latest?.ready).toBe(true);
+    expect(latest?.authenticated).toBe(false);
+  });
+
+  it("settles readiness when login wins over the pending startup restore", async () => {
+    mocks.token = "token-a";
+    mocks.whoami.mockReturnValueOnce(new Promise(() => {}));
+    renderProvider();
+    await waitFor(() => expect(mocks.whoami).toHaveBeenCalledTimes(1));
+
+    mocks.login.mockResolvedValue({ identity: { name: "b", kind: "admin" } });
+    mocks.whoami.mockResolvedValue({ name: "b", kind: "admin" });
+    await act(async () => {
+      await latest?.login("token-b");
+    });
+
+    expect(latest?.ready).toBe(true);
+    expect(latest?.authenticated).toBe(true);
+    expect(latest?.identity?.name).toBe("b");
+  });
+
+  it("can replace or end a login whose scope verification is pending", async () => {
+    mocks.login.mockResolvedValueOnce({ identity: { name: "a", kind: "client" } });
+    mocks.whoami.mockRejectedValueOnce(new ApiError("unavailable", "offline", 0));
+    renderProvider();
+    await waitFor(() => expect(latest?.ready).toBe(true));
+    await act(async () => {
+      await expect(latest?.login("token-a")).rejects.toMatchObject({
+        name: "SessionVerificationError",
+      });
+    });
+    expect(latest?.ready).toBe(false);
+
+    mocks.login.mockResolvedValueOnce({ identity: { name: "b", kind: "admin" } });
+    mocks.whoami.mockResolvedValueOnce({ name: "b", kind: "admin" });
+    await act(async () => {
+      await latest?.login("token-b");
+    });
+    expect(latest?.ready).toBe(true);
+    expect(latest?.identity?.name).toBe("b");
+
+    act(() => latest?.logout());
+    expect(latest?.ready).toBe(true);
+    expect(latest?.authenticated).toBe(false);
+  });
+
+  it("resumes the stored-session check when a competing login is rejected", async () => {
+    mocks.token = "stored-token";
+    mocks.whoami.mockReturnValueOnce(new Promise(() => {}));
+    renderProvider();
+    await waitFor(() => expect(mocks.whoami).toHaveBeenCalledTimes(1));
+
+    mocks.login.mockRejectedValue(new ApiError("invalid_credentials", "bad", 401));
+    mocks.whoami.mockResolvedValueOnce({ name: "stored", kind: "admin" });
+    await act(async () => {
+      await expect(latest?.login("bad-token")).rejects.toMatchObject({ status: 401 });
+    });
+
+    await waitFor(() => expect(latest?.ready).toBe(true));
+    expect(latest?.identity?.name).toBe("stored");
+    expect(latest?.authenticated).toBe(true);
+  });
+
+  it("keeps a reloaded uncached session pending when verification is offline", async () => {
+    mocks.token = "stored-token";
+    mocks.cachedIdentity = null;
+    mocks.whoami.mockRejectedValue(new ApiError("unavailable", "offline", 0));
+    renderProvider();
+
+    await waitFor(() => expect(latest?.verificationPending).toBe(true));
+    expect(latest?.ready).toBe(false);
+    expect(latest?.authenticated).toBe(true);
+    expect(latest?.identity).toBeNull();
   });
 });
 
@@ -248,6 +445,7 @@ describe("Protected redirects", () => {
       mocks.token = null;
     });
     for (const fn of Object.values(mocks.toast)) fn.mockClear();
+    resetNamespaceMemory();
     window.history.replaceState(null, "", "/");
   });
 
@@ -286,10 +484,12 @@ describe("Protected redirects", () => {
 
     renderApp();
     await waitFor(() => expect(screen.getByTestId("authenticated")).toHaveTextContent("true"));
+    rememberNamespace({ env: "prod", app: "billing" });
 
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
     expect(mocks.replace).toHaveBeenCalledTimes(1);
+    expect(lastNamespace()).toBeNull();
   });
 });

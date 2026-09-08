@@ -29,6 +29,33 @@ describe("schema upgrade helpers", () => {
       schemaDifferences('{"type":"object","properties":{}}', '{"properties":{},"type":"object"}'),
     ).toEqual([]);
   });
+  it("compares exact numeric tokens throughout nested constraints", () => {
+    const before =
+      '{"properties":{"settings":{"properties":{"id":{"maximum":9223372036854775807,"examples":[null,9223372036854775807]}}}}}';
+    const after =
+      '{"properties":{"settings":{"properties":{"id":{"maximum":9223372036854775806,"examples":[null,9223372036854775806]}}}}}';
+
+    expect(schemaDifferences(before, after)).toEqual([{ path: "settings.id", change: "changed" }]);
+    expect(
+      schemaDifferences(
+        '{"properties":{"settings":{"examples":[null,[9223372036854775807]]}}}',
+        '{"properties":{"settings":{"examples":[null,[9223372036854775806]]}}}',
+      ),
+    ).toEqual([{ path: "settings", change: "changed" }]);
+    expect(
+      schemaDifferences(
+        '{"properties":{"value":{"const":9223372036854775807}},"examples":[null,[1,2]]}',
+        '{"examples":[null,[1,2]],"properties":{"value":{"const":9223372036854775807}}}',
+      ),
+    ).toEqual([]);
+  });
+  it("distinguishes exact numbers from schema objects resembling internal markers", () => {
+    const before = '{"properties":{"value":{"const":1}}}';
+    const after = JSON.stringify({
+      properties: { value: { const: { "\u0000kms.schema-number": "1" } } },
+    });
+    expect(schemaDifferences(before, after)).toEqual([{ path: "value", change: "changed" }]);
+  });
   const artifact = {
     format: "kms-config-defaults/v1",
     profile: "dev",

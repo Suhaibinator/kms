@@ -5,6 +5,7 @@
 import type {
   Application,
   ApplicationOverview,
+  AuthMethod,
   CloneEnvironmentResponse,
   EnvironmentOverview,
   HealthResponse,
@@ -78,6 +79,8 @@ export interface SetupPanelProps {
 
 export interface ConnectSdkPanelProps {
   namespace: NamespaceRef;
+  /** Credential methods accepted by this environment, independently of transport TLS. */
+  allowedAuthMethods?: readonly AuthMethod[];
   releaseName: string;
   /** Contract aliases; the snippet reads the first one. */
   aliases: string[];

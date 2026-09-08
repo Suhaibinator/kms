@@ -39,12 +39,27 @@ func setParamLabel(tx *gorm.DB, paramID int64, label string, version uint64) err
 // an immutable version, moves the current/previous labels, and appends a
 // change-log entry. The namespace must already exist.
 func (s *SQLStore) PutParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (version, revision uint64, err error) {
+	return s.putParameter(ctx, ref, value, contentType, metadata, createdBy, false, false)
+}
+
+// PutParameterPreservingMetadata atomically uses the existing parameter
+// metadata for an update. New parameters receive the ordinary empty default.
+func (s *SQLStore) PutParameterPreservingMetadata(ctx context.Context, ref domain.Ref, value, contentType, createdBy string) (version, revision uint64, err error) {
+	return s.putParameter(ctx, ref, value, contentType, "", createdBy, false, true)
+}
+
+// CreateParameter atomically rejects an existing key without changing its versions or metadata.
+func (s *SQLStore) CreateParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (uint64, uint64, error) {
+	return s.putParameter(ctx, ref, value, contentType, metadata, createdBy, true, false)
+}
+
+func (s *SQLStore) putParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string, createOnly, preserveMetadata bool) (version, revision uint64, err error) {
 	contentType = zeroOr(contentType, "string")
 	metadata = zeroOr(metadata, "{}")
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var writeErr error
-		version, revision, writeErr = putParameterTx(tx, ref, value, contentType, metadata, createdBy, fmtTime(time.Now()))
+		version, revision, writeErr = putParameterWithModeTx(tx, ref, value, contentType, metadata, createdBy, fmtTime(time.Now()), createOnly, preserveMetadata)
 		return writeErr
 	})
 	if err != nil {
@@ -58,6 +73,10 @@ func (s *SQLStore) PutParameter(ctx context.Context, ref domain.Ref, value, cont
 // transaction, which lets a defaults import commit every version and change
 // log row atomically.
 func putParameterTx(tx *gorm.DB, ref domain.Ref, value, contentType, metadata, createdBy, now string) (version, revision uint64, err error) {
+	return putParameterWithModeTx(tx, ref, value, contentType, metadata, createdBy, now, false, false)
+}
+
+func putParameterWithModeTx(tx *gorm.DB, ref domain.Ref, value, contentType, metadata, createdBy, now string, createOnly, preserveMetadata bool) (version, revision uint64, err error) {
 	nsID, err := resolveNamespaceID(tx, ref.NS)
 	if err != nil {
 		return 0, 0, err
@@ -73,6 +92,12 @@ func putParameterTx(tx *gorm.DB, ref domain.Ref, value, contentType, metadata, c
 	case e != nil:
 		return 0, 0, e
 	default:
+		if createOnly {
+			return 0, 0, domain.Errorf(domain.ErrAlreadyExists, "parameter %s", ref)
+		}
+		if preserveMetadata {
+			metadata = p.MetadataJSON
+		}
 		if err := tx.Model(&parameterModel{}).Where("id = ?", p.ID).Updates(map[string]any{
 			"content_type": contentType, "metadata_json": metadata, "updated_at": now,
 		}).Error; err != nil {

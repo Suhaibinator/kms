@@ -39,6 +39,8 @@ export default function HealthPage() {
   const toast = useToast();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
+  const [keysLoaded, setKeysLoaded] = useState(false);
+  const [keysError, setKeysError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const now = useNow();
   const { begin } = useLatestRequest();
@@ -46,6 +48,7 @@ export default function HealthPage() {
   const load = useCallback(async () => {
     const run = begin();
     setLoading(true);
+    setKeysError(null);
     const [h, k] = await Promise.allSettled([
       api.health({ signal: run.signal }),
       api.keys({ signal: run.signal }),
@@ -58,8 +61,15 @@ export default function HealthPage() {
       setHealth(null);
       toast.error(h.reason, "Failed to load health");
     }
-    if (k.status === "fulfilled") setKeys(k.value.keys ?? []);
-    else toast.error(k.reason, "Failed to load keys");
+    if (k.status === "fulfilled") {
+      setKeys(k.value.keys ?? []);
+      setKeysLoaded(true);
+    } else {
+      setKeysError(
+        k.reason instanceof Error ? k.reason.message : "The key service did not respond.",
+      );
+      toast.error(k.reason, "Failed to load keys");
+    }
     setLoading(false);
   }, [begin, toast]);
 
@@ -149,10 +159,20 @@ export default function HealthPage() {
 
           <div className="card">
             <h2 className="card-title">Encryption keys</h2>
-            {keys.length === 0 ? (
-              <EmptyState icon={<Icon.health size={20} />} title="No key metadata available">
-                The service exposes key metadata once a master key provider is configured.
-              </EmptyState>
+            {keysError ? (
+              <div className="danger-panel mb-4" role="alert">
+                <strong>Could not load key metadata.</strong> {keysError}
+                {keysLoaded && keys.length > 0
+                  ? " Showing key metadata from the last successful refresh."
+                  : " Key state is unknown."}
+              </div>
+            ) : null}
+            {!keysLoaded ? null : keys.length === 0 ? (
+              keysError ? null : (
+                <EmptyState icon={<Icon.health size={20} />} title="No key metadata available">
+                  The service exposes key metadata once a master key provider is configured.
+                </EmptyState>
+              )
             ) : (
               <div className="table-wrap card-table">
                 <table className="data">

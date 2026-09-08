@@ -93,8 +93,8 @@
     "prepack": "npm run check"
   },
   "peerDependencies": {
-    "next": ">=14 <17",
-    "react": ">=18 <20"
+    "next": ">=16 <17",
+    "react": ">=19 <20"
   },
   "peerDependenciesMeta": {
     "next": {

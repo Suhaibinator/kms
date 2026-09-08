@@ -11,7 +11,9 @@ export function queryValue(value: string | string[] | undefined): string {
  * query. An empty-string value deletes the key. Never call this from an effect — only
  * from an event handler — so the URL can never fight the form state.
  */
-export function useQueryReplace(pathname: string): (patch: Record<string, string>) => void {
+export function useQueryReplace(
+  pathname: string,
+): (patch: Record<string, string>) => Promise<boolean> {
   const router = useRouter();
   return useCallback(
     (patch: Record<string, string>) => {
@@ -24,7 +26,7 @@ export function useQueryReplace(pathname: string): (patch: Record<string, string
         if (value) next[key] = value;
         else delete next[key];
       }
-      void router.replace({ pathname, query: next }, undefined, {
+      return router.replace({ pathname, query: next }, undefined, {
         shallow: true,
         scroll: false,
       });

@@ -168,9 +168,9 @@ export default function SecretManager({
 
   // Version actions.
   const [confirm, setConfirm] = useState<
-    | { kind: "disable" | "enable" | "promote"; version: number }
-    | { kind: "destroy"; version: number }
-    | { kind: "delete" }
+    | { kind: "disable" | "enable" | "promote"; version: number; refKey: string }
+    | { kind: "destroy"; version: number; refKey: string }
+    | { kind: "delete"; refKey: string }
     | null
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -178,6 +178,8 @@ export default function SecretManager({
 
   // New version modal.
   const [newVersionOpen, setNewVersionOpen] = useState(false);
+  const [newVersionRefKey, setNewVersionRefKey] = useState<string | null>(null);
+  const [bindingActionRefKey, setBindingActionRefKey] = useState<string | null>(null);
   const [section, setSection] = useState("overview");
 
   const load = useCallback(
@@ -192,7 +194,7 @@ export default function SecretManager({
       }
       try {
         const res = await api.secretMetadata(ref, { signal: run.signal });
-        if (!run.current) return;
+        if (!run.current || activeRefKey.current !== refKey) return;
         setSecret(res.secret);
         // The reveal select only offers enabled versions, so defaulting to a
         // disabled `current` would leave it blank with Reveal still enabled.
@@ -205,7 +207,7 @@ export default function SecretManager({
         );
         setLoadState("success");
       } catch (err) {
-        if (!run.current || isAbortError(err)) return;
+        if (!run.current || activeRefKey.current !== refKey || isAbortError(err)) return;
         if (err instanceof ApiError && err.status === 404) {
           setLoadState("not-found");
         } else {
@@ -215,10 +217,10 @@ export default function SecretManager({
           toast.error(err, "Failed to load secret");
         }
       } finally {
-        if (run.current) setRefreshing(false);
+        if (run.current && activeRefKey.current === refKey) setRefreshing(false);
       }
     },
-    [hasRef, ref, request, toast],
+    [hasRef, ref, refKey, request, toast],
   );
 
   useEffect(() => {
@@ -227,7 +229,11 @@ export default function SecretManager({
     setRevealTarget(null);
     setRevealBusy(false);
     setBindingAction(null);
+    setBindingActionRefKey(null);
     setNewVersionOpen(false);
+    setNewVersionRefKey(null);
+    setConfirm(null);
+    setActionBusy(false);
     setSection("overview");
     if (hasRef) {
       setRevealed(null);
@@ -243,6 +249,19 @@ export default function SecretManager({
       revealRequest.abort();
     };
   }, [ready, hasRef, load, request, revealRequest]);
+
+  // Next preserves this detail component when only the query changes. Scope
+  // every resource action to the URL identity so a history jump cannot leave
+  // a confirmation or editor attached to the prior secret.
+  useEffect(() => {
+    void refKey;
+    setConfirm(null);
+    setActionBusy(false);
+    setBindingAction(null);
+    setBindingActionRefKey(null);
+    setNewVersionOpen(false);
+    setNewVersionRefKey(null);
+  }, [refKey]);
 
   // An identity boundary invalidates every open credential-bearing flow,
   // including admin-to-admin switches. Nothing transient survives it.
@@ -340,11 +359,13 @@ export default function SecretManager({
   }, []);
 
   const runAction = useCallback(async () => {
-    if (!hasRef || !confirm) return;
+    if (!hasRef || !confirm || confirm.refKey !== refKey) return;
+    const actionRefKey = refKey;
     setActionBusy(true);
     try {
       if (confirm.kind === "delete") {
         await api.deleteSecret(ref);
+        if (activeRefKey.current !== actionRefKey) return;
         toast.success("Secret deleted", displayPath(ref));
         setConfirm(null);
         if (surface === "workspace") {
@@ -357,15 +378,18 @@ export default function SecretManager({
       }
       if (confirm.kind === "promote") {
         const res = await api.promoteSecret(ref, confirm.version);
+        if (activeRefKey.current !== actionRefKey) return;
         toast.success(`Promoted v${res.current_version} to current`);
       } else if (confirm.kind === "destroy") {
         await api.destroySecret(ref, confirm.version);
+        if (activeRefKey.current !== actionRefKey) return;
         toast.success(`Destroyed version ${confirm.version}`);
         // If the destroyed version was revealed, hide it.
         setRevealed((r) => (r && r.version === confirm.version ? null : r));
       } else {
         const enable = confirm.kind === "enable";
         await api.disableSecret(ref, confirm.version, enable);
+        if (activeRefKey.current !== actionRefKey) return;
         toast.success(
           enable ? `Enabled version ${confirm.version}` : `Disabled version ${confirm.version}`,
         );
@@ -375,11 +399,25 @@ export default function SecretManager({
       await load({ background: true });
       onChanged?.(ref);
     } catch (err) {
-      toast.error(err, "Action failed");
+      if (activeRefKey.current === actionRefKey) toast.error(err, "Action failed");
     } finally {
-      setActionBusy(false);
+      if (activeRefKey.current === actionRefKey) setActionBusy(false);
     }
-  }, [hasRef, ref, env, app, confirm, toast, load, router, surface, onDeleted, onClose, onChanged]);
+  }, [
+    hasRef,
+    ref,
+    refKey,
+    env,
+    app,
+    confirm,
+    toast,
+    load,
+    router,
+    surface,
+    onDeleted,
+    onClose,
+    onChanged,
+  ]);
 
   const backLink = hasRef ? links.secrets({ env, app }) : links.secrets();
   const trail = hasRef ? crumbs.secret(ref) : undefined;
@@ -577,19 +615,33 @@ export default function SecretManager({
   // has to fit beside a 31px tab list, so it asks for `sm`.
   const actions = (size: "default" | "sm") => (
     <>
-      <Button variant="outline" size={size} onClick={() => setNewVersionOpen(true)}>
+      <Button
+        variant="outline"
+        size={size}
+        onClick={() => {
+          setNewVersionRefKey(refKey);
+          setNewVersionOpen(true);
+        }}
+      >
         New version
       </Button>
       {isAdmin && hasUnboundVersions ? (
         <Button
           variant="destructive"
           size={size}
-          onClick={() => setBindingAction({ kind: "purge-unbound" })}
+          onClick={() => {
+            setBindingActionRefKey(refKey);
+            setBindingAction({ kind: "purge-unbound" });
+          }}
         >
           Purge unbound versions
         </Button>
       ) : null}
-      <Button variant="destructive" size={size} onClick={() => setConfirm({ kind: "delete" })}>
+      <Button
+        variant="destructive"
+        size={size}
+        onClick={() => setConfirm({ kind: "delete", refKey })}
+      >
         Delete
       </Button>
     </>
@@ -622,7 +674,10 @@ export default function SecretManager({
                   version={currentVersionInfo}
                   isCurrent
                   canPurge={false}
-                  onAction={setBindingAction}
+                  onAction={(action) => {
+                    setBindingActionRefKey(refKey);
+                    setBindingAction(action);
+                  }}
                 />
               ) : null}
             </div>,
@@ -778,8 +833,11 @@ export default function SecretManager({
                     canReveal={isAdmin}
                     canPurge={isAdmin}
                     onReveal={openReveal}
-                    onConfirm={setConfirm}
-                    onBindingAction={setBindingAction}
+                    onConfirm={(confirmation) => setConfirm({ ...confirmation, refKey })}
+                    onBindingAction={(action) => {
+                      setBindingActionRefKey(refKey);
+                      setBindingAction(action);
+                    }}
                   />
                 ))}
             </tbody>
@@ -826,7 +884,7 @@ export default function SecretManager({
 
       {/* Version / delete confirmations */}
       <ConfirmDialog
-        open={confirm !== null && confirm.kind !== "destroy"}
+        open={confirm !== null && confirm.refKey === refKey && confirm.kind !== "destroy"}
         title={
           confirm?.kind === "delete"
             ? "Delete secret?"
@@ -867,7 +925,7 @@ export default function SecretManager({
 
       {/* Destroy requires typed confirmation (irreversible) */}
       <ConfirmDialog
-        open={confirm?.kind === "destroy"}
+        open={confirm?.kind === "destroy" && confirm.refKey === refKey}
         title="Destroy version — irreversible"
         danger
         requireText="DESTROY"
@@ -891,22 +949,30 @@ export default function SecretManager({
       />
 
       <NewVersionModal
-        open={newVersionOpen}
+        open={newVersionOpen && newVersionRefKey === refKey}
         secret={secret}
-        onClose={() => setNewVersionOpen(false)}
+        onClose={() => {
+          setNewVersionOpen(false);
+          setNewVersionRefKey(null);
+        }}
         onSaved={() => {
           setNewVersionOpen(false);
+          setNewVersionRefKey(null);
           void load({ background: true });
           onChanged?.(ref);
         }}
       />
 
       <BindingActionModal
-        action={bindingAction}
+        action={bindingActionRefKey === refKey ? bindingAction : null}
         secretRef={ref}
-        onClose={() => setBindingAction(null)}
+        onClose={() => {
+          setBindingAction(null);
+          setBindingActionRefKey(null);
+        }}
         onSaved={() => {
           setBindingAction(null);
+          setBindingActionRefKey(null);
           void load({ background: true });
           onChanged?.(ref);
         }}

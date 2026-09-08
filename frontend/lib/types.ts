@@ -100,6 +100,7 @@ export interface Namespace {
   created_at_unix_ms: number;
   parameter_count: number;
   secret_count: number;
+  identity_count?: number;
 }
 
 export interface ListNamespacesResponse {
@@ -218,6 +219,7 @@ export interface ParameterMetadata {
 }
 
 export interface PutParameterRequest {
+  create_only?: boolean;
   env: string;
   app: string;
   key: string;

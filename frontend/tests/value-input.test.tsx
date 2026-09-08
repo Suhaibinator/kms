@@ -144,3 +144,28 @@ describe("ContentTypeSelect", () => {
     expect(screen.queryByText(/The current value is not valid/)).toBeNull();
   });
 });
+
+it("forwards form draft validity through ParameterValueInput with inline parent callbacks", () => {
+  function ValidityHarness() {
+    const [value, setValue] = useState('{"count":3}');
+    const [validity, setValidity] = useState({ valid: true });
+    return (
+      <>
+        <ParameterValueInput
+          contentType="json"
+          value={value}
+          onChange={setValue}
+          schema={{ type: "object", properties: { count: { type: "number" } } }}
+          preferForm
+          onValidityChange={(valid) => setValidity({ valid })}
+        />
+        <button disabled={!validity.valid}>Save value</button>
+      </>
+    );
+  }
+  render(<ValidityHarness />);
+  fireEvent.change(screen.getByLabelText("count"), { target: { value: "4e" } });
+  expect(screen.getByRole("button", { name: "Save value" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("count"), { target: { value: "4" } });
+  expect(screen.getByRole("button", { name: "Save value" })).toBeEnabled();
+});

@@ -231,18 +231,19 @@ func (s *server) handleApplicationDashboard(w http.ResponseWriter, r *http.Reque
 
 func (s *server) handlePutApplicationParameter(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Application  string   `json:"application"`
-		Key          string   `json:"key"`
-		Value        string   `json:"value"`
-		ContentType  string   `json:"content_type"`
-		MetadataJSON string   `json:"metadata_json"`
-		Environments []string `json:"environments"`
+		Application      string   `json:"application"`
+		Key              string   `json:"key"`
+		Value            string   `json:"value"`
+		ContentType      string   `json:"content_type"`
+		MetadataJSON     string   `json:"metadata_json"`
+		Environments     []string `json:"environments"`
+		PreserveMetadata bool     `json:"preserve_metadata"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	results, err := s.svc.PutApplicationParameter(r.Context(), principalFrom(r.Context()), body.Application, body.Key, body.Value, body.ContentType, body.MetadataJSON, body.Environments)
+	results, err := s.svc.PutApplicationParameter(r.Context(), principalFrom(r.Context()), body.Application, body.Key, body.Value, body.ContentType, body.MetadataJSON, body.Environments, body.PreserveMetadata)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -482,6 +483,7 @@ func (s *server) handleParameterMetadata(w http.ResponseWriter, r *http.Request)
 func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
+		CreateOnly   bool   `json:"create_only"`
 		Value        string `json:"value"`
 		ContentType  string `json:"content_type"`
 		MetadataJSON string `json:"metadata_json"`
@@ -490,7 +492,11 @@ func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	version, revision, err := s.svc.PutParameter(r.Context(), principalFrom(r.Context()),
+	put := s.svc.PutParameter
+	if body.CreateOnly {
+		put = s.svc.CreateParameter
+	}
+	version, revision, err := put(r.Context(), principalFrom(r.Context()),
 		body.ref(), body.Value, body.ContentType, body.MetadataJSON)
 	if err != nil {
 		s.writeError(w, r, err)

@@ -98,6 +98,7 @@ export function ImportDefaultsModal({
     setArtifact(null);
     setFileName(file?.name ?? "");
     setOverwrite(false);
+    setUpdateDefinition(false);
     setPreview(null);
     setConfirmation("");
     setError(null);

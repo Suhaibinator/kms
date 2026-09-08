@@ -225,6 +225,36 @@ describe("DashboardPage", () => {
     expect(screen.getByRole("heading", { level: 2, name: /Live subscribers/ })).toBeVisible();
   });
 
+  it("reports release lifecycle without counting release streams as revision lag", async () => {
+    mocks.identity = client;
+    mocks.subscribers.mockResolvedValue({
+      current_revision: 42,
+      subscribers: [
+        {
+          release_name: "runtime",
+          release_state: "applied",
+          release_version: 7,
+          release_revision: 41,
+          client_name: "release-loader",
+          instance_id: "release-1",
+          identity: "billing-api",
+          namespaces: [{ env: "prod", app: "billing" }],
+          remote_addr: "10.0.0.2",
+          connected_at_unix_ms: 1,
+          last_heartbeat_unix_ms: 0,
+          last_acked_revision: 0,
+        },
+      ],
+    });
+    render(<DashboardPage />);
+    expect(await screen.findByText("runtime · applied · v7 · revision 41")).toBeVisible();
+    expect(screen.queryByText(/42 behind/)).toBeNull();
+    expect(screen.getByText("—")).toHaveAttribute(
+      "title",
+      "Release streams report lifecycle status instead of transport heartbeats",
+    );
+  });
+
   it("reports the service status when /health responds", async () => {
     render(<DashboardPage />);
     expect(await screen.findByText("healthy")).toBeVisible();
@@ -478,6 +508,25 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/Release detail is shown for the first 25/)).toBeVisible();
   });
 
+  it("uses the complete active fleet for the application count beyond the list page", async () => {
+    const many = Array.from({ length: 201 }, (_, i) => ({
+      ...fleet.applications[0],
+      application: { ...fleet.applications[0]?.application, name: `app${i}` },
+    }));
+    // The list endpoint's first page is intentionally incomplete; the fleet
+    // summary is the complete active-app source used for the dashboard grid.
+    mocks.listApplications.mockResolvedValue({
+      applications: many.slice(0, 200).map((entry) => entry.application),
+      next_page_token: "page-2",
+    });
+    mocks.fleetOverview.mockResolvedValue({ applications: many });
+
+    render(<DashboardPage />);
+    const grid = await screen.findByRole("region", { name: "Applications" });
+    await waitFor(() => expect(grid.querySelectorAll(".fleet-card")).toHaveLength(201));
+    expect(screen.getByRole("heading", { name: /Applications 201/ })).toBeVisible();
+  });
+
   it("does not mistake a failed fleet load for an empty store", async () => {
     mocks.listApplications.mockRejectedValue(new Error("boom"));
     mocks.fleetOverview.mockRejectedValue(new Error("boom"));
@@ -543,5 +592,32 @@ describe("HealthPage", () => {
 
     pending.resolve({ ...healthy, version: "1.2.4" });
     await waitFor(() => expect(screen.getByText("1.2.4")).toBeVisible());
+  });
+
+  it("shows key failures as unknown and marks retained metadata stale", async () => {
+    mocks.keys.mockRejectedValueOnce(new Error("keys offline"));
+    const { unmount } = render(<HealthPage />);
+    expect(await screen.findByText(/Key state is unknown/)).toBeVisible();
+    expect(screen.queryByText("No key metadata available")).toBeNull();
+    unmount();
+
+    mocks.keys.mockResolvedValueOnce({
+      keys: [{ id: "k1", source: "file", state: "active", created_at_unix_ms: Date.now() }],
+    });
+    render(<HealthPage />);
+    expect(await screen.findByText("k1")).toBeVisible();
+    mocks.keys.mockRejectedValueOnce(new Error("keys offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText(/last successful refresh/)).toBeVisible();
+    expect(screen.getByText("k1")).toBeVisible();
+  });
+
+  it("does not present a previously empty key response as authoritative after failure", async () => {
+    render(<HealthPage />);
+    expect(await screen.findByText("No key metadata available")).toBeVisible();
+    mocks.keys.mockRejectedValueOnce(new Error("keys offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText(/Key state is unknown/)).toBeVisible();
+    expect(screen.queryByText("No key metadata available")).toBeNull();
   });
 });

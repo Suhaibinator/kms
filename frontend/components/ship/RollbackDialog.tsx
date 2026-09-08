@@ -168,13 +168,14 @@ export default function RollbackDialog({
 
   const previous = target?.previous_version ?? 0;
   const releasesHref = links.releases({ app: namespace.app, env: namespace.env, name });
-  // Opens the active release on its Compare tab, which defaults to the version below it: exactly the rollback diff.
+  // Compare the actual activation pair; inactive intermediate versions are unrelated.
   const compareHref = links.releases({
     app: namespace.app,
     env: namespace.env,
     name,
-    release: releaseKey({ name, version: target?.version ?? 0 }),
+    release: releaseKey({ name, version: previous }),
     section: "compare",
+    compare: releaseKey({ name, version: target?.version ?? 0 }),
   });
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
   // Rolling back a rollback is a re-activation; the title says which.
@@ -230,7 +231,24 @@ export default function RollbackDialog({
               <Ident kind="env" value={namespace.env} /> in place of{" "}
               <ReleaseIdent name={name} version={target.version} />. Subscribers receive a new
               activation revision; nothing is deleted.{" "}
-              <Link href={compareHref} className="text-link">
+              <Link
+                href={compareHref}
+                className="text-link"
+                onClick={(event) => {
+                  if (busy) {
+                    event.preventDefault();
+                    return;
+                  }
+                  if (
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.shiftKey &&
+                    !event.altKey &&
+                    event.button === 0
+                  )
+                    onClose();
+                }}
+              >
                 See what changes (v{target.version} → v{previous})
               </Link>
             </>

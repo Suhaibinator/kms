@@ -222,10 +222,11 @@ type Namespace struct {
 	AllowedAuthMethods []AuthMethod
 	CreatedBy          string
 	CreatedAt          time.Time
-	// ParameterCount and SecretCount are populated by list queries; point reads
+	// Resource and bound identity counts are populated by list queries; point reads
 	// leave them zero.
 	ParameterCount uint64
 	SecretCount    uint64
+	IdentityCount  uint64
 }
 
 // Application is the environment-independent configuration owner. Every

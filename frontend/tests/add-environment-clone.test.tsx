@@ -188,10 +188,76 @@ describe("CloneEnvironmentModal", () => {
     expect(within(result).getByText("Needs a value")).toBeVisible();
     expect(within(result).getByText(/Secret values are never copied/)).toBeVisible();
     fireEvent.click(within(result).getByRole("button", { name: "Add secret" }));
-    expect(onAddSecret).toHaveBeenCalledWith("prod-eu", "db_password");
+    expect(onAddSecret).toHaveBeenCalledWith("prod-eu", "db_password", "db_password");
     fireEvent.click(within(result).getByRole("button", { name: "Done" }));
     expect(onCreated).toHaveBeenCalledWith(cloneResult);
   });
+
+  it("recovers an uncopied parameter by its physical key and completes once", async () => {
+    mocks.cloneEnvironment.mockResolvedValue({
+      ...cloneResult,
+      items: [
+        { alias: "database", key: "database-config", kind: "parameter", action: "needs_value" },
+      ],
+      needs_value: ["database"],
+    });
+    const onCreated = vi.fn();
+    const onAddParameter = vi.fn();
+    const onAddSecret = vi.fn();
+    render(
+      <CloneEnvironmentModal
+        application={ready.application}
+        environments={environments}
+        seed={{ source: "dev", target: "staging", description: "", methods: ["mtls"] }}
+        open
+        onClose={vi.fn()}
+        onCreated={onCreated}
+        onAddParameter={onAddParameter}
+        onAddSecret={onAddSecret}
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /Copy parameter values/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add value" }));
+    expect(mocks.cloneEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({ copy_values: false }),
+    );
+    expect(onAddParameter).toHaveBeenCalledWith("prod-eu", "database-config");
+    expect(onAddSecret).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Done", "Dismiss dialog", "Escape", "Backdrop"])(
+    "completes successful results on %s",
+    async (dismissal) => {
+      const onCreated = vi.fn();
+      const onClose = vi.fn();
+      render(
+        <CloneEnvironmentModal
+          application={ready.application}
+          environments={environments}
+          seed={{ source: "dev", target: "staging", description: "", methods: ["mtls"] }}
+          open
+          onClose={onClose}
+          onCreated={onCreated}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+      const result = await screen.findByRole("dialog", { name: "prod-eu created from dev" });
+      if (dismissal === "Escape")
+        fireEvent.keyDown(within(result).getByRole("button", { name: "Done" }), { key: "Escape" });
+      else if (dismissal === "Backdrop") {
+        const backdrop = document.querySelector('[data-slot="dialog-overlay"]') as HTMLElement;
+        fireEvent.mouseDown(backdrop);
+        fireEvent.mouseUp(backdrop);
+        fireEvent.click(backdrop);
+      } else fireEvent.click(within(result).getByRole("button", { name: dismissal }));
+      await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+      expect(onCreated).toHaveBeenCalledWith(cloneResult);
+      expect(onClose).not.toHaveBeenCalled();
+    },
+  );
 
   it("clones a non-production target directly and refuses an existing name", async () => {
     render(

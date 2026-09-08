@@ -6,10 +6,12 @@ import {
   clearToken,
   getToken,
   isUnreachableError,
-  PurgeCleanupPendingApiError,
+  loadIdentity,
   PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingApiError,
   SECRET_OPERATION_FAILED_MESSAGE,
   setToken,
+  storeIdentity,
   UNAUTHORIZED_EVENT,
 } from "@/lib/api";
 
@@ -19,6 +21,15 @@ afterEach(() => {
 });
 
 describe("apiFetch", () => {
+  it("does not reuse an identity cached for a replaced token", () => {
+    setToken("token-a");
+    storeIdentity({ name: "a", kind: "admin" });
+    expect(loadIdentity()).toEqual({ name: "a", kind: "admin" });
+
+    setToken("token-b");
+    expect(loadIdentity()).toBeNull();
+  });
+
   it("fetches connection diagnostics without a stored bearer token or caching", async () => {
     setToken("stored-secret");
     const data = { tls_enabled: true, client_certificate: null };
@@ -412,6 +423,22 @@ describe("apiFetch", () => {
     } finally {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     }
+  });
+
+  it("does not let an old 401 clear a replacement session", async () => {
+    let resolve!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockReturnValue(
+      new Promise<Response>((done) => {
+        resolve = done;
+      }),
+    );
+    setToken("old-session");
+    const request = apiFetch("/slow");
+    setToken("new-session");
+
+    resolve(new Response("", { status: 401 }));
+    await expect(request).rejects.toMatchObject({ status: 401 });
+    expect(getToken()).toBe("new-session");
   });
 });
 

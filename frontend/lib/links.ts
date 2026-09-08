@@ -112,6 +112,8 @@ export const links = {
     release?: string;
     /** Which workspace tab to open on; only with `release`. */
     section?: "compare";
+    /** Exact source release for the comparison, as name@version. */
+    compare?: string;
   }): string => {
     const params: string[] = [];
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
@@ -120,6 +122,7 @@ export const links = {
     if (opts?.tab) params.push(`tab=${opts.tab}`);
     if (opts?.release) params.push(`release=${encodeURIComponent(opts.release)}`);
     if (opts?.section) params.push(`section=${opts.section}`);
+    if (opts?.compare) params.push(`compare=${encodeURIComponent(opts.compare)}`);
     return params.length > 0 ? `/releases?${params.join("&")}` : "/releases";
   },
 };

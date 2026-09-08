@@ -487,3 +487,15 @@ type Store interface {
 	// so the snapshot is the whole authorized namespace.
 	SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error)
 }
+
+// ParameterCreateStore supports an atomic create-only parameter write. Implementations
+// must reject an existing key without modifying any metadata, version, label, or change log.
+type ParameterCreateStore interface {
+	CreateParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (version, revision uint64, err error)
+}
+
+// ParameterMetadataPreservingStore supports value-only writes that copy the
+// parameter's current metadata into the new version in the same transaction.
+type ParameterMetadataPreservingStore interface {
+	PutParameterPreservingMetadata(ctx context.Context, ref domain.Ref, value, contentType, createdBy string) (version, revision uint64, err error)
+}

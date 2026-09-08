@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
@@ -163,7 +163,9 @@ describe("ReleasesPage", () => {
     for (const mock of Object.values(mocks)) {
       if (typeof mock === "function" && "mockReset" in mock) mock.mockReset();
     }
+    for (const mock of Object.values(mocks.toast)) mock.mockReset();
     mocks.listReleases.mockResolvedValue({ releases: [], next_page_token: "" });
+    mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "none", 404));
     mocks.listApplications.mockResolvedValue({
       applications: [dashboardWithContract.application],
       next_page_token: "",
@@ -435,6 +437,158 @@ describe("ReleasesPage", () => {
     );
   });
 
+  it("keeps activation bound to the version shown in its confirmation", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: false, previous: false, activation_revision: 0 },
+        { release: releaseV1, current: true, previous: false, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    mocks.getActiveRelease.mockResolvedValue({
+      release: releaseV1,
+      activation_revision: 7,
+      previous_version: 0,
+    });
+    mocks.activateRelease.mockRejectedValue(new ApiError("aborted", "active release changed", 409));
+    render(<ReleasesPage />);
+    const activate = (await screen.findAllByRole("button", { name: "Activate" })).find(
+      (button) => !button.hasAttribute("disabled"),
+    );
+    if (!activate) throw new Error("Missing inactive release action");
+    fireEvent.click(activate);
+    const confirm = await screen.findByRole("dialog", { name: "Activate release?" });
+    expect(confirm).toHaveTextContent("in place of the current runtime@1");
+    // Another operator activates v3 after this confirmation was displayed.
+    mocks.getActiveRelease.mockResolvedValue({
+      release: { ...releaseV2, version: 3 },
+      activation_revision: 9,
+      previous_version: 1,
+    });
+    fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Activate release" }));
+    await waitFor(() =>
+      expect(mocks.activateRelease).toHaveBeenCalledWith(releaseV2.namespace, "runtime", 2, 1),
+    );
+    expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Activate release?" })).toBeNull(),
+    );
+    expect(mocks.toast.error).toHaveBeenCalledWith(expect.any(ApiError), "Activation failed");
+  });
+
+  it("cancels a pending activation snapshot when history changes namespace", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: false, previous: false, activation_revision: 0 }],
+      next_page_token: "",
+    });
+    let finish: (value: { release: typeof releaseV1 }) => void = () => undefined;
+    mocks.getActiveRelease.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    await waitFor(() => expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1));
+    mocks.query = { ...mocks.query, env: "dev" };
+    rerender(<ReleasesPage />);
+    await act(async () => finish({ release: releaseV1 }));
+    expect(screen.queryByRole("dialog", { name: "Activate release?" })).toBeNull();
+    expect(mocks.activateRelease).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a production confirmation on external namespace navigation", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: false, previous: false, activation_revision: 0 }],
+      next_page_token: "",
+    });
+    mocks.getActiveRelease.mockResolvedValue({ release: releaseV1 });
+    const { rerender } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    const confirm = await screen.findByRole("dialog", { name: "Activate release?" });
+    expect(within(confirm).getByRole("textbox")).toBeVisible();
+    mocks.query = { ...mocks.query, env: "dev" };
+    rerender(<ReleasesPage />);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Activate release?" })).toBeNull(),
+    );
+    expect(mocks.activateRelease).not.toHaveBeenCalled();
+  });
+
+  it("opens the exact rollback comparison even with inactive intermediate versions", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1",
+      section: "compare",
+      compare: "runtime@3",
+    };
+    const releaseV3 = { ...releaseV2, version: 3 };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV3, current: true, previous: false, activation_revision: 9 },
+        { release: releaseV2, current: false, previous: false, activation_revision: 0 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    mocks.getRelease.mockResolvedValue({ release: releaseV3 });
+    const { rerender } = render(<ReleasesPage />);
+    let workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
+    expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
+      "runtime@3",
+    );
+    expect(
+      within(workspace)
+        .getAllByRole("columnheader")
+        .map((cell) => cell.textContent),
+    ).toEqual(["Alias", "runtime@3", "runtime@1"]);
+    // The inverse reactivation link works on the same mounted route too.
+    mocks.query = { ...mocks.query, release: "runtime@3", compare: "runtime@1" };
+    rerender(<ReleasesPage />);
+    workspace = await screen.findByRole("dialog", { name: "Release runtime@3" });
+    expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
+      "runtime@1",
+    );
+  });
+
+  it("fetches an explicit comparison outside the loaded page", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1",
+      section: "compare",
+      compare: "runtime@3",
+    };
+    const releaseV3 = { ...releaseV2, version: 3 };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV1, current: false, previous: true, activation_revision: 7 }],
+      next_page_token: "older",
+    });
+    mocks.getRelease.mockResolvedValue({ release: releaseV3 });
+    render(<ReleasesPage />);
+    const workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
+    await waitFor(() =>
+      expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
+        "runtime@3",
+      ),
+    );
+    expect(mocks.getRelease).toHaveBeenCalledWith(
+      releaseV1.namespace,
+      "runtime",
+      3,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(within(workspace).getByText(/new-digest/)).toBeVisible();
+  });
+
   it("renders validation failures in the workspace violations table", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };
     mocks.listReleases.mockResolvedValue({
@@ -531,6 +685,29 @@ describe("ReleasesPage", () => {
 
     await waitFor(() => expect(mocks.createRelease).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
+  });
+
+  it("submits an immutable release only once while creation is pending", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    let finish!: (value: { release: typeof releaseV2 }) => void;
+    mocks.createRelease.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    const create = within(dialog).getByRole("button", { name: "Create release" });
+    fireEvent.click(create);
+    fireEvent.click(create);
+
+    expect(mocks.createRelease).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ release: releaseV2 }));
   });
 
   it("does not let a late URL update overwrite what the user typed into the name filter", async () => {
@@ -874,6 +1051,51 @@ describe("ReleasesPage", () => {
     expect(mocks.toast.success).toHaveBeenCalledWith("Created schema payments/runtime@4");
   });
 
+  it("registers a schema only once while its editor shortcut is pending", async () => {
+    mocks.query = { tab: "schemas" };
+    let finish!: (value: {
+      schema: {
+        application: string;
+        release_name: string;
+        version: number;
+        schema_json: string;
+        digest: string;
+        metadata_json: string;
+        created_by: string;
+        created_at_unix_ms: number;
+      };
+    }) => void;
+    mocks.createSchema.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
+    await chooseSelectOption(within(dialog).getByLabelText("Application"), "payments / runtime");
+    const editor = within(dialog).getByRole("textbox", { name: "JSON Schema definition" });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+
+    expect(mocks.createSchema).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      finish({
+        schema: {
+          application: "payments",
+          release_name: "runtime",
+          version: 4,
+          schema_json: "{}",
+          digest: "schema-digest",
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: 1,
+        },
+      }),
+    );
+  });
+
   it("loads every application page for the schema owner selector", async () => {
     mocks.query = { tab: "schemas" };
     const second = {
@@ -974,6 +1196,90 @@ describe("ReleasesPage", () => {
       undefined,
       { shallow: true, scroll: false },
     );
+  });
+
+  it("keeps a loaded selection open when an older off-page deep link fails", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+    let rejectLink!: (error: Error) => void;
+    mocks.getRelease.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectLink = reject;
+      }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1),
+    );
+
+    mocks.query = { ...mocks.query, release: "runtime@2" };
+    rerender(<ReleasesPage />);
+    expect(await screen.findByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    await act(async () => rejectLink(new Error("late failure")));
+
+    expect(screen.getByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    expect(mocks.replace).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@2" }) }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("keeps a release-list failure visible and retries it", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.listReleases
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValueOnce({ releases: [], next_page_token: "" });
+    render(<ReleasesPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("gateway timeout");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No releases found")).toBeVisible();
+    expect(mocks.listReleases).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the live activation revision for an inactive release rollout", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 0 },
+      ],
+      next_page_token: "",
+    });
+    mocks.releaseSubscribers.mockResolvedValue({
+      subscribers: [
+        {
+          namespace: releaseV1.namespace,
+          release_name: "runtime",
+          client_name: "api",
+          instance_id: "api-1",
+          identity: "payments-client",
+          state: "applied",
+          release_version: 2,
+          activation_revision: 8,
+          rejection_category: "",
+          diagnostic: "",
+          client_timestamp_unix_ms: 1,
+          server_timestamp_unix_ms: 1,
+          connected: true,
+        },
+      ],
+      current_revision: 8,
+      next_page_token: "",
+    });
+    render(<ReleasesPage />);
+    const view = await screen.findAllByRole("button", { name: "View" });
+    fireEvent.click(view[1]);
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@1" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
+
+    expect(await within(dialog).findByText("api/api-1")).toBeVisible();
+    expect(within(dialog).getByTestId("rollout-progress")).toHaveTextContent("1/1 applied");
+    expect(within(dialog).getByTestId("rollout-progress")).toHaveTextContent("rev8");
   });
 
   it("rolls back through the RollbackDialog with pre-validation and a CAS guard", async () => {

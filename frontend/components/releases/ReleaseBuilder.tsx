@@ -213,6 +213,9 @@ export function ReleaseBuilder({
   // Bumped by Retry so the load effect re-runs without reopening the modal.
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Claim creation synchronously so repeated Cmd/Ctrl+Enter events cannot
+  // allocate two immutable versions before React paints the loading state.
+  const savingRef = useRef(false);
   const [mode, setMode] = useState<"guided" | "json">("guided");
   const [modeMessage, setModeMessage] = useState("");
   const [name, setName] = useState("runtime");
@@ -428,6 +431,7 @@ export function ReleaseBuilder({
   }
 
   async function createRelease() {
+    if (savingRef.current) return;
     setAttempted(true);
     entryErrors.markAllTouched();
     if ((mode === "guided" && guidedProblem) || (mode === "json" && jsonProblem)) {
@@ -436,6 +440,7 @@ export function ReleaseBuilder({
     }
     const request: CreateReleaseRequest =
       mode === "guided" ? guidedRequest() : { ...parseReleaseDefinition(jsonText), namespace };
+    savingRef.current = true;
     setSaving(true);
     try {
       const result = await api.createRelease(request);
@@ -445,6 +450,7 @@ export function ReleaseBuilder({
     } catch (error) {
       toast.error(error, "Could not create release");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }

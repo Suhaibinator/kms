@@ -10,6 +10,8 @@
  * than a wrong form.
  */
 
+import { tokenizeJson } from "@/lib/json-text";
+
 export type JsonSchema = { [keyword: string]: unknown };
 export type JsonObject = { [key: string]: unknown };
 
@@ -64,11 +66,57 @@ export function pathKey(path: string[]): string {
   return path.join(" ");
 }
 
+// Object identity carries raw-schema provenance without adding JSON keywords or
+// changing deep equality. Every containing schema is marked, so an alias cannot
+// insert a rounded nested default, numeric enum item, or bound through its form.
+const exactJsonSchemas = new WeakSet<object>();
+
+export function schemaNeedsExactJson(schema: JsonSchema): boolean {
+  return exactJsonSchemas.has(schema);
+}
+
+function retainNumberProvenance(parsed: unknown, rawNumbers: unknown): boolean {
+  if (typeof parsed === "number") return JSON.stringify(parsed) !== rawNumbers;
+  if (parsed === null || typeof parsed !== "object") return false;
+  let needsExact = false;
+  for (const [key, child] of Object.entries(parsed)) {
+    const rawChild = (rawNumbers as Record<string, unknown>)[key];
+    // Visit every child, even after finding an unsafe number, to mark sibling
+    // alias schemas independently for aliasSchema callers.
+    if (retainNumberProvenance(child, rawChild)) needsExact = true;
+  }
+  if (needsExact) exactJsonSchemas.add(parsed);
+  return needsExact;
+}
+
 export function parseSchema(schemaJson: string | null | undefined): JsonSchema | null {
   if (!schemaJson) return null;
   try {
     const parsed: unknown = JSON.parse(schemaJson);
-    return isSchema(parsed) ? parsed : null;
+    if (!isSchema(parsed)) return null;
+    const numbers = tokenizeJson(schemaJson).filter((token) => token.kind === "number");
+    if (
+      numbers.some(
+        (token) =>
+          JSON.stringify(Number(schemaJson.slice(token.start, token.end))) !==
+          schemaJson.slice(token.start, token.end),
+      )
+    ) {
+      // Parse a parallel tree with number tokens represented as their source
+      // strings. String-valued keywords are disambiguated by the parsed tree.
+      let end = 0;
+      const parts: string[] = [];
+      for (const token of numbers) {
+        parts.push(
+          schemaJson.slice(end, token.start),
+          JSON.stringify(schemaJson.slice(token.start, token.end)),
+        );
+        end = token.end;
+      }
+      parts.push(schemaJson.slice(end));
+      retainNumberProvenance(parsed, JSON.parse(parts.join("")));
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -104,6 +152,7 @@ export function unwrapNullable(schema: JsonSchema): JsonSchema | null {
     merged.description = schema.description;
   }
   if ("default" in schema && !("default" in merged)) merged.default = schema.default;
+  if (schemaNeedsExactJson(schema) || schemaNeedsExactJson(inner)) exactJsonSchemas.add(merged);
   return merged;
 }
 

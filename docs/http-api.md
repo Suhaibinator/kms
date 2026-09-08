@@ -129,6 +129,10 @@ endpoints are admin-only:
   Each target receives an independent immutable version and result. The
   response may contain per-environment errors when only some targets succeed;
   the operation intentionally does not create shared mutable state.
+  Set optional `preserve_metadata: true` to retain each existing target's own
+  metadata atomically when changing only its value or content type. With this
+  flag, `metadata_json` is ignored and newly created parameters receive `{}`.
+  Omit the flag (or set it to `false`) to replace metadata as usual.
 - `POST /api/v1/applications/defaults?env=ENV&app=APP&overwrite=false&update_definition=false&execute=false&plan_digest=`
   accepts a raw `kms-config-defaults/v1` JSON artifact. Preview is the default.
   The response contains the artifact profile and schema digest, an opaque plan
@@ -1008,8 +1012,9 @@ namespace.
 
 - `GET /api/v1/namespaces?page_size=&page_token=` →
   `{"namespaces": [Namespace], "next_page_token": ""}`
-  (each item includes `parameter_count` and `secret_count`, powering the
-  dashboard and per-namespace counts)
+  (each item includes `parameter_count`, `secret_count`, and `identity_count`,
+  the count of bound identities, including disabled identities). All three
+  counts must be zero before deletion can succeed; deletion rechecks them atomically.
 - `POST /api/v1/namespaces` — create:
   ```json
   { "env": "prod", "app": "gradethis", "description": "",
@@ -1045,7 +1050,9 @@ Listing is always namespace-scoped: `env` and `app` are required.
     "versions":[{"version","content_type","state","created_by",
       "created_at_unix_ms","metadata_json"}]}`
 - `PUT /api/v1/parameters` — `{"env","app","key","value","content_type","metadata_json"}` →
-  `{"version": 4, "revision": 99}`
+  `{"version": 4, "revision": 99}`. Optional `"create_only": true` rejects an existing key
+  with HTTP 409 (`already_exists`), atomically leaving its metadata, versions, labels,
+  and change log unchanged. Omitted or false preserves the usual append-version behavior.
 - `DELETE /api/v1/parameters?env=&app=&key=` → `{"revision": 100}`
 
 ### Secrets
@@ -1305,8 +1312,9 @@ rules (a deny still wins).
   `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime","version":14}`
   → `{"valid":false,"errors":[{"alias":"rate_limits",
   "code":"schema_violation","schema_pointer":"/properties/rate_limits/type",
-  "message":"configuration value does not satisfy schema"}]}`. Error messages
-  are sanitized and never include values.
+  "message":"Use a value of type integer."}]}`. Error messages
+  describe schema requirements, including missing required field names and numeric
+  bounds. They are sanitized and never include submitted configuration values.
 - `POST /api/v1/releases/activate` with
   `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime",
   "version":14,"expected_current_version":13}` →

@@ -248,6 +248,25 @@ describe("CommandPalette", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("activates the first visibly grouped result rather than the pre-group ranking", async () => {
+    const secretsService = { ...applications[0], name: "secrets-service" } as Application;
+    mocks.listApplications.mockResolvedValue({
+      applications: [secretsService],
+      next_page_token: "",
+    });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "secrets" } });
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("secrets-service"),
+    );
+    const options = screen.getAllByRole("option");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.push).toHaveBeenCalledWith(links.application("secrets-service"));
+  });
+
   it("moves the highlight with the arrow keys and wraps, and follows the mouse", async () => {
     render(<CommandPalette open onOpenChange={vi.fn()} />);
     const input = await screen.findByRole("combobox");
@@ -316,6 +335,49 @@ describe("CommandPalette", () => {
     expect(options[0]).toHaveTextContent("prod/legacy");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.push).toHaveBeenCalledWith(links.parameters({ env: "prod", app: "legacy" }));
+  });
+
+  it("does not let an admin application cache hide a later client's environment", async () => {
+    const { rerender } = render(<CommandPalette open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalledTimes(1));
+    const adminInput = await screen.findByRole("combobox");
+    fireEvent.change(adminInput, { target: { value: "gradethis" } });
+    await screen.findByRole("option", { name: /^gradethis/ });
+
+    mocks.identity = client;
+    rerender(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "prod gradethis" } });
+    const environment = document.querySelector<HTMLElement>('[data-item="env:prod/gradethis"]');
+    expect(environment).not.toBeNull();
+    fireEvent.click(environment as HTMLElement);
+    expect(mocks.push).toHaveBeenCalledWith(links.parameters({ env: "prod", app: "gradethis" }));
+  });
+
+  it("ignores an application response from the identity that just signed out", async () => {
+    const stale = { ...applications[0], name: "stale-admin-app" } as Application;
+    const fresh = { ...applications[0], name: "fresh-admin-app" } as Application;
+    let resolveStale!: (value: { applications: Application[]; next_page_token: string }) => void;
+    mocks.listApplications
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ applications: [fresh], next_page_token: "" });
+    const { rerender } = render(<CommandPalette open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalledTimes(1));
+
+    mocks.identity = { ...admin, name: "another-admin" };
+    rerender(<CommandPalette open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalledTimes(2));
+    resolveStale({ applications: [stale], next_page_token: "" });
+
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "admin-app" } });
+    expect(await screen.findByRole("option", { name: /fresh-admin-app/ })).toBeVisible();
+    expect(screen.queryByRole("option", { name: /stale-admin-app/ })).toBeNull();
   });
 
   it("labels each result group so the listbox owns its options", async () => {
@@ -407,6 +469,52 @@ describe("CommandPalette", () => {
     expect(mocks.push).toHaveBeenCalledWith(
       links.parameters({ env: "prod", app: "gradethis" }, "rate"),
     );
+  });
+
+  it("prefers a client's binding over namespace memory from the previous identity", async () => {
+    rememberNamespace({ env: "prod-eu", app: "reports" });
+    mocks.identity = client;
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "rate" } });
+    fireEvent.click(await screen.findByRole("option", { name: /Search parameters for "rate"/ }));
+    expect(mocks.push).toHaveBeenCalledWith(
+      links.parameters({ env: "prod", app: "gradethis" }, "rate"),
+    );
+  });
+
+  it("loads every application page before replacing the palette index", async () => {
+    const later = { ...applications[0], name: "later-page" } as Application;
+    mocks.listApplications
+      .mockResolvedValueOnce({ applications: [], next_page_token: "page-2" })
+      .mockResolvedValueOnce({ applications: [later], next_page_token: "" });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "later-page" } });
+
+    expect(await screen.findByRole("option", { name: /later-page/ })).toBeVisible();
+    expect(mocks.listApplications).toHaveBeenNthCalledWith(
+      2,
+      200,
+      "page-2",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+  });
+
+  it("refreshes applications whenever the palette is reopened", async () => {
+    const added = { ...applications[0], name: "newly-created" } as Application;
+    mocks.listApplications
+      .mockResolvedValueOnce({ applications, next_page_token: "" })
+      .mockResolvedValueOnce({ applications: [added], next_page_token: "" });
+    const { rerender } = render(<CommandPalette open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalledTimes(1));
+
+    rerender(<CommandPalette open={false} onOpenChange={vi.fn()} />);
+    rerender(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "newly-created" } });
+    expect(await screen.findByRole("option", { name: /newly-created/ })).toBeVisible();
+    expect(mocks.listApplications).toHaveBeenCalledTimes(2);
   });
 
   it("offers no key search without a namespace in play", async () => {

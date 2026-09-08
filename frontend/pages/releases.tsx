@@ -32,7 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
-import { useCursorPagination, useNamespaces } from "@/lib/hooks";
+import { useCursorPagination, useLatestRequest, useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
@@ -69,7 +69,7 @@ const COLUMNS: ReadonlyArray<SortColumn<ReleaseSummary>> = [
 const PAGE_SORT_HINT = "Sorts the releases loaded on this page, not the whole history.";
 
 type PendingReleaseAction =
-  | { kind: "activate"; summary: ReleaseSummary }
+  | { kind: "activate"; summary: ReleaseSummary; current: ConfigurationRelease | null }
   | { kind: "rollback"; name: string; current: ReleaseSummary; previous: ReleaseSummary };
 
 type BusyReleaseAction = "" | "activate" | `validate:${string}`;
@@ -110,6 +110,8 @@ export default function ReleasesPage() {
   const [nameTouched, setNameTouched] = useState(false);
   const [releases, setReleases] = useState<ReleaseSummary[]>([]);
   const [releasesLoading, setReleasesLoading] = useState(false);
+  const [releasesError, setReleasesError] = useState<unknown>(null);
+  const [releasesErrorScope, setReleasesErrorScope] = useState("");
   const [busyAction, setBusyAction] = useState<BusyReleaseAction>("");
   const [builderOpen, setBuilderOpen] = useState(false);
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
@@ -118,6 +120,11 @@ export default function ReleasesPage() {
   const [deepLink, setDeepLink] = useState<{ name: string; version: number } | null>(null);
   // The workspace tab a deep link asked for; cleared with the workspace.
   const [linkedSection, setLinkedSection] = useState<"compare" | null>(null);
+  const [linkedCompareKey, setLinkedCompareKey] = useState("");
+  const [linkedComparison, setLinkedComparison] = useState<ReleaseSummary | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const activationRequest = useLatestRequest();
   const [pendingAction, setPendingAction] = useState<PendingReleaseAction | null>(null);
   const [activationFailure, setActivationFailure] = useState<ActivationFailure | null>(null);
   // The request scope whose response is currently on screen; gates the empty
@@ -138,24 +145,56 @@ export default function ReleasesPage() {
   const queryName = queryValue(router.query.name);
   const queryRelease = queryValue(router.query.release);
   const querySection = queryValue(router.query.section);
+  const queryCompare = queryValue(router.query.compare);
+  const appliedFilters = useRef({ app: ns.app, env: ns.env, name });
+  appliedFilters.current = { app: ns.app, env: ns.env, name };
 
-  // Seed from the URL exactly once. Every later change flows state → URL
-  // through replaceQuery; re-reading the query here would clobber whatever the
-  // user has typed into the name filter since the last Apply.
+  // Only changes to applied URL filters replace the filter draft. Same-page
+  // comparison links and browser history must also update the workspace.
   useEffect(() => {
-    if (!router.isReady || seeded) return;
+    if (!router.isReady) return;
     setSeeded(true);
     setActiveTab(queryTab === "schemas" ? "schemas" : "releases");
-    setNS({ app: queryApp, env: queryEnv });
-    setNameDraft(queryName);
+    setNS((current) =>
+      current.app === queryApp && current.env === queryEnv
+        ? current
+        : { app: queryApp, env: queryEnv },
+    );
+    const applied = appliedFilters.current;
+    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name) {
+      activationRequest.abort();
+      setBusyAction("");
+      setPendingAction(null);
+      setActivationFailure(null);
+      setLinkedSummary(null);
+      linkRun.current += 1;
+    }
+    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name) {
+      setNameDraft(queryName);
+    }
     setName(queryName);
+  }, [queryApp, queryEnv, queryName, queryTab, router.isReady, activationRequest]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    // Invalidate even when the next selected release is already loaded: an
+    // older off-page deep-link request must not close that new workspace.
+    linkRun.current += 1;
+    setPendingAction((current) => (current?.kind === "rollback" ? null : current));
     const linked = queryRelease ? parseReleaseKey(queryRelease) : null;
     if (linked && queryApp && queryEnv) {
       setDeepLink(linked);
       setSelectedReleaseKey(`${linked.name}@${linked.version}`);
-      if (querySection === "compare") setLinkedSection("compare");
+      setLinkedSection(querySection === "compare" ? "compare" : null);
+      const comparison = parseReleaseKey(queryCompare);
+      setLinkedCompareKey(comparison?.name === linked.name ? releaseKey(comparison) : "");
+    } else {
+      setDeepLink(null);
+      setSelectedReleaseKey("");
+      setLinkedSection(null);
+      setLinkedCompareKey("");
     }
-  }, [queryApp, queryEnv, queryName, queryRelease, querySection, queryTab, router.isReady, seeded]);
+  }, [queryApp, queryEnv, queryRelease, querySection, queryCompare, router.isReady]);
 
   function changeTab(value: string | number) {
     const next = value === "schemas" ? "schemas" : "releases";
@@ -164,39 +203,46 @@ export default function ReleasesPage() {
   }
 
   function openWorkspace(key: string) {
+    linkRun.current += 1;
     setActivationFailure(null);
     setLinkedSection(null);
+    setLinkedCompareKey("");
     setSelectedReleaseKey(key);
-    replaceQuery({ release: key, section: "" });
+    replaceQuery({ release: key, section: "", compare: "" });
   }
 
   function closeWorkspace() {
+    linkRun.current += 1;
     setSelectedReleaseKey("");
     setLinkedSummary(null);
     setLinkedSection(null);
+    setLinkedCompareKey("");
     setActivationFailure(null);
-    replaceQuery({ release: "", section: "" });
+    replaceQuery({ release: "", section: "", compare: "" });
   }
 
   function changeNamespace(next: NamespaceSelection) {
+    activationRequest.abort();
+    setBusyAction("");
     setActivationFailure(null);
     setPendingAction(null);
     setSelectedReleaseKey("");
     setLinkedSummary(null);
     setDeepLink(null);
+    setLinkedCompareKey("");
     linkRun.current += 1;
     setNS(next);
     setNameDraft("");
     setName("");
     loadedReleaseScope.current = "";
-    replaceQuery({ app: next.app, env: next.env, name: "", release: "" });
+    replaceQuery({ app: next.app, env: next.env, name: "", release: "", section: "", compare: "" });
   }
 
   const hasNS = Boolean(ns.env && ns.app);
   const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name]) : "";
   const releasePaging = useCursorPagination(releaseScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
-  const settled = loadedScope === releaseRequestScope;
+  const settled = loadedScope === releaseRequestScope || releasesErrorScope === releaseRequestScope;
   const nameFilterError = validateReleaseName(nameDraft.trim());
 
   useEffect(() => {
@@ -213,6 +259,8 @@ export default function ReleasesPage() {
         setReleases([]);
         releasePaging.setNextToken("");
         setReleasesLoading(false);
+        setReleasesError(null);
+        setReleasesErrorScope("");
         return;
       }
       // Keep the loaded list across a visit to the Schemas tab; it is
@@ -226,6 +274,8 @@ export default function ReleasesPage() {
       const controller = new AbortController();
       refreshController.current = controller;
       setReleasesLoading(true);
+      setReleasesError(null);
+      setReleasesErrorScope("");
       try {
         const response = await api.listReleases(
           ns,
@@ -241,6 +291,8 @@ export default function ReleasesPage() {
         releasePaging.setNextToken(response.next_page_token ?? "");
       } catch (error) {
         if (generation === refreshGeneration.current && !isAbortError(error)) {
+          setReleasesError(error);
+          setReleasesErrorScope(releaseRequestScope);
           toast.error(error, "Failed to load releases");
         }
       } finally {
@@ -358,33 +410,61 @@ export default function ReleasesPage() {
     setActivationFailure(failure);
   }
 
+  async function prepareActivation(summary: ReleaseSummary) {
+    if (busyAction) return;
+    const run = activationRequest.begin();
+    setBusyAction("activate");
+    try {
+      const active = await api
+        .getActiveRelease(summary.release.namespace, summary.release.name, { signal: run.signal })
+        .catch((error: unknown) => {
+          if (error instanceof ApiError && error.code === "not_found") return null;
+          throw error;
+        });
+      if (!run.current) return;
+      setPendingAction({ kind: "activate", summary, current: active?.release ?? null });
+    } catch (error) {
+      if (run.current && !isAbortError(error))
+        toast.error(error, "Could not check the active release");
+    } finally {
+      if (run.current) setBusyAction("");
+    }
+  }
+
   async function performActivation() {
     if (pendingAction?.kind !== "activate" || busyAction) return;
     const action = pendingAction;
+    const run = activationRequest.begin();
     setBusyAction("activate");
     setActivationFailure(null);
     const releaseName = action.summary.release.name;
     const target = releaseKey(action.summary.release);
     try {
-      const active = await api.getActiveRelease(ns, releaseName).catch((error: unknown) => {
-        if (error instanceof ApiError && error.code === "not_found") return null;
-        throw error;
-      });
-      const expectedVersion = active?.release.version ?? 0;
-      await api.activateRelease(ns, releaseName, action.summary.release.version, expectedVersion);
+      await api.activateRelease(
+        action.summary.release.namespace,
+        releaseName,
+        action.summary.release.version,
+        action.current?.version ?? 0,
+      );
+      if (!run.current) return;
       toast.success(`Activated ${target}`);
       setPendingAction(null);
       await refresh(true);
     } catch (error) {
+      if (!run.current) return;
       const violations = activationViolations(error);
       if (violations) {
         showViolations({ operation: "Activation", target, violations });
         setPendingAction(null);
       } else {
         toast.error(error, "Activation failed");
+        if (error instanceof ApiError && error.code === "aborted") {
+          setPendingAction(null);
+          await refresh(true);
+        }
       }
     } finally {
-      setBusyAction("");
+      if (run.current) setBusyAction("");
     }
   }
 
@@ -399,14 +479,50 @@ export default function ReleasesPage() {
   const previousNamedRelease = releases.find(
     (summary) => summary.previous && summary.release.name === name,
   );
-  const pendingCurrentRelease =
-    pendingAction?.kind === "activate"
-      ? releases.find(
-          (summary) =>
-            summary.current && summary.release.name === pendingAction.summary.release.name,
-        )
-      : pendingAction?.current;
+  const pendingCurrentRelease = pendingAction?.kind === "activate" ? pendingAction.current : null;
   const rollbackAction = pendingAction?.kind === "rollback" ? pendingAction : null;
+
+  const loadedComparison = releases.some(
+    (summary) => releaseKey(summary.release) === linkedCompareKey,
+  );
+  useEffect(() => {
+    setLinkedComparison(null);
+    setComparisonError(null);
+    const wanted = parseReleaseKey(linkedCompareKey);
+    if (!wanted || !hasNS || loadedComparison) {
+      setComparisonLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setComparisonLoading(true);
+    void api
+      .getRelease(ns, wanted.name, wanted.version, { signal: controller.signal })
+      .then(
+        ({ release }) => {
+          if (!cancelled)
+            setLinkedComparison({
+              release,
+              current: false,
+              previous: false,
+              activation_revision: 0,
+            });
+        },
+        (error: unknown) => {
+          if (!cancelled && !isAbortError(error))
+            setComparisonError(
+              `Could not load ${linkedCompareKey} for comparison. Reopen the comparison to retry.`,
+            );
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setComparisonLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [linkedCompareKey, hasNS, loadedComparison, ns]);
 
   return (
     <>
@@ -532,6 +648,20 @@ export default function ReleasesPage() {
               toolbarHint={PAGE_SORT_HINT}
               summary
             />
+          ) : releasesError && releasesErrorScope === releaseRequestScope ? (
+            <EmptyState
+              icon={<Icon.release size={20} />}
+              title="Could not load releases"
+              actions={
+                <Button variant="outline" onClick={() => void refresh(true)}>
+                  Retry
+                </Button>
+              }
+            >
+              <span role="alert">
+                {releasesError instanceof Error ? releasesError.message : String(releasesError)}
+              </span>
+            </EmptyState>
           ) : releases.length === 0 ? (
             <EmptyState
               icon={<Icon.release size={20} />}
@@ -609,7 +739,7 @@ export default function ReleasesPage() {
                             <Button
                               size="sm"
                               disabled={summary.current || Boolean(busyAction)}
-                              onClick={() => setPendingAction({ kind: "activate", summary })}
+                              onClick={() => void prepareActivation(summary)}
                             >
                               Activate
                             </Button>
@@ -659,7 +789,12 @@ export default function ReleasesPage() {
       <ReleaseWorkspace
         summary={selectedSummary}
         initialSection={linkedSection ?? "overview"}
-        releases={releases}
+        initialCompareKey={linkedCompareKey}
+        comparisonLoading={comparisonLoading}
+        comparisonError={comparisonError}
+        releases={
+          linkedComparison && !loadedComparison ? [...releases, linkedComparison] : releases
+        }
         busyAction={busyAction}
         activationFailure={activationFailure}
         onDismissFailure={() => setActivationFailure(null)}
@@ -674,7 +809,7 @@ export default function ReleasesPage() {
         }
         onClose={closeWorkspace}
         onValidate={(release) => void validate(release)}
-        onActivate={(summary) => setPendingAction({ kind: "activate", summary })}
+        onActivate={(summary) => void prepareActivation(summary)}
         onRollback={(current, previous) =>
           setPendingAction({ kind: "rollback", name: current.release.name, current, previous })
         }
@@ -691,7 +826,7 @@ export default function ReleasesPage() {
                 <>
                   {" "}
                   in place of the current{" "}
-                  <span className="mono">{releaseKey(pendingCurrentRelease.release)}</span>
+                  <span className="mono">{releaseKey(pendingCurrentRelease)}</span>
                 </>
               ) : (
                 <> as the first active release for this name</>
@@ -701,8 +836,15 @@ export default function ReleasesPage() {
           ) : null
         }
         confirmLabel="Activate release"
-        danger={isProductionEnvironment(ns.env)}
-        requireText={isProductionEnvironment(ns.env) ? ns.env : undefined}
+        danger={isProductionEnvironment(
+          pendingAction?.kind === "activate" ? pendingAction.summary.release.namespace.env : ns.env,
+        )}
+        requireText={
+          pendingAction?.kind === "activate" &&
+          isProductionEnvironment(pendingAction.summary.release.namespace.env)
+            ? pendingAction.summary.release.namespace.env
+            : undefined
+        }
         busy={busyAction === "activate"}
         onConfirm={() => void performActivation()}
         onCancel={() => setPendingAction(null)}

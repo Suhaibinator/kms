@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import ConnectSdkPanel, { ENDPOINT_STORAGE_KEY } from "@/components/onboarding/ConnectSdkPanel";
+import ConnectSdkPanel, {
+  ENDPOINT_STORAGE_KEY,
+  isWildcardEndpoint,
+} from "@/components/onboarding/ConnectSdkPanel";
 import { goSnippet, MTLS_RUNBOOK_URL, tsSnippet } from "@/lib/sdk-snippets";
 import type { HealthResponse } from "@/lib/types";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -90,9 +94,10 @@ describe("ConnectSdkPanel", () => {
     expect(snippet()).toContain('Endpoint:  "kms.prod.internal:8443"');
     expect(snippet()).toContain('candidate.Parameter("rate_limits")');
     expect(screen.getByRole("button", { name: "Copy Go snippet" })).toBeVisible();
-    // The endpoint is read-only when the server reports it.
-    expect(screen.queryByLabelText("gRPC endpoint")).toBeNull();
-    expect(screen.getByText("kms.prod.internal:8443")).toBeVisible();
+    expect(screen.getByLabelText("gRPC endpoint")).toHaveAttribute(
+      "placeholder",
+      "kms.prod.internal:8443",
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
     expect(snippet()).toContain('createReleaseLoader({ name: "runtime" })');
@@ -128,6 +133,59 @@ describe("ConnectSdkPanel", () => {
     expect(snippet()).not.toContain("MTLSFromFiles");
   });
 
+  it("uses a token with server-authenticated TLS in both languages for token-only environments", () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={health}
+        allowedAuthMethods={["token"]}
+      />,
+    );
+    expect(snippet()).toContain('kmsclient.TLSFromFiles(os.Getenv("KMS_CA_FILE"))');
+    expect(snippet()).toContain('Token:    os.Getenv("KMS_TOKEN")');
+    expect(snippet()).not.toContain("KMS_CLIENT_CERT_FILE");
+    expect(snippet()).not.toContain("Insecure");
+    fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
+    expect(snippet()).toContain("credentials: tlsFromFiles(process.env.KMS_CA_FILE!)");
+    expect(snippet()).toContain("token: process.env.KMS_TOKEN");
+    expect(snippet()).not.toContain("mtlsFromFiles");
+    expect(snippet()).not.toContain("KMS_CLIENT_KEY_FILE");
+  });
+
+  it("offers either accepted credential method without changing transport security", async () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={health}
+        allowedAuthMethods={["mtls", "token"]}
+      />,
+    );
+    expect(snippet()).toContain("kmsclient.MTLSFromFiles(");
+    await chooseSelectOption(screen.getByRole("combobox", { name: "Authentication" }), "Token");
+    expect(snippet()).toContain("kmsclient.TLSFromFiles(");
+    expect(snippet()).toContain('os.Getenv("KMS_TOKEN")');
+    expect(snippet()).not.toContain("Insecure");
+  });
+
+  it("does not offer unusable token snippets when an mTLS-only environment has no TLS listener", () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={{ ...health, tls_enabled: false }}
+        allowedAuthMethods={["mtls"]}
+      />,
+    );
+    expect(screen.getByText(/Enable TLS before connecting an SDK/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Copy Go snippet" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "TypeScript" })).toBeNull();
+  });
+
   it("does not warn while health is loading or when TLS is on", () => {
     const { rerender } = render(
       <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={null} />,
@@ -137,6 +195,15 @@ describe("ConnectSdkPanel", () => {
       <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("allows a destination override even when health is unavailable", () => {
+    render(
+      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={null} />,
+    );
+    const input = screen.getByLabelText("gRPC endpoint");
+    fireEvent.change(input, { target: { value: "kms.reachable:8443" } });
+    expect(snippet()).toContain("kms.reachable:8443");
   });
 
   it("lets the operator type the endpoint when health has none, remembering it per browser", () => {
@@ -169,6 +236,33 @@ describe("ConnectSdkPanel", () => {
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(window.localStorage.getItem(ENDPOINT_STORAGE_KEY)).toBeNull();
+  });
+
+  it("never generates a wildcard destination and persists an IPv6 override", () => {
+    expect(isWildcardEndpoint("0.0.0.0:8443")).toBe(true);
+    expect(isWildcardEndpoint("[::]:8443")).toBe(true);
+    expect(isWildcardEndpoint("[2001:db8::10]:8443")).toBe(false);
+
+    const { unmount } = render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        aliases={aliases}
+        health={{ ...health, grpc_addr: "[::]:8443" }}
+      />,
+    );
+    expect(snippet()).not.toContain("[::]:8443");
+    const input = screen.getByLabelText("gRPC endpoint");
+    fireEvent.change(input, { target: { value: "[2001:db8::10]:9443" } });
+    fireEvent.blur(input);
+    expect(snippet()).toContain("[2001:db8::10]:9443");
+    unmount();
+
+    render(
+      <ConnectSdkPanel namespace={ns} releaseName="runtime" aliases={aliases} health={health} />,
+    );
+    expect(screen.getByLabelText("gRPC endpoint")).toHaveValue("[2001:db8::10]:9443");
+    expect(snippet()).toContain("[2001:db8::10]:9443");
   });
 
   it("lists the three usual failures", () => {

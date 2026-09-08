@@ -454,10 +454,9 @@ from committed output. The library API for custom tooling is available at
 | `@suhaibinator/kms/next/server` | Next.js Node runtime | Server-only lifecycle and Route Handlers |
 | `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery |
 
-The package is ESM-only. Next.js 14 through 16 and React 18 through 19 are the
-optional peer ranges. CI builds isolated, exact Next.js 14/React 18,
-Next.js 15/React 18 and 19, and Next.js 16/React 18 and 19 tuples. Generated protobuf
-modules are internal and are not a compatibility surface.
+The package is ESM-only. Next.js 16 and React 19 are the optional peer ranges.
+CI builds an isolated, exact Next.js 16/React 19 tuple. Generated protobuf modules
+are internal and are not a compatibility surface.
 
 The `next/client` hook targets modern browsers with native `bigint`, `fetch`,
 `AbortController`, and standard focus events. Its automated tests run in a DOM

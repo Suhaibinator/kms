@@ -25,6 +25,9 @@ export function ReleaseWorkspace({
   onDismissFailure,
   resolveHref,
   initialSection = "overview",
+  initialCompareKey = "",
+  comparisonLoading = false,
+  comparisonError = null,
   onClose,
   onValidate,
   onActivate,
@@ -33,6 +36,9 @@ export function ReleaseWorkspace({
   summary: ReleaseSummary | null;
   /** The tab a deep link asked for; the workspace returns to it for each new release identity. */
   initialSection?: "overview" | "compare";
+  initialCompareKey?: string;
+  comparisonLoading?: boolean;
+  comparisonError?: string | null;
   releases: ReleaseSummary[];
   busyAction: string;
   activationFailure: ActivationFailure | null;
@@ -52,7 +58,7 @@ export function ReleaseWorkspace({
   const key = release ? releaseKey(release) : "";
   const [section, setSection] = useState<string>(initialSection);
   // "" means "use the derived default" (the next-lower version, if loaded).
-  const [compareKey, setCompareKey] = useState("");
+  const [compareKey, setCompareKey] = useState(initialCompareKey);
 
   const sameNameReleases = useMemo(
     () =>
@@ -67,8 +73,8 @@ export function ReleaseWorkspace({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset per release identity (`key`), not per summary object.
   useEffect(() => {
     setSection(initialSection);
-    setCompareKey("");
-  }, [key, initialSection]);
+    setCompareKey(initialCompareKey);
+  }, [key, initialSection, initialCompareKey]);
 
   const defaultCompareKey = useMemo(() => {
     const previous = release
@@ -108,6 +114,11 @@ export function ReleaseWorkspace({
   const previousSummary = summary?.current
     ? sameNameReleases.find((candidate) => candidate.previous)
     : undefined;
+  const currentSummary = sameNameReleases.find((candidate) => candidate.current);
+  // An inactive version has no activation revision of its own. Its rollout
+  // remains a view of this name's current activation.
+  const rolloutActivationRevision =
+    currentSummary?.activation_revision ?? summary?.activation_revision ?? 0;
 
   return (
     <Modal
@@ -271,7 +282,11 @@ export function ReleaseWorkspace({
                 />
               </Field>
             </div>
-            {!comparison ? (
+            {comparisonLoading && effectiveCompareKey === initialCompareKey ? (
+              <div role="status">Loading {initialCompareKey} for comparison…</div>
+            ) : comparisonError && effectiveCompareKey === initialCompareKey ? (
+              <div role="alert">{comparisonError}</div>
+            ) : !comparison ? (
               <div className="faint">No other loaded version is available for comparison.</div>
             ) : diff.length === 0 ? (
               <div className="info-panel">No manifest differences.</div>
@@ -310,7 +325,8 @@ export function ReleaseWorkspace({
             <RolloutPanel
               namespace={release.namespace}
               releaseName={release.name}
-              activationRevision={summary.activation_revision}
+              activationRevision={rolloutActivationRevision}
+              followCurrentActivation
               enabled={section === "rollout"}
               caption={
                 summary.current

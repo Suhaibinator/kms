@@ -69,6 +69,7 @@ type namespaceDTO struct {
 	CreatedAtUnixMS    int64    `json:"created_at_unix_ms"`
 	ParameterCount     uint64   `json:"parameter_count"`
 	SecretCount        uint64   `json:"secret_count"`
+	IdentityCount      uint64   `json:"identity_count"`
 }
 
 func toNamespaceDTO(n domain.Namespace) namespaceDTO {
@@ -81,6 +82,7 @@ func toNamespaceDTO(n domain.Namespace) namespaceDTO {
 		CreatedAtUnixMS:    unixMS(n.CreatedAt),
 		ParameterCount:     n.ParameterCount,
 		SecretCount:        n.SecretCount,
+		IdentityCount:      n.IdentityCount,
 	}
 }
 

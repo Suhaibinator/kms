@@ -1,6 +1,6 @@
 import { Filter, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
 import {
   BulkActionBar,
@@ -111,18 +111,23 @@ export default function SecretsPage() {
   const { pageToken, setNextToken } = paging;
 
   const [seeded, setSeeded] = useState(false);
+  const appliedScope = useRef<string | null>(null);
   useEffect(() => {
-    if (!queryReady || seeded) return;
+    if (!queryReady) return;
     setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
     const kp = queryValues.key_prefix ?? "";
-    if (env || app) setNs({ env, app });
-    if (kp) {
-      setPrefixInput(kp);
-      setPrefix(kp);
-    }
-  }, [queryReady, queryValues, seeded]);
+    const scope = requestScope({ env, app }, kp, "");
+    // An internal replace can acknowledge an applied filter after the user
+    // has started typing the next draft. Only external scope changes reset it.
+    if (appliedScope.current === scope) return;
+    appliedScope.current = scope;
+    setNs((current) => (current.env === env && current.app === app ? current : { env, app }));
+    setPrefixInput(kp);
+    setPrefix(kp);
+    setPrefixTouched(false);
+  }, [queryReady, queryValues]);
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -183,8 +188,8 @@ export default function SecretsPage() {
   }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
+    appliedScope.current = requestScope(next, prefix, "");
     setNs(next);
-    setSecrets([]);
     replaceQuery({ env: next.env, app: next.app });
   }
   function applyFilter(e: React.FormEvent) {
@@ -192,14 +197,14 @@ export default function SecretsPage() {
     setPrefixTouched(true);
     if (prefixError) return;
     const next = prefixInput.trim();
-    setSecrets([]);
+    appliedScope.current = requestScope(ns, next, "");
     setPrefix(next);
     replaceQuery({ key_prefix: next });
   }
   function clearFilter() {
+    appliedScope.current = requestScope(ns, "", "");
     setPrefixInput("");
     setPrefixTouched(false);
-    setSecrets([]);
     setPrefix("");
     replaceQuery({ key_prefix: "" });
   }

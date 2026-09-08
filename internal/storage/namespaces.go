@@ -164,14 +164,14 @@ func deleteNamespaceTx(tx *gorm.DB, ref domain.NamespaceRef) error {
 }
 
 // ListNamespaces returns namespaces ordered by (env, app), each with its
-// parameter and secret counts (cheap COUNT subqueries powering the dashboard).
+// parameter, secret, and bound identity counts (cheap COUNT subqueries powering the dashboard).
 func (s *SQLStore) ListNamespaces(ctx context.Context, page ListPage) ([]domain.Namespace, string, error) {
 	limit := clampLimit(page.Limit)
 	after, err := decodeToken(page.Token)
 	if err != nil {
 		return nil, "", err
 	}
-	// Flat row shape: namespace columns plus the two counts. A struct embedding
+	// Flat row shape: namespace columns plus the counts. A struct embedding
 	// namespaceModel would be treated by GORM as a belongs-to association (the
 	// embedded type has its own table/PK), not as flattened columns, so the
 	// fields are listed explicitly here.
@@ -185,11 +185,13 @@ func (s *SQLStore) ListNamespaces(ctx context.Context, page ListPage) ([]domain.
 		CreatedAt          string
 		ParameterCount     int64
 		SecretCount        int64
+		IdentityCount      int64
 	}
 	q := s.db.WithContext(ctx).Table("namespaces AS n").
 		Select("n.id, n.env, n.app, n.description, n.allowed_auth_methods, n.created_by, n.created_at, " +
 			"(SELECT COUNT(*) FROM parameters p WHERE p.namespace_id = n.id) AS parameter_count, " +
-			"(SELECT COUNT(*) FROM secrets s WHERE s.namespace_id = n.id) AS secret_count")
+			"(SELECT COUNT(*) FROM secrets s WHERE s.namespace_id = n.id) AS secret_count, " +
+			"(SELECT COUNT(*) FROM identities i WHERE i.namespace_id = n.id) AS identity_count")
 	if after != "" {
 		// Keyset pagination over the (env, app) UNIQUE key, encoded as "env/app".
 		env, app, _ := splitNamespaceToken(after)
@@ -218,6 +220,7 @@ func (s *SQLStore) ListNamespaces(ctx context.Context, page ListPage) ([]domain.
 		})
 		ns.ParameterCount = uint64(r.ParameterCount)
 		ns.SecretCount = uint64(r.SecretCount)
+		ns.IdentityCount = uint64(r.IdentityCount)
 		out = append(out, ns)
 	}
 	return out, next, nil

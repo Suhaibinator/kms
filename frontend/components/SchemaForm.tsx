@@ -1,10 +1,19 @@
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, type Ref, useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Button, Checkbox, Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
-import { checkJson } from "@/lib/json-text";
+import { checkJson, tokenizeJson } from "@/lib/json-text";
 import {
   buildForm,
   describeConstraints,
@@ -19,6 +28,7 @@ import {
   type JsonSchema,
   parseNumberDraft,
   pathKey,
+  schemaNeedsExactJson,
   setAt,
   validateValue,
 } from "@/lib/schema-form";
@@ -30,6 +40,8 @@ export interface SchemaFormProps {
   /** The value as JSON text — the single source of truth shared with the JSON editor. */
   value: string;
   onChange: (text: string) => void;
+  /** False while any visible or retained local draft cannot be committed. */
+  onValidityChange?: (valid: boolean) => void;
   disabled?: boolean;
   /** Accessible name for the raw JSON editor and, in form mode, the field group. */
   jsonLabel?: string;
@@ -49,6 +61,11 @@ export interface SchemaFormProps {
   captionSource?: "pinned" | "inferred";
   /** Shown beside the mode toggle, e.g. schema and alias chips. */
   schemaLabel?: ReactNode;
+  /** Changes when the parent intentionally replaces the draft, e.g. restore or source pin. */
+  resetKey?: string;
+  preferForm?: boolean;
+  /** @deprecated Exact numeric text is always protected. */
+  preserveExactNumbers?: boolean;
 }
 
 type Mode = "form" | "json";
@@ -86,7 +103,53 @@ function parseText(text: string): { ok: true; data: unknown } | { ok: false; err
       error: `must be valid JSON (line ${problem.line}, col ${problem.column}: ${problem.message})`,
     };
   }
-  return { ok: true, data: JSON.parse(text) };
+  try {
+    return { ok: true, data: JSON.parse(text) };
+  } catch {
+    return { ok: false, error: "must be valid JSON" };
+  }
+}
+
+function needsExactJson(text: string): boolean {
+  return tokenizeJson(text).some(
+    (token) =>
+      token.kind === "number" &&
+      JSON.stringify(Number(text.slice(token.start, token.end))) !==
+        text.slice(token.start, token.end),
+  );
+}
+
+function parseFormText(text: string): ReturnType<typeof parseText> {
+  const parsed = parseText(text);
+  return parsed.ok && needsExactJson(text)
+    ? {
+        ok: false,
+        error: "Use the JSON editor for the whole value to preserve exact numeric text.",
+      }
+    : parsed;
+}
+
+// Compare decimal values without rounding; harmless spellings such as 1.0 and
+// 1e2 remain usable, while digits lost by Number are never silently committed.
+function decimalKey(text: string): string {
+  const [mantissa, exponent = "0"] = text.toLowerCase().replace(/^\+/, "").split("e");
+  const fraction = mantissa.split(".")[1]?.length ?? 0;
+  const digits = mantissa.replace(".", "").replace(/^(-?)0+/, "$1");
+  const trimmed = digits.replace(/0+$/, "");
+  if (trimmed === "" || trimmed === "-") return "0";
+  return `${trimmed}e${BigInt(exponent) - BigInt(fraction) + BigInt(digits.length - trimmed.length)}`;
+}
+
+function parseFormNumber(text: string, integer: boolean): ReturnType<typeof parseNumberDraft> {
+  const result = parseNumberDraft(text, integer);
+  if (
+    !result.error &&
+    result.value !== undefined &&
+    decimalKey(text.trim()) !== decimalKey(String(result.value))
+  ) {
+    return { value: undefined, error: "Use JSON to preserve this number's exact precision." };
+  }
+  return result;
 }
 
 function fieldLabel(field: FormField): string {
@@ -95,6 +158,12 @@ function fieldLabel(field: FormField): string {
 
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function enumUnsetValue(values: Array<string | number>): string {
+  let value = "__kms_unset__";
+  while (values.some((option) => String(option) === value)) value += "_";
+  return value;
 }
 
 /**
@@ -106,6 +175,7 @@ export function SchemaForm({
   schema,
   value,
   onChange,
+  onValidityChange,
   disabled = false,
   jsonLabel = "Value",
   rows = 7,
@@ -118,6 +188,8 @@ export function SchemaForm({
   "aria-required": ariaRequired,
   captionSource = "pinned",
   schemaLabel,
+  preferForm,
+  resetKey,
   inputRef,
 }: SchemaFormProps) {
   const baseId = useId();
@@ -137,29 +209,50 @@ export function SchemaForm({
   );
   const root = useMemo(() => buildForm(schema), [schema]);
   const parsed = useMemo(() => parseText(value), [value]);
+  const exactJsonOnly = needsExactJson(value) || schemaNeedsExactJson(schema);
   const formable =
-    root !== null && parsed.ok && (parsed.data === undefined || isJsonObject(parsed.data));
+    !exactJsonOnly &&
+    root !== null &&
+    parsed.ok &&
+    (parsed.data === undefined || isJsonObject(parsed.data));
   // The operator's last choice wins; otherwise a pinned schema opens on its
   // fields and an inferred one — a convenience — behind the JSON they know.
   const [mode, setModeState] = useState<Mode>(() => {
     if (!root || !formable) return "json";
-    return readStoredEditorMode() ?? (captionSource === "pinned" ? "form" : "json");
+    return preferForm
+      ? "form"
+      : (readStoredEditorMode() ?? (captionSource === "pinned" ? "form" : "json"));
   });
   const setMode = (next: Mode) => {
     setModeState(next);
     storeEditorMode(next);
   };
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, { text: string; error: string | null }>>({});
+  // Keep local incomplete number/JSON text while typing, but discard it on an
+  // explicit parent restore/source replacement. Expansion and mode stay intact.
+  useEffect(() => {
+    void resetKey;
+    setDrafts({});
+  }, [resetKey]);
+  const valid =
+    parsed.ok && value.trim() !== "" && !Object.values(drafts).some((draft) => draft.error);
+  // Inline parent callbacks often change identity after patching a row. Notify
+  // only for validity changes, avoiding callback-driven update loops.
+  const validityCallback = useRef(onValidityChange);
+  validityCallback.current = onValidityChange;
+  useEffect(() => {
+    validityCallback.current?.(valid);
+  }, [valid]);
   // Object groups the operator folded; a group with a problem inside stays open.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const effectiveMode: Mode = mode === "form" && formable ? "form" : "json";
 
   // A brand-new value starts from the schema's shape so required fields are visible.
   useEffect(() => {
-    if (effectiveMode === "form" && root && value.trim() === "") {
+    if (!disabled && effectiveMode === "form" && root && value.trim() === "") {
       onChange(serialize(initialValue(root)));
     }
-  }, [effectiveMode, root, value, onChange]);
+  }, [disabled, effectiveMode, root, value, onChange]);
 
   const data: JsonObject = parsed.ok && isJsonObject(parsed.data) ? parsed.data : {};
   const issues = useMemo(() => (root ? validateValue(schema, data) : []), [schema, root, data]);
@@ -176,12 +269,32 @@ export function SchemaForm({
   function commit(path: string[], next: unknown) {
     onChange(serialize(setAt(data, path, next)));
   }
-  function setDraft(key: string, text: string | undefined) {
+  function setDraft(key: string, text: string | undefined, error: string | null = null) {
     setDrafts((current) => {
       const copy = { ...current };
       if (text === undefined) delete copy[key];
-      else copy[key] = text;
+      else copy[key] = { text, error };
       return copy;
+    });
+  }
+  function reindexListDrafts(listKey: string, removedIndex: number) {
+    const prefix = `${listKey} `;
+    setDrafts((previous) => {
+      const next: Record<string, { text: string; error: string | null }> = {};
+      for (const [draftKey, draft] of Object.entries(previous)) {
+        if (!draftKey.startsWith(prefix)) {
+          next[draftKey] = draft;
+          continue;
+        }
+        const path = draftKey.slice(prefix.length).split(" ");
+        const index = Number(path[0]);
+        if (!Number.isInteger(index) || String(index) !== path[0] || index < removedIndex) {
+          next[draftKey] = draft;
+        } else if (index > removedIndex) {
+          next[`${prefix}${[String(index - 1), ...path.slice(1)].join(" ")}`] = draft;
+        }
+      }
+      return next;
     });
   }
   function errorFor(field: FormField, draftError: string | null): string | null {
@@ -217,7 +330,17 @@ export function SchemaForm({
             // text line and grew the line the moment a default was departed
             // from. text-sm is the hint's own size.
             className="ml-1 h-auto p-0 align-baseline text-sm"
-            onClick={() => commit(field.path, field.schema.default)}
+            onClick={() => {
+              const key = pathKey(field.path);
+              setDrafts((current) =>
+                Object.fromEntries(
+                  Object.entries(current).filter(
+                    ([draftKey]) => draftKey !== key && !draftKey.startsWith(`${key} `),
+                  ),
+                ),
+              );
+              commit(field.path, field.schema.default);
+            }}
           >
             Reset to default
           </Button>
@@ -250,19 +373,26 @@ export function SchemaForm({
           JSON
         </button>
       </fieldset>
+      {Object.values(drafts).some((draft) => draft.error) && effectiveMode === "json" ? (
+        <span role="alert">
+          Fix the incomplete Form fields, or edit JSON to replace those drafts.
+        </span>
+      ) : null}
       {schemaLabel ? <span className="schema-form-label">{schemaLabel}</span> : null}
       <span className="schema-form-caption faint">
         {root === null
-          ? "This alias has no field-level schema; edit it as JSON."
+          ? "This schema cannot be rendered as fields; edit it as JSON."
           : !parsed.ok
             ? "Fix the JSON to use the form."
-            : !formable
-              ? "The form needs a JSON object; the value is something else."
-              : effectiveMode === "form"
-                ? captionSource === "inferred"
-                  ? "Fields inferred from the current value — no schema is pinned for this key."
-                  : "Fields from the pinned schema. Editing a field rewrites the JSON with standard formatting."
-                : "Switch to Form to edit by field."}
+            : exactJsonOnly
+              ? "Use JSON to preserve exact numeric precision and representation."
+              : !formable
+                ? "The form needs a JSON object; the value is something else."
+                : effectiveMode === "form"
+                  ? captionSource === "inferred"
+                    ? "Fields inferred from the current value — no schema is pinned for this key."
+                    : "Fields from the pinned schema. Editing a field rewrites the JSON with standard formatting."
+                  : "Switch to Form to edit by field."}
       </span>
       {showSummary ? (
         <span className="schema-form-summary" data-testid="schema-form-summary" role="status">
@@ -281,15 +411,18 @@ export function SchemaForm({
           id={id}
           aria-label={jsonLabel}
           aria-describedby={ariaDescribedBy}
-          aria-invalid={ariaInvalid}
+          aria-invalid={ariaInvalid || !valid}
           aria-required={ariaRequired}
           inputRef={inputRef}
           rows={rows}
           value={value}
           disabled={disabled}
-          onChange={onChange}
+          onChange={(next) => {
+            setDrafts({});
+            onChange(next);
+          }}
           onBlur={onBlur}
-          onSubmit={onSubmit}
+          onSubmit={valid ? onSubmit : undefined}
         />
       </div>
     );
@@ -299,11 +432,11 @@ export function SchemaForm({
   const extras = extraKeys(rootField, data);
   // A key no JSON path can produce, so the extras draft never collides with a field.
   const extrasKey = "\0extras";
-  const extrasDraft = drafts[extrasKey];
+  const extrasDraft = drafts[extrasKey]?.text;
   const extrasValue = Object.fromEntries(extras.map((key) => [key, data[key]]));
   const extrasText =
     extrasDraft ?? (extras.length === 0 ? "" : JSON.stringify(extrasValue, null, 2));
-  const extrasParsed = extrasDraft === undefined ? null : parseText(extrasDraft);
+  const extrasParsed = extrasDraft === undefined ? null : parseFormText(extrasDraft);
   const extrasError =
     extrasParsed && !extrasParsed.ok
       ? extrasParsed.error
@@ -412,9 +545,11 @@ export function SchemaForm({
         const error = errorFor(field, null);
         const hint = hintFor(field, current);
         if (field.enumValues) {
+          const unsetValue = enumUnsetValue(field.enumValues);
+          const emptyValue = enumUnsetValue([...field.enumValues, unsetValue]);
           const options = field.enumValues.map((option) => ({
-            value: String(option),
-            label: String(option),
+            value: option === "" ? emptyValue : String(option),
+            label: option === "" ? "Empty string" : String(option),
           }));
           return (
             <Field
@@ -427,11 +562,26 @@ export function SchemaForm({
             >
               <AppSelect
                 id={controlId}
-                value={text}
+                value={
+                  current === undefined
+                    ? field.required
+                      ? ""
+                      : unsetValue
+                    : text === ""
+                      ? emptyValue
+                      : text
+                }
                 disabled={disabled}
                 placeholder="Choose…"
-                options={field.required ? options : [{ value: "", label: "— none —" }, ...options]}
-                onValueChange={(next) => commit(field.path, next === "" ? undefined : next)}
+                options={
+                  field.required ? options : [{ value: unsetValue, label: "— none —" }, ...options]
+                }
+                onValueChange={(next) =>
+                  commit(
+                    field.path,
+                    next === unsetValue ? undefined : next === emptyValue ? "" : next,
+                  )
+                }
                 onBlur={onBlur}
                 aria-required={field.required || undefined}
               />
@@ -440,7 +590,8 @@ export function SchemaForm({
         }
         const long =
           (typeof field.schema.maxLength === "number" && field.schema.maxLength > 200) ||
-          field.schema.format === "kms-base64";
+          field.schema.format === "kms-base64" ||
+          /[\r\n]/.test(text);
         const maxLength =
           typeof field.schema.maxLength === "number" ? field.schema.maxLength : undefined;
         return (
@@ -474,10 +625,10 @@ export function SchemaForm({
         );
       }
       case "number": {
-        const draft = drafts[key];
+        const draft = drafts[key]?.text;
         const text = draft ?? (typeof current === "number" ? String(current) : "");
         const draftProblem =
-          draft === undefined ? null : parseNumberDraft(draft, Boolean(field.integer)).error;
+          draft === undefined ? null : parseFormNumber(draft, Boolean(field.integer)).error;
         const error = errorFor(field, draftProblem);
         const hint = hintFor(field, current);
         if (field.enumValues) {
@@ -519,12 +670,12 @@ export function SchemaForm({
               spellCheck={false}
               onChange={(event) => {
                 const next = event.target.value;
-                setDraft(key, next);
-                const result = parseNumberDraft(next, Boolean(field.integer));
+                const result = parseFormNumber(next, Boolean(field.integer));
+                setDraft(key, next, result.error);
                 if (!result.error) commit(field.path, result.value);
               }}
               onBlur={() => {
-                if (draft !== undefined && !parseNumberDraft(draft, Boolean(field.integer)).error) {
+                if (draft !== undefined && !parseFormNumber(draft, Boolean(field.integer)).error) {
                   setDraft(key, undefined);
                 }
                 onBlur?.();
@@ -537,15 +688,95 @@ export function SchemaForm({
         const items = Array.isArray(current) ? current : [];
         const error = errorFor(field, null);
         const hint = hintFor(field, current);
-        const removeItem = (index: number) =>
+        const nullable =
+          field.nullable ||
+          (Array.isArray(field.schema.type) && field.schema.type.includes("null"));
+        const state =
+          current === undefined
+            ? "unset"
+            : current === null
+              ? "null"
+              : Array.isArray(current)
+                ? "set"
+                : "invalid";
+        const replaceList = (next: unknown) => {
+          // Item indices can be reused after a clear, unset or removal. Do not
+          // overlay the replacement list with old numeric/JSON input drafts.
+          setDrafts((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).filter(
+                ([draftKey]) => draftKey !== key && !draftKey.startsWith(`${key} `),
+              ),
+            ),
+          );
+          commit(field.path, next);
+        };
+        const stateControl = (
+          <div className="row-wrap">
+            <select
+              id={`${controlId}-state`}
+              className="native-select w-full rounded-md border border-input bg-input/30 px-3 py-2 sm:w-48"
+              aria-label={`${label} state`}
+              aria-invalid={error ? true : undefined}
+              disabled={disabled}
+              value={state}
+              onChange={(event) =>
+                replaceList(
+                  event.target.value === "unset"
+                    ? undefined
+                    : event.target.value === "null"
+                      ? null
+                      : [],
+                )
+              }
+              onBlur={onBlur}
+            >
+              <option value="unset">Not set</option>
+              <option value="set">Set</option>
+              {nullable && <option value="null">Null</option>}
+              {state === "null" && !nullable && (
+                <option value="null" disabled>
+                  Null (not allowed)
+                </option>
+              )}
+              {state === "invalid" && (
+                <option value="invalid" disabled>
+                  Invalid value
+                </option>
+              )}
+            </select>
+            <span className="faint text-sm" role="status">
+              {state === "unset"
+                ? "Not set · property omitted"
+                : state === "null"
+                  ? "Null · explicit null value"
+                  : state === "set"
+                    ? items.length === 0
+                      ? "Empty array · 0 items"
+                      : `${items.length} item${items.length === 1 ? "" : "s"}`
+                    : "Not an array · use JSON to inspect"}
+            </span>
+          </div>
+        );
+        const removeItem = (index: number) => {
+          reindexListDrafts(key, index);
           commit(
             field.path,
             items.filter((_, position) => position !== index),
           );
+        };
         if (field.item === "object" && field.itemField) {
           const itemField = field.itemField;
           return (
-            <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+            <Field
+              key={key}
+              label={label}
+              htmlFor={`${controlId}-state`}
+              required={field.required}
+              hint={hint}
+              error={error}
+            >
+              {stateControl}
               <ul className="schema-form-list" aria-label={`${label} items`}>
                 {items.map((_, index) => {
                   const item = itemAt(field, index);
@@ -580,12 +811,25 @@ export function SchemaForm({
           );
         }
         return (
-          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+          <Field
+            key={key}
+            label={label}
+            htmlFor={`${controlId}-state`}
+            required={field.required}
+            hint={hint}
+            error={error}
+          >
+            {stateControl}
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
                 const itemKey = pathKey([...field.path, String(index)]);
-                const itemDraft = drafts[itemKey];
-                const itemError = issueByPath.get(itemKey)?.join("; ") ?? null;
+                const itemDraft = drafts[itemKey]?.text;
+                const itemError =
+                  drafts[itemKey]?.error ?? issueByPath.get(itemKey)?.join("; ") ?? null;
+                const ItemInput =
+                  field.item === "string" && typeof item === "string" && /[\r\n]/.test(item)
+                    ? Textarea
+                    : Input;
                 const setItem = (next: unknown) =>
                   commit(
                     field.path,
@@ -624,7 +868,7 @@ export function SchemaForm({
                         }
                       />
                     ) : (
-                      <Input
+                      <ItemInput
                         className="font-mono"
                         aria-label={`${label} item ${index + 1}`}
                         aria-invalid={itemError ? true : undefined}
@@ -645,18 +889,20 @@ export function SchemaForm({
                         onChange={(event) => {
                           const next = event.target.value;
                           if (field.item === "number") {
-                            setDraft(itemKey, next);
-                            const result = parseNumberDraft(next, Boolean(field.integer));
+                            const result = parseFormNumber(next, Boolean(field.integer));
+                            setDraft(
+                              itemKey,
+                              next,
+                              result.error ??
+                                (result.value === undefined ? "must be a number" : null),
+                            );
                             if (!result.error && result.value !== undefined) setItem(result.value);
                           } else {
                             setItem(next);
                           }
                         }}
                         onBlur={() => {
-                          if (
-                            itemDraft !== undefined &&
-                            !parseNumberDraft(itemDraft, Boolean(field.integer)).error
-                          ) {
+                          if (itemDraft !== undefined && !drafts[itemKey]?.error) {
                             setDraft(itemKey, undefined);
                           }
                           onBlur?.();
@@ -702,9 +948,9 @@ export function SchemaForm({
         );
       }
       default: {
-        const draft = drafts[key];
+        const draft = drafts[key]?.text;
         const text = draft ?? (current === undefined ? "" : JSON.stringify(current, null, 2));
-        const draftResult = draft === undefined ? null : parseText(draft);
+        const draftResult = draft === undefined ? null : parseFormText(draft);
         const draftProblem = draftResult && !draftResult.ok ? draftResult.error : null;
         const error = errorFor(field, draftProblem);
         return (
@@ -726,12 +972,12 @@ export function SchemaForm({
               value={text}
               disabled={disabled}
               onChange={(next) => {
-                setDraft(key, next);
-                const result = parseText(next);
+                const result = parseFormText(next);
+                setDraft(key, next, result.ok ? null : result.error);
                 if (result.ok) commit(field.path, result.data);
               }}
               onBlur={() => {
-                if (draft !== undefined && parseText(draft).ok) setDraft(key, undefined);
+                if (draft !== undefined && parseFormText(draft).ok) setDraft(key, undefined);
                 onBlur?.();
               }}
             />
@@ -756,7 +1002,7 @@ export function SchemaForm({
       data-mode="form"
       aria-describedby={ariaDescribedBy}
       data-required={ariaRequired ? "true" : undefined}
-      data-invalid={ariaInvalid ? "true" : undefined}
+      data-invalid={ariaInvalid || !valid ? "true" : undefined}
     >
       <legend className="sr-only">{jsonLabel}</legend>
       {toolbar}
@@ -786,8 +1032,16 @@ export function SchemaForm({
             value={extrasText}
             disabled={disabled}
             onChange={(next) => {
-              setDraft(extrasKey, next);
-              const result = parseText(next);
+              const result = parseFormText(next);
+              setDraft(
+                extrasKey,
+                next,
+                !result.ok
+                  ? result.error
+                  : result.data !== undefined && !isJsonObject(result.data)
+                    ? "must be a JSON object"
+                    : null,
+              );
               if (!result.ok) return;
               if (result.data !== undefined && !isJsonObject(result.data)) return;
               const kept: JsonObject = {};

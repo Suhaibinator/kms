@@ -123,6 +123,7 @@ export default function ParametersPage() {
   const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [valueValid, setValueValid] = useState(true);
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [metadataOpen, setMetadataOpen] = useState(false);
@@ -149,20 +150,26 @@ export default function ParametersPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDone, setBulkDone] = useState(0);
 
-  // Seed the selection from deep-link query params exactly once.
+  // Follow deep links and same-page/history navigation. Query values are stable
+  // until the relevant URL fields change; local drafts do not write from effects.
   const [seeded, setSeeded] = useState(false);
+  const appliedScope = useRef<string | null>(null);
   useEffect(() => {
-    if (!queryReady || seeded) return;
+    if (!queryReady) return;
     setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
     const kp = queryValues.key_prefix ?? "";
-    if (env || app) setNs({ env, app });
-    if (kp) {
-      setPrefixInput(kp);
-      setPrefix(kp);
-    }
-  }, [queryReady, queryValues, seeded]);
+    const scope = requestScope({ env, app }, kp, "");
+    // An internal replace can acknowledge an applied filter after the user
+    // has started typing the next draft. Only external scope changes reset it.
+    if (appliedScope.current === scope) return;
+    appliedScope.current = scope;
+    setNs((current) => (current.env === env && current.app === app ? current : { env, app }));
+    setPrefixInput(kp);
+    setPrefix(kp);
+    setPrefixTouched(false);
+  }, [queryReady, queryValues]);
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -191,6 +198,7 @@ export default function ParametersPage() {
 
   // A message stays hidden until the user has left the field or tried to
   // submit, so a freshly opened form is never already covered in errors.
+  const invalidFormDraft = !valueValid && valueError === null;
   const shownPrefixError = prefixTouched ? prefixError : null;
   const shownKeyError = errors.shown("key", keyError);
   const shownValueError = errors.shown("value", valueError);
@@ -260,8 +268,8 @@ export default function ParametersPage() {
   }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
+    appliedScope.current = requestScope(next, prefix, "");
     setNs(next);
-    setRows([]);
     setDeleteTarget(null);
     replaceQuery({ env: next.env, app: next.app });
   }
@@ -270,15 +278,15 @@ export default function ParametersPage() {
     setPrefixTouched(true);
     if (prefixError) return;
     const next = prefixInput.trim();
-    setRows([]);
+    appliedScope.current = requestScope(ns, next, "");
     setDeleteTarget(null);
     setPrefix(next);
     replaceQuery({ key_prefix: next });
   }
   function clearFilter() {
+    appliedScope.current = requestScope(ns, "", "");
     setPrefixInput("");
     setPrefixTouched(false);
-    setRows([]);
     setDeleteTarget(null);
     setPrefix("");
     replaceQuery({ key_prefix: "" });
@@ -288,6 +296,7 @@ export default function ParametersPage() {
     setCreateNs(hasNs ? ns : NO_NS);
     setKey("");
     setValue("");
+    setValueValid(true);
     setContentType("string");
     setMetadataJson("{}");
     setMetadataOpen(false);
@@ -300,7 +309,7 @@ export default function ParametersPage() {
     errors.markAllTouched();
     // Every problem now has an inline message beside the field that caused it;
     // move focus there so the button never looks dead.
-    if (!createNs.env || !createNs.app || createError) {
+    if (!createNs.env || !createNs.app || createError || !valueValid) {
       if (metadataError) setMetadataOpen(true);
       requestFocus();
       return;
@@ -312,6 +321,7 @@ export default function ParametersPage() {
         env: createNs.env,
         app: createNs.app,
         key: k,
+        create_only: true,
         value: canonicalParameterValue(value, contentType),
         content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
@@ -620,7 +630,11 @@ export default function ParametersPage() {
             <Button variant="outline" onClick={close} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={onCreate} loading={saving} disabled={shownCreateError !== null}>
+            <Button
+              onClick={onCreate}
+              loading={saving}
+              disabled={shownCreateError !== null || invalidFormDraft}
+            >
               Save parameter
             </Button>
           </>
@@ -683,6 +697,7 @@ export default function ParametersPage() {
               schema={createSchema.status === "ready" ? createSchema.schema : null}
               rows={8}
               onChange={setValue}
+              onValidityChange={setValueValid}
               onBlur={() => errors.touch("value")}
             />
           </Field>

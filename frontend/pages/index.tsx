@@ -263,7 +263,7 @@ function LiveSubscribers({
               <tr>
                 <th>Client</th>
                 <th>Last heartbeat</th>
-                <th>Applied revision</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -280,12 +280,39 @@ function LiveSubscribers({
                     <td
                       data-label="Last heartbeat"
                       className="nowrap"
-                      title={formatUnixMs(s.last_heartbeat_unix_ms)}
+                      title={
+                        s.release_name
+                          ? "Release streams report lifecycle status instead of transport heartbeats"
+                          : formatUnixMs(s.last_heartbeat_unix_ms)
+                      }
                     >
-                      {formatRelative(s.last_heartbeat_unix_ms, now)}
+                      {s.release_name ? "—" : formatRelative(s.last_heartbeat_unix_ms, now)}
                     </td>
-                    <td data-label="Applied revision">
-                      {behind > 0 ? (
+                    <td data-label="Status">
+                      {s.release_name ? (
+                        <Badge
+                          kind={
+                            s.release_state === "applied"
+                              ? "success"
+                              : s.release_state === "rejected"
+                                ? "danger"
+                                : "neutral"
+                          }
+                        >
+                          {s.release_state
+                            ? [
+                                s.release_name,
+                                s.release_state,
+                                s.release_version === undefined ? null : `v${s.release_version}`,
+                                s.release_revision === undefined
+                                  ? null
+                                  : `revision ${s.release_revision}`,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")
+                            : `${s.release_name} · awaiting lifecycle report`}
+                        </Badge>
+                      ) : behind > 0 ? (
                         <Badge kind="warning">{behind} behind</Badge>
                       ) : (
                         <Badge kind="success">up to date</Badge>
@@ -395,16 +422,20 @@ export default function DashboardPage() {
     if (!run.current) return;
 
     const nextFleet: Fleet = { ...NO_FLEET, overviews: {} };
-    if (apps.status === "fulfilled") {
-      nextFleet.applicationCount = (apps.value.applications ?? []).length;
-    }
     if (overview.status === "fulfilled") {
       nextFleet.applications = overview.value.applications ?? [];
-      if (nextFleet.applicationCount === null) {
-        nextFleet.applicationCount = nextFleet.applications.length;
-      }
+      // The fleet endpoint walks every active application, whereas the list
+      // request is a bounded fallback. Keep the header count on the same
+      // active fleet represented by the grid, even beyond the list's 200-row
+      // first page.
+      nextFleet.applicationCount = nextFleet.applications.length;
     } else {
       nextFleet.fleetFailed = true;
+      // Preserve a useful count if the complete fleet request failed. Both
+      // endpoints exclude archived applications by default.
+      if (apps.status === "fulfilled") {
+        nextFleet.applicationCount = (apps.value.applications ?? []).length;
+      }
     }
     const fleetError = [apps, overview].find((r) => r.status === "rejected") as
       | PromiseRejectedResult
@@ -440,7 +471,7 @@ export default function DashboardPage() {
   }, [load]);
 
   const staleCount = data.subscribers.filter(
-    (s) => s.last_acked_revision < data.currentRevision,
+    (s) => !s.release_name && s.last_acked_revision < data.currentRevision,
   ).length;
 
   const statusCounts = useMemo(() => {

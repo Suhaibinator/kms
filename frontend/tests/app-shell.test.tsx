@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AppShell, { isApplePlatform } from "@/components/AppShell";
+import { Modal } from "@/components/Modal";
 import { rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
 
@@ -192,6 +193,18 @@ describe("AppShell", () => {
     );
   });
 
+  it("uses a client's binding instead of namespace memory from another identity", () => {
+    rememberNamespace({ env: "staging", app: "reports" });
+    mocks.identity = client;
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+    const parameters = within(desktopNav()).getByRole("link", { name: "Parameters" });
+    expect(parameters).toHaveAttribute("href", "/parameters?env=prod&app=gradethis");
+  });
+
   it("opens the command palette from the search button and toggles it with ⌘K / Ctrl+K", () => {
     render(
       <AppShell>
@@ -218,6 +231,21 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("palette")).toBeNull();
     expect(fireEvent.keyDown(window, { key: "k", metaKey: true, altKey: true })).toBe(true);
     expect(screen.queryByTestId("palette")).toBeNull();
+  });
+
+  it("does not open the palette over a dirty dialog that owns dismissal", () => {
+    render(
+      <AppShell>
+        <Modal open dirty title="Edit parameter" onClose={vi.fn()}>
+          <input aria-label="Draft value" defaultValue="unsaved" />
+        </Modal>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole("dialog", { name: "Edit parameter" })).toBeVisible();
+    expect(fireEvent.keyDown(window, { key: "k", metaKey: true })).toBe(false);
+    expect(screen.queryByTestId("palette")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull();
   });
 
   it("shows Ctrl K instead of ⌘K off Apple platforms, while declaring both", () => {

@@ -1405,3 +1405,86 @@ async function generateBindingKey() {
   fireEvent.click(screen.getByRole("button", { name: "Generate binding key" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "32 bytes, hex" }));
 }
+
+describe("secrets list navigation", () => {
+  it("keeps rows when Filter or Clear does not change the scope", async () => {
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    render(<SecretsPage />);
+    await screen.findByText(SECRET.key);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByText(SECRET.key)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText(SECRET.key)).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    await screen.findByText(SECRET.key);
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByText(SECRET.key)).toBeVisible();
+  });
+
+  it("follows same-page navigation and history when query fields change or disappear", async () => {
+    const list = vi
+      .spyOn(api, "listSecrets")
+      .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    const view = render(<SecretsPage />);
+    await screen.findByText(SECRET.key);
+    mocks.router.query = { env: "dev", app: "other", key_prefix: "new" };
+    view.rerender(<SecretsPage />);
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(
+        { env: "dev", app: "other" },
+        "new",
+        100,
+        undefined,
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Key prefix")).toHaveValue("new");
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    view.rerender(<SecretsPage />);
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(
+        { env: NAMESPACE.env, app: NAMESPACE.app },
+        undefined,
+        100,
+        undefined,
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByLabelText("Key prefix")).toHaveValue("");
+    mocks.router.query = {};
+    view.rerender(<SecretsPage />);
+    expect(await screen.findByText("Choose an environment")).toBeVisible();
+  });
+});
+
+it("preserves a newer filter draft when an internal URL replacement settles late", async () => {
+  const list = vi
+    .spyOn(api, "listSecrets")
+    .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+  const view = render(<SecretsPage />);
+  await screen.findByText(SECRET.key);
+  const input = screen.getByLabelText("Key prefix");
+  fireEvent.change(input, { target: { value: "db" } });
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.change(input, { target: { value: "db/cache" } });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "db" };
+  view.rerender(<SecretsPage />);
+  expect(input).toHaveValue("db/cache");
+  await waitFor(() =>
+    expect(list).toHaveBeenLastCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      "db",
+      100,
+      undefined,
+      expect.anything(),
+    ),
+  );
+  // A real navigation to another applied scope still replaces the draft.
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "external" };
+  view.rerender(<SecretsPage />);
+  expect(input).toHaveValue("external");
+});

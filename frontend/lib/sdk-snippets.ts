@@ -12,6 +12,8 @@ export interface SnippetInput {
   alias: string;
   /** false when health reports `tls_enabled: false`; the snippet then opts into cleartext. */
   tls: boolean;
+  /** Defaults to mTLS over TLS, or token on a development cleartext listener. */
+  authMethod?: "mtls" | "token";
 }
 
 export const MTLS_RUNBOOK_URL =
@@ -41,7 +43,10 @@ export function goSnippet(input: SnippetInput): string {
   const alias = input.alias || "alias";
   const name = identifier(alias);
   const transport = input.tls
-    ? `    TLS: kmsclient.MTLSFromFiles(
+    ? input.authMethod === "token"
+      ? `    TLS:      kmsclient.TLSFromFiles(os.Getenv("KMS_CA_FILE")),
+    Token:    os.Getenv("KMS_TOKEN"),`
+      : `    TLS: kmsclient.MTLSFromFiles(
         os.Getenv("KMS_CLIENT_CERT_FILE"),
         os.Getenv("KMS_CLIENT_KEY_FILE"),
         os.Getenv("KMS_CA_FILE"),
@@ -83,7 +88,10 @@ export function tsSnippet(input: SnippetInput): string {
   const alias = input.alias || "alias";
   const name = identifier(alias);
   const credentials = input.tls
-    ? `  credentials: mtlsFromFiles(
+    ? input.authMethod === "token"
+      ? `  credentials: tlsFromFiles(process.env.KMS_CA_FILE!),
+  token: process.env.KMS_TOKEN,`
+      : `  credentials: mtlsFromFiles(
     process.env.KMS_CLIENT_CERT_FILE!,
     process.env.KMS_CLIENT_KEY_FILE!,
     process.env.KMS_CA_FILE!,
@@ -92,7 +100,7 @@ export function tsSnippet(input: SnippetInput): string {
   insecure: true,
   token: process.env.KMS_TOKEN,`;
   const imports = input.tls
-    ? 'import { ClassifiedReleaseError, createClient, mtlsFromFiles } from "@suhaibinator/kms";'
+    ? `import { ClassifiedReleaseError, createClient, ${input.authMethod === "token" ? "tlsFromFiles" : "mtlsFromFiles"} } from "@suhaibinator/kms";`
     : 'import { ClassifiedReleaseError, createClient } from "@suhaibinator/kms";';
   return `${imports}
 

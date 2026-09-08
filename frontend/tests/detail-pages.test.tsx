@@ -536,6 +536,28 @@ describe("parameter version history", () => {
     expect(panel.querySelector(".json-block")?.textContent).toBe("2");
   });
 
+  it("keeps the comparison when viewing a third version of the same parameter", async () => {
+    mocks.router.query = { env: PARAMETER.env, app: PARAMETER.app, key: PARAMETER.key };
+    vi.spyOn(api, "parameterMetadata").mockResolvedValue({
+      ...HISTORY,
+      versions: [{ ...HISTORY.versions[0], version: 3 }, ...HISTORY.versions],
+    });
+    vi.spyOn(api, "getParameter").mockImplementation(async (_ref, version) => ({
+      parameter: { ...PARAMETER, version: version ?? 2, value: String(version ?? 2) },
+    }));
+    render(<ParameterDetailPage />);
+    await screen.findByRole("button", { name: "Copy value" });
+    fireEvent.click(within(row(1)).getByRole("button", { name: "View value" }));
+    const panel = await screen.findByTestId("version-panel");
+    fireEvent.click(within(row(2)).getByRole("button", { name: "Compare v2 with v1" }));
+    await within(panel).findByTestId("json-diff");
+    fireEvent.click(within(row(3)).getByRole("button", { name: "View value" }));
+    await waitFor(() => expect(within(row(3)).getByText("viewing")).toBeVisible());
+    expect(within(row(2)).getByText("comparing")).toBeVisible();
+    expect(within(panel).getByTestId("json-diff")).toHaveTextContent("v2");
+    expect(within(panel).getByTestId("json-diff")).toHaveTextContent("v3");
+  });
+
   it("restores an older version by prefilling the new-version dialog", async () => {
     const putParameter = vi
       .spyOn(api, "putParameter")

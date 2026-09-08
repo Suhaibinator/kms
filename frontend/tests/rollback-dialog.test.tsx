@@ -95,7 +95,7 @@ describe("RollbackDialog", () => {
   });
 
   it("links to the previous release so the operator can compare before confirming", async () => {
-    renderDialog();
+    const props = renderDialog();
     expect(
       within(dialog()).getByRole("link", {
         name: `See what changes (v${active.version} → v${active.previous_version})`,
@@ -106,10 +106,13 @@ describe("RollbackDialog", () => {
         app: incident.application.name,
         env: "prod",
         name,
-        release: `${name}@${active.version}`,
+        release: `${name}@${active.previous_version}`,
         section: "compare",
+        compare: `${name}@${active.version}`,
       }),
     );
+    fireEvent.click(within(dialog()).getByRole("link", { name: /^See what changes/ }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("calls a rollback of a rollback a re-activation", async () => {

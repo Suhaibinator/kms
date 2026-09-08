@@ -4292,12 +4292,210 @@
   }
 
   .migration-contract-row {
+    position: relative;
     display: grid;
-    grid-template-columns: minmax(10rem, 1.2fr) minmax(10rem, 1fr) minmax(9rem, 0.8fr) auto;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
     align-items: end;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+    margin-top: var(--space-4);
+  }
+
+  .upgrade-contract-heading {
+    grid-column: 1 / -1;
+    min-width: 0;
+    padding-right: var(--space-9);
+  }
+
+  .upgrade-contract-heading h3 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-base);
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .migration-contract-row > button {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+  }
+
+  .migration-contract-row .native-select {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: var(--space-2);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  .migration-contract-row .native-select:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .migration-contract-row .native-select:disabled {
+    opacity: 0.55;
+  }
+
+  .upgrade-change-navigator {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    margin-block: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+  }
+
+  .upgrade-change-counts {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .upgrade-change-counts > span {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+    font-size: var(--text-sm);
+    color: var(--muted-foreground);
+  }
+
+  .upgrade-change-counts strong {
+    color: var(--foreground);
+    font-size: var(--text-base);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .upgrade-change-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .upgrade-change-controls > input {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .upgrade-change-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-right: auto;
+    font-size: var(--text-sm);
+  }
+  .upgrade-change-filter input {
+    accent-color: var(--primary);
+  }
+  .upgrade-change-navigator summary {
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+  }
+  .upgrade-change-navigator details[open] > div {
+    margin-top: var(--space-3);
+  }
+
+  .upgrade-change-labels {
+    display: grid;
     gap: var(--space-3);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
+    min-width: 0;
+    font-size: var(--text-sm);
+  }
+  .upgrade-change-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .upgrade-change-badge {
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    color: var(--primary);
+    border-radius: var(--radius-sm);
+    padding: 2px var(--space-2);
+    font-weight: 550;
+  }
+  .upgrade-change-badge-alert {
+    color: var(--destructive);
+    border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  }
+  .upgrade-change-unchanged {
+    color: var(--muted-foreground);
+  }
+  .upgrade-change-paths {
+    list-style: none;
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .upgrade-change-paths li {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding-block: var(--space-1);
+  }
+  .upgrade-change-paths .mono {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .upgrade-change-path-kind {
+    flex-shrink: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+  }
+  .upgrade-value-card {
+    margin-top: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+  }
+  .upgrade-value-card > summary {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .upgrade-value-card[open] > summary {
+    margin-bottom: var(--space-4);
+  }
+  .upgrade-field-changed {
+    border-left: 3px solid var(--primary);
+  }
+
+  @media (max-width: 900px) {
+    .migration-contract-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .upgrade-change-counts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 480px) {
+    .upgrade-change-controls > button {
+      flex: 1 1 auto;
+    }
+    .upgrade-change-filter {
+      flex-basis: 100%;
+      margin-block: var(--space-1);
+    }
+    .upgrade-contract-heading {
+      padding-right: var(--space-7);
+    }
   }
 
   .migration-value-row {

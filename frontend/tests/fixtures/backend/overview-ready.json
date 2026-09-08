@@ -48,6 +48,7 @@
         "created_by": "admin",
         "description": "dev/gradethis",
         "env": "dev",
+        "identity_count": 0,
         "parameter_count": 2,
         "secret_count": 1
       },
@@ -191,6 +192,7 @@
         "created_by": "admin",
         "description": "prod/gradethis",
         "env": "prod",
+        "identity_count": 0,
         "parameter_count": 2,
         "secret_count": 1
       },
