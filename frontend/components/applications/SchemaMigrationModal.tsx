@@ -470,6 +470,7 @@ export function SchemaMigrationModal({
     return {
       environment,
       schema_version: schemaVersion,
+      source_schema_version: sourceSchemaVersion,
       contract: fields.map(({ alias, kind, content_type }) => ({
         alias: alias.trim(),
         kind,
@@ -549,6 +550,7 @@ export function SchemaMigrationModal({
       const active = await api.getActiveRelease(
         { env: environment, app: application.name },
         application.release_name,
+        sourceSchemaVersion,
       );
       if (generation !== loadGeneration.current || requestedEnvironment !== environment) return;
       sourceIdentity.current = {
@@ -1410,6 +1412,7 @@ export function SchemaMigrationModal({
           </div>
           {preview.activation ? (
             <RolloutPanel
+              schemaVersion={preview.schema_version}
               namespace={{ env: environment, app: application.name }}
               releaseName={preview.release_name}
               activationRevision={preview.activation.activation_revision}

@@ -29,6 +29,7 @@ export interface UseReleaseSubscribersOptions {
   enabled?: boolean;
   /** `poll` skips the stream entirely (tests, constrained proxies). */
   transport?: "auto" | "poll";
+  schemaVersion?: number;
 }
 
 export const POLL_INTERVAL_MS = 5_000;
@@ -61,6 +62,7 @@ export function useReleaseSubscribers(
 ): ReleaseSubscribersState {
   const enabled = (opts.enabled ?? true) && ns !== null && name !== "";
   const mode = opts.transport ?? "auto";
+  const schemaVersion = opts.schemaVersion ?? 0;
   const env = ns?.env ?? "";
   const app = ns?.app ?? "";
 
@@ -77,9 +79,9 @@ export function useReleaseSubscribers(
     if (!enabled) return;
     const run = request.begin();
     try {
-      const page = await api.releaseSubscribers({ env, app }, name, 1000, undefined, {
-        signal: run.signal,
-      });
+      const page = await api.releaseSubscribers(
+        { env, app }, name, 1000, undefined, { signal: run.signal }, schemaVersion,
+      );
       if (!run.current) return;
       setInstances(groupSubscriberInstances(page.subscribers ?? []));
       setCurrentRevision(page.current_revision ?? 0);
@@ -89,7 +91,7 @@ export function useReleaseSubscribers(
       if (!run.current || isAbortError(err)) return;
       setStale(true);
     }
-  }, [enabled, env, app, name, request]);
+  }, [enabled, env, app, name, request, schemaVersion]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `refresh` already encodes the namespace, name and enabled flag; listing them again would only restart the stream twice.
   useEffect(() => {
@@ -134,7 +136,7 @@ export function useReleaseSubscribers(
       let attempt = 0;
       while (!signal.aborted) {
         try {
-          await api.subscriberStream({ env, app }, name, {
+          await api.subscriberStream({ env, app }, name, schemaVersion, {
             signal,
             onSnapshot: (snapshot) => {
               if (signal.aborted) return;

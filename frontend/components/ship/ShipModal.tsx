@@ -269,6 +269,7 @@ export default function ShipModal({
       const response = await api.ship({
         application: application.name,
         environment,
+        schema_version: application.schema_version,
         changes: attempted,
         dry_run: true,
       });
@@ -439,6 +440,7 @@ export default function ShipModal({
       response = await api.ship({
         application: application.name,
         environment,
+        schema_version: application.schema_version,
         changes: previewChanges,
         expected_active_version: expected,
         request_id: newRequestId(),
@@ -509,6 +511,7 @@ export default function ShipModal({
         namespace,
         release.name,
         release.version,
+        preview.schema_version,
         preview.base_version,
       );
       setRetrying(false);
@@ -866,6 +869,7 @@ export default function ShipModal({
               <RolloutPanel
                 namespace={namespace}
                 releaseName={application.release_name}
+                schemaVersion={preview?.schema_version ?? application.schema_version}
                 activationRevision={rolledBack?.activation_revision ?? activation.revision}
                 enabled={open && phase === "rollout"}
                 onRollback={

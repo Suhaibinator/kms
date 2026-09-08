@@ -26,6 +26,8 @@ function listLink(base: string, ns?: NamespaceRef, keyPrefix?: string): string {
 }
 
 export interface ApplicationLinkOptions {
+
+  schemaVersion?: number;
   /** Focus (scroll to) this environment's pipeline column. */
   env?: string;
   /** Open the Ship modal: an alias prefills a row, `true` opens it empty. */
@@ -45,6 +47,7 @@ export const links = {
   // all five and the palette/overview deep-link into every combination.
   application: (name: string, opts?: ApplicationLinkOptions): string => {
     const params = [`app=${encodeURIComponent(name)}`];
+    if (opts?.schemaVersion !== undefined) params.push(`schema_version=${opts.schemaVersion}`);
     if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
     if (opts?.ship) {
       params.push(`ship=${opts.ship === true ? "1" : encodeURIComponent(opts.ship)}`);
@@ -114,11 +117,13 @@ export const links = {
     section?: "compare";
     /** Exact source release for the comparison, as name@version. */
     compare?: string;
+    schemaVersion?: number;
   }): string => {
     const params: string[] = [];
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
     if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
     if (opts?.name) params.push(`name=${encodeURIComponent(opts.name)}`);
+    if (opts?.schemaVersion !== undefined) params.push(`schema_version=${opts.schemaVersion}`);
     if (opts?.tab) params.push(`tab=${opts.tab}`);
     if (opts?.release) params.push(`release=${encodeURIComponent(opts.release)}`);
     if (opts?.section) params.push(`section=${opts.section}`);

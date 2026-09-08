@@ -29,6 +29,7 @@ export function ImportDefaultsModal({
   application,
   environment,
   production,
+  schemaVersion = 0,
   open,
   onClose,
   onImported,
@@ -36,6 +37,7 @@ export function ImportDefaultsModal({
   application: string;
   environment: string;
   production: boolean;
+  schemaVersion?: number;
   open: boolean;
   onClose: () => void;
   onImported: () => void | Promise<void>;
@@ -79,6 +81,7 @@ export function ImportDefaultsModal({
       const result = await api.importApplicationDefaults({
         env: environment,
         app: application,
+        schemaVersion,
         artifact: raw,
         overwrite: allowOverwrite,
         updateDefinition: allowDefinitionUpdate,
@@ -146,6 +149,7 @@ export function ImportDefaultsModal({
       const result = await api.importApplicationDefaults({
         env: environment,
         app: application,
+        schemaVersion,
         artifact,
         overwrite,
         updateDefinition,

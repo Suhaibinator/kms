@@ -91,7 +91,7 @@ const changedToastId = (name: string) => `overview-changed:${name}`;
 
 export function useApplicationOverview(
   name: string,
-  { paused = false }: { paused?: boolean } = {},
+  { paused = false, schemaVersion }: { paused?: boolean; schemaVersion?: number } = {},
 ): {
   /** Only ever the slot for `name`; null before the first response. */
   slot: OverviewSlot | null;
@@ -130,7 +130,7 @@ export function useApplicationOverview(
         : { name, status: "loading", data: null },
     );
     try {
-      const data = await api.applicationOverview(name, undefined, { signal: run.signal });
+      const data = await api.applicationOverview(name, undefined, { signal: run.signal }, schemaVersion);
       if (!run.current) return;
       shownRef.current = { name, data };
       setSlot({ name, status: "success", data });
@@ -161,7 +161,7 @@ export function useApplicationOverview(
         setLoading(false);
       }
     }
-  }, [name, request, toast]);
+  }, [name, request, toast, schemaVersion]);
 
   useEffect(() => {
     if (name) void reload();
@@ -192,7 +192,7 @@ export function useApplicationOverview(
       try {
         const latest = await api.applicationOverview(name, undefined, {
           signal: controller.signal,
-        });
+        }, schemaVersion);
         // A reload that started meanwhile supersedes this comparison.
         if (disposed || generationRef.current !== generation || loadingRef.current) return;
         const moved = releaseMovements(shown.data, latest);
@@ -221,7 +221,7 @@ export function useApplicationOverview(
       controller?.abort();
       toast.dismiss(changedToastId(name));
     };
-  }, [name, reload, toast]);
+  }, [name, reload, toast, schemaVersion]);
 
   return { slot: slot?.name === name ? slot : null, loading, reload, freshness };
 }

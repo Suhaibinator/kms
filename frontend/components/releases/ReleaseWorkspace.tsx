@@ -325,6 +325,7 @@ export function ReleaseWorkspace({
             <RolloutPanel
               namespace={release.namespace}
               releaseName={release.name}
+              schemaVersion={release.schema_version}
               activationRevision={rolloutActivationRevision}
               followCurrentActivation
               enabled={section === "rollout"}

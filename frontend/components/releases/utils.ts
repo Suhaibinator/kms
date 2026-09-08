@@ -7,20 +7,25 @@ import {
   validateReleaseName,
 } from "@/lib/validation";
 
-export function releaseKey(release: { name: string; version: number }): string {
-  return `${release.name}@${release.version}`;
+export function releaseKey(release: { name: string; version: number; schema_version?: number }): string {
+  return release.schema_version === undefined
+    ? `${release.name}@${release.version}`
+    : `${release.name}@${release.schema_version}:${release.version}`;
 }
 
 /** Inverse of releaseKey: `runtime@12` → {name, version}; null when malformed. */
-export function parseReleaseKey(key: string): { name: string; version: number } | null {
+export function parseReleaseKey(key: string): { name: string; version: number; schema_version?: number } | null {
   const at = key.lastIndexOf("@");
   if (at <= 0 || at === key.length - 1) return null;
   const name = key.slice(0, at);
-  const digits = key.slice(at + 1);
-  if (!/^\d+$/.test(digits)) return null;
-  const version = Number(digits);
+  const suffix = key.slice(at + 1);
+  const parts = suffix.split(":");
+  if (parts.length > 2 || parts.some((part) => !/^\d+$/.test(part))) return null;
+  const schema_version = parts.length === 2 ? Number(parts[0]) : undefined;
+  const version = Number(parts.at(-1));
   if (!Number.isSafeInteger(version) || version < 1) return null;
-  return { name, version };
+  if (schema_version !== undefined && (!Number.isSafeInteger(schema_version) || schema_version < 0)) return null;
+  return { name, version, schema_version };
 }
 
 export function refText(entry: ConfigurationRelease["entries"][number]): string {

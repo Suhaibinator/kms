@@ -75,7 +75,7 @@ export default function RollbackDialog({
       }
       setCheck({ kind: "loading" });
       try {
-        const result = await api.validateRelease(namespace, name, candidate.previous_version);
+        const result = await api.validateRelease(namespace, name, candidate.previous_version, active?.schema_version ?? 0);
         if (signal.aborted) return;
         if (result.valid) setCheck({ kind: "valid" });
         else if (result.errors.length > 0) setCheck({ kind: "invalid", violations: result.errors });
@@ -96,7 +96,7 @@ export default function RollbackDialog({
         setCheck({ kind: "error", message: errorMessage(error) });
       }
     },
-    [name, namespace],
+    [name, namespace, active?.schema_version],
   );
 
   // Every open starts from the caller's view of the active release.
@@ -117,7 +117,7 @@ export default function RollbackDialog({
   const refresh = useCallback(async () => {
     setOutcome({ kind: "busy" });
     try {
-      const current = await api.getActiveRelease(namespace, name);
+      const current = await api.getActiveRelease(namespace, name, active?.schema_version ?? 0);
       const next = { version: current.release.version, previous_version: current.previous_version };
       setTarget(next);
       setTyped("");
@@ -143,6 +143,7 @@ export default function RollbackDialog({
         env: namespace.env,
         app: namespace.app,
         name,
+        schema_version: active?.schema_version ?? 0,
         expected_current_version: target.version,
       });
       if (!result.changed) {

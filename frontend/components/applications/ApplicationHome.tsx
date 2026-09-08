@@ -84,6 +84,7 @@ export interface ApplicationHomeProps {
   rollback: string | null;
   /** `?migrate=<schema version>` opens schema migration from the registry. */
   migrate?: string | null;
+  schemaVersion?: number;
 }
 
 interface ShipTarget {
@@ -188,6 +189,7 @@ export function ApplicationHome({
   tab,
   rollback,
   migrate,
+  schemaVersion = overview.application.schema_version,
 }: ApplicationHomeProps) {
   const toast = useToast();
   const router = useRouter();
@@ -233,6 +235,7 @@ export function ApplicationHome({
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
   const [latestSchema, setLatestSchema] = useState<ConfigurationSchema | null>(null);
+  const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const {
     name: schemaApplication,
     release_name: schemaRelease,
@@ -241,6 +244,7 @@ export function ApplicationHome({
   // biome-ignore lint/correctness/useExhaustiveDependencies: Clear registry data when its application or release identity changes.
   useEffect(() => {
     setLatestSchema(null);
+    setSchemas([]);
   }, [schemaApplication, schemaRelease]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: A changed schema pin invalidates the registry lookup after an upgrade.
   useEffect(() => {
@@ -248,7 +252,10 @@ export function ApplicationHome({
     void api
       .listSchemas(schemaApplication, schemaRelease)
       .then((page) => {
-        if (!cancelled) setLatestSchema(page.schemas[0] ?? null);
+        if (!cancelled) {
+          setSchemas(page.schemas ?? []);
+          setLatestSchema(page.schemas[0] ?? null);
+        }
       })
       .catch(() => {
         /* Upgrade dialog reports schema-loading failures. */
@@ -347,6 +354,7 @@ export function ApplicationHome({
                 env: environment,
                 name: release.name,
                 release: releaseKey(release),
+                schemaVersion,
               }),
             ),
         },
@@ -625,6 +633,30 @@ export function ApplicationHome({
         subtitle={application.description || "Application configuration across environments."}
         actions={
           <>
+            <label className="row-wrap" htmlFor="application-schema-track">
+              <span className="muted">Schema</span>
+              <select
+                id="application-schema-track"
+                aria-label="Schema version"
+                value={schemaVersion}
+                onChange={(event) => {
+                  setShipTarget(null);
+                  setRollbackEnv(null);
+                  setMigrationEnv(null);
+                  void replaceQuery({
+                    schema_version: event.target.value,
+                    ship: "",
+                    rollback: "",
+                    migrate: "",
+                  });
+                }}
+              >
+                {schemas.map((schema) => (
+                  <option key={schema.version} value={schema.version}>v{schema.version}</option>
+                ))}
+                {schemaVersion === 0 ? <option value={0}>v0 · schema-free</option> : null}
+              </select>
+            </label>
             {freshness ? (
               <TransportBadge
                 transport="poll"
@@ -1000,6 +1032,7 @@ export function ApplicationHome({
       />
       <ImportDefaultsModal
         application={application.name}
+        schemaVersion={schemaVersion}
         environment={defaultsEnv ?? ""}
         production={
           environments.find((candidate) => candidate.namespace.env === defaultsEnv)?.production ??

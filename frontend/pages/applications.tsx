@@ -42,6 +42,7 @@ export default function ApplicationsPage() {
     "rollback",
     "migrate",
     "new",
+    "schema_version",
   ]);
   const name = query.app ?? "";
   const [applications, setApplications] = useState<Application[]>([]);
@@ -50,7 +51,21 @@ export default function ApplicationsPage() {
   const [archiveFilter, setArchiveFilter] = useState<ApplicationArchiveFilter>("exclude");
   const paging = useCursorPagination(`applications:${archiveFilter}`);
   const [writing, setWriting] = useState(false);
-  const { slot, loading, reload, freshness } = useApplicationOverview(name, { paused: writing });
+  const selectedSchema = query.schema_version === null ? undefined : Number(query.schema_version);
+  const schemaVersion = Number.isSafeInteger(selectedSchema) && selectedSchema! >= 0 ? selectedSchema : undefined;
+  const { slot, loading, reload, freshness } = useApplicationOverview(name, { paused: writing, schemaVersion });
+
+  useEffect(() => {
+    if (!ready || !name || schemaVersion !== undefined || !slot?.data) return;
+    void router.replace(
+      {
+        pathname: "/applications",
+        query: { ...router.query, schema_version: String(slot.data.application.schema_version) },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  }, [ready, name, schemaVersion, slot?.data, router]);
 
   const loadApplications = useCallback(
     async (pageToken: string) => {
@@ -199,7 +214,7 @@ export default function ApplicationsPage() {
 
   return (
     <ApplicationHome
-      key={name}
+      key={`${name}:${slot.data.application.schema_version}`}
       overview={slot.data}
       loading={loading}
       reload={reload}
@@ -210,6 +225,7 @@ export default function ApplicationsPage() {
       tab={query.tab}
       rollback={query.rollback}
       migrate={query.migrate}
+      schemaVersion={slot.data.application.schema_version}
     />
   );
 }

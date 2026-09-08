@@ -117,7 +117,7 @@ export default function ReleasesPage() {
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
   // A deep-linked release that is not in the loaded page, fetched on its own.
   const [linkedSummary, setLinkedSummary] = useState<ReleaseSummary | null>(null);
-  const [deepLink, setDeepLink] = useState<{ name: string; version: number } | null>(null);
+  const [deepLink, setDeepLink] = useState<ReturnType<typeof parseReleaseKey>>(null);
   // The workspace tab a deep link asked for; cleared with the workspace.
   const [linkedSection, setLinkedSection] = useState<"compare" | null>(null);
   const [linkedCompareKey, setLinkedCompareKey] = useState("");
@@ -146,6 +146,8 @@ export default function ReleasesPage() {
   const queryRelease = queryValue(router.query.release);
   const querySection = queryValue(router.query.section);
   const queryCompare = queryValue(router.query.compare);
+  const querySchema = queryValue(router.query.schema_version);
+  const schemaVersion = /^\d+$/.test(querySchema) ? Number(querySchema) : undefined;
   const appliedFilters = useRef({ app: ns.app, env: ns.env, name });
   appliedFilters.current = { app: ns.app, env: ns.env, name };
 
@@ -184,7 +186,7 @@ export default function ReleasesPage() {
     const linked = queryRelease ? parseReleaseKey(queryRelease) : null;
     if (linked && queryApp && queryEnv) {
       setDeepLink(linked);
-      setSelectedReleaseKey(`${linked.name}@${linked.version}`);
+      setSelectedReleaseKey(releaseKey(linked));
       setLinkedSection(querySection === "compare" ? "compare" : null);
       const comparison = parseReleaseKey(queryCompare);
       setLinkedCompareKey(comparison?.name === linked.name ? releaseKey(comparison) : "");
@@ -239,7 +241,7 @@ export default function ReleasesPage() {
   }
 
   const hasNS = Boolean(ns.env && ns.app);
-  const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name]) : "";
+  const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name, schemaVersion]) : "";
   const releasePaging = useCursorPagination(releaseScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
   const settled = loadedScope === releaseRequestScope || releasesErrorScope === releaseRequestScope;
@@ -283,6 +285,7 @@ export default function ReleasesPage() {
           100,
           releasePaging.pageToken || undefined,
           { signal: controller.signal },
+          schemaVersion,
         );
         if (generation !== refreshGeneration.current) return;
         loadedReleaseScope.current = releaseRequestScope;
@@ -333,8 +336,8 @@ export default function ReleasesPage() {
     void (async () => {
       try {
         const [{ release }, active] = await Promise.all([
-          api.getRelease(ns, deepLink.name, deepLink.version),
-          api.getActiveRelease(ns, deepLink.name).catch((error: unknown) => {
+          api.getRelease(ns, deepLink.name, deepLink.version, deepLink.schema_version ?? schemaVersion ?? 0),
+          api.getActiveRelease(ns, deepLink.name, deepLink.schema_version ?? schemaVersion ?? 0).catch((error: unknown) => {
             if (error instanceof ApiError && error.code === "not_found") return null;
             throw error;
           }),
@@ -382,7 +385,7 @@ export default function ReleasesPage() {
     const target = releaseKey(release);
     setBusyAction(`validate:${target}`);
     try {
-      const result = await api.validateRelease(release.namespace, release.name, release.version);
+      const result = await api.validateRelease(release.namespace, release.name, release.version, release.schema_version);
       if (result.valid) {
         toast.success(`${target} is valid`);
         if (activationFailure?.operation === "Validation" && activationFailure.target === target) {
@@ -416,7 +419,7 @@ export default function ReleasesPage() {
     setBusyAction("activate");
     try {
       const active = await api
-        .getActiveRelease(summary.release.namespace, summary.release.name, { signal: run.signal })
+        .getActiveRelease(summary.release.namespace, summary.release.name, summary.release.schema_version, { signal: run.signal })
         .catch((error: unknown) => {
           if (error instanceof ApiError && error.code === "not_found") return null;
           throw error;
@@ -444,6 +447,7 @@ export default function ReleasesPage() {
         action.summary.release.namespace,
         releaseName,
         action.summary.release.version,
+        action.summary.release.schema_version,
         action.current?.version ?? 0,
       );
       if (!run.current) return;
@@ -497,7 +501,7 @@ export default function ReleasesPage() {
     const controller = new AbortController();
     setComparisonLoading(true);
     void api
-      .getRelease(ns, wanted.name, wanted.version, { signal: controller.signal })
+      .getRelease(ns, wanted.name, wanted.version, wanted.schema_version ?? schemaVersion ?? 0, { signal: controller.signal })
       .then(
         ({ release }) => {
           if (!cancelled)
