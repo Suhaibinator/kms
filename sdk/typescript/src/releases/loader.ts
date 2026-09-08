@@ -1059,6 +1059,7 @@ function synchronousCallbackError(name: string, returned: unknown): Error | unde
 function sameQueuedCandidate(left: Candidate, right: Candidate): boolean {
   return (
     left.revision === right.revision &&
+    left.release.schemaVersion === right.release.schemaVersion &&
     left.release.version === right.release.version &&
     left.release.digest === right.release.digest
   );
@@ -1068,6 +1069,7 @@ function sameActiveCandidate(left: Candidate, right: Candidate): boolean {
   return (
     left.revision === right.revision &&
     left.release.name === right.release.name &&
+    left.release.schemaVersion === right.release.schemaVersion &&
     left.release.version === right.release.version &&
     left.release.digest === right.release.digest
   );

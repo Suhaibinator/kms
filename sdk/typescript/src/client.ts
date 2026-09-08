@@ -804,7 +804,7 @@ export class KmsClient {
           this.#callOptions({}),
         );
         if (!response) throw new KmsError("internal", "KMS schema resolution response was empty");
-        assertUint64(response.schemaVersion, "resolved schemaVersion");
+        assertUint64(response.schemaVersion, "resolved schemaVersion", true);
         schemaVersion = response.schemaVersion;
       } catch (error) {
         throwMapped(error);

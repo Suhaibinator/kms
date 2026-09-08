@@ -34,6 +34,15 @@ describe("KmsClient release transport boundary", () => {
     await client.close();
   });
 
+  it("rejects schema version zero returned for a generated digest", async () => {
+    const transport = new FakeTransport(() => ({ schemaVersion: 0n }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    await expect(
+      client.createReleaseLoader({ name: "runtime", schemaSHA256: "a".repeat(64) }),
+    ).rejects.toThrow(/positive/u);
+    await client.close();
+  });
+
   it("rejects a returned parameter ref mismatch without polluting the read cache", async () => {
     const expectedValue = "expected-value";
     const release = makeRelease({
