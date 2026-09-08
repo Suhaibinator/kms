@@ -139,9 +139,11 @@ func TestApplicationMigrationHTTPInputAndAuthorization(t *testing.T) {
 	mustStatus(t, e.admin(http.MethodPost, migrationHTTPPath, body), http.StatusPreconditionFailed)
 	mustStatus(t, e.do(http.MethodPost, migrationHTTPPath, body, nil), http.StatusUnauthorized)
 	authEnv := newTestEnv(t)
-	w := rawDefaultsRequest(authEnv, authEnv.clientToken, migrationHTTPPath, []byte(`{"environment":"dev","schema_version":2}`))
+	w := rawDefaultsRequest(authEnv, authEnv.clientToken, migrationHTTPPath, []byte(`{"environment":"dev","source_schema_version":0,"schema_version":2}`))
 	mustStatus(t, w, http.StatusForbidden)
 	for _, raw := range []string{
+		`{"environment":"dev","schema_version":2}`,
+		`{"environment":"dev","source_schema_version":null,"schema_version":2}`,
 		`{"environment":"dev","schema_version":-1}`,
 		`{"environment":"dev","unknown":"do-not-echo"}`,
 		`{"environment":"dev","changes":[{"alias":"db_password","secret_value":"do-not-echo"}]}`,
