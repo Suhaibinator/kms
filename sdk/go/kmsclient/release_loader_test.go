@@ -988,6 +988,160 @@ func TestReleaseLoaderSurfacesPermanentWatchRejection(t *testing.T) {
 	}
 }
 
+func TestReleaseLoaderAcknowledgementRejectionMatchesExactGeneration(t *testing.T) {
+	client := &Client{clientName: "worker"}
+	loader := &ReleaseLoader{
+		client: client, cfg: ReleaseLoaderConfig{Name: "runtime"}, instanceID: "instance-1",
+		pendingAck: make(map[string]*kmsv1.ReleaseAcknowledgement), ackGeneration: make(map[string]uint64),
+		dirtyAck: make(map[string]bool), ackSignal: make(chan struct{}, 1),
+	}
+	ns := namespaceRef{env: "prod", app: "app"}
+	first := releaseCandidate{release: testRelease(1, `{"version":1}`), revision: 11}
+	second := releaseCandidate{release: testRelease(2, `{"version":2}`), revision: 12}
+	loader.ack(ns, first, ReleaseStateApplied, "")
+	firstAck := proto.Clone(loader.pendingAck[ReleaseStateApplied]).(*kmsv1.ReleaseAcknowledgement)
+	loader.ack(ns, second, ReleaseStateApplied, "")
+	secondAck := proto.Clone(loader.pendingAck[ReleaseStateApplied]).(*kmsv1.ReleaseAcknowledgement)
+	if firstAck.GetSequence() == 0 || secondAck.GetSequence() <= firstAck.GetSequence() {
+		t.Fatalf("ack sequences = %d, %d", firstAck.GetSequence(), secondAck.GetSequence())
+	}
+
+	rejection := rejectionForAcknowledgement(firstAck)
+	loader.handleAcknowledgementRejected(ns, rejection)
+	if got := loader.pendingAck[ReleaseStateApplied]; got == nil || got.GetSequence() != secondAck.GetSequence() {
+		t.Fatalf("delayed rejection removed newer acknowledgement: %+v", got)
+	}
+
+	forged := []*kmsv1.ReleaseAcknowledgementRejectedEvent{
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+	}
+	forged[0].Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+	forged[1].InstanceId = "other-instance"
+	forged[2].SchemaVersion++
+	forged[3].Reason = "other_reason"
+	for _, event := range forged {
+		loader.handleAcknowledgementRejected(ns, event)
+		if loader.pendingAck[ReleaseStateApplied] == nil {
+			t.Fatal("forged rejection removed retained acknowledgement")
+		}
+	}
+	loader.handleAcknowledgementRejected(ns, rejectionForAcknowledgement(secondAck))
+	if loader.pendingAck[ReleaseStateApplied] != nil {
+		t.Fatal("exact rejection did not remove retained acknowledgement")
+	}
+	if loader.ackGeneration[ReleaseStateApplied] != secondAck.GetSequence() {
+		t.Fatal("rejection reset the per-state sequence generation")
+	}
+}
+
+func rejectionForAcknowledgement(ack *kmsv1.ReleaseAcknowledgement) *kmsv1.ReleaseAcknowledgementRejectedEvent {
+	return &kmsv1.ReleaseAcknowledgementRejectedEvent{
+		Namespace: ack.GetNamespace(), Name: ack.GetName(), SchemaVersion: ack.GetSchemaVersion(),
+		Version: ack.GetVersion(), ActivationRevision: ack.GetActivationRevision(),
+		ClientName: ack.GetClientName(), InstanceId: ack.GetInstanceId(), State: ack.GetState(),
+		Sequence: ack.GetSequence(), Reason: "activation_unavailable",
+	}
+}
+
+func TestReleaseLoaderRejectionDoesNotAdvanceCursorAndLaterActivationReplaysAck(t *testing.T) {
+	server := newReleaseLoaderServer()
+	first := testRelease(1, `{"version":1}`)
+	server.setActive(first, 1)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"version":1}`, ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain"}
+	loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var prepares atomic.Int32
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			prepares.Add(1)
+			return &testPreparedRelease{done: make(chan struct{})}, nil
+		})
+	}()
+	<-server.watchRegs
+	firstApplied := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if firstApplied.GetSequence() == 0 {
+		t.Fatal("applied acknowledgement had zero sequence")
+	}
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Revision: ^uint64(0),
+		Event: &kmsv1.WatchReleaseEvent_AcknowledgementRejected{
+			AcknowledgementRejected: rejectionForAcknowledgement(firstApplied),
+		},
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		loader.ackMu.Lock()
+		pending := loader.pendingAck[ReleaseStateApplied]
+		loader.ackMu.Unlock()
+		if pending == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("acknowledgement rejection was not handled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := loader.lastSeen.Load(); got != 1 {
+		t.Fatalf("last seen revision = %d after rejection, want 1", got)
+	}
+	if got := prepares.Load(); got != 1 {
+		t.Fatalf("prepare calls = %d after rejection, want 1", got)
+	}
+
+	second := testRelease(2, `{"version":2}`)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"version":2}`, ContentType: "json", Version: 2}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-2"), ContentType: "text/plain"}
+	server.setActive(second, 2)
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Revision: 2, Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: second}},
+	}
+	secondApplied := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if secondApplied.GetVersion() != 2 || secondApplied.GetSequence() <= firstApplied.GetSequence() {
+		t.Fatalf("second applied acknowledgement = %+v", secondApplied)
+	}
+	server.watchKills <- struct{}{}
+	select {
+	case registration := <-server.watchRegs:
+		if registration.GetLastSeenRevision() != 2 {
+			t.Fatalf("reconnect cursor = %d, want 2", registration.GetLastSeenRevision())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("watch did not reconnect")
+	}
+	replayed := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if replayed.GetSequence() != secondApplied.GetSequence() || replayed.GetVersion() != 2 {
+		t.Fatalf("replayed acknowledgement = %+v, want sequence %d", replayed, secondApplied.GetSequence())
+	}
+	cancel()
+	if err := <-runErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run cancellation error = %v", err)
+	}
+}
+
+func waitReleaseAckState(t *testing.T, server *releaseLoaderServer, state string) *kmsv1.ReleaseAcknowledgement {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ack := <-server.acks:
+			if ack.GetState() == state {
+				return ack
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s acknowledgement", state)
+		}
+	}
+}
+
 func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure(t *testing.T) {
 	server := newReleaseLoaderServer()
 	client := newReleaseTestClient(t, server)

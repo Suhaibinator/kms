@@ -1196,12 +1196,19 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 					source = releaseCandidateSourceReconciliation
 				case *kmsv1.WatchReleaseEvent_Activation:
 					release = payload.Activation.GetRelease()
+				case *kmsv1.WatchReleaseEvent_AcknowledgementRejected:
+					l.handleAcknowledgementRejected(ns, payload.AcknowledgementRejected)
+					// Rejection events describe retained client state, not a
+					// release cursor. In particular, their envelope revision must
+					// never suppress a later activation.
 				}
-				if release == nil {
-					l.advanceLastSeen(event.GetRevision())
-				} else if release.GetSchemaVersion() == l.trackSchemaVersion {
-					l.advanceLastSeen(event.GetRevision())
-					offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision(), source: source})
+				if _, rejected := event.GetEvent().(*kmsv1.WatchReleaseEvent_AcknowledgementRejected); !rejected {
+					if release == nil {
+						l.advanceLastSeen(event.GetRevision())
+					} else if release.GetSchemaVersion() == l.trackSchemaVersion {
+						l.advanceLastSeen(event.GetRevision())
+						offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision(), source: source})
+					}
 				}
 			}
 			go func() {
@@ -1294,8 +1301,13 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 	}
 	l.ackMu.Lock()
 	if current := l.pendingAck[state]; current == nil || current.GetActivationRevision() <= candidate.revision {
+		nextSequence := l.ackGeneration[state] + 1
+		if nextSequence == 0 {
+			nextSequence = 1
+		}
+		ack.Sequence = nextSequence
 		l.pendingAck[state] = ack
-		l.ackGeneration[state]++
+		l.ackGeneration[state] = nextSequence
 		l.dirtyAck[state] = true
 	}
 	l.ackMu.Unlock()
@@ -1303,6 +1315,26 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 	case l.ackSignal <- struct{}{}:
 	default:
 	}
+}
+
+func (l *ReleaseLoader) handleAcknowledgementRejected(ns namespaceRef, rejected *kmsv1.ReleaseAcknowledgementRejectedEvent) {
+	if rejected == nil || rejected.GetReason() != "activation_unavailable" || rejected.GetNamespace() == nil ||
+		rejected.GetNamespace().GetEnv() != ns.env || rejected.GetNamespace().GetApp() != ns.app ||
+		rejected.GetName() != l.cfg.Name || rejected.GetSchemaVersion() != l.trackSchemaVersion ||
+		rejected.GetClientName() != l.client.clientName || rejected.GetInstanceId() != l.instanceID ||
+		rejected.GetSequence() == 0 {
+		return
+	}
+	l.ackMu.Lock()
+	defer l.ackMu.Unlock()
+	ack := l.pendingAck[rejected.GetState()]
+	if ack == nil || ack.GetSequence() != rejected.GetSequence() ||
+		ack.GetVersion() != rejected.GetVersion() || ack.GetActivationRevision() != rejected.GetActivationRevision() ||
+		ack.GetState() != rejected.GetState() {
+		return
+	}
+	delete(l.pendingAck, rejected.GetState())
+	delete(l.dirtyAck, rejected.GetState())
 }
 
 func (l *ReleaseLoader) sendPendingAcks(stream kmsv1.ConfigurationReleaseService_WatchReleaseClient, replay bool) error {
