@@ -363,8 +363,9 @@ func ValidAuditDecision(s string) bool {
 // ChangeLogEntry is one revisioned change for watch replay. Ref carries the
 // denormalized env/app/key of the changed resource.
 type ChangeLogEntry struct {
-	Revision     uint64
-	ResourceType string // ResourceParameter | ResourceSecret
+	SchemaVersion uint64
+	Revision      uint64
+	ResourceType  string // ResourceParameter | ResourceSecret
 	// NamespaceID is the immutable namespace incarnation that produced this
 	// event. Watch replay/live matching must use it in addition to Ref so a
 	// deleted namespace's history cannot flow into a recreated name.
@@ -385,6 +386,7 @@ type ChangeLogEntry struct {
 // the (env, app) namespaces the stream is subscribed to. ReleaseName is set
 // for release streams; their lifecycle is separate from transport acknowledgements.
 type Subscriber struct {
+	SchemaVersion   uint64
 	ReleaseName     string
 	ReleaseState    string
 	ReleaseVersion  uint64
