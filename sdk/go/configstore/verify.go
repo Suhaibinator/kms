@@ -90,7 +90,7 @@ func (r VerifyResult) Report() string {
 	if r.SchemaMatches {
 		schema = "match"
 	}
-	fmt.Fprintf(&out, "%s %s@%d#%d  schema: %s\n", r.Namespace, r.ReleaseName, r.ReleaseVersion, r.ActivationRevision, schema)
+	fmt.Fprintf(&out, "%s %s@%d#%d  schema_version: %d  schema: %s\n", r.Namespace, r.ReleaseName, r.ReleaseVersion, r.ActivationRevision, r.SchemaVersion, schema)
 	entries := append([]VerifyEntryResult(nil), r.Entries...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
 	table := tabwriter.NewWriter(&out, 0, 0, 2, ' ', 0)
