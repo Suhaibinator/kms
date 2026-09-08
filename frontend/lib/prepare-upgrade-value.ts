@@ -1,10 +1,23 @@
 import { checkJson, tokenizeJson } from "./json-text";
-import { type JsonSchema, unwrapNullable } from "./schema-form";
+import { arrayAllowsEmpty, type JsonSchema, unwrapNullable, validateValue } from "./schema-form";
+
+export interface ArrayMigration {
+  id: string;
+  from: string;
+  to: string;
+  /** Undefined means the source needs manual editing, rather than a suggested conversion. */
+  value?: string;
+  reason: string;
+}
 
 export interface PreparedUpgradeValue {
   value: string;
   added: string[];
   removed: string[];
+  initializedLists: string[];
+  appliedDefaults: string[];
+  migrations: ArrayMigration[];
+  suggestions: ArrayMigration[];
 }
 const object = (v: unknown): v is JsonSchema =>
   v !== null && typeof v === "object" && !Array.isArray(v);
@@ -13,8 +26,18 @@ export function prepareUpgradeValue(
   value: string,
   schema: JsonSchema | string | null,
   alias?: string,
+  acceptedMigrations: readonly string[] = [],
 ): PreparedUpgradeValue {
-  const result: PreparedUpgradeValue = { value, added: [], removed: [] };
+  const unchanged = (): PreparedUpgradeValue => ({
+    value,
+    added: [],
+    removed: [],
+    initializedLists: [],
+    appliedDefaults: [],
+    migrations: [],
+    suggestions: [],
+  });
+  const result = unchanged();
   if (!schema || checkJson(value)) return result;
   const defaults = new WeakMap<JsonSchema, string>();
   if (typeof schema === "string") {
@@ -78,12 +101,11 @@ export function prepareUpgradeValue(
       ? null
       : s;
   }
-  function initial(raw: unknown): string | undefined {
+  function initial(raw: unknown, path: string[]): string | undefined {
     const s = normalized(raw);
     if (!s) return undefined;
     if ("default" in s) {
       const exact = defaults.get(s);
-      if (exact !== undefined) return exact;
       const safe = (v: unknown): boolean =>
         typeof v === "number"
           ? false // Parsed schema numbers may already be rounded or underflowed; raw tokens are unavailable.
@@ -92,14 +114,26 @@ export function prepareUpgradeValue(
             : object(v)
               ? Object.values(v).every(safe)
               : true;
-      return safe(s.default) ? JSON.stringify(s.default) : undefined;
+      const candidate = exact ?? (safe(s.default) ? JSON.stringify(s.default) : undefined);
+      if (candidate === undefined) return undefined;
+      const defaultValue: unknown = JSON.parse(candidate);
+      if (
+        validateValue(raw as JsonSchema, defaultValue).length > 0 ||
+        (Array.isArray(defaultValue) && "contains" in s)
+      )
+        return undefined;
+      result.appliedDefaults.push(path.join("."));
+      return candidate;
     }
-    if (s.type === "array") return "[]";
+    if (arrayAllowsEmpty(s)) {
+      result.initializedLists.push(path.join("."));
+      return "[]";
+    }
     if (s.type === "object" && object(s.properties)) {
       const parts: string[] = [];
       for (const key of Array.isArray(s.required) ? s.required : []) {
         if (typeof key !== "string") continue;
-        const entry = initial(s.properties[key]);
+        const entry = initial(s.properties[key], [...path, key]);
         if (entry !== undefined) parts.push(`${JSON.stringify(key)}:${entry}`);
       }
       return `{${parts.join(",")}}`;
@@ -115,6 +149,13 @@ export function prepareUpgradeValue(
       const properties = s && object(s.properties) ? s.properties : {};
       const seen = new Set<string>();
       const parts: string[] = [];
+      const entries: Array<{
+        key: string;
+        keyText: string;
+        child: string;
+        original: string;
+        forbidden: boolean;
+      }> = [];
       let changed = false;
       while (value[tokens[cursor].start] !== "}") {
         const keyToken = tokens[cursor++];
@@ -130,21 +171,94 @@ export function prepareUpgradeValue(
           [...path, key],
         );
         const original = value.slice(childStart, tokens[cursor - 1].end);
-        if (forbidden) {
-          result.removed.push([...path, key].join("."));
-          changed = true;
-        } else {
-          parts.push(`${value.slice(keyToken.start, keyToken.end)}:${child}`);
-          changed ||= child !== original;
-        }
+        entries.push({
+          key,
+          keyText: value.slice(keyToken.start, keyToken.end),
+          child,
+          original,
+          forbidden,
+        });
         if (value[tokens[cursor].start] === ",") cursor++;
       }
       cursor++;
-      for (const [key, childSchema] of Object.entries(properties)) {
+      const converted = new Map<string, string>();
+      const protectedSources = new Set<string>();
+      const pendingTargets = new Set<string>();
+      for (const [key, rawChild] of Object.entries(properties)) {
         if (seen.has(key)) continue;
+        const childSchema = normalized(rawChild);
+        if (
+          !childSchema ||
+          !(
+            childSchema.type === "array" ||
+            (Array.isArray(childSchema.type) && childSchema.type.includes("array"))
+          )
+        )
+          continue;
+        const declared =
+          typeof childSchema["x-kms-migrate-from"] === "string"
+            ? childSchema["x-kms-migrate-from"]
+            : undefined;
+        const sourceKey = declared ?? (key.endsWith("s") ? key.slice(0, -1) : undefined);
+        const source = entries.find((entry) => entry.key === sourceKey);
+        // Name-based suggestions only move fields the target no longer declares.
+        if (!source || (!declared && Object.hasOwn(properties, source.key))) continue;
+        const sourceValue: unknown = JSON.parse(source.original);
+        const itemSchema = object(childSchema.items) ? normalized(childSchema.items) : null;
+        if (!declared && itemSchema?.type !== "string") continue;
+        const singleton =
+          typeof sourceValue === "string" && sourceValue !== ""
+            ? `[${source.original}]`
+            : undefined;
+        const candidate =
+          singleton &&
+          !["contains", "prefixItems", "unevaluatedItems"].some(
+            (keyword) => keyword in childSchema,
+          ) &&
+          validateValue(childSchema, [sourceValue]).length === 0
+            ? singleton
+            : sourceValue === "" && arrayAllowsEmpty(childSchema)
+              ? "[]"
+              : undefined;
+        const migration: ArrayMigration = {
+          id: JSON.stringify([...path, key]),
+          from: [...path, source.key].join("."),
+          to: [...path, key].join("."),
+          value: candidate,
+          reason:
+            candidate === "[]"
+              ? "The old value is an empty string. Discard it and use an empty list."
+              : candidate
+                ? "Keep the existing string as one list item."
+                : "The old value cannot be converted automatically. Edit the target field before removing the old field.",
+        };
+        if (
+          candidate !== undefined &&
+          ((declared && singleton) || acceptedMigrations.includes(migration.id))
+        ) {
+          converted.set(key, candidate);
+          result.migrations.push(migration);
+        } else {
+          result.suggestions.push(migration);
+          protectedSources.add(source.key);
+          pendingTargets.add(key);
+        }
+      }
+      for (const entry of entries) {
+        if (entry.forbidden && !protectedSources.has(entry.key)) {
+          result.removed.push([...path, entry.key].join("."));
+          changed = true;
+        } else {
+          parts.push(`${entry.keyText}:${entry.child}`);
+          changed ||= entry.child !== entry.original;
+        }
+      }
+      for (const [key, childSchema] of Object.entries(properties)) {
+        if (seen.has(key) || pendingTargets.has(key)) continue;
         const required = Array.isArray(s?.required) && s.required.includes(key);
-        if (!required && !(object(childSchema) && "default" in childSchema)) continue;
-        const child = initial(childSchema);
+        if (!converted.has(key) && !required && !(object(childSchema) && "default" in childSchema))
+          continue;
+        const child = converted.get(key) ?? initial(childSchema, [...path, key]);
         if (child !== undefined) {
           parts.push(`${JSON.stringify(key)}:${child}`);
           result.added.push([...path, key].join("."));
@@ -180,7 +294,7 @@ export function prepareUpgradeValue(
     const prepared = walk(schema, []);
     if (result.added.length || result.removed.length) result.value = prepared;
   } catch {
-    return { value, added: [], removed: [] };
+    return unchanged();
   }
   return result;
 }
