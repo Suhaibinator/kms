@@ -53,10 +53,22 @@ def generate_artifacts(
             "type": "object", "additionalProperties": False,
             "required": [field.json_name for field in fields], "properties": properties,
         }
+    schema_contract = sorted(
+        [
+            {"alias": alias, "kind": "parameter", "content_type": "json"}
+            for alias in groups
+        ]
+        + [
+            {"alias": field.alias, "kind": "secret", "content_type": ""}
+            for field in spec.secrets
+        ],
+        key=lambda entry: entry["alias"],
+    )
     schema_object = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object", "additionalProperties": False,
         "required": list(groups), "properties": groups,
+        "x-kms-contract": schema_contract,
     }
     compact_schema = json.dumps(schema_object, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     schema_sha256 = hashlib.sha256(compact_schema.encode()).hexdigest()

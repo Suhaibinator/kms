@@ -18,7 +18,7 @@ from kms_paramstore.configstore import (
 
 _RootConfig = _source.ApplicationConfig
 
-SCHEMA_SHA256 = "3ea94877dd7e3054e51226eb22570a42b99744cf58872e8d3a471065c8bbed85"
+SCHEMA_SHA256 = "8939f3781ba788cba2dcc326d04da080bb068b410d3b707e1d272a19ca86c462"
 CONTRACT = (
     ContractEntry('db_password', 'secret', ''),
     ContractEntry('runtime', 'parameter', 'json'),

@@ -33,6 +33,10 @@ def test_generation_is_deterministic_and_contract_matches_other_sdks(tmp_path: P
     assert first.schema_sha256 in first.contract
     assert "GeneratedConfigStore" in first.binding
     assert '"minimum": 1' in first.schema and '"maximum": 65535' in first.schema
+    assert json.loads(first.schema)["x-kms-contract"] == [
+        {"alias": "password", "kind": "secret", "content_type": ""},
+        {"alias": "runtime", "kind": "parameter", "content_type": "json"},
+    ]
     assert "generator-binding-key-canary" not in first.binding + first.schema + first.contract
 
     binding, schema, contract = tmp_path / "generated.py", tmp_path / "schema.json", tmp_path / "contract.json"
