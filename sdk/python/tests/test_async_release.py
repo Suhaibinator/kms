@@ -102,6 +102,8 @@ class _AsyncCall:
         if item is self._CLOSED:
             self.drained = True
             raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
         return item
 
     def push(self, event) -> None:
@@ -164,6 +166,10 @@ class _AsyncReleaseStub:
     def disconnect(self) -> None:
         for call in list(self.calls):
             call.push(_AsyncCall._CLOSED)
+
+    def reject_watch(self, code: grpc.StatusCode) -> None:
+        for call in list(self.calls):
+            call.push(_RpcFailure(code, "watch rejected"))
 
 
 class _AsyncClient:
@@ -340,6 +346,35 @@ def test_async_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
         await _wait_for(lambda: bool(stub.registrations))
         external_stop.set()
         await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type", "initial"),
+    [
+        (grpc.StatusCode.NOT_FOUND, kms_paramstore.NotFoundError, None),
+        (
+            grpc.StatusCode.PERMISSION_DENIED,
+            kms_paramstore.PermissionDeniedError,
+            _release(1, 10),
+        ),
+    ],
+)
+def test_async_loader_surfaces_terminal_watch_rejection(
+    monkeypatch, code, error_type, initial
+):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, initial)
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared())
+        )
+        await _wait_for(lambda: bool(stub.registrations))
+        if initial is not None:
+            await _wait_for(lambda: loader.status().state == "applied")
+        stub.reject_watch(code)
+        with pytest.raises(error_type):
+            await task
 
     asyncio.run(scenario())
 

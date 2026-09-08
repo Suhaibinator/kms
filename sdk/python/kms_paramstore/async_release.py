@@ -52,6 +52,14 @@ AsyncManifestValidator = Callable[
     [asyncio.Event, ReleaseManifest], Union[None, Awaitable[None]]
 ]
 
+_TERMINAL_WATCH_CODES = frozenset({
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNAUTHENTICATED,
+})
+
 
 @dataclass(frozen=True)
 class AsyncReleaseLoaderConfig:
@@ -241,9 +249,19 @@ class AsyncReleaseLoader:
                     candidate_task = asyncio.create_task(self._candidate_queue.get())
                     stopped_task = asyncio.create_task(self._stop_event.wait())
                     done, _ = await asyncio.wait(
-                        {candidate_task, stopped_task},
+                        {candidate_task, stopped_task, watch_task},
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if watch_task in done:
+                        candidate_task.cancel()
+                        stopped_task.cancel()
+                        await asyncio.gather(
+                            candidate_task, stopped_task, return_exceptions=True
+                        )
+                        error = watch_task.exception()
+                        if error is not None:
+                            raise error
+                        break
                     if stopped_task in done:
                         candidate_task.cancel()
                         await asyncio.gather(candidate_task, return_exceptions=True)
@@ -737,6 +755,9 @@ class AsyncReleaseLoader:
                     )
         except asyncio.CancelledError:
             raise
+        except grpc.RpcError as exc:
+            if exc.code() in _TERMINAL_WATCH_CODES:
+                raise errors.map_grpc_error(exc) from None
         except Exception:
             pass
         finally:

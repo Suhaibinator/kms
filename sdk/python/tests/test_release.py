@@ -175,6 +175,8 @@ class _Call:
             raise StopIteration
         if item is self._CLOSED:
             raise RuntimeError("stream disconnected")
+        if isinstance(item, BaseException):
+            raise item
         return item
 
     def push(self, event) -> None:
@@ -246,6 +248,12 @@ class _ReleaseStub:
             calls = list(self.calls)
         for call in calls:
             call.disconnect()
+
+    def reject_watch(self, code: grpc.StatusCode) -> None:
+        with self.lock:
+            calls = list(self.calls)
+        for call in calls:
+            call.push(_RpcFailure(code, "watch rejected"))
 
 
 class _Client:
@@ -377,7 +385,7 @@ def test_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatc
     )
     prepared = _Prepared()
     thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
-    assert wait_until(lambda: bool(stub.registrations))
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
     assert wait_until(lambda: len(stub.active_requests) >= 2)
     assert prepared.commits == 0
     stub.activate(_release(1, 1))
@@ -404,6 +412,33 @@ def test_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
     external_stop.set()
     thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type", "initial"),
+    [
+        (grpc.StatusCode.NOT_FOUND, kms_paramstore.NotFoundError, None),
+        (
+            grpc.StatusCode.PERMISSION_DENIED,
+            kms_paramstore.PermissionDeniedError,
+            _release(1, 10),
+        ),
+    ],
+)
+def test_loader_surfaces_terminal_watch_rejection(
+    monkeypatch, code, error_type, initial
+):
+    loader, stub, _client = _loader(monkeypatch, initial)
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
+    if initial is not None:
+        assert wait_until(lambda: loader.status().state == "applied")
+    stub.reject_watch(code)
+    assert wait_until(lambda: bool(raised), timeout=3)
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert len(raised) == 1
+    assert isinstance(raised[0], error_type)
 
 
 def test_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):

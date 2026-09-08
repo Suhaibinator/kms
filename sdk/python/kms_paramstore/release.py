@@ -82,6 +82,13 @@ _STATES = RELEASE_STATES
 _REJECTION_CATEGORIES = frozenset(RELEASE_REJECTION_CATEGORIES)
 _DIAGNOSTIC_LIMIT = 128
 _MAX_DIVERGENT_FIELD_COUNT = 65_535
+_TERMINAL_WATCH_CODES = frozenset({
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNAUTHENTICATED,
+})
 
 
 def _validate_release_timing(name: str, value: Optional[float]) -> None:
@@ -381,6 +388,7 @@ class ReleaseLoader:
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
         self._retry_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
+        self._watch_error: Optional[BaseException] = None
 
         self._ack_cond = threading.Condition()
         self._ack_sequence = 0
@@ -474,6 +482,7 @@ class ReleaseLoader:
             self._active_identity = None
             self._latest_identity = None
             self._retry_identity = None
+            self._watch_error = None
             self._graceful_watch_stop = threading.Event()
             self._watch_done = threading.Event()
             self._relay_done = threading.Event()
@@ -534,8 +543,10 @@ class ReleaseLoader:
                 self._offer_candidate(initial, source="reconciliation")
 
             while not self._stop_event.is_set():
+                self._raise_watch_error()
                 wait_for = min(0.25, max(0.0, next_reconcile - time.monotonic()))
                 candidate = self._take_candidate(wait_for)
+                self._raise_watch_error()
                 if candidate is not None:
                     outcome, category, acknowledgement_generation = self._process_candidate(
                         candidate, prepare
@@ -676,7 +687,11 @@ class ReleaseLoader:
     def _take_candidate(self, timeout: float) -> Optional[_Candidate]:
         deadline = time.monotonic() + timeout
         with self._candidate_cond:
-            while self._pending_candidate is None and not self._stop_event.is_set():
+            while (
+                self._pending_candidate is None
+                and not self._stop_event.is_set()
+                and self._watch_error is None
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
@@ -684,6 +699,12 @@ class ReleaseLoader:
             candidate = self._pending_candidate
             self._pending_candidate = None
             return candidate
+
+    def _raise_watch_error(self) -> None:
+        with self._candidate_cond:
+            error = self._watch_error
+        if error is not None:
+            raise error
 
     def _process_candidate(
         self,
@@ -991,6 +1012,9 @@ class ReleaseLoader:
                     # Receiving any server event proves connectivity and resets the
                     # next delay to the base window.
                     attempt = 0
+                with self._candidate_cond:
+                    if self._watch_error is not None:
+                        return
                 if self._stop_event.is_set() or self._graceful_watch_stop.is_set():
                     return
                 cap = min(
@@ -1023,6 +1047,12 @@ class ReleaseLoader:
                     self._offer_candidate(
                         _Candidate(_clone_release(event.activation.release), event.revision)
                     )
+        except grpc.RpcError as exc:
+            if exc.code() in _TERMINAL_WATCH_CODES:
+                with self._candidate_cond:
+                    self._watch_error = errors.map_grpc_error(exc)
+                    self._candidate_cond.notify_all()
+            return received_event
         except Exception:
             return received_event
         finally:
