@@ -276,6 +276,14 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 	tlsHolder := listenertls.NewReloadable(derivedTLS)
 
+	// Register before constructing or starting either listener: a factory may
+	// bind immediately, and a ready listener can receive an operator's reload
+	// while the rest of startup is still running. Buffer that signal until the
+	// event loop below can handle it instead of dropping it under signal.Ignore.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
 	var grpcSrv GRPCServer
 	grpcAddr := ""
 	if GRPCFactory != nil {
@@ -340,9 +348,6 @@ func (c *CLI) cmdServe(args []string) int {
 	}()
 	logger.Info("HTTP listening", zap.String("addr", cfg.Server.HTTPAddr), zap.Bool("tls", tlsCfg != nil), zap.Bool("frontend", cfg.Frontend.Enabled))
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigCh)
 	exitCode := 0
 	running := cfg
 loop:
