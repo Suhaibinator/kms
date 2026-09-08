@@ -592,6 +592,8 @@ class ReleaseLoader:
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
+        if response.schema_version == 0:
+            raise ReleaseLoaderError("release schema digest resolved to schema version 0")
         self._schema_version = response.schema_version
 
     def _require_schema_version(self) -> int:
@@ -611,6 +613,8 @@ class ReleaseLoader:
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
+        if response.release.name and response.release.schema_version != self._require_schema_version():
+            raise ReleaseLoaderError("active release response has the wrong schema version")
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:

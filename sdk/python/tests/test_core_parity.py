@@ -154,6 +154,7 @@ def test_verify_defaults_validates_request_and_hostile_response():
         with pytest.raises(ParamStoreError, match="count disagrees") as failure:
             client.verify_release_defaults(
                 namespace="prod/app",
+                schema_version=0,
                 entries=[{"alias": "settings", "content_type": "json", "sha256": digest}],
             )
         assert failure.value.code == "internal"
@@ -166,6 +167,7 @@ def test_verify_defaults_validates_request_and_hostile_response():
         with pytest.raises(RateLimitedError):
             client.verify_release_defaults(
                 namespace="prod/app",
+                schema_version=0,
                 entries=[{"alias": "settings", "content_type": "json", "sha256": digest}],
             )
     finally:

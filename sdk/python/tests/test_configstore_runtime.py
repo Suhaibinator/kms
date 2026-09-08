@@ -488,7 +488,7 @@ def test_cancelled_async_start_stops_loader_and_releases_binding_claim(monkeypat
         binding = ConfigBinding(RuntimeConfig, {})
         task = asyncio.create_task(start_async_managed_config(
             object(), release="runtime", binding=binding,
-            callbacks=Callbacks(lambda _report: None),
+            callbacks=Callbacks(lambda _report: None), schema_version=0,
         ))
         await running.wait()
         task.cancel()

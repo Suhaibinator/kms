@@ -16,6 +16,7 @@ from kms_paramstore import (
     ReleaseCommitError,
     ReleaseLoader,
     ReleaseLoaderConfig,
+    ReleaseLoaderError,
     ReleaseStartupError,
     run_typed_release,
 )
@@ -186,10 +187,11 @@ class _ReleaseStub:
         self.acknowledgements: List[object] = []
         self.active_requests: List[object] = []
         self.resolve_requests: List[object] = []
+        self.resolved_schema = 1
 
     def ResolveReleaseSchema(self, request, **_kwargs):
         self.resolve_requests.append(request)
-        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=1)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=self.resolved_schema)
 
     def GetActiveRelease(self, request, **_kwargs):
         self.active_requests.append(request)
@@ -356,6 +358,20 @@ def test_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):
     assert loader._pending_candidate is not None
     assert loader._pending_candidate.release.schema_version == 1
     assert loader.status().observed_revision == 10
+
+
+def test_active_read_and_digest_resolution_reject_foreign_schema(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    stub.release.schema_version = 2
+    with pytest.raises(ReleaseLoaderError, match="wrong schema"):
+        loader._read_active()
+
+    digest_loader, digest_stub, _client = _loader(
+        monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64
+    )
+    digest_stub.resolved_schema = 0
+    with pytest.raises(ReleaseLoaderError, match="version 0"):
+        digest_loader._ensure_schema_version()
 
 
 def _run_in_thread(loader, prepare):

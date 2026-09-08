@@ -114,10 +114,11 @@ class _AsyncReleaseStub:
         self.acknowledgements: List[object] = []
         self.active_requests: List[object] = []
         self.resolve_requests: List[object] = []
+        self.resolved_schema = 1
 
     async def ResolveReleaseSchema(self, request, **_kwargs):
         self.resolve_requests.append(request)
-        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=1)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=self.resolved_schema)
 
     async def GetActiveRelease(self, request, **_kwargs):
         self.active_requests.append(request)
@@ -296,6 +297,26 @@ def test_async_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch
     assert loader._candidate_queue.qsize() == 1
     assert loader._candidate_queue.get_nowait().release.schema_version == 1
     assert loader.status().observed_revision == 10
+
+
+def test_async_active_read_and_digest_resolution_reject_foreign_schema(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        loader._namespace = NamespaceRef("prod", "app")
+        stub.release.schema_version = 2
+        with pytest.raises(ReleaseStartupError, match="wrong schema"):
+            await loader._read_active()
+
+        digest_loader, digest_stub, _client = _loader(
+            monkeypatch, _release(1, 10), schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        digest_loader._namespace = NamespaceRef("prod", "app")
+        digest_stub.resolved_schema = 0
+        with pytest.raises(ReleaseStartupError, match="version 0"):
+            await digest_loader._ensure_schema_version()
+
+    asyncio.run(scenario())
 
 
 def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
