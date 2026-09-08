@@ -487,7 +487,8 @@ class ReleaseLoader:
         """Apply the initial release, then block and hot reload until stopped.
 
         ``prepare`` receives a cancellation event that is set when a newer
-        activation supersedes its candidate. It must return an object whose
+        activation supersedes its candidate, the loader stops, or the watch is
+        permanently rejected. It must return an object whose
         ``commit`` is infallible and whose ``abort`` releases uncommitted work.
         """
         if not callable(prepare):
@@ -624,6 +625,9 @@ class ReleaseLoader:
             with self._run_lock:
                 if self._run_generation == run_generation:
                     self._running = False
+            # Keep a terminal watch failure authoritative even when cancellation
+            # makes preparation fail or the application stops during cleanup.
+            self._raise_watch_error()
 
     # --- candidate lifecycle ---------------------------------------------
 
@@ -749,6 +753,8 @@ class ReleaseLoader:
     ) -> Tuple[str, str, int]:
         cancel = threading.Event()
         with self._candidate_cond:
+            # Install the cancellation event atomically with the fatal check.
+            self._raise_watch_error()
             self._active_cancel = cancel
             self._active_identity = candidate.identity
         self._set_observed(candidate)
@@ -795,15 +801,23 @@ class ReleaseLoader:
                 self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
 
-            try:
-                returned: object = getattr(prepared, "commit")()
-                if returned is not None:
-                    raise TypeError("PreparedRelease.commit must return None")
-            except BaseException:
-                self._set_failure("internal")
-                raise ReleaseCommitError(
-                    "PreparedRelease.commit raised; applied state is unknown"
-                ) from None
+            # Serialize the final fence and synchronous commit with watch failure
+            # recording, so a known terminal failure cannot race into a commit.
+            with self._candidate_cond:
+                commit_cancelled = cancel.is_set()
+                if not commit_cancelled:
+                    try:
+                        returned: object = getattr(prepared, "commit")()
+                        if returned is not None:
+                            raise TypeError("PreparedRelease.commit must return None")
+                    except BaseException:
+                        self._set_failure("internal")
+                        raise ReleaseCommitError(
+                            "PreparedRelease.commit raised; applied state is unknown"
+                        ) from None
+            if commit_cancelled:
+                self._abort_or_fail(candidate, prepared)
+                raise _CandidateFailure("superseded")
 
             with self._state_lock:
                 self._status = replace(
@@ -820,6 +834,7 @@ class ReleaseLoader:
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return "applied", "", 0
         except _CandidateFailure as exc:
+            self._raise_watch_error()
             acknowledgement_generation = self._reject(
                 candidate, exc.category, exc.diagnostic
             )
@@ -1119,6 +1134,8 @@ class ReleaseLoader:
             if exc.code() in _TERMINAL_WATCH_CODES:
                 with self._candidate_cond:
                     self._watch_error = errors.map_grpc_error(exc)
+                    if self._active_cancel is not None:
+                        self._active_cancel.set()
                     self._candidate_cond.notify_all()
             return received_event
         except Exception:

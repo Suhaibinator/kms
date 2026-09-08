@@ -1588,3 +1588,120 @@ def test_sync_external_stop_relay_exits_after_each_reused_run(monkeypatch):
         thread.join(timeout=2)
         assert not raised
         assert not relay.is_alive()
+
+
+@pytest.mark.parametrize("prepare_result", ["prepared", "failed", "stopped"])
+def test_terminal_watch_cancels_cooperative_prepare(monkeypatch, prepare_result):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    cancelled = threading.Event()
+    cleanup = threading.Event()
+    prepared = _Prepared()
+
+    def prepare(cancel, _snapshot):
+        entered.set()
+        if cancel.wait(2):
+            cancelled.set()
+        assert cleanup.wait(2)
+        if prepare_result == "failed":
+            raise RuntimeError("preparation failed during cancellation")
+        if prepare_result == "stopped":
+            loader.stop()
+        return prepared
+
+    thread, raised = _run_in_thread(loader, prepare)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        assert cancelled.wait(0.5)
+        assert thread.is_alive(), "cooperative cleanup must finish before run exits"
+        cleanup.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == (0 if prepare_result == "failed" else 1)
+    finally:
+        cleanup.set()
+        loader.stop()
+        thread.join(3)
+
+
+def test_terminal_watch_before_candidate_install_fences_preparation(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    proceed = threading.Event()
+    prepared = _Prepared()
+    preparations = []
+    process = loader._process_candidate
+
+    def held_process(candidate, prepare):
+        entered.set()
+        assert proceed.wait(2)
+        return process(candidate, prepare)
+
+    def prepare(_cancel, snapshot):
+        preparations.append(snapshot)
+        return prepared
+
+    monkeypatch.setattr(loader, "_process_candidate", held_process)
+    thread, raised = _run_in_thread(loader, prepare)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.UNAUTHENTICATED)
+        assert loader._watch_done.wait(2)
+        proceed.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.UnauthenticatedError)
+        assert preparations == []
+        assert loader.stats().resolutions == 0
+        assert prepared.commits == prepared.aborts == 0
+    finally:
+        proceed.set()
+        loader.stop()
+        thread.join(3)
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fails):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    proceed = threading.Event()
+    prepared = _Prepared()
+    read_active = loader._read_active
+    reads = 0
+
+    def held_read():
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            entered.set()
+            assert proceed.wait(2)
+            if read_fails:
+                raise RuntimeError("active read failed after watch rejection")
+        return read_active()
+
+    monkeypatch.setattr(loader, "_read_active", held_read)
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        proceed.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == 1
+    finally:
+        proceed.set()
+        loader.stop()
+        thread.join(3)

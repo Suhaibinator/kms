@@ -130,6 +130,7 @@ class AsyncReleaseLoader:
         self._running = False
         self._stop_event = asyncio.Event()
         self._candidate_queue: "asyncio.Queue[_Candidate]" = asyncio.Queue(maxsize=1)
+        self._watch_error: Optional[BaseException] = None
         self._active_cancel: Optional[asyncio.Event] = None
         self._active_identity: Optional[Tuple[int, int, str, str]] = None
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
@@ -207,6 +208,7 @@ class AsyncReleaseLoader:
         self._running = True
         self._stop_event = asyncio.Event()
         self._candidate_queue = asyncio.Queue(maxsize=1)
+        self._watch_error = None
         self._active_cancel = None
         self._active_identity = None
         self._latest_identity = None
@@ -303,6 +305,9 @@ class AsyncReleaseLoader:
         finally:
             self._watch_call = None
             self._running = False
+            # Preserve the mapped watch failure after cooperative cancellation,
+            # including application cancellation or failure during preparation.
+            self._raise_watch_error()
 
     async def _relay_stop(self, stop_event: asyncio.Event) -> None:
         await stop_event.wait()
@@ -377,9 +382,15 @@ class AsyncReleaseLoader:
         elif self._retry_identity == candidate.identity:
             self._retry_identity = None
 
+    def _raise_watch_error(self) -> None:
+        if self._watch_error is not None:
+            raise self._watch_error
+
     async def _process_candidate(
         self, candidate: _Candidate, prepare: Any
     ) -> Tuple[str, str, int]:
+        # No await separates the fatal check from cancellation-event installation.
+        self._raise_watch_error()
         cancel = asyncio.Event()
         self._active_cancel = cancel
         self._active_identity = candidate.identity
@@ -457,6 +468,7 @@ class AsyncReleaseLoader:
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return ("applied", "", 0)
         except _CandidateFailure as exc:
+            self._raise_watch_error()
             if prepared is not None and exc.category != "prepare_failed":
                 # All paths that need cleanup normally abort above. This guard
                 # covers validator/fencing refactors without double-aborting.
@@ -470,6 +482,7 @@ class AsyncReleaseLoader:
         except asyncio.CancelledError:
             if prepared is not None:
                 self._abort_or_fail(candidate, prepared)
+            self._raise_watch_error()
             raise
         finally:
             if self._active_cancel is cancel:
@@ -803,7 +816,10 @@ class AsyncReleaseLoader:
             raise
         except grpc.RpcError as exc:
             if exc.code() in _TERMINAL_WATCH_CODES:
-                raise errors.map_grpc_error(exc) from None
+                self._watch_error = errors.map_grpc_error(exc)
+                if self._active_cancel is not None:
+                    self._active_cancel.set()
+                raise self._watch_error from None
         except Exception:
             pass
         finally:

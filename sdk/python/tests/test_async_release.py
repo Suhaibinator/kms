@@ -1141,3 +1141,125 @@ def test_async_initial_grpc_failure_is_wrapped_as_startup_error(monkeypatch):
         assert not stub.calls
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("prepare_result", ["prepared", "failed", "cancelled", "stopped"])
+def test_async_terminal_watch_cancels_cooperative_prepare(monkeypatch, prepare_result):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        cleanup = asyncio.Event()
+        prepared = _Prepared()
+
+        async def prepare(cancel, _snapshot):
+            entered.set()
+            await cancel.wait()
+            cancelled.set()
+            await cleanup.wait()
+            if prepare_result == "failed":
+                raise RuntimeError("preparation failed during cancellation")
+            if prepare_result == "cancelled":
+                raise asyncio.CancelledError()
+            if prepare_result == "stopped":
+                loader.stop()
+            return prepared
+
+        task = asyncio.create_task(loader.run(prepare))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            await asyncio.wait_for(cancelled.wait(), 0.5)
+            assert not task.done(), "cooperative cleanup must finish before run exits"
+            cleanup.set()
+            with pytest.raises(kms_paramstore.PermissionDeniedError):
+                await asyncio.wait_for(task, 2)
+            assert prepared.commits == 0
+            assert prepared.aborts == (1 if prepare_result in {"prepared", "stopped"} else 0)
+        finally:
+            cleanup.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_async_terminal_watch_before_candidate_install_fences_preparation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+        prepared = _Prepared()
+        preparations = []
+        process = loader._process_candidate
+
+        async def held_process(candidate, prepare):
+            entered.set()
+            await proceed.wait()
+            return await process(candidate, prepare)
+
+        def prepare(_cancel, snapshot):
+            preparations.append(snapshot)
+            return prepared
+
+        monkeypatch.setattr(loader, "_process_candidate", held_process)
+        task = asyncio.create_task(loader.run(prepare))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.UNAUTHENTICATED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            proceed.set()
+            with pytest.raises(kms_paramstore.UnauthenticatedError):
+                await asyncio.wait_for(task, 2)
+            assert preparations == []
+            assert loader.stats().resolutions == 0
+            assert prepared.commits == prepared.aborts == 0
+        finally:
+            proceed.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_async_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fails):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+        prepared = _Prepared()
+        read_active = loader._read_active
+        reads = 0
+
+        async def held_read():
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                entered.set()
+                await proceed.wait()
+                if read_fails:
+                    raise RuntimeError("active read failed after watch rejection")
+            return await read_active()
+
+        monkeypatch.setattr(loader, "_read_active", held_read)
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            proceed.set()
+            with pytest.raises(kms_paramstore.PermissionDeniedError):
+                await asyncio.wait_for(task, 2)
+            assert prepared.commits == 0
+            assert prepared.aborts == 1
+        finally:
+            proceed.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
