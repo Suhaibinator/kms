@@ -141,7 +141,7 @@ func TestOptionalExpectedCurrentVersionTracksPresenceOfZero(t *testing.T) {
 	}
 }
 
-func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t *testing.T) {
+func TestReleaseSubscriberPresentationSeparatesSchemaTracksSharingIdentityAndInstance(t *testing.T) {
 	instances := map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus{}
 	mergeReleaseSubscriberStates(instances, []*kmsv1.ReleaseSubscriberState{
 		{
@@ -151,15 +151,17 @@ func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t
 			State:              "received",
 			ReleaseVersion:     1,
 			ActivationRevision: 1,
+			SchemaVersion:      1,
 		},
 		{
-			Identity:           "identity-b",
+			Identity:           "identity-a",
 			ClientName:         "shared-client",
 			InstanceId:         "same-instance",
 			State:              "applied",
 			ReleaseVersion:     2,
 			ActivationRevision: 2,
 			Connected:          true,
+			SchemaVersion:      2,
 		},
 	})
 	if len(instances) != 2 {
@@ -172,14 +174,14 @@ func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t
 	if len(lines) != 3 {
 		t.Fatalf("output rows = %d, want header plus 2 identities:\n%s", len(lines), output.String())
 	}
-	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|RECEIVED|PREPARED|APPLIED|REJECTED|LAG|CONNECTED" {
+	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|SCHEMA|RECEIVED|PREPARED|APPLIED|REJECTED|LAG|CONNECTED" {
 		t.Fatalf("header = %q", got)
 	}
-	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|v1/r1|-|-|-|1|false" {
+	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|1|v1/r1|-|-|-|1|false" {
 		t.Fatalf("identity-a row = %q", got)
 	}
-	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-b|shared-client|same-instance|-|-|v2/r2|-|0|true" {
-		t.Fatalf("identity-b row = %q", got)
+	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-a|shared-client|same-instance|2|-|-|v2/r2|-|0|true" {
+		t.Fatalf("schema-2 row = %q", got)
 	}
 }
 
@@ -252,9 +254,26 @@ func writeVerifyArtifact(t *testing.T) string {
 	return path
 }
 
+func writeSchemaFreeVerifyArtifact(t *testing.T) string {
+	t.Helper()
+	raw, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev",
+		Contract:   []configstore.ContractEntry{{Alias: "greeting", Kind: configstore.ContractKindParameter, ContentType: "string"}},
+		Parameters: []configstore.DefaultsParameter{{Alias: "greeting", ContentType: "string", Value: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "schema-free-defaults.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestReleaseVerifyDefaultsHashesLocallyAndReportsVerdicts(t *testing.T) {
 	stub := &verifyReleaseStub{response: &kmsv1.VerifyReleaseDefaultsResponse{
-		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: true,
+		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: true, SchemaVersion: 7,
 		Entries:    []*kmsv1.VerifyEntryVerdict{{Alias: "greeting", Verdict: "match"}, {Alias: "settings", Verdict: "match"}},
 		MatchCount: 2, UnverifiedCount: 1,
 	}}
@@ -296,10 +315,58 @@ func TestReleaseVerifyDefaultsHashesLocallyAndReportsVerdicts(t *testing.T) {
 		}
 	}
 	out := c.stdout()
-	for _, want := range []string{"ALIAS", "VERDICT", "greeting  match", "settings  match", "Release runtime version 3 (revision 42): 2 match, 0 differs", "1 unverified", "schema match"} {
+	for _, want := range []string{"ALIAS", "VERDICT", "greeting  match", "settings  match", "Release runtime version 3 (revision 42): 2 match, 0 differs", "1 unverified", "schema match (version 7)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestVerifyDefaultsRequestSchemaSelectors(t *testing.T) {
+	ns := &kmsv1.NamespaceRef{Env: "prod", App: "app"}
+	artifact := configstore.DefaultsArtifact{Profile: "dev"}
+	if _, err := verifyDefaultsRequest(ns, "runtime", artifact, optionalUint64{}); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("missing selector error = %v", err)
+	}
+	explicitZero := optionalUint64{set: true, value: 0}
+	request, err := verifyDefaultsRequest(ns, "runtime", artifact, explicitZero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.SchemaVersion == nil || request.GetSchemaVersion() != 0 || request.GetSchemaSha256() != "" {
+		t.Fatalf("explicit-zero request = %+v", request)
+	}
+	artifact.SchemaSHA256 = verifyTestSchemaSHA
+	if _, err := verifyDefaultsRequest(ns, "runtime", artifact, explicitZero); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("dual selector error = %v", err)
+	}
+}
+
+func TestReleaseVerifyDefaultsExplicitSchemaZero(t *testing.T) {
+	stub := &verifyReleaseStub{response: &kmsv1.VerifyReleaseDefaultsResponse{
+		Name: "runtime", Version: 1, SchemaVersion: 0, SchemaMatches: true,
+		Entries: []*kmsv1.VerifyEntryVerdict{{Alias: "greeting", Verdict: "match"}}, MatchCount: 1,
+	}}
+	run := func(args ...string) (int, *testCLI) {
+		c := newTestCLI()
+		c.dialOverride = startStubGRPC(t, func(server *grpc.Server) { kmsv1.RegisterConfigurationReleaseServiceServer(server, stub) })
+		return c.Run(append([]string{"release", "verify-defaults"}, args...)), c
+	}
+	artifact := writeSchemaFreeVerifyArtifact(t)
+	if code, c := run("prod/app", "--artifact", artifact, "--insecure"); code != exitUsage || !strings.Contains(c.stderr(), "requires --schema-version") {
+		t.Fatalf("missing selector = exit %d stderr %q", code, c.stderr())
+	}
+	code, c := run("prod/app", "--artifact", artifact, "--schema-version", "0", "--insecure")
+	if code != exitOK {
+		t.Fatalf("explicit schema zero = exit %d stderr %q", code, c.stderr())
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.calls) != 1 || stub.calls[0].SchemaVersion == nil || stub.calls[0].GetSchemaVersion() != 0 || stub.calls[0].GetSchemaSha256() != "" {
+		t.Fatalf("verify calls = %+v", stub.calls)
+	}
+	if !strings.Contains(c.stdout(), "schema match (version 0)") {
+		t.Fatalf("stdout = %q", c.stdout())
 	}
 }
 
@@ -337,11 +404,12 @@ func TestReleaseVerifyDefaultsExitCodes(t *testing.T) {
 	t.Run("usage errors", func(t *testing.T) {
 		stub := &verifyReleaseStub{}
 		for _, args := range [][]string{
-			{"prod/gradethis"},                                    // no --artifact
-			{"--artifact", artifact},                              // no namespace
-			{"not-a-namespace", "--artifact", artifact},           // bad namespace
-			{"prod/gradethis", "extra", "--artifact", artifact},   // too many positionals
-			{"prod/gradethis", "--artifact", artifact, "--bogus"}, // unknown flag
+			{"prod/gradethis"},                                                  // no --artifact
+			{"--artifact", artifact},                                            // no namespace
+			{"not-a-namespace", "--artifact", artifact},                         // bad namespace
+			{"prod/gradethis", "extra", "--artifact", artifact},                 // too many positionals
+			{"prod/gradethis", "--artifact", artifact, "--bogus"},               // unknown flag
+			{"prod/gradethis", "--artifact", artifact, "--schema-version", "0"}, // embedded digest conflicts
 		} {
 			code, _ := run(t, stub, args...)
 			if code != 2 {

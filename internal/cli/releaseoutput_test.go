@@ -35,12 +35,16 @@ type releaseServiceStub struct {
 	activeErr     error
 	activate      *kmsv1.ActivateReleaseResponse
 	activateErr   error
+	getCalls      []*kmsv1.GetReleaseRequest
+	validateCalls []*kmsv1.ValidateReleaseRequest
+	activeCalls   []*kmsv1.GetActiveReleaseRequest
 	activateCalls []*kmsv1.ActivateReleaseRequest
 }
 
 func (s *releaseServiceStub) GetRelease(_ context.Context, req *kmsv1.GetReleaseRequest) (*kmsv1.GetReleaseResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getCalls = append(s.getCalls, proto.Clone(req).(*kmsv1.GetReleaseRequest))
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -60,18 +64,20 @@ func (s *releaseServiceStub) ListReleases(context.Context, *kmsv1.ListReleasesRe
 	return &kmsv1.ListReleasesResponse{Releases: s.list}, nil
 }
 
-func (s *releaseServiceStub) ValidateRelease(context.Context, *kmsv1.ValidateReleaseRequest) (*kmsv1.ValidateReleaseResponse, error) {
+func (s *releaseServiceStub) ValidateRelease(_ context.Context, req *kmsv1.ValidateReleaseRequest) (*kmsv1.ValidateReleaseResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.validateCalls = append(s.validateCalls, proto.Clone(req).(*kmsv1.ValidateReleaseRequest))
 	if s.validateErr != nil {
 		return nil, s.validateErr
 	}
 	return s.validate, nil
 }
 
-func (s *releaseServiceStub) GetActiveRelease(context.Context, *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
+func (s *releaseServiceStub) GetActiveRelease(_ context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.activeCalls = append(s.activeCalls, proto.Clone(req).(*kmsv1.GetActiveReleaseRequest))
 	if s.activeErr != nil {
 		return nil, s.activeErr
 	}
@@ -156,9 +162,12 @@ func releaseFixture(version uint64, digest string) *kmsv1.ConfigurationRelease {
 
 func TestReleaseShowJSONIsTheWholeOfStdout(t *testing.T) {
 	stub := &releaseServiceStub{releases: map[uint64]*kmsv1.ConfigurationRelease{3: releaseFixture(3, "d3")}}
-	code, c := runRelease(t, stub, "show", "prod/app", "runtime", "3", "--insecure", "--output", "json")
+	code, c := runRelease(t, stub, "show", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--output", "json")
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+	if len(stub.getCalls) != 1 || stub.getCalls[0].SchemaVersion == nil || stub.getCalls[0].GetSchemaVersion() != 0 {
+		t.Fatalf("get calls = %+v, want explicit schema 0", stub.getCalls)
 	}
 	const want = `{
   "namespace": {
@@ -202,7 +211,7 @@ func TestReleaseShowJSONIsTheWholeOfStdout(t *testing.T) {
 
 func TestReleaseShowNotFoundExitsFive(t *testing.T) {
 	stub := &releaseServiceStub{getErr: status.Error(codes.NotFound, "release runtime version 9 not found")}
-	code, c := runRelease(t, stub, "show", "prod/app", "runtime", "9", "--insecure")
+	code, c := runRelease(t, stub, "show", "prod/app", "runtime", "9", "--schema-version", "0", "--insecure")
 	if code != exitNotFound {
 		t.Fatalf("exit=%d want=%d stderr=%s", code, exitNotFound, c.stderr())
 	}
@@ -265,7 +274,7 @@ func TestReleaseDiffJSONSplitsAddedRemovedAndChanged(t *testing.T) {
 		Version: 9, ParameterDigest: "fresh-digest",
 	})
 	stub := &releaseServiceStub{releases: map[uint64]*kmsv1.ConfigurationRelease{1: from, 2: to}}
-	code, c := runRelease(t, stub, "diff", "prod/app", "runtime", "1", "2", "--insecure", "--output", "json")
+	code, c := runRelease(t, stub, "diff", "prod/app", "runtime", "1", "2", "--schema-version", "0", "--insecure", "--output", "json")
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 	}
@@ -307,7 +316,7 @@ func TestReleaseDiffTableMatchesTheComputedDiff(t *testing.T) {
 		Version: 9, ParameterDigest: "fresh-digest",
 	})
 	stub := &releaseServiceStub{releases: map[uint64]*kmsv1.ConfigurationRelease{1: from, 2: to}}
-	code, c := runRelease(t, stub, "diff", "prod/app", "runtime", "1", "2", "--insecure")
+	code, c := runRelease(t, stub, "diff", "prod/app", "runtime", "1", "2", "--schema-version", "0", "--insecure")
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 	}
@@ -331,7 +340,7 @@ func TestReleaseValidateJSONReportsErrorsAndExitsOne(t *testing.T) {
 		{Alias: "settings", Code: "schema_violation", SchemaPointer: "/properties/retries", Message: "must be an integer"},
 		{Code: "pin_unresolved", Message: "parameter version 4 no longer exists"},
 	}}}
-	code, c := runRelease(t, stub, "validate", "prod/app", "runtime", "3", "--insecure", "--output", "json")
+	code, c := runRelease(t, stub, "validate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--output", "json")
 	if code != 1 {
 		t.Fatalf("exit=%d want 1, stderr=%s", code, c.stderr())
 	}
@@ -348,9 +357,12 @@ func TestReleaseValidateJSONReportsErrorsAndExitsOne(t *testing.T) {
 	if report.Errors[1].Alias != "" || report.Errors[1].Code != "pin_unresolved" {
 		t.Fatalf("release-level error = %+v", report.Errors[1])
 	}
+	if len(stub.validateCalls) != 1 || stub.validateCalls[0].SchemaVersion == nil || stub.validateCalls[0].GetSchemaVersion() != 0 {
+		t.Fatalf("validate calls = %+v, want explicit schema 0", stub.validateCalls)
+	}
 
 	valid := &releaseServiceStub{validate: &kmsv1.ValidateReleaseResponse{Valid: true}}
-	code, c = runRelease(t, valid, "validate", "prod/app", "runtime", "3", "--insecure", "--output", "json")
+	code, c = runRelease(t, valid, "validate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--output", "json")
 	if code != 0 {
 		t.Fatalf("valid exit=%d stderr=%s", code, c.stderr())
 	}
@@ -383,7 +395,7 @@ func TestReleaseActivateValidationFailureExitsSeven(t *testing.T) {
 		activeErr:   status.Error(codes.NotFound, "no active release"),
 		activateErr: failedValidationStatus(t),
 	}
-	code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes")
+	code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes")
 	if code != exitFailedPrecondition {
 		t.Fatalf("exit=%d want=%d stderr=%s", code, exitFailedPrecondition, c.stderr())
 	}
@@ -410,7 +422,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 
 	t.Run("non-interactive without --yes is refused", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure")
 		if code != exitUsage {
 			t.Fatalf("exit=%d want=%d stderr=%s", code, exitUsage, c.stderr())
 		}
@@ -433,12 +445,12 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 
 	t.Run("--yes activates", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
 		calls := stub.activations()
-		if len(calls) != 1 || calls[0].GetVersion() != 3 || calls[0].GetName() != "runtime" {
+		if len(calls) != 1 || calls[0].GetVersion() != 3 || calls[0].GetName() != "runtime" || calls[0].SchemaVersion == nil || calls[0].GetSchemaVersion() != 0 {
 			t.Fatalf("activations = %+v", calls)
 		}
 		if !strings.Contains(c.stdout(), "Active prod/app/runtime version 3 (previous 2, revision 42, changed=true)") {
@@ -451,7 +463,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 
 	t.Run("--quiet never suppresses the preview", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes", "--quiet")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes", "--quiet")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
@@ -462,7 +474,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 
 	t.Run("json mode keeps the preview off stdout", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes", "--output", "json")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes", "--output", "json")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
@@ -481,7 +493,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 
 	t.Run("--quiet silences the json result line but not the preview", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes", "--quiet", "--output", "json")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes", "--quiet", "--output", "json")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
@@ -498,7 +510,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 		stub := newStub()
 		stub.active = nil
 		stub.activeErr = status.Error(codes.NotFound, "no active release")
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
@@ -514,7 +526,7 @@ func TestReleaseActivatePreviewsTheDiffAndRequiresConfirmation(t *testing.T) {
 		stub := newStub()
 		stub.active = nil
 		stub.activeErr = status.Error(codes.Unavailable, "server is starting")
-		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--insecure", "--yes")
+		code, c := runRelease(t, stub, "activate", "prod/app", "runtime", "3", "--schema-version", "0", "--insecure", "--yes")
 		if code != exitUnavailable {
 			t.Fatalf("exit=%d want=%d stderr=%s", code, exitUnavailable, c.stderr())
 		}
@@ -534,7 +546,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 
 	t.Run("non-interactive without --yes is refused", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--insecure")
+		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure")
 		if code != exitUsage {
 			t.Fatalf("exit=%d want=%d stderr=%s", code, exitUsage, c.stderr())
 		}
@@ -548,12 +560,12 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 
 	t.Run("--yes rolls back to the previous version", func(t *testing.T) {
 		stub := newStub()
-		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--insecure", "--yes")
+		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure", "--yes")
 		if code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
 		calls := stub.activations()
-		if len(calls) != 1 || calls[0].GetVersion() != 2 || calls[0].GetExpectedCurrentVersion() != 3 {
+		if len(calls) != 1 || calls[0].GetVersion() != 2 || calls[0].GetExpectedCurrentVersion() != 3 || calls[0].SchemaVersion == nil || calls[0].GetSchemaVersion() != 0 {
 			t.Fatalf("activations = %+v", calls)
 		}
 		if !strings.Contains(c.stdout(), "Rolled back prod/app/runtime to version 2 (revision 43)") {
@@ -567,7 +579,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 		c.dialOverride = startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterConfigurationReleaseServiceServer(s, stub) })
 		c.isTTY = func() bool { return true }
 		c.Stdin = releaseStdinFile(t, "prod/app\n")
-		if code := c.Run([]string{"release", "rollback", "prod/app", "runtime", "--insecure"}); code != 0 {
+		if code := c.Run([]string{"release", "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure"}); code != 0 {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
 		if len(stub.activations()) != 1 {
@@ -584,7 +596,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 		c.dialOverride = startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterConfigurationReleaseServiceServer(s, stub) })
 		c.isTTY = func() bool { return true }
 		c.Stdin = releaseStdinFile(t, "prod/other\n")
-		if code := c.Run([]string{"release", "rollback", "prod/app", "runtime", "--insecure"}); code != exitUsage {
+		if code := c.Run([]string{"release", "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure"}); code != exitUsage {
 			t.Fatalf("exit=%d want=%d stderr=%s", code, exitUsage, c.stderr())
 		}
 		if len(stub.activations()) != 0 {
@@ -598,7 +610,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 	t.Run("nothing to roll back to is refused before the prompt", func(t *testing.T) {
 		stub := newStub()
 		stub.active = &kmsv1.GetActiveReleaseResponse{Release: releaseFixture(1, "d1")}
-		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--insecure")
+		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure")
 		if code != 1 || !strings.Contains(c.stderr(), "no previous release is available") {
 			t.Fatalf("exit=%d stderr=%s", code, c.stderr())
 		}
@@ -608,7 +620,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 		stub := newStub()
 		stub.active = nil
 		stub.activeErr = status.Error(codes.PermissionDenied, "identity may not read releases")
-		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--insecure", "--yes")
+		code, c := runRelease(t, stub, "rollback", "prod/app", "runtime", "--schema-version", "0", "--insecure", "--yes")
 		if code != exitPermissionDenied {
 			t.Fatalf("exit=%d want=%d stderr=%s", code, exitPermissionDenied, c.stderr())
 		}
@@ -617,7 +629,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 
 func TestReleaseVerifyDefaultsJSONKeepsItsOwnExitCodes(t *testing.T) {
 	stub := &verifyReleaseStub{response: &kmsv1.VerifyReleaseDefaultsResponse{
-		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: false,
+		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: false, SchemaVersion: 7,
 		Entries:      []*kmsv1.VerifyEntryVerdict{{Alias: "greeting", Verdict: "differs"}, {Alias: "settings", Verdict: "match"}},
 		MatchCount:   1,
 		DiffersCount: 1,
@@ -632,7 +644,7 @@ func TestReleaseVerifyDefaultsJSONKeepsItsOwnExitCodes(t *testing.T) {
 	if err := json.Unmarshal([]byte(c.stdout()), &report); err != nil {
 		t.Fatalf("%v:\n%s", err, c.stdout())
 	}
-	if report.Name != "runtime" || report.Version != 3 || report.ActivationRevision != 42 {
+	if report.Name != "runtime" || report.Version != 3 || report.ActivationRevision != 42 || report.SchemaVersion != 7 {
 		t.Fatalf("report identity = %+v", report)
 	}
 	if report.Schema != "mismatch" || report.Clean {
