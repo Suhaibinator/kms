@@ -95,6 +95,27 @@ func replaceWithMTLSNamespace(st *storage.SQLStore, ns domain.NamespaceRef) erro
 	return err
 }
 
+func TestResolveReleaseSchemaRejectsAuthorizationABA(t *testing.T) {
+	ctx := context.Background()
+	st, ns, _ := newNamespaceIncarnationStore(t)
+	svc := New(st, nil, "test")
+	schema, err := svc.CreateConfigurationSchema(ctx, adminPrincipal(), ns.App, `{"type":"object"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := boundClientPrincipal("client", ns)
+	if version, err := svc.ResolveReleaseSchema(ctx, client, ns, "runtime", schema.Digest); err != nil || version != schema.Version {
+		t.Fatalf("resolve before namespace replacement: version=%d err=%v", version, err)
+	}
+	wrapped := &namespaceSwapStore{Store: st, ReleaseStore: st, target: ns}
+	wrapped.afterNamespaceRead = func() error { return replaceWithMTLSNamespace(st, ns) }
+	racing := New(wrapped, nil, "test")
+	version, err := racing.ResolveReleaseSchema(ctx, client, ns, "runtime", schema.Digest)
+	if !errors.Is(err, domain.ErrAborted) || version != 0 {
+		t.Fatalf("stale token-authorized namespace resolved version=%d err=%v; want no result and ErrAborted", version, err)
+	}
+}
+
 func testSQLKeyring(t *testing.T, st *storage.SQLStore) *kmscrypto.Keyring {
 	t.Helper()
 	kek, err := kmscrypto.NewKEKFromMaterial("kek-namespace-aba", bytes.Repeat([]byte{0x51}, 32))

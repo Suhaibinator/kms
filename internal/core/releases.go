@@ -1153,5 +1153,10 @@ func (s *Service) ResolveReleaseSchema(ctx context.Context, pr Principal, ns dom
 	if err != nil {
 		return 0, err
 	}
+	// The registry belongs to the application, so its lookup does not resolve
+	// the authorized namespace. Reject replacement before returning its track.
+	if _, err := s.store.GetNamespace(ctx, ns); err != nil {
+		return 0, err
+	}
 	return schema.Version, nil
 }
