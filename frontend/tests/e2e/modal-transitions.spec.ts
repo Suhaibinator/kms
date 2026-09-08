@@ -57,8 +57,46 @@ for (const entry of ["list", "application"] as const) {
         .poll(async () => (await manager.boundingBox())?.width)
         .toBeCloseTo(workspaceWidth, 0);
       expect(page.url()).toBe(url);
-      await manager.getByRole("tab", { name: "Versions" }).click();
+      const versionsTab = manager.getByRole("tab", { name: "Versions" });
+      const successToast = page
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "Secret created (version 1)" });
+      await expect(successToast).toBeVisible();
+      await successToast.evaluate((element) =>
+        Promise.all(
+          element.getAnimations({ subtree: true }).map((animation) => animation.finished),
+        ),
+      );
+      expect(
+        await versionsTab.evaluate((element) => {
+          const toast = document.querySelector<HTMLElement>("[data-sonner-toast]");
+          const target = element.getBoundingClientRect();
+          const toastBox = toast?.getBoundingClientRect();
+          const x = target.left + target.width / 2;
+          const y = target.top + target.height / 2;
+          return {
+            toastVisible: Boolean(toast && toastBox && toastBox.width > 0 && toastBox.height > 0),
+            toastCoversTarget: Boolean(
+              toastBox &&
+                x >= toastBox.left &&
+                x <= toastBox.right &&
+                y >= toastBox.top &&
+                y <= toastBox.bottom,
+            ),
+            targetReceivesPointer:
+              document.elementFromPoint(x, y)?.closest('[role="tab"]') === element,
+          };
+        }),
+      ).toEqual({
+        toastVisible: true,
+        toastCoversTarget: isMobile,
+        targetReceivesPointer: true,
+      });
+      await versionsTab.click();
       await expect(manager.getByRole("row").filter({ hasText: "v1" })).toBeVisible();
+      await successToast.getByRole("button", { name: "Close toast" }).click();
+      await expect(successToast).toBeHidden();
+      await expect(manager).toBeVisible();
       // Same footprint on both tabs, and no sideways scroll inside the body.
       await expect
         .poll(async () => (await manager.boundingBox())?.width)

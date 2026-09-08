@@ -3812,6 +3812,17 @@
     }
   }
 
+  /* A toast can still span a mobile workspace's toolbar. Let pointer events
+     reach the dialog through its message surface; its own actions and dismiss
+     button remain usable. This also prevents hovering a covered control from
+     pausing Sonner's timer forever. */
+  body:has([data-slot="dialog-content"][data-open]) [data-sonner-toast] {
+    pointer-events: none;
+  }
+  body:has([data-slot="dialog-content"][data-open]) [data-sonner-toast] :is(a, button) {
+    pointer-events: auto;
+  }
+
   /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
 
   @variant max-md {
