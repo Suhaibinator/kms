@@ -45,7 +45,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	w := e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusOK)
 	preview := decodeBody(t, w)
-	if preview["valid"] != true || preview["executed"] != false || preview["plan_digest"] == "" || preview["definition_changed"] != true {
+	if preview["valid"] != true || preview["executed"] != false || preview["plan_digest"] == "" || preview["definition_changed"] != false {
 		t.Fatalf("unexpected preview: %v", preview)
 	}
 	if len(preview["affected_environments"].([]any)) != 1 {
@@ -67,6 +67,10 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	}
 	if active.Release.Version == source.Release.Version || active.Release.SchemaVersion == source.Release.SchemaVersion {
 		t.Fatal("migration did not activate a new schema/release")
+	}
+	sourceAfter, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
+	if err != nil || sourceAfter.Release.Version != source.Release.Version || sourceAfter.ActivationRevision != source.ActivationRevision {
+		t.Fatalf("migration changed source activation: before=%+v after=%+v err=%v", source, sourceAfter, err)
 	}
 	for _, entry := range active.Release.Entries {
 		for _, old := range source.Release.Entries {

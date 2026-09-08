@@ -126,7 +126,7 @@ export default function RollbackDialog({
     } catch (error) {
       setOutcome({ kind: "error", message: errorMessage(error) });
     }
-  }, [name, namespace, validate]);
+  }, [active?.schema_version, name, namespace, validate]);
 
   const confirmDisabled =
     busy ||

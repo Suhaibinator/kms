@@ -313,6 +313,7 @@ export default function ReleasesPage() {
       releasePaging.pageToken,
       releasePaging.setNextToken,
       releaseRequestScope,
+      schemaVersion,
       toast,
     ],
   );
@@ -357,6 +358,11 @@ export default function ReleasesPage() {
         ]);
         if (run !== linkRun.current) return;
         const current = active?.release.version === release.version;
+        const resolved = releaseKey(release);
+        setSelectedReleaseKey(resolved);
+        if (resolved !== queryRelease) {
+          replaceQuery({ release: resolved, schema_version: String(release.schema_version) });
+        }
         setLinkedSummary({
           release,
           current,
@@ -502,11 +508,15 @@ export default function ReleasesPage() {
   const rollbackAction = pendingAction?.kind === "rollback" ? pendingAction : null;
 
   const wantedComparison = parseReleaseKey(linkedCompareKey);
-  const loadedComparison = releases.some(
+  const matchingComparisons = releases.filter(
     ({ release }) => wantedComparison && release.name === wantedComparison.name &&
       release.version === wantedComparison.version &&
       (wantedComparison.schema_version === undefined || release.schema_version === wantedComparison.schema_version),
   );
+  const loadedComparison = matchingComparisons.length === 1;
+  const resolvedCompareKey = loadedComparison
+    ? releaseKey(matchingComparisons[0].release)
+    : linkedCompareKey;
   useEffect(() => {
     setLinkedComparison(null);
     setComparisonError(null);
@@ -544,7 +554,7 @@ export default function ReleasesPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [linkedCompareKey, hasNS, loadedComparison, ns]);
+  }, [linkedCompareKey, hasNS, loadedComparison, ns, schemaVersion]);
 
   return (
     <>
@@ -811,7 +821,7 @@ export default function ReleasesPage() {
       <ReleaseWorkspace
         summary={selectedSummary}
         initialSection={linkedSection ?? "overview"}
-        initialCompareKey={linkedCompareKey}
+        initialCompareKey={resolvedCompareKey}
         comparisonLoading={comparisonLoading}
         comparisonError={comparisonError}
         releases={

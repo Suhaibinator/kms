@@ -337,6 +337,7 @@ describe("ReleasesPage", () => {
       1000,
       undefined,
       expect.objectContaining({ signal: expect.anything() }),
+      releaseV2.schema_version,
     );
   });
 
@@ -469,7 +470,7 @@ describe("ReleasesPage", () => {
     fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
     fireEvent.click(within(confirm).getByRole("button", { name: "Activate release" }));
     await waitFor(() =>
-      expect(mocks.activateRelease).toHaveBeenCalledWith(releaseV2.namespace, "runtime", 2, 1),
+      expect(mocks.activateRelease).toHaveBeenCalledWith(releaseV2.namespace, "runtime", 2, releaseV2.schema_version, 1),
     );
     expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1);
     await waitFor(() =>
@@ -542,7 +543,7 @@ describe("ReleasesPage", () => {
     const { rerender } = render(<ReleasesPage />);
     let workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
     expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
-      "runtime@3",
+      "runtime@1:3",
     );
     expect(
       within(workspace)
@@ -584,6 +585,7 @@ describe("ReleasesPage", () => {
       releaseV1.namespace,
       "runtime",
       3,
+      0,
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(within(workspace).getByText(/new-digest/)).toBeVisible();
@@ -613,7 +615,7 @@ describe("ReleasesPage", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Release runtime@2" });
     const panel = await within(dialog).findByRole("alert");
-    expect(panel).toHaveTextContent("runtime@2 failed validation");
+    expect(panel).toHaveTextContent("runtime@1:2 failed validation");
     expect(within(panel).getByText("expected boolean")).toBeVisible();
     expect(within(panel).getByText("/properties/enabled")).toBeVisible();
     // The violation row links to the parameter the alias pins.
@@ -1162,7 +1164,7 @@ describe("ReleasesPage", () => {
 
     render(<ReleasesPage />);
     const dialog = await screen.findByRole("dialog", { name: "Release runtime@1" });
-    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1);
+    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1, 0);
     expect(within(dialog).getByText("previous")).toBeVisible();
 
     // Closing writes the parameter back out of the URL.
@@ -1191,7 +1193,7 @@ describe("ReleasesPage", () => {
     expect(mocks.replace).toHaveBeenLastCalledWith(
       {
         pathname: "/releases",
-        query: { app: "payments", env: "prod", name: "runtime", release: "runtime@2" },
+        query: { app: "payments", env: "prod", name: "runtime", release: "runtime@1:2" },
       },
       undefined,
       { shallow: true, scroll: false },
@@ -1212,7 +1214,7 @@ describe("ReleasesPage", () => {
     );
     const { rerender } = render(<ReleasesPage />);
     await waitFor(() =>
-      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1),
+      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1, 0),
     );
 
     mocks.query = { ...mocks.query, release: "runtime@2" };
@@ -1308,6 +1310,7 @@ describe("ReleasesPage", () => {
         { env: "prod", app: "payments" },
         "runtime",
         1,
+        releaseV1.schema_version,
       ),
     );
     await within(dialog).findByText("is valid and can be activated.");
@@ -1324,6 +1327,7 @@ describe("ReleasesPage", () => {
         env: "prod",
         app: "payments",
         name: "runtime",
+        schema_version: 1,
         expected_current_version: 2,
       }),
     );

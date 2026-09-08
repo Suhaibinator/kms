@@ -70,7 +70,7 @@ func TestReleaseSubscriberStream(t *testing.T) {
 
 	open := func(ctx context.Context) *http.Response {
 		t.Helper()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,11 +175,11 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestReleaseSubscriberStreamRejectsUnauthenticatedAndUnknown(t *testing.T) {
 	e := newReleaseTestEnv(t)
-	w := e.do(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil, nil)
+	w := e.do(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil, nil)
 	mustStatus(t, w, http.StatusUnauthorized)
-	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 	mustStatus(t, w, http.StatusNotFound)
-	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis", nil)
+	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&schema_version=1", nil)
 	mustStatus(t, w, http.StatusBadRequest)
 }
 
@@ -251,7 +251,7 @@ func TestReleaseSubscriberStreamEndsOnTokenRotation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+		ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil).WithContext(ctx)
+		"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+e.adminToken)
 	req = withPeerCert(req, cert)
 

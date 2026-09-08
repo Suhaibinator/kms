@@ -246,7 +246,7 @@ func TestSSEStreamGaugeReturnsToZero(t *testing.T) {
 	open := func(ctx context.Context) *http.Response {
 		t.Helper()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-			ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+			ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
