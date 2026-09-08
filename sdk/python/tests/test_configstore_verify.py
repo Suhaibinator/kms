@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass
+from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
+from kms_paramstore import AsyncClient, Client
+from kms_paramstore._gen import kms_pb2
 from kms_paramstore.configstore import ContractEntry, verify_defaults, verify_defaults_async
 
 
@@ -26,19 +30,18 @@ class _Response:
 
 
 class _Client:
-    def __init__(self, schema_version: int = 2) -> None:
+    def __init__(self) -> None:
         self.request = None
-        self.schema_version = schema_version
 
     def verify_release_defaults(self, **kwargs):
         self.request = kwargs
-        return _Response(schema_version=self.schema_version)
+        return _Response()
 
 
 class _AsyncClient(_Client):
     async def verify_release_defaults(self, **kwargs):
         self.request = kwargs
-        return _Response(schema_version=self.schema_version)
+        return _Response()
 
 
 def test_verify_sends_hashes_only_and_renders_value_free_report() -> None:
@@ -67,15 +70,51 @@ def test_async_verify_matches_sync() -> None:
 @pytest.mark.parametrize("schema_version", [0, 2])
 @pytest.mark.parametrize("asynchronous", [False, True])
 def test_managed_verification_retains_schema_identity(schema_version: int, asynchronous: bool) -> None:
+    requests = []
+
+    def verify(request, **kwargs):
+        requests.append(request)
+        return kms_pb2.VerifyReleaseDefaultsResponse(
+            name="runtime", version=4, activation_revision=8,
+            schema_version=schema_version, schema_matches=True,
+            entries=[kms_pb2.VerifyEntryVerdict(alias="runtime", verdict="match")],
+            match_count=1,
+        )
+
     options = dict(
-        namespace="prod/app", schema_sha256="a" * 64,
+        namespace="prod/app", schema_sha256="" if schema_version == 0 else "a" * 64,
         contract=(ContractEntry("runtime", "parameter", "json"),),
         groups={"runtime": "{}"},
     )
+    if schema_version == 0:
+        options["schema_version"] = 0
+
     if asynchronous:
-        result = asyncio.run(verify_defaults_async(_AsyncClient(schema_version), **options))
+        async def exercise():
+            async def verify_async(request, **kwargs):
+                return verify(request, **kwargs)
+
+            client = AsyncClient(channel=mock.MagicMock())
+            client._release_stub = SimpleNamespace(VerifyReleaseDefaults=verify_async)
+            try:
+                return await verify_defaults_async(client, **options)
+            finally:
+                await client.close()
+
+        result = asyncio.run(exercise())
     else:
-        result = verify_defaults(_Client(schema_version), **options)
+        client = Client(channel=mock.MagicMock())
+        client._release_stub = SimpleNamespace(VerifyReleaseDefaults=verify)
+        try:
+            result = verify_defaults(client, **options)
+        finally:
+            client.close()
+
+    assert len(requests) == 1
+    assert requests[0].HasField("schema_version") == (schema_version == 0)
+    assert requests[0].schema_sha256 == options["schema_sha256"]
+    if schema_version == 0:
+        assert requests[0].schema_version == 0
     assert result.schema_version == schema_version
     assert asdict(result)["schema_version"] == schema_version
     assert f"prod/app runtime@4#8  schema_version: {schema_version}  schema: match" in result.report()
