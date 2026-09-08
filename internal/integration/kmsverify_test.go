@@ -458,10 +458,10 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		}
 		releases := kmsv1.NewConfigurationReleaseServiceClient(f.env.dial(t, nil))
 		verifyCtx := networkAuthContext(f.ctx, f.verifyToken)
-		if _, err := releases.GetActiveRelease(verifyCtx, &kmsv1.GetActiveReleaseRequest{Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease}); status.Code(err) != codes.PermissionDenied {
+		if _, err := releases.GetActiveRelease(verifyCtx, &kmsv1.GetActiveReleaseRequest{SchemaVersion: integrationSchemaVersion(1), Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("GetActiveRelease as verify-only = %v, want PermissionDenied", err)
 		}
-		if _, err := releases.GetRelease(verifyCtx, &kmsv1.GetReleaseRequest{Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease, Version: driftedVersion}); status.Code(err) != codes.PermissionDenied {
+		if _, err := releases.GetRelease(verifyCtx, &kmsv1.GetReleaseRequest{SchemaVersion: integrationSchemaVersion(1), Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease, Version: driftedVersion}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("GetRelease as verify-only = %v, want PermissionDenied", err)
 		}
 		if _, err := releases.ListReleases(verifyCtx, &kmsv1.ListReleasesRequest{Namespace: networkNS(f.ns.Env, f.ns.App)}); status.Code(err) != codes.PermissionDenied {

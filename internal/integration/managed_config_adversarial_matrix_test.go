@@ -196,7 +196,7 @@ func (h *adversarialManagedApp) createReleaseWithSchema(
 		h.t.Fatalf("create managed release: %v", err)
 	}
 	release := created.GetRelease()
-	validation, err := h.releases.ValidateRelease(h.authCtx, &kmsv1.ValidateReleaseRequest{
+	validation, err := h.releases.ValidateRelease(h.authCtx, &kmsv1.ValidateReleaseRequest{SchemaVersion: integrationSchemaVersion(h.schemaVersion),
 		Namespace: h.namespace, Name: adversarialReleaseName, Version: release.GetVersion(),
 	})
 	if err != nil {
@@ -209,7 +209,7 @@ func (h *adversarialManagedApp) activate(
 	release *kmsv1.ConfigurationRelease,
 	expected *uint64,
 ) (*kmsv1.ActivateReleaseResponse, error) {
-	return h.releases.ActivateRelease(h.authCtx, &kmsv1.ActivateReleaseRequest{
+	return h.releases.ActivateRelease(h.authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(h.schemaVersion),
 		Namespace: h.namespace, Name: adversarialReleaseName,
 		Version: release.GetVersion(), ExpectedCurrentVersion: expected,
 	})
@@ -732,7 +732,7 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 		t.Fatal("schema-invalid release unexpectedly passed server validation")
 	}
 	expectedInitialVersion := initialRelease.GetVersion()
-	if _, activateErr := app.releases.ActivateRelease(app.authCtx, &kmsv1.ActivateReleaseRequest{
+	if _, activateErr := app.releases.ActivateRelease(app.authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(app.schemaVersion),
 		Namespace: app.namespace, Name: adversarialReleaseName, Version: invalidRelease.GetVersion(),
 		ExpectedCurrentVersion: &expectedInitialVersion,
 	}); status.Code(activateErr) != codes.FailedPrecondition {
@@ -938,7 +938,7 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 	if response, err := app.activate(candidates[0], &wrongExpected); status.Code(err) != codes.Aborted {
 		t.Fatalf("stale CAS activation response=%+v error=%v code=%s, want Aborted", response, err, status.Code(err))
 	}
-	activeAfterCAS, err := app.releases.GetActiveRelease(app.authCtx, &kmsv1.GetActiveReleaseRequest{
+	activeAfterCAS, err := app.releases.GetActiveRelease(app.authCtx, &kmsv1.GetActiveReleaseRequest{SchemaVersion: integrationSchemaVersion(app.schemaVersion),
 		Namespace: app.namespace, Name: adversarialReleaseName,
 	})
 	if err != nil {

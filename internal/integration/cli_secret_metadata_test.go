@@ -45,7 +45,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{
+	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(0),
 		Namespace: ref.GetNamespace(), Name: "runtime", Version: created.GetRelease().GetVersion(),
 	}); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 		{"default", []string{"get-secret", "/prod/review/history"}, "value-300"},
 		{"current", []string{"get-secret", "/prod/review/history", "--label", "current"}, "value-300"},
 		{"previous", []string{"get-secret", "/prod/review/history", "--label", "previous"}, "value-299"},
-		{"release", []string{"env", "prod/review", "--release", "runtime"}, "HISTORY=value-7"},
+		{"release", []string{"env", "prod/review", "--release", "runtime", "--schema-version", "0"}, "HISTORY=value-7"},
 		{"bind", []string{"secret", "bind", "/prod/review/history"}, "Bound"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

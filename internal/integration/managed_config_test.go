@@ -136,7 +136,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 			t.Fatalf("create managed release: %v", createErr)
 		}
 		release := response.GetRelease()
-		validation, validateErr := releases.ValidateRelease(authCtx, &kmsv1.ValidateReleaseRequest{
+		validation, validateErr := releases.ValidateRelease(authCtx, &kmsv1.ValidateReleaseRequest{SchemaVersion: integrationSchemaVersion(schemaVersion),
 			Namespace: namespace, Name: managedRelease, Version: release.GetVersion(),
 		})
 		if validateErr != nil {
@@ -149,7 +149,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	}
 	activate := func(release *kmsv1.ConfigurationRelease, expected uint64) uint64 {
 		t.Helper()
-		response, activateErr := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+		response, activateErr := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(schemaVersion),
 			Namespace: namespace, Name: managedRelease, Version: release.GetVersion(), ExpectedCurrentVersion: &expected,
 		})
 		if activateErr != nil {
@@ -308,7 +308,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	invalidPins.runtime = putParameter("groups/runtime", managedRuntimeInvalid)
 	invalidRelease := createRelease(invalidPins, false)
 	expectedHotVersion := hotRelease.GetVersion()
-	if _, activateErr := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+	if _, activateErr := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(schemaVersion),
 		Namespace: namespace, Name: managedRelease, Version: invalidRelease.GetVersion(), ExpectedCurrentVersion: &expectedHotVersion,
 	}); status.Code(activateErr) != codes.FailedPrecondition {
 		t.Fatalf("activate schema-invalid release error = %v, want failed precondition", activateErr)
