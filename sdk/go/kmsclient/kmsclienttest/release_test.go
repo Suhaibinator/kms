@@ -47,7 +47,7 @@ func TestConfigurationReleaseScripting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}

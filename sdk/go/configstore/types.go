@@ -56,8 +56,13 @@ type Callbacks struct {
 
 // Options configures a managed configuration manager.
 type Options struct {
-	Release  string
-	Contract []ContractEntry
+	Release string
+	// SchemaVersion selects an exact schema track. Schema version zero is
+	// valid. Exactly one of SchemaVersion and SchemaSHA256 must be set.
+	SchemaVersion *uint64
+	// SchemaSHA256 selects a schema track by generated schema digest.
+	SchemaSHA256 string
+	Contract     []ContractEntry
 	Callbacks
 	// BindingKeys is an internal alias-keyed credential map assembled by
 	// generated stores from declaration-only Secret.BindKey fields.
@@ -68,16 +73,20 @@ type Options struct {
 }
 
 type optionsJSON struct {
-	Release              string `json:"release"`
-	ContractEntries      int    `json:"contract_entries"`
-	ReconcileInterval    string `json:"reconcile_interval"`
-	MaxConcurrentFetches int    `json:"max_concurrent_fetches"`
-	InstanceID           string `json:"instance_id,omitempty"`
+	Release              string  `json:"release"`
+	SchemaVersion        *uint64 `json:"schema_version,omitempty"`
+	SchemaSHA256         string  `json:"schema_sha256,omitempty"`
+	ContractEntries      int     `json:"contract_entries"`
+	ReconcileInterval    string  `json:"reconcile_interval"`
+	MaxConcurrentFetches int     `json:"max_concurrent_fetches"`
+	InstanceID           string  `json:"instance_id,omitempty"`
 }
 
 func (o Options) safeProjection() optionsJSON {
 	return optionsJSON{
 		Release:              o.Release,
+		SchemaVersion:        o.SchemaVersion,
+		SchemaSHA256:         o.SchemaSHA256,
 		ContractEntries:      len(o.Contract),
 		ReconcileInterval:    o.ReconcileInterval.String(),
 		MaxConcurrentFetches: o.MaxConcurrentFetches,

@@ -18,11 +18,12 @@ const (
 // immutable application release assembled from a generated defaults artifact.
 // Execute requests must carry the plan digest returned by a fresh preview.
 type CreateApplicationReleaseOptions struct {
-	Namespace    string
-	Artifact     []byte
-	MetadataJSON string
-	Execute      bool
-	PlanDigest   string
+	Namespace     string
+	SchemaVersion *uint64
+	Artifact      []byte
+	MetadataJSON  string
+	Execute       bool
+	PlanDigest    string
 }
 
 // ApplicationReleasePlanEntry describes one value-free resource pin selected
@@ -88,11 +89,12 @@ func (c *Client) CreateApplicationRelease(
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.admin.CreateApplicationRelease(cctx, &kmsv1.CreateApplicationReleaseRequest{
-		Namespace:    namespace.proto(),
-		Artifact:     options.Artifact,
-		MetadataJson: options.MetadataJSON,
-		Execute:      options.Execute,
-		PlanDigest:   options.PlanDigest,
+		Namespace:     namespace.proto(),
+		SchemaVersion: options.SchemaVersion,
+		Artifact:      options.Artifact,
+		MetadataJson:  options.MetadataJSON,
+		Execute:       options.Execute,
+		PlanDigest:    options.PlanDigest,
 	})
 	if err != nil {
 		return CreateApplicationReleaseResult{}, mapError(err)

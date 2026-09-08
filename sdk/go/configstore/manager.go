@@ -115,6 +115,8 @@ func Start(
 	validateManifest := manifestValidator(options.Contract)
 	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
 		Name:              options.Release,
+		SchemaVersion:     options.SchemaVersion,
+		SchemaSHA256:      options.SchemaSHA256,
 		ReconcileInterval: options.ReconcileInterval,
 		BindingKeys:       bindingKeys,
 		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {

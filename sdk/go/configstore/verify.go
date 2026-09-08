@@ -30,6 +30,9 @@ type VerifyOptions struct {
 	Release string
 	// Profile is an informational label sent with the request.
 	Profile string
+	// SchemaVersion selects an exact numeric track. When omitted, the generated
+	// schema digest is resolved by the server.
+	SchemaVersion *uint64
 }
 
 // VerifyEntryResult is the verdict for one parameter alias.
@@ -48,6 +51,7 @@ type VerifyResult struct {
 	// SchemaMatches is true when the server's pinned application schema digest
 	// equals the generated contract's schema digest.
 	SchemaMatches bool
+	SchemaVersion uint64
 	Entries       []VerifyEntryResult
 	// Unverified counts parameter aliases pinned by the release that the
 	// contract did not mention.
@@ -141,12 +145,17 @@ func VerifyDefaults(ctx context.Context, client VerifyClient, in VerifyInput, op
 		entries = append(entries, kmsclient.VerifyDefaultsEntry{Alias: alias, ContentType: entry.ContentType, SHA256: hash})
 		contentTypes[alias] = entry.ContentType
 	}
+	schemaSHA256 := in.SchemaSHA256
+	if opts.SchemaVersion != nil {
+		schemaSHA256 = ""
+	}
 	response, err := client.VerifyReleaseDefaults(ctx, kmsclient.VerifyReleaseDefaultsOptions{
-		Namespace:    opts.Namespace,
-		Release:      opts.Release,
-		Profile:      opts.Profile,
-		SchemaSHA256: in.SchemaSHA256,
-		Entries:      entries,
+		Namespace:     opts.Namespace,
+		Release:       opts.Release,
+		Profile:       opts.Profile,
+		SchemaSHA256:  schemaSHA256,
+		SchemaVersion: opts.SchemaVersion,
+		Entries:       entries,
 	})
 	if err != nil {
 		if errors.Is(err, kmsclient.ErrRateLimited) {
@@ -160,6 +169,7 @@ func VerifyDefaults(ctx context.Context, client VerifyClient, in VerifyInput, op
 		ReleaseVersion:     response.ReleaseVersion,
 		ActivationRevision: response.ActivationRevision,
 		SchemaMatches:      response.SchemaMatches,
+		SchemaVersion:      response.SchemaVersion,
 		Entries:            make([]VerifyEntryResult, 0, len(response.Entries)),
 		Unverified:         response.UnverifiedCount,
 	}

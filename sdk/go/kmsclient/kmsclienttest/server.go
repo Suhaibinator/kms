@@ -121,10 +121,11 @@ type Server struct {
 	subs      []*Subscription
 	subNotify chan *Subscription
 
-	releaseMu        sync.Mutex
-	activeRelease    *kmsv1.GetActiveReleaseResponse
-	releaseSubs      []*ReleaseSubscription
-	releaseSubNotify chan *ReleaseSubscription
+	releaseMu          sync.Mutex
+	activeRelease      *kmsv1.GetActiveReleaseResponse
+	releaseSubs        []*ReleaseSubscription
+	releaseSubNotify   chan *ReleaseSubscription
+	resolveSchemaCalls []*kmsv1.ResolveReleaseSchemaRequest
 }
 
 type secretVersionCredentials struct {
@@ -255,6 +256,7 @@ func (s *Server) ActivateConfigurationRelease(spec ReleaseSpec, activationRevisi
 	for _, sub := range s.releaseSubs {
 		registration := sub.Registration
 		if registration.GetName() == spec.Name &&
+			registration.SchemaVersion != nil && registration.GetSchemaVersion() == spec.SchemaVersion &&
 			registration.GetNamespace().GetEnv()+"/"+registration.GetNamespace().GetApp() == spec.Namespace {
 			subs = append(subs, sub)
 		}
@@ -1433,12 +1435,40 @@ func (s *Server) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveRelea
 	defer s.releaseMu.Unlock()
 	active := s.activeRelease
 	if active == nil || active.GetRelease() == nil ||
+		req.SchemaVersion == nil || active.GetRelease().GetSchemaVersion() != req.GetSchemaVersion() ||
 		active.GetRelease().GetName() != req.GetName() ||
 		active.GetRelease().GetNamespace().GetEnv() != req.GetNamespace().GetEnv() ||
 		active.GetRelease().GetNamespace().GetApp() != req.GetNamespace().GetApp() {
 		return nil, notFound(req.GetName())
 	}
 	return proto.Clone(active).(*kmsv1.GetActiveReleaseResponse), nil
+}
+
+// ResolveReleaseSchema resolves a digest to the fake active release's schema
+// version and records the request for assertions.
+func (s *Server) ResolveReleaseSchema(ctx context.Context, req *kmsv1.ResolveReleaseSchemaRequest) (*kmsv1.ResolveReleaseSchemaResponse, error) {
+	s.recordMD(ctx, "ResolveReleaseSchema")
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	s.resolveSchemaCalls = append(s.resolveSchemaCalls, proto.Clone(req).(*kmsv1.ResolveReleaseSchemaRequest))
+	if req.GetSchemaSha256() == "" || s.activeRelease == nil || s.activeRelease.GetRelease() == nil ||
+		s.activeRelease.GetRelease().GetName() != req.GetName() ||
+		s.activeRelease.GetRelease().GetNamespace().GetEnv() != req.GetNamespace().GetEnv() ||
+		s.activeRelease.GetRelease().GetNamespace().GetApp() != req.GetNamespace().GetApp() {
+		return nil, notFound(req.GetName())
+	}
+	return &kmsv1.ResolveReleaseSchemaResponse{SchemaVersion: s.activeRelease.GetRelease().GetSchemaVersion()}, nil
+}
+
+// ResolveReleaseSchemaCalls returns recorded digest resolution requests.
+func (s *Server) ResolveReleaseSchemaCalls() []*kmsv1.ResolveReleaseSchemaRequest {
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	out := make([]*kmsv1.ResolveReleaseSchemaRequest, len(s.resolveSchemaCalls))
+	for index, call := range s.resolveSchemaCalls {
+		out[index] = proto.Clone(call).(*kmsv1.ResolveReleaseSchemaRequest)
+	}
+	return out
 }
 
 // WatchRelease captures registrations and acknowledgements and relays events

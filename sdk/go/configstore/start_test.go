@@ -48,7 +48,8 @@ func startTestClient(t *testing.T) (*kmsclient.Client, *kmsclienttest.Server) {
 
 func startTestOptions(callback func(DefaultMismatchReport)) Options {
 	return Options{
-		Release: "runtime",
+		SchemaVersion: new(uint64),
+		Release:       "runtime",
 		Contract: []ContractEntry{{
 			Alias: "settings", Kind: ContractKindParameter, ContentType: "json",
 		}},

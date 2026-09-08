@@ -16,7 +16,7 @@ func TestFaultRunCancellationDuringPreparationAbortsLateCandidateAndKeepsLKG(t *
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 	})
 	if err != nil {
 		t.Fatal(err)
