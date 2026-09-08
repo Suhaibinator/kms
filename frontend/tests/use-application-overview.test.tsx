@@ -136,6 +136,25 @@ describe("useApplicationOverview", () => {
     expect(result.current.freshness.staleReason).toBeNull();
   });
 
+  it("hides the previous track immediately while a schema switch is slow or fails", async () => {
+    mocks.applicationOverview.mockResolvedValueOnce(ready);
+    let rejectSwitch!: (reason: unknown) => void;
+    const slowFailure = new Promise<ApplicationOverview>((_, reject) => {
+      rejectSwitch = reject;
+    });
+    mocks.applicationOverview.mockReturnValueOnce(slowFailure);
+    const { result, rerender } = renderHook(
+      ({ schemaVersion }) => useApplicationOverview("gradethis", { schemaVersion }),
+      { initialProps: { schemaVersion: 1 } },
+    );
+    await waitFor(() => expect(result.current.slot?.status).toBe("success"));
+    rerender({ schemaVersion: 2 });
+    expect(result.current.slot?.data).toBeNull();
+    await act(async () => rejectSwitch(new Error("offline")));
+    expect(result.current.slot?.status).toBe("error");
+    expect(result.current.slot?.data).toBeNull();
+  });
+
   it("announces a release activated elsewhere with a Reload action instead of swapping the data", async () => {
     mocks.applicationOverview.mockResolvedValue(ready);
     const { result } = renderHook(() => useApplicationOverview("gradethis"));

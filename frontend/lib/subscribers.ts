@@ -22,8 +22,9 @@ export function instanceKey(row: {
   identity: string;
   client_name: string;
   instance_id: string;
+  schema_version?: number;
 }): string {
-  return JSON.stringify([row.identity, row.client_name, row.instance_id]);
+  return JSON.stringify([row.identity, row.client_name, row.instance_id, row.schema_version ?? 0]);
 }
 
 function byIdentity(

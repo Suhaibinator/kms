@@ -530,6 +530,7 @@ export interface PostureFilters {
 
 export interface Subscriber {
   release_name?: string;
+  schema_version?: number;
   release_state?: string;
   release_version?: number;
   release_revision?: number;

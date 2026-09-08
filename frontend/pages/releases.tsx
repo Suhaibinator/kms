@@ -148,8 +148,8 @@ export default function ReleasesPage() {
   const queryCompare = queryValue(router.query.compare);
   const querySchema = queryValue(router.query.schema_version);
   const schemaVersion = /^\d+$/.test(querySchema) ? Number(querySchema) : undefined;
-  const appliedFilters = useRef({ app: ns.app, env: ns.env, name });
-  appliedFilters.current = { app: ns.app, env: ns.env, name };
+  const appliedFilters = useRef({ app: ns.app, env: ns.env, name, schema: schemaVersion });
+  appliedFilters.current = { app: ns.app, env: ns.env, name, schema: schemaVersion };
 
   // Only changes to applied URL filters replace the filter draft. Same-page
   // comparison links and browser history must also update the workspace.
@@ -163,7 +163,7 @@ export default function ReleasesPage() {
         : { app: queryApp, env: queryEnv },
     );
     const applied = appliedFilters.current;
-    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name) {
+    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name || schemaVersion !== applied.schema) {
       activationRequest.abort();
       setBusyAction("");
       setPendingAction(null);
@@ -175,7 +175,7 @@ export default function ReleasesPage() {
       setNameDraft(queryName);
     }
     setName(queryName);
-  }, [queryApp, queryEnv, queryName, queryTab, router.isReady, activationRequest]);
+  }, [queryApp, queryEnv, queryName, queryTab, schemaVersion, router.isReady, activationRequest]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -329,9 +329,22 @@ export default function ReleasesPage() {
   // every render because `replaceQuery` follows the router object.
   useEffect(() => {
     if (!deepLink || !settled || !hasNS) return;
-    const wanted = `${deepLink.name}@${deepLink.version}`;
+    const matching = releases.filter(
+      ({ release }) =>
+        release.name === deepLink.name &&
+        release.version === deepLink.version &&
+        (deepLink.schema_version === undefined || release.schema_version === deepLink.schema_version),
+    );
+    const wanted = releaseKey(deepLink);
     setDeepLink(null);
-    if (releases.some((summary) => releaseKey(summary.release) === wanted)) return;
+    if (matching.length === 1) {
+      const resolved = releaseKey(matching[0].release);
+      setSelectedReleaseKey(resolved);
+      if (resolved !== queryRelease) {
+        replaceQuery({ release: resolved, schema_version: String(matching[0].release.schema_version) });
+      }
+      return;
+    }
     const run = ++linkRun.current;
     void (async () => {
       try {
@@ -357,7 +370,7 @@ export default function ReleasesPage() {
         toast.error(error, `Could not open ${wanted}`);
       }
     })();
-  }, [deepLink, settled, hasNS, releases, ns, replaceQuery, toast]);
+  }, [deepLink, settled, hasNS, releases, ns, queryRelease, replaceQuery, schemaVersion, toast]);
 
   // Drop a deep-link fetch that lands after unmount.
   useEffect(
@@ -478,16 +491,21 @@ export default function ReleasesPage() {
       ? linkedSummary
       : null);
   const currentNamedRelease = releases.find(
-    (summary) => summary.current && summary.release.name === name,
+    (summary) => summary.current && summary.release.name === name &&
+      (schemaVersion === undefined || summary.release.schema_version === schemaVersion),
   );
   const previousNamedRelease = releases.find(
-    (summary) => summary.previous && summary.release.name === name,
+    (summary) => summary.previous && summary.release.name === name &&
+      summary.release.schema_version === currentNamedRelease?.release.schema_version,
   );
   const pendingCurrentRelease = pendingAction?.kind === "activate" ? pendingAction.current : null;
   const rollbackAction = pendingAction?.kind === "rollback" ? pendingAction : null;
 
+  const wantedComparison = parseReleaseKey(linkedCompareKey);
   const loadedComparison = releases.some(
-    (summary) => releaseKey(summary.release) === linkedCompareKey,
+    ({ release }) => wantedComparison && release.name === wantedComparison.name &&
+      release.version === wantedComparison.version &&
+      (wantedComparison.schema_version === undefined || release.schema_version === wantedComparison.schema_version),
   );
   useEffect(() => {
     setLinkedComparison(null);

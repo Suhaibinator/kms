@@ -118,6 +118,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
       updateDefinition: false,
@@ -147,6 +148,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenLastCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: true,
       updateDefinition: false,
@@ -262,6 +264,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenLastCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
       updateDefinition: false,
@@ -289,6 +292,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenLastCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
       updateDefinition: true,

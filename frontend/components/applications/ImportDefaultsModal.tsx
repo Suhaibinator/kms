@@ -49,7 +49,6 @@ export function ImportDefaultsModal({
   const [artifact, setArtifact] = useState<DefaultsArtifactBody | null>(null);
   const [fileName, setFileName] = useState("");
   const [overwrite, setOverwrite] = useState(false);
-  const [updateDefinition, setUpdateDefinition] = useState(false);
   const [preview, setPreview] = useState<DefaultsApplyResponse | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState<BusyState>(null);
@@ -61,7 +60,6 @@ export function ImportDefaultsModal({
     setArtifact(null);
     setFileName("");
     setOverwrite(false);
-    setUpdateDefinition(false);
     setPreview(null);
     setConfirmation("");
     setBusy(null);
@@ -71,7 +69,7 @@ export function ImportDefaultsModal({
   async function previewArtifact(
     raw: DefaultsArtifactBody,
     allowOverwrite: boolean,
-    allowDefinitionUpdate: boolean,
+    _allowDefinitionUpdate = false,
   ) {
     const request = ++requestSequence.current;
     setBusy("preview");
@@ -84,7 +82,7 @@ export function ImportDefaultsModal({
         schemaVersion,
         artifact: raw,
         overwrite: allowOverwrite,
-        updateDefinition: allowDefinitionUpdate,
+        updateDefinition: false,
       });
       if (request !== requestSequence.current) return;
       setPreview(result);
@@ -101,7 +99,6 @@ export function ImportDefaultsModal({
     setArtifact(null);
     setFileName(file?.name ?? "");
     setOverwrite(false);
-    setUpdateDefinition(false);
     setPreview(null);
     setConfirmation("");
     setError(null);
@@ -124,13 +121,7 @@ export function ImportDefaultsModal({
   function changeOverwrite(checked: boolean) {
     setOverwrite(checked);
     setConfirmation("");
-    if (artifact) void previewArtifact(artifact, checked, updateDefinition);
-  }
-
-  function changeUpdateDefinition(checked: boolean) {
-    setUpdateDefinition(checked);
-    setConfirmation("");
-    if (artifact) void previewArtifact(artifact, overwrite, checked);
+    if (artifact) void previewArtifact(artifact, checked);
   }
 
   async function execute() {
@@ -152,7 +143,7 @@ export function ImportDefaultsModal({
         schemaVersion,
         artifact,
         overwrite,
-        updateDefinition,
+        updateDefinition: false,
         execute: true,
         planDigest: preview.plan_digest,
       });
@@ -177,7 +168,7 @@ export function ImportDefaultsModal({
   }
 
   const blocked = preview?.entries.some((entry) => entry.status === "blocked") ?? false;
-  const definitionReady = !preview?.definition_changed || updateDefinition;
+  const definitionReady = !preview?.definition_changed;
   const productionConfirmed = !production || confirmation === environment;
   const canExecute =
     Boolean(preview) && !blocked && definitionReady && productionConfirmed && busy === null;
@@ -195,7 +186,7 @@ export function ImportDefaultsModal({
             : blocked
               ? "Enable overwrite to replace the differing values."
               : !definitionReady
-                ? "Enable definition update or use an artifact that matches the definition."
+                ? "Use an artifact that matches this schema track's definition."
                 : !productionConfirmed
                   ? `Type ${environment} to confirm the production import.`
                   : null;
@@ -227,7 +218,7 @@ export function ImportDefaultsModal({
             <Button
               type="button"
               variant="outline"
-              onClick={() => void previewArtifact(artifact, overwrite, updateDefinition)}
+              onClick={() => void previewArtifact(artifact, overwrite)}
               disabled={busy !== null}
               loading={busy === "preview"}
             >
@@ -252,8 +243,7 @@ export function ImportDefaultsModal({
             {environment}/{application}
           </span>
           . Secrets, releases, schemas, applications, and environments are never created by this
-          operation. An explicit option can update the existing application's contract and schema
-          pin.
+          operation. The artifact must match the selected schema track's definition.
         </div>
 
         <Field
@@ -315,10 +305,10 @@ export function ImportDefaultsModal({
                 parameters, then review the fresh preview.
               </div>
             ) : null}
-            {preview.definition_changed && !updateDefinition ? (
+            {preview.definition_changed ? (
               <div className="warn-panel text-sm">
                 The imported contract or schema digest differs from the application definition.
-                Enable definition update and review a fresh preview before importing.
+                Use an artifact that matches the selected schema track before importing.
               </div>
             ) : null}
             {preview.missing_secrets.length > 0 ? (
@@ -344,22 +334,6 @@ export function ImportDefaultsModal({
                 <span className="block faint text-sm">
                   Identical values are always skipped. Enabling this immediately creates a new
                   preview; it does not write anything.
-                </span>
-              </label>
-            </div>
-
-            <div className="checkbox-row">
-              <Checkbox
-                id="defaults-update-definition"
-                checked={updateDefinition}
-                disabled={busy !== null}
-                onCheckedChange={changeUpdateDefinition}
-              />
-              <label htmlFor="defaults-update-definition">
-                <strong>Update application definition</strong>
-                <span className="block faint text-sm">
-                  Replace the contract and repin an already registered schema with the artifact's
-                  digest. Enabling this creates a fresh preview; it does not write anything.
                 </span>
               </label>
             </div>

@@ -73,7 +73,7 @@ describe("RollbackDialog", () => {
   it("validates the previous release on open and rolls back with the CAS guard", async () => {
     const props = renderDialog({ namespace: devNs });
     await waitFor(() =>
-      expect(mocks.validateRelease).toHaveBeenCalledWith(devNs, name, active.previous_version),
+      expect(mocks.validateRelease).toHaveBeenCalledWith(devNs, name, active.previous_version, active.schema_version),
     );
     const check = await within(dialog()).findByTestId("rollback-check");
     expect(check).toHaveTextContent(`${name}@${active.previous_version}`);
@@ -88,6 +88,7 @@ describe("RollbackDialog", () => {
         env: "dev",
         app: incident.application.name,
         name,
+        schema_version: active.schema_version,
         expected_current_version: active.version,
       }),
     );
@@ -198,7 +199,7 @@ describe("RollbackDialog", () => {
 
     fireEvent.click(within(dialog()).getByRole("button", { name: "Refresh" }));
     await waitFor(() =>
-      expect(mocks.validateRelease).toHaveBeenLastCalledWith(devNs, name, active.version),
+      expect(mocks.validateRelease).toHaveBeenLastCalledWith(devNs, name, active.version, active.schema_version),
     );
     expect(within(dialog()).getByTestId("rollback-check")).toHaveTextContent(
       `${name}@${active.version}`,
@@ -209,6 +210,7 @@ describe("RollbackDialog", () => {
         env: "dev",
         app: incident.application.name,
         name,
+        schema_version: active.schema_version,
         expected_current_version: active.version + 1,
       }),
     );

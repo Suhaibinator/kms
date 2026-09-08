@@ -125,7 +125,7 @@ export function ReleaseWorkspace({
       mobileFullScreen
       open={Boolean(release)}
       workspace
-      title={release ? `Release ${releaseKey(release)}` : "Release details"}
+      title={release ? `Release ${release.name}@${release.version}` : "Release details"}
       onClose={onClose}
     >
       {release && summary ? (
@@ -209,7 +209,7 @@ export function ReleaseWorkspace({
               </dd>
               <dt>Release</dt>
               <dd>
-                <ReleaseIdent name={release.name} version={release.version} />
+                <ReleaseIdent name={release.name} schemaVersion={release.schema_version} version={release.version} />
               </dd>
               <dt>Created</dt>
               <dd>{formatUnixMs(release.created_at_unix_ms)}</dd>

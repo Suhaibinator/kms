@@ -537,6 +537,7 @@ describe("ApplicationsPage", () => {
         app: ready.application.name,
         env: "prod",
         name: release.name,
+        schemaVersion: ready.application.schema_version,
         release: `${release.name}@${release.version}`,
       }),
     );

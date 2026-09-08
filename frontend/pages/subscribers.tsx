@@ -268,6 +268,7 @@ export default function SubscribersPage() {
                           s.client_name,
                           s.instance_id,
                           s.release_name,
+                          s.schema_version,
                           s.remote_addr,
                           s.connected_at_unix_ms,
                           index,
@@ -277,7 +278,7 @@ export default function SubscribersPage() {
                         <td data-label="Client">
                           {s.client_name}
                           {s.release_name ? (
-                            <div className="faint text-sm">Release: {s.release_name}</div>
+                            <div className="faint text-sm">Release: {s.release_name}@{s.schema_version ?? 0}</div>
                           ) : null}
                           {s.instance_id ? (
                             <div className="faint text-sm mono">{s.instance_id}</div>
@@ -345,6 +346,7 @@ export default function SubscribersPage() {
                                 app: s.namespaces[0]?.app,
                                 env: s.namespaces[0]?.env,
                                 name: s.release_name,
+                                schemaVersion: s.schema_version ?? 0,
                               })}
                             >
                               {s.release_state

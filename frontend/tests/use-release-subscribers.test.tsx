@@ -71,7 +71,7 @@ function abortError(): Error {
 function openStream() {
   const handle: { push?: (s: SubscriberStreamSnapshot) => void; end?: () => void } = {};
   mocks.subscriberStream.mockImplementationOnce(
-    (_ns, _name, { signal, onSnapshot }) =>
+    (_ns, _name, _schemaVersion, { signal, onSnapshot }) =>
       new Promise<void>((resolve, reject) => {
         handle.push = onSnapshot;
         handle.end = resolve;
@@ -102,15 +102,15 @@ describe("useReleaseSubscribers", () => {
     expect(result.current.transport).toBe("off");
 
     await waitFor(() => expect(result.current.instances).toHaveLength(1));
-    expect(mocks.releaseSubscribers).toHaveBeenCalledWith(ns, "runtime", 1000, undefined, {
-      signal: expect.any(AbortSignal),
-    });
+    expect(mocks.releaseSubscribers).toHaveBeenCalledWith(
+      ns, "runtime", 1000, undefined, { signal: expect.any(AbortSignal) }, 0,
+    );
     expect(result.current.instances[0]?.state).toBe("prepared");
     expect(result.current.currentRevision).toBe(41);
     expect(result.current.lastUpdatedAt).not.toBeNull();
 
     await waitFor(() => expect(stream.push).toBeDefined());
-    expect(mocks.subscriberStream).toHaveBeenCalledWith(ns, "runtime", {
+    expect(mocks.subscriberStream).toHaveBeenCalledWith(ns, "runtime", 0, {
       signal: expect.any(AbortSignal),
       onSnapshot: expect.any(Function),
     });
@@ -120,7 +120,7 @@ describe("useReleaseSubscribers", () => {
     expect(result.current.currentRevision).toBe(42);
     expect(result.current.stale).toBe(false);
 
-    const signal = mocks.subscriberStream.mock.calls[0]?.[2].signal as AbortSignal;
+    const signal = mocks.subscriberStream.mock.calls[0]?.[3].signal as AbortSignal;
     unmount();
     expect(signal.aborted).toBe(true);
   });

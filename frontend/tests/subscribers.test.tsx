@@ -98,7 +98,7 @@ describe("SubscribersPage", () => {
     expect(document.querySelectorAll("tr.stale")).toHaveLength(0);
     expect(
       screen.getByRole("link", { name: "Connected · awaiting lifecycle report" }),
-    ).toHaveAttribute("href", links.releases({ app: "app", env: "prod", name: "runtime" }));
+    ).toHaveAttribute("href", links.releases({ app: "app", env: "prod", name: "runtime", schemaVersion: 0 }));
   });
 
   it("reorders every namespace table from a column header and records it in the URL", async () => {

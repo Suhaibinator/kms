@@ -139,7 +139,7 @@ export function ShipPreview({
             <h4 className="ship-subtitle">
               Release{" "}
               {nextVersion !== null ? (
-                <ReleaseIdent name={preview.release_name} version={nextVersion} />
+                <ReleaseIdent name={preview.release_name} schemaVersion={preview.schema_version} version={nextVersion} />
               ) : null}
             </h4>
             <div className="table-wrap card-table">

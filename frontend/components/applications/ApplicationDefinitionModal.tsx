@@ -86,11 +86,15 @@ export function ApplicationDefinitionModal({
     if (blocking) return;
     setSaving(true);
     try {
+      // The overview may project a URL-selected schema track. Read the stored
+      // definition before saving metadata so browsing another track cannot
+      // silently repin the application's mutation default.
+      const { application: stored } = await api.getApplication(application.name);
       const { application: updated } = await api.updateApplication({
         name: application.name,
         description,
         release_name: application.release_name,
-        schema_version: application.schema_version,
+        schema_version: stored.schema_version,
         contract,
       });
       toast.success("Definition updated");

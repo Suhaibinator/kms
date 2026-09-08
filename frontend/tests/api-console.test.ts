@@ -103,7 +103,7 @@ describe("console api additions", () => {
       const seen: SubscriberStreamSnapshot[] = [];
       await api.subscriberStream(ns, "runtime", { onSnapshot: (s) => void seen.push(s) });
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/release-subscribers/stream?env=prod&app=gradethis&name=runtime",
+        "/api/v1/release-subscribers/stream?env=prod&app=gradethis&name=runtime&schema_version=0",
         expect.objectContaining({
           headers: { Accept: "text/event-stream", Authorization: "Bearer tok-1" },
           cache: "no-store",

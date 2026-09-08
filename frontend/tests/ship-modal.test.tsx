@@ -347,6 +347,7 @@ describe("ShipModal", () => {
     expect(dryRuns()[0]).toEqual({
       application: app.name,
       environment: "dev",
+      schema_version: app.schema_version,
       changes: [{ alias: "rate_limits", value: EDIT_A, content_type: rateLimitsType }],
       dry_run: true,
     });
@@ -394,6 +395,7 @@ describe("ShipModal", () => {
     expect(realShips()[0]).toEqual({
       application: app.name,
       environment: "dev",
+      schema_version: app.schema_version,
       changes: [{ alias: "rate_limits", value: EDIT_A, content_type: rateLimitsType }],
       expected_active_version: base,
       request_id: expect.any(String),
@@ -553,6 +555,7 @@ describe("ShipModal", () => {
         { env: "dev", app: app.name },
         releaseName,
         next,
+        app.schema_version,
         base,
       ),
     );
@@ -1288,6 +1291,7 @@ describe("ShipModal", () => {
         { env: "dev", app: app.name },
         releaseName,
         base,
+        app.schema_version,
       ),
     );
     await waitFor(() => expect(within(rollback).getByTestId("rollback-confirm")).toBeEnabled());
@@ -1297,6 +1301,7 @@ describe("ShipModal", () => {
         env: "dev",
         app: app.name,
         name: releaseName,
+        schema_version: app.schema_version,
         expected_current_version: next,
       }),
     );
