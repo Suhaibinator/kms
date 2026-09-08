@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -72,9 +73,86 @@ entries:
 	}
 }
 
+func TestReleaseCreateRequiresManifestSchemaSelectorBeforeDial(t *testing.T) {
+	for _, tc := range []struct {
+		name, extension, selector string
+	}{
+		{name: "yaml omitted", extension: ".yaml"},
+		{name: "yaml null", extension: ".yaml", selector: "schema_version: null\n"},
+		{name: "json omitted", extension: ".json"},
+		{name: "json null", extension: ".json", selector: `"schema_version":null,`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "release"+tc.extension)
+			var manifest string
+			if tc.extension == ".json" {
+				manifest = `{"namespace":"prod/app","name":"runtime",` + tc.selector + `"entries":[{"alias":"settings","kind":"parameter","key":"settings","version":1}]}`
+			} else {
+				manifest = "namespace: prod/app\nname: runtime\n" + tc.selector + "entries:\n  - alias: settings\n    kind: parameter\n    key: settings\n    version: 1\n"
+			}
+			if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cli := newTestCLI()
+			dialed := false
+			cli.dialOverride = func(*connFlags) (*grpc.ClientConn, error) {
+				dialed = true
+				return nil, errors.New("unexpected dial")
+			}
+			if code := cli.cmdReleaseCreate([]string{path}); code != exitError {
+				t.Fatalf("exit code = %d, stderr = %q", code, cli.stderr())
+			}
+			if dialed {
+				t.Fatal("invalid manifest dialed the server")
+			}
+			if !strings.Contains(cli.stderr(), "schema_version is required") {
+				t.Fatalf("stderr = %q", cli.stderr())
+			}
+		})
+	}
+}
+
+func TestReadReleaseDefinitionPreservesExplicitSchemaSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest string
+		want           uint64
+	}{
+		{name: "yaml zero", manifest: "schema_version: 0\n", want: 0},
+		{name: "yaml positive", manifest: "schema_version: 7\n", want: 7},
+		{name: "json zero", manifest: `"schema_version":0,`, want: 0},
+		{name: "json positive", manifest: `"schema_version":7,`, want: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "release")
+			var manifest string
+			if strings.HasPrefix(tc.name, "json") {
+				manifest = `{"namespace":"prod/app","name":"runtime",` + tc.manifest + `"entries":[{"alias":"settings","kind":"parameter","key":"settings","version":1}]}`
+			} else {
+				manifest = "namespace: prod/app\nname: runtime\n" + tc.manifest + "entries:\n  - alias: settings\n    kind: parameter\n    key: settings\n    version: 1\n"
+			}
+			if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			definition, err := (&CLI{}).readReleaseDefinition(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := releaseCreateRequest(definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if req.SchemaVersion == nil || req.GetSchemaVersion() != tc.want {
+				t.Fatalf("schema selector = %v, want explicit %d", req.SchemaVersion, tc.want)
+			}
+		})
+	}
+}
+
 func TestReleaseCreateRequestRejectsAmbiguousAndDuplicateEntries(t *testing.T) {
+	schemaVersion := uint64(1)
 	_, err := releaseCreateRequest(releaseDefinition{
-		Namespace: "prod/app", Name: "runtime",
+		Namespace: "prod/app", Name: "runtime", SchemaVersion: &schemaVersion,
 		Entries: []releaseEntryDefinition{
 			{Alias: "x", Kind: "parameter", Key: "a", Version: 1, Label: "current"},
 		},
@@ -83,7 +161,7 @@ func TestReleaseCreateRequestRejectsAmbiguousAndDuplicateEntries(t *testing.T) {
 		t.Fatalf("ambiguous selector error = %v", err)
 	}
 	_, err = releaseCreateRequest(releaseDefinition{
-		Namespace: "prod/app", Name: "runtime",
+		Namespace: "prod/app", Name: "runtime", SchemaVersion: &schemaVersion,
 		Entries: []releaseEntryDefinition{
 			{Alias: "x", Kind: "parameter", Key: "a", Version: 1},
 			{Alias: "x", Kind: "secret", Key: "b", Version: 2},

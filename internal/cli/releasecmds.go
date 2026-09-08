@@ -102,7 +102,7 @@ func releaseEntryToJSON(entry *kmsv1.ConfigurationReleaseEntry) releaseEntryJSON
 type releaseDefinition struct {
 	Namespace     string                   `json:"namespace" yaml:"namespace"`
 	Name          string                   `json:"name" yaml:"name"`
-	SchemaVersion uint64                   `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
+	SchemaVersion *uint64                  `json:"schema_version" yaml:"schema_version"`
 	MetadataJSON  string                   `json:"metadata_json,omitempty" yaml:"metadata_json,omitempty"`
 	Entries       []releaseEntryDefinition `json:"entries" yaml:"entries"`
 }
@@ -216,6 +216,9 @@ func (c *CLI) readReleaseDefinition(path string) (releaseDefinition, error) {
 }
 
 func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseRequest, error) {
+	if definition.SchemaVersion == nil {
+		return nil, errors.New("schema_version is required (0 selects the schema-free track)")
+	}
 	ns, err := keyutil.ParseNamespace(definition.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("namespace: %w", err)
@@ -263,7 +266,7 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 	}
 	return &kmsv1.CreateReleaseRequest{
 		Namespace: pns, Name: definition.Name,
-		SchemaVersion: &definition.SchemaVersion,
+		SchemaVersion: definition.SchemaVersion,
 		Entries:       selectors, MetadataJson: definition.MetadataJSON,
 	}, nil
 }
