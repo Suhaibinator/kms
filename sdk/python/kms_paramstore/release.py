@@ -342,6 +342,25 @@ class _CandidateFailure(Exception):
         self.diagnostic = diagnostic[:_DIAGNOSTIC_LIMIT]
 
 
+class _EmptyActiveReleaseError(ReleaseLoaderError):
+    pass
+
+
+def _release_matches_track(
+    release: kms_pb2.ConfigurationRelease,
+    namespace: NamespaceRef,
+    name: str,
+    schema_version: int,
+) -> bool:
+    """Return whether a release belongs to the loader's exact selected track."""
+    return (
+        release.namespace.env == namespace.env
+        and release.namespace.app == namespace.app
+        and release.name == name
+        and release.schema_version == schema_version
+    )
+
+
 class ReleaseLoader:
     """Reliably resolve, prepare, and atomically apply one named release.
 
@@ -504,6 +523,14 @@ class ReleaseLoader:
                 # A known schema track may exist before its first activation.
                 # Subscribe immediately and let watch/reconciliation deliver it.
                 pass
+        except _EmptyActiveReleaseError:
+            with self._run_lock:
+                self._running = False
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+            raise ReleaseStartupError(
+                "active configuration release response was empty"
+            ) from None
         except Exception:
             with self._run_lock:
                 self._running = False
@@ -512,12 +539,6 @@ class ReleaseLoader:
             raise ReleaseStartupError(
                 "unable to read the initial active configuration release"
             ) from None
-        if initial is not None and not initial.release.name:  # type: ignore[attr-defined]
-            with self._run_lock:
-                self._running = False
-            self._executor.shutdown(wait=True, cancel_futures=True)
-            self._executor = None
-            raise ReleaseStartupError("active configuration release response was empty")
         with self._candidate_cond:
             self._last_seen_revision = initial.revision if initial is not None else 0
         self._watch_thread = threading.Thread(
@@ -638,21 +659,29 @@ class ReleaseLoader:
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
-        if response.release.name and response.release.schema_version != self._require_schema_version():
+        if not response.HasField("release") or not response.release.name:
+            raise _EmptyActiveReleaseError(
+                "active configuration release response was empty"
+            )
+        schema_version = self._require_schema_version()
+        if response.release.schema_version != schema_version:
             raise ReleaseLoaderError("active release response has the wrong schema version")
+        if not _release_matches_track(
+            response.release, self._namespace, self._config.name, schema_version
+        ):
+            raise ReleaseLoaderError("active release response has the wrong release track")
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
-        if not candidate.release.name:  # type: ignore[attr-defined]
-            return
-        if candidate.release.schema_version != self._require_schema_version():
+        if not _release_matches_track(
+            candidate.release,
+            self._namespace,
+            self._config.name,
+            self._require_schema_version(),
+        ):
             return
         accepted = False
         with self._candidate_cond:
-            if candidate.revision and candidate.revision < self._last_seen_revision:
-                return
-            if candidate.revision > self._last_seen_revision:
-                self._last_seen_revision = candidate.revision
             if self._latest_identity is not None:
                 if candidate.revision < self._latest_identity[0]:
                     return
@@ -1040,18 +1069,48 @@ class ReleaseLoader:
             for event in call:
                 if self._stop_event.is_set():
                     return received_event
-                received_event = True
                 kind = event.WhichOneof("event")
                 if kind == "snapshot":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.snapshot.release), event.revision)
-                    )
+                    if event.snapshot.HasField("release") and _release_matches_track(
+                        event.snapshot.release,
+                        self._namespace,
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        with self._candidate_cond:
+                            self._last_seen_revision = max(
+                                self._last_seen_revision, event.revision
+                            )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.snapshot.release), event.revision)
+                        )
+                        received_event = True
                 elif kind == "activation":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.activation.release), event.revision)
-                    )
+                    if event.activation.HasField("release") and _release_matches_track(
+                        event.activation.release,
+                        self._namespace,
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        with self._candidate_cond:
+                            self._last_seen_revision = max(
+                                self._last_seen_revision, event.revision
+                            )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.activation.release), event.revision)
+                        )
+                        received_event = True
+                elif kind == "heartbeat":
+                    with self._candidate_cond:
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                    received_event = True
                 elif kind == "acknowledgement_rejected":
-                    self._discard_rejected_ack(event.acknowledgement_rejected)
+                    received_event = (
+                        self._discard_rejected_ack(event.acknowledgement_rejected)
+                        or received_event
+                    )
         except grpc.RpcError as exc:
             if exc.code() in _TERMINAL_WATCH_CODES:
                 with self._candidate_cond:
@@ -1068,7 +1127,7 @@ class ReleaseLoader:
 
     def _discard_rejected_ack(
         self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
-    ) -> None:
+    ) -> bool:
         if (
             rejection.reason != "activation_unavailable"
             or rejection.namespace.env != self._namespace.env
@@ -1078,11 +1137,11 @@ class ReleaseLoader:
             or rejection.client_name != self._client_name
             or rejection.instance_id != self._instance_id
         ):
-            return
+            return False
         with self._ack_cond:
             current = self._ack_latest.get(rejection.state)
             if current is None:
-                return
+                return True
             generation, acknowledgement = current
             if (
                 generation == rejection.sequence
@@ -1093,6 +1152,7 @@ class ReleaseLoader:
             ):
                 del self._ack_latest[rejection.state]
                 self._ack_cond.notify_all()
+        return True
 
     def _watch_requests(self):
         with self._candidate_cond:

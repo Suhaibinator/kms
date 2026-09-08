@@ -34,6 +34,7 @@ from .release import (
     ReleaseStatus,
     _Candidate,
     _CandidateFailure,
+    _EmptyActiveReleaseError,
     _REJECTION_CATEGORIES,
     _STATES,
     _classified_rejection_category,
@@ -43,6 +44,7 @@ from .release import (
     _grpc_code_name,
     _now_ms,
     _release_digest,
+    _release_matches_track,
     _validate_release_timing,
     _valid_sha256_hex,
 )
@@ -226,14 +228,14 @@ class AsyncReleaseLoader:
                 # A known schema track may exist before its first activation.
                 # Subscribe immediately and let watch/reconciliation deliver it.
                 pass
+            except _EmptyActiveReleaseError:
+                raise ReleaseStartupError(
+                    "active configuration release response was empty"
+                ) from None
             except Exception:
                 raise ReleaseStartupError(
                     "unable to read the initial active configuration release"
                 ) from None
-            if initial is not None and not initial.release.name:
-                raise ReleaseStartupError(
-                    "active configuration release response was empty"
-                )
             self._last_seen_revision = initial.revision if initial is not None else 0
             watch_task = asyncio.create_task(self._watch_loop(), name="kms-release-watch")
             reconcile_task = asyncio.create_task(
@@ -331,14 +333,16 @@ class AsyncReleaseLoader:
         return self._schema_version
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
-        if self._stop_event.is_set() or not candidate.release.name:
+        namespace = self._namespace
+        if self._stop_event.is_set() or namespace is None:
             return
-        if candidate.release.schema_version != self._require_schema_version():
+        if not _release_matches_track(
+            candidate.release,
+            namespace,
+            self._config.name,
+            self._require_schema_version(),
+        ):
             return
-        if candidate.revision and candidate.revision < self._last_seen_revision:
-            return
-        if candidate.revision > self._last_seen_revision:
-            self._last_seen_revision = candidate.revision
         if self._latest_identity is not None:
             if candidate.revision < self._latest_identity[0]:
                 return
@@ -665,8 +669,20 @@ class AsyncReleaseLoader:
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
-        if response.release.name and response.release.schema_version != self._require_schema_version():
+        if not response.HasField("release") or not response.release.name:
+            raise _EmptyActiveReleaseError(
+                "active configuration release response was empty"
+            )
+        schema_version = self._require_schema_version()
+        if response.release.schema_version != schema_version:
             raise ReleaseStartupError("active release response has the wrong schema version")
+        if not _release_matches_track(
+            response.release,
+            self._require_namespace(),
+            self._config.name,
+            schema_version,
+        ):
+            raise ReleaseStartupError("active release response has the wrong release track")
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     async def _reconcile_loop(self) -> None:
@@ -744,25 +760,45 @@ class AsyncReleaseLoader:
             async for event in call:
                 if self._stop_event.is_set():
                     break
-                received = True
                 kind = event.WhichOneof("event")
                 if kind == "snapshot":
-                    if event.revision > self._last_seen_revision:
-                        self._last_seen_revision = event.revision
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.snapshot.release), event.revision)
-                    )
+                    if event.snapshot.HasField("release") and _release_matches_track(
+                        event.snapshot.release,
+                        self._require_namespace(),
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.snapshot.release), event.revision)
+                        )
+                        received = True
                 elif kind == "activation":
-                    if event.revision > self._last_seen_revision:
-                        self._last_seen_revision = event.revision
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.activation.release), event.revision)
-                    )
+                    if event.activation.HasField("release") and _release_matches_track(
+                        event.activation.release,
+                        self._require_namespace(),
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.activation.release), event.revision)
+                        )
+                        received = True
                 elif kind == "heartbeat":
-                    if event.revision > self._last_seen_revision:
-                        self._last_seen_revision = event.revision
+                    self._last_seen_revision = max(
+                        self._last_seen_revision, event.revision
+                    )
+                    received = True
                 elif kind == "acknowledgement_rejected":
-                    self._discard_rejected_ack(event.acknowledgement_rejected)
+                    received = (
+                        self._discard_rejected_ack(event.acknowledgement_rejected)
+                        or received
+                    )
         except asyncio.CancelledError:
             raise
         except grpc.RpcError as exc:
@@ -785,7 +821,7 @@ class AsyncReleaseLoader:
 
     def _discard_rejected_ack(
         self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
-    ) -> None:
+    ) -> bool:
         namespace = self._require_namespace()
         if (
             rejection.reason != "activation_unavailable"
@@ -796,10 +832,10 @@ class AsyncReleaseLoader:
             or rejection.client_name != self._client_name
             or rejection.instance_id != self._instance_id
         ):
-            return
+            return False
         current = self._ack_latest.get(rejection.state)
         if current is None:
-            return
+            return True
         generation, acknowledgement, _dirty = current
         if (
             generation == rejection.sequence
@@ -809,6 +845,7 @@ class AsyncReleaseLoader:
             and acknowledgement.state == rejection.state
         ):
             del self._ack_latest[rejection.state]
+        return True
 
     async def _ack_sender(self, call: Any) -> None:
         while not self._stop_event.is_set():
