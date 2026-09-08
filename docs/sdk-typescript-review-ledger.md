@@ -240,8 +240,7 @@ These are accepted support boundaries, not unresolved hidden findings:
   separately deployed production KMS server.
 - **Explicit compatibility matrix.** Supported Node majors are 22, 24, and 26;
   declarations are checked with TypeScript 5.2.2 and the pinned compiler;
-  Next.js 16 and React 18–19 are supported only where tested peer ranges
-  intersect.
+  Next.js 16 and React 19 are the supported adapter peers.
 - **Browser matrix.** Chromium is qualified. Other modern browsers with native
   `bigint`, `fetch`, `AbortController`, and focus/navigation events are expected
   to work but are not advertised as matrix-qualified.
