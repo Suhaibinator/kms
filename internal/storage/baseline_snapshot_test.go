@@ -69,7 +69,7 @@ func rawBaselineDB(t *testing.T, path string) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sqlDB.Close() })
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
 func execBaselineSQL(t *testing.T, db *gorm.DB, sql string) {
@@ -94,7 +94,7 @@ func TestBaselineInspectionRejectsClosedWALWithoutMutation(t *testing.T) {
 		t.Fatal("closed WAL fixture has sidecars")
 	}
 	if st, err := Open(path); err == nil {
-		st.Close()
+		_ = st.Close()
 		t.Fatal("unsupported database accepted")
 	}
 	assertBaselineArtifactsUnchanged(t, path, before)
@@ -128,7 +128,7 @@ func TestBaselineInspectionReadsUncheckpointedWALWithoutMutation(t *testing.T) {
 				t.Fatal("uncheckpointed incompatible baseline accepted")
 			}
 			if reopened, err := Open(path); err == nil {
-				reopened.Close()
+				_ = reopened.Close()
 				t.Fatal("Open accepted incompatible WAL")
 			}
 			assertBaselineArtifactsUnchanged(t, path, before)
@@ -147,7 +147,7 @@ func TestBaselineInspectionSupportedReopenAndSafeNames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			st.Close()
+			_ = st.Close()
 			// A supported uncheckpointed write must also remain visible in inspection.
 			db := rawBaselineDB(t, path)
 			execBaselineSQL(t, db, "UPDATE schema_migrations SET applied_at='from-wal'")
@@ -184,18 +184,18 @@ func TestBaselineInspectionSupportedReopenAndSafeNames(t *testing.T) {
 				t.Fatalf("WAL value lost: %q", applied)
 			}
 			snapDB, _ := snapshot.DB()
-			snapDB.Close()
+			_ = snapDB.Close()
 			cleanup()
 			if _, err = os.Stat(filepath.Dir(copyPath)); !os.IsNotExist(err) {
 				t.Errorf("snapshot directory not cleaned: %v", err)
 			}
 			liveDB, _ := db.DB()
-			liveDB.Close()
+			_ = liveDB.Close()
 			reopened, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			reopened.Close()
+			_ = reopened.Close()
 		})
 	}
 }
@@ -266,7 +266,7 @@ func TestBaselineInspectionRejectsNonemptyRollbackJournalWithoutMutation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
+	_ = st.Close()
 	if err = os.WriteFile(path+"-journal", []byte("journal with possible external references"), 0600); err != nil {
 		t.Fatal(err)
 	}
