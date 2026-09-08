@@ -483,9 +483,15 @@ class ReleaseLoader:
             max_workers=self._config.max_concurrent_fetches,
             thread_name_prefix="kms-release-resolve",
         )
+        initial: Optional[_Candidate] = None
         try:
             self._ensure_schema_version()
-            initial = self._read_active()
+            try:
+                initial = self._read_active()
+            except errors.NotFoundError:
+                # A known schema track may exist before its first activation.
+                # Subscribe immediately and let watch/reconciliation deliver it.
+                pass
         except Exception:
             with self._run_lock:
                 self._running = False
@@ -494,14 +500,14 @@ class ReleaseLoader:
             raise ReleaseStartupError(
                 "unable to read the initial active configuration release"
             ) from None
-        if not initial.release.name:  # type: ignore[attr-defined]
+        if initial is not None and not initial.release.name:  # type: ignore[attr-defined]
             with self._run_lock:
                 self._running = False
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
             raise ReleaseStartupError("active configuration release response was empty")
         with self._candidate_cond:
-            self._last_seen_revision = initial.revision
+            self._last_seen_revision = initial.revision if initial is not None else 0
         self._watch_thread = threading.Thread(
             target=self._watch_loop, name="kms-release-watch", daemon=True
         )
@@ -524,7 +530,8 @@ class ReleaseLoader:
         applied_once = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
         try:
-            self._offer_candidate(initial, source="reconciliation")
+            if initial is not None:
+                self._offer_candidate(initial, source="reconciliation")
 
             while not self._stop_event.is_set():
                 wait_for = min(0.25, max(0.0, next_reconcile - time.monotonic()))
@@ -556,6 +563,10 @@ class ReleaseLoader:
                     try:
                         reconciled = self._read_active()
                         self._offer_candidate(reconciled, source="reconciliation")
+                    except errors.NotFoundError:
+                        # The selected track is still inactive. Keep the watch
+                        # alive and continue periodic reconciliation.
+                        continue
                     except Exception:
                         if not applied_once:
                             raise ReleaseStartupError(

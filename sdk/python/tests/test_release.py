@@ -8,6 +8,7 @@ import time
 from dataclasses import FrozenInstanceError
 from typing import Dict, List, Optional
 
+import grpc
 import pytest
 
 import kms_paramstore.release as release_module
@@ -25,6 +26,18 @@ from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
 from kms_paramstore.secret import Secret
 from tests.helpers import wait_until
+
+
+class _RpcFailure(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
 
 
 def _ref(key: str) -> kms_pb2.ResourceRef:
@@ -181,13 +194,17 @@ class _Call:
 class _ReleaseStub:
     def __init__(self, initial) -> None:
         self.lock = threading.Lock()
-        self.release, self.revision = initial
+        if initial is None:
+            self.release, self.revision = kms_pb2.ConfigurationRelease(), 0
+        else:
+            self.release, self.revision = initial
         self.calls: List[_Call] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
         self.active_requests: List[object] = []
         self.resolve_requests: List[object] = []
         self.resolved_schema = 1
+        self.inactive = initial is None
 
     def ResolveReleaseSchema(self, request, **_kwargs):
         self.resolve_requests.append(request)
@@ -196,6 +213,8 @@ class _ReleaseStub:
     def GetActiveRelease(self, request, **_kwargs):
         self.active_requests.append(request)
         with self.lock:
+            if self.inactive:
+                raise _RpcFailure(grpc.StatusCode.NOT_FOUND, "track has no active release")
             release = kms_pb2.ConfigurationRelease()
             release.CopyFrom(self.release)
             revision = self.revision
@@ -214,6 +233,7 @@ class _ReleaseStub:
         with self.lock:
             self.release = release
             self.revision = revision
+            self.inactive = False
             calls = list(self.calls)
         event = kms_pb2.WatchReleaseEvent(
             activation=kms_pb2.ReleaseActivationEvent(release=release), revision=revision
@@ -345,6 +365,45 @@ def test_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
     assert wait_until(lambda: bool(stub.registrations and stub.acknowledgements))
     assert all(request.schema_version == 1 for request in stub.registrations)
     assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+
+def test_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatch):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        None,
+        reconcile_interval=0.02,
+        schema_version=None,
+        schema_sha256="a" * 64,
+    )
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: bool(stub.registrations))
+    assert wait_until(lambda: len(stub.active_requests) >= 2)
+    assert prepared.commits == 0
+    stub.activate(_release(1, 1))
+    assert wait_until(lambda: prepared.commits == 1)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert not raised
+    assert len(stub.resolve_requests) == 1
+    assert stub.registrations[0].last_seen_revision == 0
+    assert stub.registrations[0].schema_version == 1
+
+
+def test_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, None)
+    external_stop = threading.Event()
+    thread = threading.Thread(
+        target=lambda: loader.run(
+            lambda _cancel, _snapshot: _Prepared(), stop_event=external_stop
+        )
+    )
+    thread.start()
+    assert wait_until(lambda: bool(stub.registrations))
+    external_stop.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
 
 
 def test_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):

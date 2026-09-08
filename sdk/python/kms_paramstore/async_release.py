@@ -208,17 +208,22 @@ class AsyncReleaseLoader:
 
             await self._ensure_schema_version()
 
+            initial: Optional[_Candidate] = None
             try:
                 initial = await self._read_active()
+            except errors.NotFoundError:
+                # A known schema track may exist before its first activation.
+                # Subscribe immediately and let watch/reconciliation deliver it.
+                pass
             except Exception:
                 raise ReleaseStartupError(
                     "unable to read the initial active configuration release"
                 ) from None
-            if not initial.release.name:
+            if initial is not None and not initial.release.name:
                 raise ReleaseStartupError(
                     "active configuration release response was empty"
                 )
-            self._last_seen_revision = initial.revision
+            self._last_seen_revision = initial.revision if initial is not None else 0
             watch_task = asyncio.create_task(self._watch_loop(), name="kms-release-watch")
             reconcile_task = asyncio.create_task(
                 self._reconcile_loop(), name="kms-release-reconcile"
@@ -228,7 +233,8 @@ class AsyncReleaseLoader:
                 if stop_event is not None
                 else None
             )
-            self._offer_candidate(initial, source="reconciliation")
+            if initial is not None:
+                self._offer_candidate(initial, source="reconciliation")
             applied_once = False
             try:
                 while not self._stop_event.is_set():

@@ -18,6 +18,18 @@ from kms_paramstore.release import ReleaseCommitError, ReleaseStartupError
 from kms_paramstore.secret import Secret
 
 
+class _RpcFailure(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
+
+
 def _ref(key: str) -> kms_pb2.ResourceRef:
     return kms_pb2.ResourceRef(
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"), key=key
@@ -108,13 +120,17 @@ class _AsyncCall:
 
 class _AsyncReleaseStub:
     def __init__(self, initial) -> None:
-        self.release, self.revision = initial
+        if initial is None:
+            self.release, self.revision = kms_pb2.ConfigurationRelease(), 0
+        else:
+            self.release, self.revision = initial
         self.calls: List[_AsyncCall] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
         self.active_requests: List[object] = []
         self.resolve_requests: List[object] = []
         self.resolved_schema = 1
+        self.inactive = initial is None
 
     async def ResolveReleaseSchema(self, request, **_kwargs):
         self.resolve_requests.append(request)
@@ -122,6 +138,8 @@ class _AsyncReleaseStub:
 
     async def GetActiveRelease(self, request, **_kwargs):
         self.active_requests.append(request)
+        if self.inactive:
+            raise _RpcFailure(grpc.StatusCode.NOT_FOUND, "track has no active release")
         release = kms_pb2.ConfigurationRelease()
         release.CopyFrom(self.release)
         return kms_pb2.GetActiveReleaseResponse(
@@ -135,6 +153,7 @@ class _AsyncReleaseStub:
 
     def activate(self, release_and_revision) -> None:
         self.release, self.revision = release_and_revision
+        self.inactive = False
         event = kms_pb2.WatchReleaseEvent(
             activation=kms_pb2.ReleaseActivationEvent(release=self.release),
             revision=self.revision,
@@ -282,6 +301,45 @@ def test_async_digest_selector_resolves_once_and_pins_every_transport(monkeypatc
         assert stub.registrations and stub.acknowledgements
         assert all(request.schema_version == 1 for request in stub.registrations)
         assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            None,
+            reconcile_interval=0.02,
+            schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        prepared = _Prepared()
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        await _wait_for(lambda: bool(stub.registrations))
+        await _wait_for(lambda: len(stub.active_requests) >= 2)
+        assert prepared.commits == 0
+        stub.activate(_release(1, 1))
+        await _wait_for(lambda: prepared.commits == 1)
+        loader.stop()
+        await task
+        assert len(stub.resolve_requests) == 1
+        assert stub.registrations[0].last_seen_revision == 0
+        assert stub.registrations[0].schema_version == 1
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, None)
+        external_stop = asyncio.Event()
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared(), stop_event=external_stop)
+        )
+        await _wait_for(lambda: bool(stub.registrations))
+        external_stop.set()
+        await asyncio.wait_for(task, timeout=2)
 
     asyncio.run(scenario())
 
