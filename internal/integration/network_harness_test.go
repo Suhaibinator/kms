@@ -71,6 +71,11 @@ type loopbackTLSEnv struct {
 
 func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 	t.Helper()
+	return newLoopbackTLSEnvWithStoreWrapper(t, nil)
+}
+
+func newLoopbackTLSEnvWithStoreWrapper(t *testing.T, wrap func(*storage.SQLStore) storage.Store) *loopbackTLSEnv {
+	t.Helper()
 	setupCtx, setupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer setupCancel()
 	dir := t.TempDir()
@@ -107,7 +112,11 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 	}
 
 	logger := zap.NewNop()
-	svc := core.New(store, logger, "integration-network")
+	var serviceStore storage.Store = store
+	if wrap != nil {
+		serviceStore = wrap(store)
+	}
+	svc := core.New(serviceStore, logger, "integration-network")
 	svc.SetKeyring(keyring)
 	// The seeded admin is token-only and most tests here call the API with a
 	// bearer token alone. https_admin_test.go turns the admin
