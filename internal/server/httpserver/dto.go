@@ -578,19 +578,26 @@ type releaseValidationErrorDTO struct {
 }
 
 type schemaDTO struct {
-	Application     string `json:"application"`
-	ReleaseName     string `json:"release_name"`
-	Version         uint64 `json:"version"`
-	SchemaJSON      string `json:"schema_json"`
-	Digest          string `json:"digest"`
-	MetadataJSON    string `json:"metadata_json"`
-	CreatedBy       string `json:"created_by"`
-	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
+	Application     string                             `json:"application"`
+	ReleaseName     string                             `json:"release_name"`
+	Version         uint64                             `json:"version"`
+	SchemaJSON      string                             `json:"schema_json"`
+	Digest          string                             `json:"digest"`
+	MetadataJSON    string                             `json:"metadata_json"`
+	CreatedBy       string                             `json:"created_by"`
+	CreatedAtUnixMS int64                              `json:"created_at_unix_ms"`
+	Contract        *[]domain.ApplicationContractField `json:"contract,omitempty"`
 }
 
 func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
-	return schemaDTO{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
+	dto := schemaDTO{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
 		MetadataJSON: rawJSON(s.Metadata), CreatedBy: s.CreatedBy, CreatedAtUnixMS: unixMS(s.CreatedAt)}
+	if s.Contract != nil {
+		contract := make([]domain.ApplicationContractField, len(s.Contract))
+		copy(contract, s.Contract)
+		dto.Contract = &contract
+	}
+	return dto
 }
 
 type releaseSubscriberDTO struct {
