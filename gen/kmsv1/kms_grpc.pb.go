@@ -1069,6 +1069,7 @@ const (
 	ConfigurationReleaseService_ActivateRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
 	ConfigurationReleaseService_GetRelease_FullMethodName            = "/kms.v1.ConfigurationReleaseService/GetRelease"
 	ConfigurationReleaseService_GetActiveRelease_FullMethodName      = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
+	ConfigurationReleaseService_ResolveReleaseSchema_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema"
 	ConfigurationReleaseService_ListReleases_FullMethodName          = "/kms.v1.ConfigurationReleaseService/ListReleases"
 	ConfigurationReleaseService_WatchRelease_FullMethodName          = "/kms.v1.ConfigurationReleaseService/WatchRelease"
 	ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName = "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults"
@@ -1087,6 +1088,8 @@ type ConfigurationReleaseServiceClient interface {
 	ActivateRelease(ctx context.Context, in *ActivateReleaseRequest, opts ...grpc.CallOption) (*ActivateReleaseResponse, error)
 	GetRelease(ctx context.Context, in *GetReleaseRequest, opts ...grpc.CallOption) (*GetReleaseResponse, error)
 	GetActiveRelease(ctx context.Context, in *GetActiveReleaseRequest, opts ...grpc.CallOption) (*GetActiveReleaseResponse, error)
+	// Resolve an immutable schema digest within the authorized release lineage.
+	ResolveReleaseSchema(ctx context.Context, in *ResolveReleaseSchemaRequest, opts ...grpc.CallOption) (*ResolveReleaseSchemaResponse, error)
 	ListReleases(ctx context.Context, in *ListReleasesRequest, opts ...grpc.CallOption) (*ListReleasesResponse, error)
 	WatchRelease(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent], error)
 	// VerifyReleaseDefaults compares caller-supplied canonical content hashes of
@@ -1158,6 +1161,16 @@ func (c *configurationReleaseServiceClient) GetActiveRelease(ctx context.Context
 	return out, nil
 }
 
+func (c *configurationReleaseServiceClient) ResolveReleaseSchema(ctx context.Context, in *ResolveReleaseSchemaRequest, opts ...grpc.CallOption) (*ResolveReleaseSchemaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveReleaseSchemaResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_ResolveReleaseSchema_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *configurationReleaseServiceClient) ListReleases(ctx context.Context, in *ListReleasesRequest, opts ...grpc.CallOption) (*ListReleasesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListReleasesResponse)
@@ -1204,6 +1217,8 @@ type ConfigurationReleaseServiceServer interface {
 	ActivateRelease(context.Context, *ActivateReleaseRequest) (*ActivateReleaseResponse, error)
 	GetRelease(context.Context, *GetReleaseRequest) (*GetReleaseResponse, error)
 	GetActiveRelease(context.Context, *GetActiveReleaseRequest) (*GetActiveReleaseResponse, error)
+	// Resolve an immutable schema digest within the authorized release lineage.
+	ResolveReleaseSchema(context.Context, *ResolveReleaseSchemaRequest) (*ResolveReleaseSchemaResponse, error)
 	ListReleases(context.Context, *ListReleasesRequest) (*ListReleasesResponse, error)
 	WatchRelease(grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]) error
 	// VerifyReleaseDefaults compares caller-supplied canonical content hashes of
@@ -1239,6 +1254,9 @@ func (UnimplementedConfigurationReleaseServiceServer) GetRelease(context.Context
 }
 func (UnimplementedConfigurationReleaseServiceServer) GetActiveRelease(context.Context, *GetActiveReleaseRequest) (*GetActiveReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActiveRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) ResolveReleaseSchema(context.Context, *ResolveReleaseSchemaRequest) (*ResolveReleaseSchemaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveReleaseSchema not implemented")
 }
 func (UnimplementedConfigurationReleaseServiceServer) ListReleases(context.Context, *ListReleasesRequest) (*ListReleasesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListReleases not implemented")
@@ -1361,6 +1379,24 @@ func _ConfigurationReleaseService_GetActiveRelease_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ConfigurationReleaseService_ResolveReleaseSchema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveReleaseSchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).ResolveReleaseSchema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_ResolveReleaseSchema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).ResolveReleaseSchema(ctx, req.(*ResolveReleaseSchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ConfigurationReleaseService_ListReleases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListReleasesRequest)
 	if err := dec(in); err != nil {
@@ -1430,6 +1466,10 @@ var ConfigurationReleaseService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetActiveRelease",
 			Handler:    _ConfigurationReleaseService_GetActiveRelease_Handler,
+		},
+		{
+			MethodName: "ResolveReleaseSchema",
+			Handler:    _ConfigurationReleaseService_ResolveReleaseSchema_Handler,
 		},
 		{
 			MethodName: "ListReleases",
