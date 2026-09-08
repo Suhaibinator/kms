@@ -708,6 +708,9 @@ message ConfigurationSchema {
   string release_name = 8;
   // Established immutable contract for this schema, if any.
   repeated ApplicationContractField contract = 9;
+  // True when the immutable contract is established, including an empty one.
+  // False means the contract has not yet been adopted.
+  bool contract_established = 10;
 }
 
 message CreateSchemaRequest {

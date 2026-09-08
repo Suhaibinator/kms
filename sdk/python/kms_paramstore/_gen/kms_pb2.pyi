@@ -862,7 +862,7 @@ class ApplicationContractField(_message.Message):
     def __init__(self, alias: _Optional[str] = ..., kind: _Optional[str] = ..., content_type: _Optional[str] = ...) -> None: ...
 
 class ConfigurationSchema(_message.Message):
-    __slots__ = ("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract")
+    __slots__ = ("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract", "contract_established")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
     DIGEST_FIELD_NUMBER: _ClassVar[int]
@@ -872,6 +872,7 @@ class ConfigurationSchema(_message.Message):
     APPLICATION_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     CONTRACT_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_ESTABLISHED_FIELD_NUMBER: _ClassVar[int]
     version: int
     schema_json: str
     digest: str
@@ -881,7 +882,8 @@ class ConfigurationSchema(_message.Message):
     application: str
     release_name: str
     contract: _containers.RepeatedCompositeFieldContainer[ApplicationContractField]
-    def __init__(self, version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ..., contract: _Optional[_Iterable[_Union[ApplicationContractField, _Mapping]]] = ...) -> None: ...
+    contract_established: bool
+    def __init__(self, version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ..., contract: _Optional[_Iterable[_Union[ApplicationContractField, _Mapping]]] = ..., contract_established: _Optional[bool] = ...) -> None: ...
 
 class CreateSchemaRequest(_message.Message):
     __slots__ = ("schema_json", "metadata_json", "application")

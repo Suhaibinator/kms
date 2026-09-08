@@ -332,7 +332,7 @@ func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.Configurati
 	for _, f := range s.Contract {
 		contract = append(contract, &kmsv1.ApplicationContractField{Alias: f.Alias, Kind: f.Kind, ContentType: f.ContentType})
 	}
-	return &kmsv1.ConfigurationSchema{Contract: contract, Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
+	return &kmsv1.ConfigurationSchema{Contract: contract, ContractEstablished: s.Contract != nil, Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
 }
 
 func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {

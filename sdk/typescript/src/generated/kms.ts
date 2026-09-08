@@ -695,6 +695,11 @@ export interface ConfigurationSchema {
   releaseName: string;
   /** Established immutable contract for this schema, if any. */
   contract: ApplicationContractField[];
+  /**
+   * True when the immutable contract is established, including an empty one.
+   * False means the contract has not yet been adopted.
+   */
+  contractEstablished: boolean;
 }
 
 export interface CreateSchemaRequest {
@@ -10945,6 +10950,7 @@ function createBaseConfigurationSchema(): ConfigurationSchema {
     application: "",
     releaseName: "",
     contract: [],
+    contractEstablished: false,
   };
 }
 
@@ -10982,6 +10988,9 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     }
     for (const v of message.contract) {
       ApplicationContractField.encode(v!, writer.uint32(74).fork()).join();
+    }
+    if (message.contractEstablished !== false) {
+      writer.uint32(80).bool(message.contractEstablished);
     }
     return writer;
   },
@@ -11071,6 +11080,14 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
             message.contract.push(ApplicationContractField.decode(reader, reader.uint32()));
             continue;
           }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.contractEstablished = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -11116,6 +11133,11 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       contract: globalThis.Array.isArray(object?.contract)
         ? object.contract.map((e: any) => ApplicationContractField.fromJSON(e))
         : [],
+      contractEstablished: isSet(object.contractEstablished)
+        ? globalThis.Boolean(object.contractEstablished)
+        : isSet(object.contract_established)
+        ? globalThis.Boolean(object.contract_established)
+        : false,
     };
   },
 
@@ -11148,6 +11170,9 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     if (message.contract?.length) {
       obj.contract = message.contract.map((e) => ApplicationContractField.toJSON(e));
     }
+    if (message.contractEstablished !== false) {
+      obj.contractEstablished = message.contractEstablished;
+    }
     return obj;
   },
 
@@ -11167,6 +11192,7 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     message.application = object.application ?? "";
     message.releaseName = object.releaseName ?? "";
     message.contract = object.contract?.map((e) => ApplicationContractField.fromPartial(e)) || [];
+    message.contractEstablished = object.contractEstablished ?? false;
     return message;
   },
 };
@@ -20106,5 +20132,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 94605295ff170dc2470b3be83cfc6f7807892e61dde9275d1955331c16e2ef7c
+// source-sha256: 130439f809827160f695d9f16e167ecc88fd929deaa337dc1a99ab667bdfb52e
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

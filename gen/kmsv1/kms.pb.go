@@ -4976,9 +4976,12 @@ type ConfigurationSchema struct {
 	Application     string                 `protobuf:"bytes,7,opt,name=application,proto3" json:"application,omitempty"`
 	ReleaseName     string                 `protobuf:"bytes,8,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
 	// Established immutable contract for this schema, if any.
-	Contract      []*ApplicationContractField `protobuf:"bytes,9,rep,name=contract,proto3" json:"contract,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Contract []*ApplicationContractField `protobuf:"bytes,9,rep,name=contract,proto3" json:"contract,omitempty"`
+	// True when the immutable contract is established, including an empty one.
+	// False means the contract has not yet been adopted.
+	ContractEstablished bool `protobuf:"varint,10,opt,name=contract_established,json=contractEstablished,proto3" json:"contract_established,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ConfigurationSchema) Reset() {
@@ -5072,6 +5075,13 @@ func (x *ConfigurationSchema) GetContract() []*ApplicationContractField {
 		return x.Contract
 	}
 	return nil
+}
+
+func (x *ConfigurationSchema) GetContractEstablished() bool {
+	if x != nil {
+		return x.ContractEstablished
+	}
+	return false
 }
 
 type CreateSchemaRequest struct {
@@ -9855,7 +9865,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x18ApplicationContractField\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12!\n" +
-	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\"\xdc\x02\n" +
+	"\fcontent_type\x18\x03 \x01(\tR\vcontentType\"\x8f\x03\n" +
 	"\x13ConfigurationSchema\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1f\n" +
 	"\vschema_json\x18\x02 \x01(\tR\n" +
@@ -9867,7 +9877,9 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\x12 \n" +
 	"\vapplication\x18\a \x01(\tR\vapplication\x12!\n" +
 	"\frelease_name\x18\b \x01(\tR\vreleaseName\x12<\n" +
-	"\bcontract\x18\t \x03(\v2 .kms.v1.ApplicationContractFieldR\bcontract\"}\n" +
+	"\bcontract\x18\t \x03(\v2 .kms.v1.ApplicationContractFieldR\bcontract\x121\n" +
+	"\x14contract_established\x18\n" +
+	" \x01(\bR\x13contractEstablished\"}\n" +
 	"\x13CreateSchemaRequest\x12\x1f\n" +
 	"\vschema_json\x18\x01 \x01(\tR\n" +
 	"schemaJson\x12#\n" +

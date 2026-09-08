@@ -38,7 +38,7 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		{"CreateReleaseRequest", fields("namespace", "name", "schema_version", "entries", "metadata_json")},
 		{"ReleaseAcknowledgement", fields("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence")},
 		{"ReleaseAcknowledgementRejectedEvent", fields("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason")},
-		{"ConfigurationSchema", fields("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract")},
+		{"ConfigurationSchema", fields("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract", "contract_established")},
 		{"CreateSchemaRequest", fields("schema_json", "metadata_json", "application")},
 		{"GetSchemaRequest", fields("version", "application", "release_name")},
 		{"ListSchemasRequest", fields("page_size", "page_token", "application", "release_name")},
