@@ -106,6 +106,7 @@ def test_generated_start_and_verify_surfaces(monkeypatch) -> None:
 
     response = type("Response", (), {
         "release_name": "runtime", "release_version": 1, "activation_revision": 2,
+        "schema_version": 2,
         "schema_matches": True,
         "entries": (type("Verdict", (), {"alias": "runtime", "verdict": "match"})(),),
         "unverified_count": 0,
@@ -116,7 +117,9 @@ def test_generated_start_and_verify_surfaces(monkeypatch) -> None:
     class AsyncClient:
         async def verify_release_defaults(self, **kwargs):
             return response
-    assert store.verify_defaults(Client(), namespace="dev/app").passed
+    result = store.verify_defaults(Client(), namespace="dev/app")
+    assert result.passed
+    assert result.schema_version == 2
     assert asyncio.run(store.verify_defaults_async(AsyncClient(), namespace="dev/app")).passed
 
 

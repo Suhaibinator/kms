@@ -27,6 +27,7 @@ class VerifyResult:
     release_name: str
     release_version: int
     activation_revision: int
+    schema_version: int
     schema_matches: bool
     entries: tuple[VerifyEntryResult, ...]
     unverified: int = 0
@@ -44,7 +45,7 @@ class VerifyResult:
             for entry in sorted(self.entries, key=lambda item: item.alias.encode())
         ]
         widths = [max(len(row[index]) for row in rows) + 2 for index in range(2)]
-        lines = [f"{self.namespace} {self.release_name}@{self.release_version}#{self.activation_revision}  schema: {'match' if self.schema_matches else 'differs'}"]
+        lines = [f"{self.namespace} {self.release_name}@{self.release_version}#{self.activation_revision}  schema_version: {self.schema_version}  schema: {'match' if self.schema_matches else 'differs'}"]
         lines.extend(f"{row[0]:<{widths[0]}}{row[1]:<{widths[1]}}{row[2]}" for row in rows)
         counts = {verdict: sum(entry.verdict == verdict for entry in self.entries) for verdict in _VERDICTS}
         lines.append("summary: " + " ".join(f"{name}={counts[name]}" for name in _VERDICTS) + f" unverified={self.unverified}")
@@ -70,7 +71,7 @@ def verify_defaults(
     method = getattr(client, "verify_release_defaults")
     response = method(namespace=namespace, release=release, profile=profile, schema_sha256=schema_sha256, entries=entries, **options)
     results = tuple(VerifyEntryResult(item.alias, content_types.get(item.alias, ""), item.verdict) for item in response.entries)
-    return VerifyResult(namespace, response.release_name, response.release_version, response.activation_revision, response.schema_matches, results, response.unverified_count)
+    return VerifyResult(namespace, response.release_name, response.release_version, response.activation_revision, response.schema_version, response.schema_matches, results, response.unverified_count)
 
 
 async def verify_defaults_async(client: object, **kwargs: Any) -> VerifyResult:
@@ -89,4 +90,4 @@ async def verify_defaults_async(client: object, **kwargs: Any) -> VerifyResult:
             content_types[item.alias] = item.content_type
     response = await getattr(client, "verify_release_defaults")(namespace=namespace, schema_sha256=schema_sha256, entries=entries, **kwargs)
     results = tuple(VerifyEntryResult(item.alias, content_types.get(item.alias, ""), item.verdict) for item in response.entries)
-    return VerifyResult(namespace, response.release_name, response.release_version, response.activation_revision, response.schema_matches, results, response.unverified_count)
+    return VerifyResult(namespace, response.release_name, response.release_version, response.activation_revision, response.schema_version, response.schema_matches, results, response.unverified_count)
