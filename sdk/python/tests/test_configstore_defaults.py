@@ -39,6 +39,45 @@ def test_defaults_artifact_is_deterministic_and_secret_free() -> None:
     assert parsed.parameters[0].value == '{"port":8080}'
 
 
+def test_schema_free_defaults_artifact_retains_explicit_empty_digest() -> None:
+    artifact = encode_defaults_artifact(
+        profile="manual", schema_sha256="", contract=CONTRACT,
+        parameters={"runtime": "{}"},
+    )
+    assert '"schema_sha256":""' in artifact
+    assert parse_defaults_artifact(artifact).schema_sha256 == ""
+
+
+@pytest.mark.parametrize("digest", ["a", "A" * 64, "g" * 64, None, 0])
+def test_defaults_artifact_rejects_noncanonical_nonempty_digest(digest) -> None:
+    if isinstance(digest, str):
+        with pytest.raises(DefaultsArtifactError, match="SHA-256"):
+            encode_defaults_artifact(
+                profile="manual", schema_sha256=digest, contract=CONTRACT,
+                parameters={"runtime": "{}"},
+            )
+        return
+    artifact = encode_defaults_artifact(
+        profile="manual", schema_sha256="", contract=CONTRACT,
+        parameters={"runtime": "{}"},
+    )
+    document = json.loads(artifact)
+    document["schema_sha256"] = digest
+    with pytest.raises(DefaultsArtifactError, match="SHA-256"):
+        parse_defaults_artifact(json.dumps(document))
+
+
+def test_defaults_artifact_requires_schema_digest_field_even_for_schema_free() -> None:
+    artifact = encode_defaults_artifact(
+        profile="manual", schema_sha256="", contract=CONTRACT,
+        parameters={"runtime": "{}"},
+    )
+    document = json.loads(artifact)
+    del document["schema_sha256"]
+    with pytest.raises(DefaultsArtifactError, match="structure"):
+        parse_defaults_artifact(json.dumps(document))
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

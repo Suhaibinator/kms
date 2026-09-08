@@ -88,5 +88,8 @@ misstating their meaning.
 `encode_defaults_artifact` and `export_defaults` produce parameter-only
 `kms-config-defaults/v1` artifacts. `verify_defaults` sends only canonical
 SHA-256 hashes to KMS and returns a value-free result suitable for CI logs.
+For a manual schema-free artifact, pass `schema_sha256=""`; the field remains
+present so management tooling can pair it with an explicit schema version 0.
+Generated stores always embed and export their nonempty generated schema digest.
 The generated store exposes these as `defaults_artifact`, `export_defaults`,
 `verify_defaults`, and `verify_defaults_async`.
