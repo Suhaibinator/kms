@@ -1555,9 +1555,10 @@ alias matches and the artifact's schema digest matches the registered
 schema, `1` on any `differs`/`missing_in_release`/`unknown_alias`/
 `secret_alias`/`unsupported_content_type` verdict, schema mismatch, or RPC
 failure, and `2` on usage errors. `unverified` (release aliases the artifact
-does not mention) is reported but does not fail the check; an artifact
-without `schema_sha256` prints `schema not checked` and the schema does not
-participate in the exit code.
+does not mention) is reported but does not fail the check. The generated
+artifact's `schema_sha256` selects its exact track; for an artifact without a
+digest, supply `--schema-version VERSION` (`0` for a schema-free track).
+Missing or conflicting selectors are usage errors.
 
 ```bash
 KMS_TOKEN="$VERIFY_TOKEN" parameter-store release verify-defaults prod/gradethis \

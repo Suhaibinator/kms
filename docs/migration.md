@@ -269,7 +269,7 @@ return loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnaps
 })
 ```
 
-Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
+Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", schema_version=1, ...))`
 and synchronous `loader.run(prepare)`, or the event-loop-native
 `AsyncReleaseLoader`, with the same resolution, cancellation,
 prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
@@ -280,7 +280,7 @@ Pydantic-based `kms-config-gen-py` layer, which emits a typed binding, strict
 release schema, and machine contract; see the
 [`Python managed configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 
-TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
+TypeScript uses `await client.createReleaseLoader({ name: "runtime", schemaVersion: 1n })` and
 `await loader.run(prepare, signal)`. Decode and validate the complete
 `ReleaseSnapshot` before returning `{ commit, abort }`; keep `commit`
 synchronous and infallible so the application snapshot swaps atomically. Pass
@@ -297,7 +297,7 @@ parameter-store release rollback prod/gradethis runtime 1 --schema-version 1 \
 ```
 
 Use the Releases frontend or `parameter-store release subscribers
-prod/gradethis runtime` until every expected instance reports the target as
+prod/gradethis runtime --schema-version 1` until every expected instance reports the target as
 `applied`. Replicas apply independently—version 1 has no fleet-wide barrier.
 An activation racing immediately after a loader's final active read is handled
 as the next candidate, so do not treat activation as a distributed commit.
