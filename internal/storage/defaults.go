@@ -103,6 +103,9 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 	if in.UpdateDefinition {
 		schemaVersion = in.DesiredSchemaVersion
 	}
+	if schemaVersion == 0 && in.SchemaDigest != "" {
+		return domain.Errorf(domain.ErrFailedPrecondition, "schema-free defaults must not claim a registered schema digest")
+	}
 	if schemaVersion != 0 {
 		var schema configurationSchemaModel
 		if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", in.Namespace.App, in.ReleaseName, schemaVersion).First(&schema).Error; err != nil {

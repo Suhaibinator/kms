@@ -178,12 +178,18 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
-	schema, err := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-	if err != nil {
-		return defaultsPlan{}, err
-	}
-	if schema.Digest != artifact.SchemaSHA256 {
-		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
+	if app.SchemaVersion == 0 {
+		if artifact.SchemaSHA256 != "" {
+			return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "schema-free defaults must not claim a registered schema digest")
+		}
+	} else {
+		schema, err := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+		if err != nil {
+			return defaultsPlan{}, err
+		}
+		if schema.Digest != artifact.SchemaSHA256 {
+			return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
+		}
 	}
 	definitionChanged := in.UpdateDefinition && (persistedApp.SchemaVersion != desiredApp.SchemaVersion || !reflect.DeepEqual(persistedApp.Contract, desiredApp.Contract))
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
