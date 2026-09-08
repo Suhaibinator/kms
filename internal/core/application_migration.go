@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"reflect"
 	"sort"
 	"strconv"
 
@@ -38,12 +37,21 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	base, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace)
+	app, err := as.GetApplication(ctx, in.Namespace.App)
 	if err != nil {
 		return empty, err
 	}
-	app, err := as.GetApplication(ctx, in.Namespace.App)
+	sourceTrack := domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SourceSchemaVersion}
+	targetTrack := domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SchemaVersion}
+	if sourceTrack == targetTrack {
+		return empty, domain.Errorf(domain.ErrInvalidArgument, "source and target schema tracks must differ")
+	}
+	base, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack)
 	if err != nil {
+		return empty, err
+	}
+	targetActive, err := rs.GetActiveConfigurationRelease(ctx, targetTrack)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return empty, err
 	}
 	if !app.ArchivedAt.IsZero() {
@@ -59,8 +67,12 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	if _, err = rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, in.SchemaVersion); err != nil {
+	targetSchema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, in.SchemaVersion)
+	if err != nil {
 		return empty, err
+	}
+	if targetSchema.Contract != nil && !contractsEqual(targetSchema.Contract, candidateApp.Contract) {
+		return empty, domain.Errorf(domain.ErrFailedPrecondition, "target contract does not match registered schema")
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: app.ReleaseName})
 	if err != nil {
@@ -145,7 +157,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		}
 		resources = append(resources, storage.MigrationResource{Kind: f.Kind, Key: key, Version: version, Write: c.Value != nil})
 	}
-	before, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	before, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack, resources...)
 	if err != nil {
 		return empty, err
 	}
@@ -157,7 +169,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		SourceVersion:            source.Release.Version,
 		SourceActivationRevision: source.ActivationRevision,
 		SchemaVersion:            in.SchemaVersion,
-		DefinitionChanged:        app.SchemaVersion != candidateApp.SchemaVersion || !reflect.DeepEqual(app.Contract, candidateApp.Contract),
+		DefinitionChanged:        false,
 		Entries:                  []domain.ApplicationReleasePlanEntry{},
 		Validation:               []domain.ReleaseValidationError{},
 		AffectedEnvironments:     []domain.ApplicationMigrationEnvironment{},
@@ -296,7 +308,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 			return empty, err
 		}
 	}
-	after, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	after, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack, resources...)
 	if err != nil {
 		return empty, err
 	}
@@ -345,7 +357,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	migrated, err := ms.ApplyApplicationMigration(ctx, storage.ApplicationMigrationTransaction{
 		Resources: resources, Namespace: in.Namespace, Snapshot: before.Digest,
 		Contract: candidateApp.Contract, Release: release, Writes: writes,
-		ExpectedActiveVersion: source.Release.Version, Audit: audit, ResourceAudits: resourceAudits,
+		SourceSchemaVersion: in.SourceSchemaVersion, ExpectedSourceVersion: source.Release.Version, ExpectedSourceActivationRevision: source.ActivationRevision, ExpectedActiveVersion: targetActive.Release.Version, Audit: audit, ResourceAudits: resourceAudits,
 	})
 	if err != nil {
 		return empty, err

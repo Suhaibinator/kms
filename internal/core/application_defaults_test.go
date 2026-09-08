@@ -183,13 +183,13 @@ func TestApplicationDefaultsExplicitDefinitionUpdateRepinsMatchingSchema(t *test
 	}
 	artifact := consoleDefaultsArtifact(t, `{"host":"localhost"}`, "5")
 	readOnlyPreview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact})
-	if err != nil || !readOnlyPreview.DefinitionChanged {
+	if err != nil || readOnlyPreview.DefinitionChanged {
 		t.Fatalf("definition drift preview = %+v err=%v", readOnlyPreview, err)
 	}
 	if _, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
 		Namespace: ns, Artifact: artifact, Execute: true, PlanDigest: readOnlyPreview.PlanDigest,
-	}); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("definition drift execute without opt-in error = %v", err)
+	}); err != nil {
+		t.Fatalf("selected track defaults execution = %v", err)
 	}
 
 	preview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{

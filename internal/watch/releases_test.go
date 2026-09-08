@@ -34,7 +34,7 @@ func createWatchRelease(t *testing.T, st *storage.SQLStore, ns domain.NamespaceR
 }
 func activateWatchRelease(t *testing.T, st *storage.SQLStore, ns domain.NamespaceRef, v uint64) domain.ActiveConfigurationRelease {
 	t.Helper()
-	a, changed, err := st.ActivateConfigurationRelease(context.Background(), ns, "runtime", v, nil)
+	a, changed, err := st.ActivateConfigurationRelease(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, v, nil)
 	if err != nil || !changed {
 		t.Fatalf("activate v%d changed=%v err=%v", v, changed, err)
 	}
@@ -298,7 +298,7 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 	if row.ReleaseState != "" || row.LastAckedRevision != 0 || !row.LastHeartbeat.IsZero() {
 		t.Fatalf("registration fabricated progress: %+v", row)
 	}
-	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
+	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: reg.Name, SchemaVersion: reg.SchemaVersion, State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
 	for _, r := range hub.Subscribers() {
 		if r.ReleaseName != "" {
 			row = r

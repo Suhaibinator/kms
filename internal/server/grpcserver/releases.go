@@ -31,11 +31,13 @@ type releaseConnectionState struct {
 }
 
 type releaseConnectionKey struct {
-	namespace  domain.NamespaceRef
-	name       string
-	clientName string
-	instanceID string
-	identity   string
+	namespace     domain.NamespaceRef
+	name          string
+	schemaVersion uint64
+	namespaceID   int64
+	clientName    string
+	instanceID    string
+	identity      string
 }
 
 func (h *configurationReleaseServer) addConnection(key releaseConnectionKey) uint64 {
@@ -113,11 +115,14 @@ func (h *configurationReleaseServer) CreateRelease(ctx context.Context, req *kms
 }
 
 func (h *configurationReleaseServer) ValidateRelease(ctx context.Context, req *kmsv1.ValidateReleaseRequest) (*kmsv1.ValidateReleaseResponse, error) {
+	if req.SchemaVersion == nil {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	errs, err := h.s.svc.ValidateConfigurationRelease(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName(), req.GetVersion())
+	errs, err := h.s.svc.ValidateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.GetSchemaVersion()}, req.GetVersion())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -143,7 +148,7 @@ func (h *configurationReleaseServer) VerifyReleaseDefaults(ctx context.Context, 
 	}
 	out, err := h.s.svc.VerifyReleaseDefaults(ctx, pr, domain.VerifyReleaseDefaultsInput{
 		Namespace: nsRefFromProto(req.GetNamespace()), ReleaseName: req.GetName(),
-		Profile: req.GetProfile(), SchemaSHA256: req.GetSchemaSha256(), Entries: entries,
+		SchemaVersion: req.SchemaVersion, Profile: req.GetProfile(), SchemaSHA256: req.GetSchemaSha256(), Entries: entries,
 	})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
@@ -156,6 +161,9 @@ func toProtoReleaseValidationError(e domain.ReleaseValidationError) *kmsv1.Relea
 }
 
 func (h *configurationReleaseServer) ActivateRelease(ctx context.Context, req *kmsv1.ActivateReleaseRequest) (*kmsv1.ActivateReleaseResponse, error) {
+	if req.SchemaVersion == nil {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
@@ -165,7 +173,7 @@ func (h *configurationReleaseServer) ActivateRelease(ctx context.Context, req *k
 		v := req.GetExpectedCurrentVersion()
 		expected = &v
 	}
-	active, changed, err := h.s.svc.ActivateConfigurationRelease(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName(), req.GetVersion(), expected)
+	active, changed, err := h.s.svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.GetSchemaVersion()}, req.GetVersion(), expected)
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -173,22 +181,28 @@ func (h *configurationReleaseServer) ActivateRelease(ctx context.Context, req *k
 }
 
 func (h *configurationReleaseServer) GetRelease(ctx context.Context, req *kmsv1.GetReleaseRequest) (*kmsv1.GetReleaseResponse, error) {
+	if req.SchemaVersion == nil {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.s.svc.GetConfigurationRelease(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName(), req.GetVersion())
+	out, err := h.s.svc.GetConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.GetSchemaVersion()}, req.GetVersion())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
 	return &kmsv1.GetReleaseResponse{Release: toProtoConfigurationRelease(out)}, nil
 }
 func (h *configurationReleaseServer) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
+	if req.SchemaVersion == nil {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.s.svc.GetActiveConfigurationRelease(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName())
+	out, err := h.s.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.GetSchemaVersion()})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -199,7 +213,7 @@ func (h *configurationReleaseServer) ListReleases(ctx context.Context, req *kmsv
 	if err != nil {
 		return nil, err
 	}
-	rows, next, err := h.s.svc.ListConfigurationReleases(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	rows, next, err := h.s.svc.ListConfigurationReleases(ctx, pr, domain.ReleaseFilter{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.SchemaVersion}, pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -224,6 +238,9 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if regp == nil {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "first watch message must register"))
 	}
+	if regp.SchemaVersion == nil {
+		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	ns := nsRefFromProto(regp.GetNamespace())
 	if regp.GetClientName() == "" || regp.GetInstanceId() == "" || len(regp.GetClientName()) > 128 || len(regp.GetInstanceId()) > 128 {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "client_name and instance_id must be between 1 and 128 bytes"))
@@ -236,20 +253,20 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if !ok {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns))
 	}
-	reg := watch.ReleaseRegistration{RemoteAddr: pr.RemoteAddr, Namespace: ns, NamespaceID: namespaceID, Name: regp.GetName(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
+	reg := watch.ReleaseRegistration{RemoteAddr: pr.RemoteAddr, Namespace: ns, NamespaceID: namespaceID, Name: regp.GetName(), SchemaVersion: regp.GetSchemaVersion(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
 	sub, err := h.s.hub.SubscribeRelease(ctx, reg)
 	if err != nil {
 		return h.s.mapErr(ctx, err)
 	}
-	connectionKey := releaseConnectionKey{namespace: ns, name: reg.Name, clientName: reg.ClientName, instanceID: reg.InstanceID, identity: pr.Identity.Name}
+	connectionKey := releaseConnectionKey{namespace: ns, namespaceID: namespaceID, name: reg.Name, schemaVersion: reg.SchemaVersion, clientName: reg.ClientName, instanceID: reg.InstanceID, identity: pr.Identity.Name}
 	connectionID := h.addConnection(connectionKey)
 	connectionIDText := fmt.Sprintf("%d", connectionID)
 	if err := h.persistConnection(connectionKey, connectionID, func() error {
-		return h.s.svc.SetReleaseSubscriberConnected(ctx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, true)
+		return h.s.svc.SetReleaseSubscriberConnected(ctx, reg.Track(), reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, true)
 	}); err != nil {
 		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false)
+			cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, reg.Track(), reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false)
 			cleanupCancel()
 			if cleanupErr != nil {
 				h.s.log.Warn("release subscriber failed-registration cleanup failed",
@@ -267,7 +284,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cleanupCancel()
-			if cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false); cleanupErr != nil {
+			if cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, reg.Track(), reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false); cleanupErr != nil {
 				h.s.log.Warn("release subscriber disconnect cleanup failed",
 					zap.String("release", reg.Name),
 					zap.String("client", reg.ClientName),
@@ -278,6 +295,9 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	}()
 	bl := sub.Backlog()
 	for _, e := range bl.Events {
+		if e.Release.Track() != reg.Track() || e.NamespaceID != reg.NamespaceID {
+			return h.s.mapErr(ctx, domain.Errorf(domain.ErrFailedPrecondition, "release event does not match registration"))
+		}
 		event := &kmsv1.WatchReleaseEvent{Revision: e.Revision}
 		if bl.IsSnapshot {
 			event.Event = &kmsv1.WatchReleaseEvent_Snapshot{Snapshot: &kmsv1.ReleaseSnapshotEvent{Release: toProtoConfigurationRelease(e.Release)}}
@@ -301,11 +321,11 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "watch message must be an acknowledgement")
 				return
 			}
-			if nsRefFromProto(a.GetNamespace()) != ns || a.GetName() != reg.Name || a.GetClientName() != reg.ClientName || a.GetInstanceId() != reg.InstanceID {
+			if nsRefFromProto(a.GetNamespace()) != ns || a.GetName() != reg.Name || a.GetSchemaVersion() != reg.SchemaVersion || a.GetClientName() != reg.ClientName || a.GetInstanceId() != reg.InstanceID {
 				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")
 				return
 			}
-			ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()}
+			ack := domain.ReleaseAcknowledgement{Namespace: ns, SchemaVersion: reg.SchemaVersion, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()}
 			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
 			if err != nil {
 				recvErr <- err
@@ -329,12 +349,21 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			}
 			return h.s.mapErr(ctx, err)
 		case e := <-sub.Events():
+			if e.Namespace != reg.Namespace || e.Name != reg.Name || e.SchemaVersion != reg.SchemaVersion || e.NamespaceID != reg.NamespaceID {
+				continue
+			}
 			release := e.Release
 			if release.Name == "" {
-				release, err = h.s.svc.GetConfigurationRelease(ctx, pr, e.Namespace, e.Name, e.Version)
+				release, err = h.s.svc.GetConfigurationRelease(ctx, pr, reg.Track(), e.Version)
 				if err != nil {
 					return h.s.mapErr(ctx, err)
 				}
+			}
+			if release.Track() != reg.Track() {
+				return h.s.mapErr(ctx, domain.Errorf(domain.ErrFailedPrecondition, "release event does not match registration"))
+			}
+			if err := h.s.svc.ReauthorizeReleaseWatch(ctx, pr, ns, reg.Name); err != nil {
+				return h.s.mapErr(ctx, err)
 			}
 			if err := stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: toProtoConfigurationRelease(release)}}, Revision: e.Revision}); err != nil {
 				return err
@@ -392,4 +421,16 @@ func (h *configurationSchemaServer) ListSchemas(ctx context.Context, req *kmsv1.
 		out = append(out, toProtoConfigurationSchema(r))
 	}
 	return &kmsv1.ListSchemasResponse{Schemas: out, NextPageToken: next}, nil
+}
+
+func (h *configurationReleaseServer) ResolveReleaseSchema(ctx context.Context, req *kmsv1.ResolveReleaseSchemaRequest) (*kmsv1.ResolveReleaseSchemaResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	version, err := h.s.svc.ResolveReleaseSchema(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetName(), req.GetSchemaSha256())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.ResolveReleaseSchemaResponse{SchemaVersion: version}, nil
 }

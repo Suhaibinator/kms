@@ -111,6 +111,9 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	if !app.ArchivedAt.IsZero() {
 		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	if app.Contract == nil {
+		app.Contract = applicationContractFromArtifact(artifact.Contract)
+	}
 	if len(app.Contract) == 0 || len(app.Contract) > maxReleaseEntries {
 		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application contract must contain between 1 and %d entries", maxReleaseEntries)
 	}

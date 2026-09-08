@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -33,15 +32,23 @@ func (s *Service) selectApplicationTrack(ctx context.Context, app domain.Applica
 			version = schemas[0].Version
 		}
 	}
-	schema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, version)
-	if err != nil && !(version == 0 && errors.Is(err, domain.ErrNotFound)) {
+	contract, err := rs.GetConfigurationSchemaContract(ctx, app.Name, app.ReleaseName, version)
+	if err != nil {
 		return app, err
 	}
-	if len(schema.Contract) > 0 {
-		app.Contract = schema.Contract
-	} else if version != app.SchemaVersion {
-		app.Contract = nil
-	}
+	app.Contract = contract
 	app.SchemaVersion = version
 	return app, nil
+}
+
+func contractsEqual(a, b []domain.ApplicationContractField) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

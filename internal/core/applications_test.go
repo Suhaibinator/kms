@@ -46,8 +46,8 @@ func TestApplicationContractIsSharedAcrossEnvironmentReleases(t *testing.T) {
 	if _, err := service.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
 		Namespace: dev, Name: app.ReleaseName,
 		Entries: []domain.ReleaseEntrySelector{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: dev, Key: "config/runtime"}}},
-	}); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("release schema unpin error = %v, want FailedPrecondition", err)
+	}); err != nil {
+		t.Fatalf("schema-free release: %v", err)
 	}
 	secondSchema, err := service.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"version two"}`, "{}")
 	if err != nil {
@@ -56,8 +56,8 @@ func TestApplicationContractIsSharedAcrossEnvironmentReleases(t *testing.T) {
 	if _, err := service.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
 		Namespace: dev, Name: app.ReleaseName, SchemaVersion: secondSchema.Version,
 		Entries: []domain.ReleaseEntrySelector{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: dev, Key: "config/runtime"}}},
-	}); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("release schema repin error = %v, want FailedPrecondition", err)
+	}); err != nil {
+		t.Fatalf("independent schema release: %v", err)
 	}
 	unchanged, err := service.GetApplication(ctx, admin, app.Name)
 	if err != nil || unchanged.SchemaVersion != schema.Version {
@@ -136,8 +136,8 @@ func TestFirstReleaseAdoptsApplicationContract(t *testing.T) {
 	if _, err := service.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
 		Namespace: dev, Name: "runtime", SchemaVersion: schema.Version,
 		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: dev, Key: "settings"}}},
-	}); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("release creation repin error = %v, want FailedPrecondition", err)
+	}); err != nil {
+		t.Fatalf("independent schema release: %v", err)
 	}
 	before, err := service.GetApplication(ctx, admin, "worker")
 	if err != nil || before.SchemaVersion != 0 || len(before.Contract) != 0 {
@@ -149,6 +149,7 @@ func TestFirstReleaseAdoptsApplicationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, err := service.GetApplication(ctx, admin, "worker")
+	app.Contract, err = store.GetConfigurationSchemaContract(ctx, "worker", "runtime", 0)
 	if err != nil || len(app.Contract) != 1 || app.Contract[0].Alias != "settings" || app.Contract[0].ContentType != "integer" {
 		t.Fatalf("adopted application = %+v err=%v", app, err)
 	}

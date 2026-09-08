@@ -284,11 +284,11 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 	if err != nil {
 		return err
 	}
-	schema, err := rs.GetConfigurationSchema(ctx, appName, releaseName, schemaVersion)
-	if err != nil && !(schemaVersion == 0 && errors.Is(err, domain.ErrNotFound)) {
+	contract, err := rs.GetConfigurationSchemaContract(ctx, appName, releaseName, schemaVersion)
+	if err != nil {
 		return err
 	}
-	if len(schema.Contract) == 0 {
+	if contract == nil {
 		if !adopt {
 			return nil
 		}
@@ -300,12 +300,13 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 			}
 			fields = append(fields, field)
 		}
-		schema, err = rs.AdoptConfigurationSchemaContract(ctx, appName, releaseName, schemaVersion, fields)
+		schema, err := rs.AdoptConfigurationSchemaContract(ctx, appName, releaseName, schemaVersion, fields)
 		if err != nil {
 			return err
 		}
+		contract = schema.Contract
 	}
-	app.Contract = schema.Contract
+	app.Contract = contract
 	if len(entries) != len(app.Contract) {
 		return domain.Errorf(domain.ErrFailedPrecondition, "release does not match application %s contract", appName)
 	}

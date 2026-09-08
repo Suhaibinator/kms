@@ -301,7 +301,7 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 
 func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 	return &kmsv1.Subscriber{
-		ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
+		SchemaVersion: s.SchemaVersion, ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceId:          s.InstanceID,
 		Identity:            s.Identity,
@@ -328,11 +328,15 @@ func toProtoConfigurationRelease(r domain.ConfigurationRelease) *kmsv1.Configura
 }
 
 func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.ConfigurationSchema {
-	return &kmsv1.ConfigurationSchema{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
+	contract := make([]*kmsv1.ApplicationContractField, 0, len(s.Contract))
+	for _, f := range s.Contract {
+		contract = append(contract, &kmsv1.ApplicationContractField{Alias: f.Alias, Kind: f.Kind, ContentType: f.ContentType})
+	}
+	return &kmsv1.ConfigurationSchema{Contract: contract, Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
 }
 
 func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {
-	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
+	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, SchemaVersion: a.SchemaVersion, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
 }
 
 // toProtoVerifyReleaseDefaults renders the value-free verification result.
@@ -344,6 +348,7 @@ func toProtoVerifyReleaseDefaults(r domain.VerifyReleaseDefaultsResult) *kmsv1.V
 		entries = append(entries, &kmsv1.VerifyEntryVerdict{Alias: e.Alias, Verdict: e.Verdict})
 	}
 	return &kmsv1.VerifyReleaseDefaultsResponse{
+		SchemaVersion:               r.SchemaVersion,
 		Name:                        r.ReleaseName,
 		Version:                     r.ReleaseVersion,
 		ActivationRevision:          r.ActivationRevision,

@@ -223,7 +223,7 @@ func TestNamespaceIncarnationBindingRejectsAuthorizationABA(t *testing.T) {
 		if !errors.Is(err, domain.ErrAborted) {
 			t.Fatalf("CreateConfigurationRelease after namespace ABA err = %v, want ErrAborted", err)
 		}
-		rows, _, err := st.ListConfigurationReleases(context.Background(), ns, "runtime", storage.ListPage{})
+		rows, _, err := st.ListConfigurationReleases(context.Background(), domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, storage.ListPage{})
 		if err != nil || len(rows) != 0 {
 			t.Fatalf("recreated namespace releases = %+v, err %v", rows, err)
 		}

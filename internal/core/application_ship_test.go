@@ -128,7 +128,7 @@ func TestShipApplicationChangeDryRunNeverWrites(t *testing.T) {
 	if p, err := st.GetParameter(ctx, domain.Ref{NS: ns, Key: "rate_limits"}, 0, domain.LabelCurrent); err != nil || p.Version != 1 || p.Value != "5" {
 		t.Fatalf("dry run wrote a parameter: %+v err=%v", p, err)
 	}
-	if n, _ := rs.CountConfigurationReleases(ctx, ns, ""); n != 0 {
+	if n, _ := rs.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: ""}); n != 0 {
 		t.Fatalf("dry run created %d releases", n)
 	}
 	app, _ := svc.GetApplication(ctx, pr, "gradethis")
@@ -165,7 +165,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	if !strings.Contains(result.Release.Metadata, `"source":"console.ship"`) || !strings.Contains(result.Release.Metadata, `"ticket":"KMS-1"`) {
 		t.Fatalf("release metadata = %s", result.Release.Metadata)
 	}
-	active, err := rs.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	active, err := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	if err != nil || active.Release.Version != 1 {
 		t.Fatalf("active = %+v err=%v", active, err)
 	}
@@ -203,7 +203,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	if e := previewEntry(t, shipped, "rate_limits"); e.Change != domain.ShipEntryPinned || e.FromVersion != 2 || e.ToVersion != 3 {
 		t.Fatalf("pinned entry = %+v", e)
 	}
-	active, _ = rs.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	active, _ = rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	for _, entry := range active.Release.Entries {
 		if entry.Alias == "rate_limits" && entry.Version != 3 {
 			t.Fatalf("active pins rate_limits@%d, want 3", entry.Version)
@@ -256,7 +256,7 @@ func TestShipApplicationChangeZeroEditOnlyCreatesFirstRelease(t *testing.T) {
 	if result.Status != domain.ShipStatusActivated || result.Release == nil || result.Release.Version != 1 || len(result.Parameters) != 0 {
 		t.Fatalf("zero-edit ship = %+v", result)
 	}
-	active, err := rs.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	active, err := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	if err != nil || len(active.Release.Entries) != 3 {
 		t.Fatalf("active first release = %+v err=%v", active, err)
 	}
@@ -286,7 +286,7 @@ func TestShipApplicationChangeRejectedWritesNothing(t *testing.T) {
 	if p, _ := st.GetParameter(ctx, domain.Ref{NS: ns, Key: "rate_limits"}, 0, domain.LabelCurrent); p.Version != 1 {
 		t.Fatalf("rejected ship wrote parameter v%d", p.Version)
 	}
-	if n, _ := rs.CountConfigurationReleases(ctx, ns, ""); n != 0 {
+	if n, _ := rs.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: ""}); n != 0 {
 		t.Fatalf("rejected ship created %d releases", n)
 	}
 	events, _, _ := st.ListAudit(ctx, domain.AuditFilter{EventType: "application.ship"}, storage.ListPage{Limit: 10})

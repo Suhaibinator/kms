@@ -106,7 +106,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if created.GetRelease().GetVersion() != 1 || created.GetRelease().GetDigest() == "" {
 		t.Fatalf("created=%+v", created.GetRelease())
 	}
-	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: new(uint64(0))})
+	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: new(uint64(0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,14 +117,14 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: new(uint64(0))}); status.Code(err) != codes.Aborted {
+	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: new(uint64(0))}); status.Code(err) != codes.Aborted {
 		t.Fatalf("stale CAS code=%s err=%v, want Aborted", status.Code(err), err)
 	}
 	stream, err := releases.WatchRelease(adminCtx())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	event, err := stream.Recv()
@@ -143,7 +143,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if subscriber.GetReleaseName() != "runtime" || subscriber.GetClientName() != "api" || subscriber.GetInstanceId() != "replica-1" || subscriber.GetReleaseState() != "" || subscriber.GetLastAckedRevision() != 0 || subscriber.GetConnectedAtUnixMs() == 0 {
 		t.Fatalf("new release subscriber = %+v", subscriber)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{SchemaVersion: pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -189,7 +189,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := duplicate.Recv(); err != nil {
@@ -344,7 +344,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion()})
+	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := strings.Repeat("f", 64)
-	req := &kmsv1.VerifyReleaseDefaultsRequest{
+	req := &kmsv1.VerifyReleaseDefaultsRequest{SchemaVersion: new(uint64(0)),
 		Namespace: pNS("prod", "app"), Profile: "dev",
 		Entries: []*kmsv1.VerifyEntry{
 			{Alias: "settings", ContentType: "json", Sha256: canonical},
@@ -367,7 +367,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatalf("client verify code = %s err=%v, want PermissionDenied", status.Code(err), err)
 	}
 	// Malformed hashes are InvalidArgument.
-	bad := &kmsv1.VerifyReleaseDefaultsRequest{Namespace: pNS("prod", "app"), Entries: []*kmsv1.VerifyEntry{{Alias: "settings", ContentType: "json", Sha256: strings.ToUpper(canonical)}}}
+	bad := &kmsv1.VerifyReleaseDefaultsRequest{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Entries: []*kmsv1.VerifyEntry{{Alias: "settings", ContentType: "json", Sha256: strings.ToUpper(canonical)}}}
 	if _, err := releases.VerifyReleaseDefaults(adminCtx(), bad); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("uppercase hash code = %s err=%v, want InvalidArgument", status.Code(err), err)
 	}
@@ -411,7 +411,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stream.Recv(); err != nil {

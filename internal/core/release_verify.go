@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"strconv"
 
@@ -137,7 +138,10 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	if err != nil {
 		return domain.VerifyReleaseDefaultsResult{}, err
 	}
-	app.Contract = schema.Contract
+	app.Contract, err = rs.GetConfigurationSchemaContract(ctx, app.Name, releaseName, schema.Version)
+	if err != nil {
+		return domain.VerifyReleaseDefaultsResult{}, err
+	}
 	track := domain.ReleaseTrack{Namespace: in.Namespace, Name: releaseName, SchemaVersion: schema.Version}
 	active, err := rs.GetActiveConfigurationRelease(ctx, track)
 	if err != nil {

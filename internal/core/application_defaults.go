@@ -156,7 +156,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	}
 	desiredApp := app
 	desiredContract := applicationContractFromArtifact(artifact.Contract)
-	if len(app.Contract) > 0 && !reflect.DeepEqual(desiredContract, app.Contract) {
+	if app.Contract != nil && !reflect.DeepEqual(desiredContract, app.Contract) {
 		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema contract")
 	}
 	desiredApp.Contract = desiredContract
@@ -214,7 +214,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		if err != nil {
 			return defaultsPlan{}, err
 		}
-		state := storage.DefaultsResolutionState{Environment: environment.Env, NamespaceID: environment.ID, LatestVersion: facts.LatestVersion}
+		state := storage.DefaultsResolutionState{SchemaVersion: app.SchemaVersion, Environment: environment.Env, NamespaceID: environment.ID, LatestVersion: facts.LatestVersion}
 		if facts.Active != nil {
 			state.ActiveVersion = facts.Active.Release.Version
 			state.ActivationRevision = facts.Active.ActivationRevision
