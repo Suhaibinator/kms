@@ -124,8 +124,8 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 // per-alias failures (missing, unreadable, denied, destroyed, oversized) are
 // reported as sanitized ReleaseValidationErrors instead; when any were
 // collected the contract check is skipped and the partially resolved candidate
-// is returned alongside them. collectErrors=true is the dry-run mode, so the
-// contract check also runs with adopt=false and nothing is ever written.
+// is returned alongside them. Candidate resolution never adopts a contract;
+// persistence establishes it atomically with the first release.
 // Structural input errors (bad alias, duplicate, unknown kind, invalid ref)
 // always abort.
 func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs storage.ReleaseStore, in domain.CreateConfigurationReleaseInput, collectErrors bool) (context.Context, domain.ConfigurationRelease, []domain.ReleaseValidationError, error) {
@@ -137,7 +137,10 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 	if len(validation) > 0 {
 		return ctx, release, validation, nil
 	}
-	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaVersion, entries, !collectErrors); err != nil {
+	// Candidate resolution must remain read only. The storage create transaction
+	// establishes an unadopted track contract together with the first release, so
+	// a failed create cannot leave an immutable contract behind on an empty track.
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaVersion, entries, false); err != nil {
 		return ctx, domain.ConfigurationRelease{}, nil, err
 	}
 	if in.SchemaVersion != 0 {

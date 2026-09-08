@@ -5,11 +5,140 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
+
+type failReleaseCreateStore struct {
+	*storage.SQLStore
+	fail bool
+}
+
+func (s *failReleaseCreateStore) CreateConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error) {
+	if s.fail {
+		return domain.ConfigurationRelease{}, errors.New("injected release create failure")
+	}
+	return s.SQLStore.CreateConfigurationRelease(ctx, release)
+}
+
+func TestConfigurationReleaseFailedCreateDoesNotAdoptContract(t *testing.T) {
+	ctx := context.Background()
+	sqlStore, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqlStore.Close() }()
+	store := &failReleaseCreateStore{SQLStore: sqlStore, fail: true}
+	svc := New(store, nil, "test")
+	pr := adminPrincipal()
+	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "app", ReleaseName: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := svc.CreateNamespace(ctx, pr, ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"first", "retry"} {
+		if _, _, err := svc.PutParameter(ctx, pr, domain.Ref{NS: ns, Key: key}, `{"enabled":true}`, "json", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create := func(alias string) (domain.ConfigurationRelease, error) {
+		return svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
+			Namespace: ns, Name: "runtime", Entries: []domain.ReleaseEntrySelector{{Alias: alias, Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: alias}}},
+		})
+	}
+	if _, err := create("first"); err == nil || err.Error() != "injected release create failure" {
+		t.Fatalf("failed create err = %v", err)
+	}
+	contract, err := sqlStore.GetConfigurationSchemaContract(ctx, "app", "runtime", 0)
+	if err != nil || contract != nil {
+		t.Fatalf("failed create contract = %+v, err = %v; want nil", contract, err)
+	}
+	store.fail = false
+	release, err := create("retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err = sqlStore.GetConfigurationSchemaContract(ctx, "app", "runtime", 0)
+	if err != nil || len(contract) != 1 || contract[0].Alias != "retry" || release.Version != 1 {
+		t.Fatalf("successful retry release=%+v contract=%+v err=%v", release, contract, err)
+	}
+}
+
+func TestConfigurationReleaseConcurrentFirstCreatesAdoptWinnerContract(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	svc := New(store, nil, "test")
+	pr := adminPrincipal()
+	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "app", ReleaseName: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := svc.CreateNamespace(ctx, pr, ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"alpha", "beta"} {
+		if _, _, err := svc.PutParameter(ctx, pr, domain.Ref{NS: ns, Key: alias}, alias, "string", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	type result struct {
+		alias   string
+		release domain.ConfigurationRelease
+		err     error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, alias := range []string{"alpha", "beta"} {
+		alias := alias
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			release, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
+				Namespace: ns, Name: "runtime", Entries: []domain.ReleaseEntrySelector{{Alias: alias, Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: alias}}},
+			})
+			results <- result{alias: alias, release: release, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var winner string
+	failed := 0
+	for got := range results {
+		if got.err == nil {
+			winner = got.alias
+			if got.release.Version != 1 {
+				t.Fatalf("winning version = %d", got.release.Version)
+			}
+		} else if errors.Is(got.err, domain.ErrFailedPrecondition) {
+			failed++
+		} else {
+			t.Fatalf("create %s err = %v", got.alias, got.err)
+		}
+	}
+	if winner == "" || failed != 1 {
+		t.Fatalf("winner=%q failed=%d", winner, failed)
+	}
+	contract, err := store.GetConfigurationSchemaContract(ctx, "app", "runtime", 0)
+	if err != nil || len(contract) != 1 || contract[0].Alias != winner {
+		t.Fatalf("winner contract = %+v, err=%v; winner=%q", contract, err, winner)
+	}
+	count, err := store.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"})
+	if err != nil || count != 1 {
+		t.Fatalf("release count = %d, err=%v", count, err)
+	}
+}
 
 func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	ctx := context.Background()
@@ -370,7 +499,8 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 		t.Fatalf("dry-run persisted a release: count=%d err=%v", n, err)
 	}
 
-	// Persisting through the public path still adopts the contract (adopt=true).
+	// Persisting through the public path adopts the contract in the storage
+	// transaction that creates the first release.
 	if _, err := svc.CreateConfigurationRelease(ctx, pr, input); err != nil {
 		t.Fatal(err)
 	}
