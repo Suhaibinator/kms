@@ -63,19 +63,35 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		for index := range release.Entries {
 			release.Entries[index].ResourceNamespaceID = nsID
 		}
-		if release.SchemaVersion != 0 {
-			fields := make([]domain.ApplicationContractField, 0, len(release.Entries))
-			for _, entry := range release.Entries {
-				field := domain.ApplicationContractField{Alias: entry.Alias, Kind: entry.Kind}
-				if entry.Kind == domain.ReleaseEntryParameter {
-					field.ContentType = entry.ContentType
-				}
-				fields = append(fields, field)
+		fields := make([]domain.ApplicationContractField, 0, len(release.Entries))
+		for _, entry := range release.Entries {
+			field := domain.ApplicationContractField{Alias: entry.Alias, Kind: entry.Kind}
+			if entry.Kind == domain.ReleaseEntryParameter {
+				field.ContentType = entry.ContentType
 			}
+			fields = append(fields, field)
+		}
+		if release.SchemaVersion != 0 {
 			if _, err := adoptSchemaContractTx(tx, release.Namespace.App, release.Name, release.SchemaVersion, fields); err != nil {
 				return err
 			}
+		} else {
+			var contract schemaFreeContractModel
+			err := tx.Where("application_name = ? AND release_name = ?", release.Namespace.App, release.Name).First(&contract).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if err == nil {
+				candidate, err := canonicalSchemaContract(fields)
+				if err != nil {
+					return err
+				}
+				if candidate != contract.ContractJSON {
+					return domain.Errorf(domain.ErrFailedPrecondition, "release does not match immutable schema contract")
+				}
+			}
 		}
+
 		if options.application != nil {
 			if err := verifyApplicationReleaseState(tx, nsID, *options.application); err != nil {
 				return err
@@ -1102,7 +1118,7 @@ func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuratio
 				WHERE l.namespace_id=configuration_release_activations.namespace_id
 				AND l.release_name=configuration_release_activations.release_name
 				AND l.schema_version=configuration_release_activations.schema_version
- AND l.activation_revision=configuration_release_activations.revision
+				AND l.activation_revision=configuration_release_activations.revision
 			)`, cutoff).Error; err != nil {
 			return err
 		}

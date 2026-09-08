@@ -6,8 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// inspectSupportedBaselineDB never changes operator data. Version 1 is accepted
-// only when its exact physical schema and all token columns are safe to remove.
+// inspectSupportedBaselineDB accepts only the current baseline without changing
+// operator data. Older baselines require a fresh database.
 func inspectSupportedBaselineDB(db *gorm.DB) (bool, error) {
 	return inspectBaselineDB(db)
 }

@@ -250,3 +250,59 @@ func TestSchemaContractConcurrentFirstAdoptionHasOneWinner(t *testing.T) {
 		t.Fatalf("success=%d rejected=%d", success, rejected)
 	}
 }
+
+func TestSchemaTrackNamespaceRecreationResetsCountersAndRejectsOldContext(t *testing.T) {
+	st, tracks := trackFixture(t)
+	ctx := context.Background()
+	track := tracks[1]
+	oldNS, err := st.GetNamespace(ctx, track.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := BindNamespaceIncarnation(ctx, track.Namespace, oldNS.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := createTrackRelease(t, st, track)
+	createTrackRelease(t, st, track)
+	active, _, err := st.ActivateConfigurationRelease(ctx, track, first.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteNamespace(ctx, track.Namespace); err != nil {
+		t.Fatal(err)
+	}
+	recreated, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: track.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.ID == oldNS.ID {
+		t.Fatal("namespace incarnation reused")
+	}
+	next := createTrackRelease(t, st, track)
+	if next.Version != 1 {
+		t.Fatalf("new incarnation counter=%d", next.Version)
+	}
+	exists, err := st.ConfigurationReleaseActivationExists(ctx, track, 1, active.ActivationRevision)
+	if err != nil || exists {
+		t.Fatalf("old activation survived: %v %v", exists, err)
+	}
+	if _, err := st.GetConfigurationRelease(bound, track, 1); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale read accepted: %v", err)
+	}
+	if _, _, err := st.ActivateConfigurationRelease(bound, track, 1, nil); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale activation accepted: %v", err)
+	}
+}
+
+func TestSchemaFreeReleaseCannotBypassEstablishedContract(t *testing.T) {
+	st, tracks := trackFixture(t)
+	ctx := context.Background()
+	fields := []domain.ApplicationContractField{{Alias: "required", Kind: domain.ReleaseEntrySecret}}
+	if _, err := st.AdoptConfigurationSchemaContract(ctx, "tracks", "runtime", 0, fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: tracks[0].Namespace, Name: "runtime", Digest: "empty"}); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("bypassed schema0 contract: %v", err)
+	}
+}
