@@ -166,6 +166,7 @@ for (const width of [390, 1280]) {
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual({
       environment: "prod",
+      source_schema_version: 1,
       schema_version: 2,
       contract: [
         { alias: "renamed_rate_limits", kind: "parameter", content_type: "integer" },

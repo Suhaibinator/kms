@@ -385,7 +385,7 @@ func TestAuthorizeSubscribe(t *testing.T) {
 	if err := s.AuthorizeSubscribe(ctx, adminPrincipal(), []domain.NamespaceRef{missing}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("admin missing-namespace subscribe err = %v, want ErrNotFound", err)
 	}
-	if err := s.AuthorizeReleaseWatch(ctx, adminPrincipal(), missing, "runtime"); !errors.Is(err, domain.ErrNotFound) {
+	if err := s.AuthorizeReleaseWatch(ctx, adminPrincipal(), domain.ReleaseTrack{Namespace: missing, Name: "runtime", SchemaVersion: 0}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("admin missing-namespace release watch err = %v, want ErrNotFound", err)
 	}
 }

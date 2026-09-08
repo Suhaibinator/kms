@@ -436,7 +436,8 @@ export interface ConfigurationRelease {
 export interface CreateReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
-  schemaVersion: bigint;
+  /** Required, including explicit 0 for the schema-free track. */
+  schemaVersion?: bigint | undefined;
   entries: ReleaseEntrySelector[];
   metadataJson: string;
 }
@@ -449,6 +450,7 @@ export interface ValidateReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
   version: bigint;
+  schemaVersion?: bigint | undefined;
 }
 
 export interface ReleaseValidationError {
@@ -472,6 +474,7 @@ export interface ActivateReleaseRequest {
   version: bigint;
   /** Presence distinguishes an omitted guard from "expect no active release". */
   expectedCurrentVersion?: bigint | undefined;
+  schemaVersion?: bigint | undefined;
 }
 
 export interface ActivateReleaseResponse {
@@ -486,6 +489,7 @@ export interface GetReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
   version: bigint;
+  schemaVersion?: bigint | undefined;
 }
 
 export interface GetReleaseResponse {
@@ -495,6 +499,18 @@ export interface GetReleaseResponse {
 export interface GetActiveReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
+  /** Required, including explicit 0 for the schema-free track. */
+  schemaVersion?: bigint | undefined;
+}
+
+export interface ResolveReleaseSchemaRequest {
+  namespace: NamespaceRef | undefined;
+  name: string;
+  schemaSha256: string;
+}
+
+export interface ResolveReleaseSchemaResponse {
+  schemaVersion: bigint;
 }
 
 export interface GetActiveReleaseResponse {
@@ -511,6 +527,8 @@ export interface ListReleasesRequest {
   name: string;
   pageSize: number;
   pageToken: string;
+  /** Omission lists all schema tracks. */
+  schemaVersion?: bigint | undefined;
 }
 
 export interface ReleaseSummary {
@@ -546,6 +564,8 @@ export interface VerifyReleaseDefaultsRequest {
   /** generated contract schema digest; empty skips the schema check */
   schemaSha256: string;
   entries: VerifyEntry[];
+  /** Select by this version or schema_sha256, never both. */
+  schemaVersion?: bigint | undefined;
 }
 
 /**
@@ -572,6 +592,7 @@ export interface VerifyReleaseDefaultsResponse {
   unsupportedContentTypeCount: number;
   /** Parameter aliases pinned by the release that the request did not mention. */
   unverifiedCount: number;
+  schemaVersion: bigint;
 }
 
 export interface ReleaseWatchRegistration {
@@ -580,6 +601,8 @@ export interface ReleaseWatchRegistration {
   clientName: string;
   instanceId: string;
   lastSeenRevision: bigint;
+  /** Required; absence never means the newest schema. */
+  schemaVersion?: bigint | undefined;
 }
 
 export interface ReleaseAcknowledgement {
@@ -601,6 +624,13 @@ export interface ReleaseAcknowledgement {
    */
   appliedDivergent: boolean;
   divergentFieldCount: number;
+  schemaVersion: bigint;
+  /**
+   * Client-assigned generation of this retained acknowledgement. The server
+   * echoes it when rejecting an unavailable activation so a delayed response
+   * cannot discard a newer acknowledgement for the same lifecycle state.
+   */
+  sequence: bigint;
 }
 
 export interface WatchReleaseRequest {
@@ -618,14 +648,40 @@ export interface ReleaseActivationEvent {
   release: ConfigurationRelease | undefined;
 }
 
+/**
+ * The activation referenced by this acknowledgement is no longer available.
+ * No lifecycle state was persisted. This does not close the subscription or
+ * change the active release, and never advances the stream revision cursor.
+ */
+export interface ReleaseAcknowledgementRejectedEvent {
+  namespace: NamespaceRef | undefined;
+  name: string;
+  schemaVersion: bigint;
+  version: bigint;
+  activationRevision: bigint;
+  clientName: string;
+  instanceId: string;
+  state: string;
+  sequence: bigint;
+  /** activation_unavailable */
+  reason: string;
+}
+
 export interface WatchReleaseEvent {
   event:
     | { $case: "snapshot"; value: ReleaseSnapshotEvent }
     | { $case: "activation"; value: ReleaseActivationEvent }
     | { $case: "heartbeat"; value: Heartbeat }
+    | { $case: "acknowledgementRejected"; value: ReleaseAcknowledgementRejectedEvent }
     | undefined;
   /** Global changelog revision assigned by activation. */
   revision: bigint;
+}
+
+export interface ApplicationContractField {
+  alias: string;
+  kind: string;
+  contentType: string;
 }
 
 export interface ConfigurationSchema {
@@ -637,6 +693,13 @@ export interface ConfigurationSchema {
   createdAtUnixMs: bigint;
   application: string;
   releaseName: string;
+  /** Established immutable contract for this schema, if any. */
+  contract: ApplicationContractField[];
+  /**
+   * True when the immutable contract is established, including an empty one.
+   * False means the contract has not yet been adopted.
+   */
+  contractEstablished: boolean;
 }
 
 export interface CreateSchemaRequest {
@@ -845,6 +908,7 @@ export interface ApplyApplicationDefaultsRequest {
   execute: boolean;
   planDigest: string;
   updateDefinition: boolean;
+  schemaVersion?: bigint | undefined;
 }
 
 export interface DefaultsApplyEntry {
@@ -1113,6 +1177,7 @@ export interface Subscriber {
   releaseState: string;
   releaseVersion: bigint;
   releaseRevision: bigint;
+  schemaVersion: bigint;
 }
 
 export interface ListSubscribersRequest {
@@ -1139,6 +1204,7 @@ export interface ReleaseSubscriberState {
   connected: boolean;
   appliedDivergent: boolean;
   divergentFieldCount: number;
+  schemaVersion: bigint;
 }
 
 export interface ListReleaseSubscribersRequest {
@@ -1146,6 +1212,7 @@ export interface ListReleaseSubscribersRequest {
   releaseName: string;
   pageSize: number;
   pageToken: string;
+  schemaVersion?: bigint | undefined;
 }
 
 export interface ListReleaseSubscribersResponse {
@@ -1180,6 +1247,7 @@ export interface CreateApplicationReleaseRequest {
   metadataJson: string;
   execute: boolean;
   planDigest: string;
+  schemaVersion?: bigint | undefined;
 }
 
 /**
@@ -7007,7 +7075,7 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
 };
 
 function createBaseCreateReleaseRequest(): CreateReleaseRequest {
-  return { namespace: undefined, name: "", schemaVersion: 0n, entries: [], metadataJson: "" };
+  return { namespace: undefined, name: "", schemaVersion: undefined, entries: [], metadataJson: "" };
 }
 
 export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
@@ -7018,7 +7086,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
     }
-    if (message.schemaVersion !== 0n) {
+    if (message.schemaVersion !== undefined) {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
@@ -7106,7 +7174,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
         ? BigInt(object.schemaVersion)
         : isSet(object.schema_version)
         ? BigInt(object.schema_version)
-        : 0n,
+        : undefined,
       entries: globalThis.Array.isArray(object?.entries)
         ? object.entries.map((e: any) => ReleaseEntrySelector.fromJSON(e))
         : [],
@@ -7126,7 +7194,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
-    if (message.schemaVersion !== 0n) {
+    if (message.schemaVersion !== undefined) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
     if (message.entries?.length) {
@@ -7149,7 +7217,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     message.name = object.name ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
-      : 0n;
+      : undefined;
     message.entries = object.entries?.map((e) => ReleaseEntrySelector.fromPartial(e)) || [];
     message.metadataJson = object.metadataJson ?? "";
     return message;
@@ -7226,7 +7294,7 @@ export const CreateReleaseResponse: MessageFns<CreateReleaseResponse> = {
 };
 
 function createBaseValidateReleaseRequest(): ValidateReleaseRequest {
-  return { namespace: undefined, name: "", version: 0n };
+  return { namespace: undefined, name: "", version: 0n, schemaVersion: undefined };
 }
 
 export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
@@ -7242,6 +7310,12 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
       writer.uint32(24).uint64(message.version);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -7283,6 +7357,14 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
             message.version = reader.uint64() as bigint;
             continue;
           }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -7300,6 +7382,11 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       version: isSet(object.version) ? BigInt(object.version) : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -7314,6 +7401,9 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
     if (message.version !== 0n) {
       obj.version = message.version.toString();
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -7327,6 +7417,9 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
       : undefined;
     message.name = object.name ?? "";
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -7540,7 +7633,7 @@ export const ValidateReleaseResponse: MessageFns<ValidateReleaseResponse> = {
 };
 
 function createBaseActivateReleaseRequest(): ActivateReleaseRequest {
-  return { namespace: undefined, name: "", version: 0n, expectedCurrentVersion: undefined };
+  return { namespace: undefined, name: "", version: 0n, expectedCurrentVersion: undefined, schemaVersion: undefined };
 }
 
 export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
@@ -7562,6 +7655,12 @@ export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
         throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
       }
       writer.uint32(32).uint64(message.expectedCurrentVersion);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -7611,6 +7710,14 @@ export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
             message.expectedCurrentVersion = reader.uint64() as bigint;
             continue;
           }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -7633,6 +7740,11 @@ export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
         : isSet(object.expected_current_version)
         ? BigInt(object.expected_current_version)
         : undefined,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -7649,6 +7761,9 @@ export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
     }
     if (message.expectedCurrentVersion !== undefined) {
       obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
+    }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
     }
     return obj;
   },
@@ -7667,6 +7782,9 @@ export const ActivateReleaseRequest: MessageFns<ActivateReleaseRequest> = {
       (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
         ? BigInt(object.expectedCurrentVersion)
         : undefined;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -7834,7 +7952,7 @@ export const ActivateReleaseResponse: MessageFns<ActivateReleaseResponse> = {
 };
 
 function createBaseGetReleaseRequest(): GetReleaseRequest {
-  return { namespace: undefined, name: "", version: 0n };
+  return { namespace: undefined, name: "", version: 0n, schemaVersion: undefined };
 }
 
 export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
@@ -7850,6 +7968,12 @@ export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
       writer.uint32(24).uint64(message.version);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -7891,6 +8015,14 @@ export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
             message.version = reader.uint64() as bigint;
             continue;
           }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -7908,6 +8040,11 @@ export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       version: isSet(object.version) ? BigInt(object.version) : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -7922,6 +8059,9 @@ export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
     if (message.version !== 0n) {
       obj.version = message.version.toString();
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -7935,6 +8075,9 @@ export const GetReleaseRequest: MessageFns<GetReleaseRequest> = {
       : undefined;
     message.name = object.name ?? "";
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -8009,7 +8152,7 @@ export const GetReleaseResponse: MessageFns<GetReleaseResponse> = {
 };
 
 function createBaseGetActiveReleaseRequest(): GetActiveReleaseRequest {
-  return { namespace: undefined, name: "" };
+  return { namespace: undefined, name: "", schemaVersion: undefined };
 }
 
 export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
@@ -8019,6 +8162,12 @@ export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
     }
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -8052,6 +8201,14 @@ export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
             message.name = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8068,6 +8225,11 @@ export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
     return {
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -8078,6 +8240,9 @@ export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
     }
     if (message.name !== "") {
       obj.name = message.name;
+    }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
     }
     return obj;
   },
@@ -8091,6 +8256,194 @@ export const GetActiveReleaseRequest: MessageFns<GetActiveReleaseRequest> = {
       ? NamespaceRef.fromPartial(object.namespace)
       : undefined;
     message.name = object.name ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseResolveReleaseSchemaRequest(): ResolveReleaseSchemaRequest {
+  return { namespace: undefined, name: "", schemaSha256: "" };
+}
+
+export const ResolveReleaseSchemaRequest: MessageFns<ResolveReleaseSchemaRequest> = {
+  encode(message: ResolveReleaseSchemaRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.schemaSha256 !== "") {
+      writer.uint32(26).string(message.schemaSha256);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResolveReleaseSchemaRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseResolveReleaseSchemaRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.schemaSha256 = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ResolveReleaseSchemaRequest {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      schemaSha256: isSet(object.schemaSha256)
+        ? globalThis.String(object.schemaSha256)
+        : isSet(object.schema_sha256)
+        ? globalThis.String(object.schema_sha256)
+        : "",
+    };
+  },
+
+  toJSON(message: ResolveReleaseSchemaRequest): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.schemaSha256 !== "") {
+      obj.schemaSha256 = message.schemaSha256;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ResolveReleaseSchemaRequest>): ResolveReleaseSchemaRequest {
+    return ResolveReleaseSchemaRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ResolveReleaseSchemaRequest>): ResolveReleaseSchemaRequest {
+    const message = createBaseResolveReleaseSchemaRequest();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.name = object.name ?? "";
+    message.schemaSha256 = object.schemaSha256 ?? "";
+    return message;
+  },
+};
+
+function createBaseResolveReleaseSchemaResponse(): ResolveReleaseSchemaResponse {
+  return { schemaVersion: 0n };
+}
+
+export const ResolveReleaseSchemaResponse: MessageFns<ResolveReleaseSchemaResponse> = {
+  encode(message: ResolveReleaseSchemaResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.schemaVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResolveReleaseSchemaResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseResolveReleaseSchemaResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ResolveReleaseSchemaResponse {
+    return {
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+    };
+  },
+
+  toJSON(message: ResolveReleaseSchemaResponse): unknown {
+    const obj: any = {};
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ResolveReleaseSchemaResponse>): ResolveReleaseSchemaResponse {
+    return ResolveReleaseSchemaResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ResolveReleaseSchemaResponse>): ResolveReleaseSchemaResponse {
+    const message = createBaseResolveReleaseSchemaResponse();
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
     return message;
   },
 };
@@ -8217,7 +8570,7 @@ export const GetActiveReleaseResponse: MessageFns<GetActiveReleaseResponse> = {
 };
 
 function createBaseListReleasesRequest(): ListReleasesRequest {
-  return { namespace: undefined, name: "", pageSize: 0, pageToken: "" };
+  return { namespace: undefined, name: "", pageSize: 0, pageToken: "", schemaVersion: undefined };
 }
 
 export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
@@ -8233,6 +8586,12 @@ export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
     }
     if (message.pageToken !== "") {
       writer.uint32(34).string(message.pageToken);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -8282,6 +8641,14 @@ export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
             message.pageToken = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8308,6 +8675,11 @@ export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
         : isSet(object.page_token)
         ? globalThis.String(object.page_token)
         : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -8325,6 +8697,9 @@ export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
     if (message.pageToken !== "") {
       obj.pageToken = message.pageToken;
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -8339,6 +8714,9 @@ export const ListReleasesRequest: MessageFns<ListReleasesRequest> = {
     message.name = object.name ?? "";
     message.pageSize = object.pageSize ?? 0;
     message.pageToken = object.pageToken ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -8668,7 +9046,7 @@ export const VerifyEntry: MessageFns<VerifyEntry> = {
 };
 
 function createBaseVerifyReleaseDefaultsRequest(): VerifyReleaseDefaultsRequest {
-  return { namespace: undefined, name: "", profile: "", schemaSha256: "", entries: [] };
+  return { namespace: undefined, name: "", profile: "", schemaSha256: "", entries: [], schemaVersion: undefined };
 }
 
 export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsRequest> = {
@@ -8687,6 +9065,12 @@ export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsReque
     }
     for (const v of message.entries) {
       VerifyEntry.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -8744,6 +9128,14 @@ export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsReque
             message.entries.push(VerifyEntry.decode(reader, reader.uint32()));
             continue;
           }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8767,6 +9159,11 @@ export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsReque
         ? globalThis.String(object.schema_sha256)
         : "",
       entries: globalThis.Array.isArray(object?.entries) ? object.entries.map((e: any) => VerifyEntry.fromJSON(e)) : [],
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -8787,6 +9184,9 @@ export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsReque
     if (message.entries?.length) {
       obj.entries = message.entries.map((e) => VerifyEntry.toJSON(e));
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -8802,6 +9202,9 @@ export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsReque
     message.profile = object.profile ?? "";
     message.schemaSha256 = object.schemaSha256 ?? "";
     message.entries = object.entries?.map((e) => VerifyEntry.fromPartial(e)) || [];
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -8905,6 +9308,7 @@ function createBaseVerifyReleaseDefaultsResponse(): VerifyReleaseDefaultsRespons
     secretAliasCount: 0,
     unsupportedContentTypeCount: 0,
     unverifiedCount: 0,
+    schemaVersion: 0n,
   };
 }
 
@@ -8951,6 +9355,12 @@ export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResp
     }
     if (message.unverifiedCount !== 0) {
       writer.uint32(96).uint32(message.unverifiedCount);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -9064,6 +9474,14 @@ export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResp
             message.unverifiedCount = reader.uint32();
             continue;
           }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -9128,6 +9546,11 @@ export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResp
         : isSet(object.unverified_count)
         ? globalThis.Number(object.unverified_count)
         : 0,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
     };
   },
 
@@ -9169,6 +9592,9 @@ export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResp
     if (message.unverifiedCount !== 0) {
       obj.unverifiedCount = Math.round(message.unverifiedCount);
     }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -9191,12 +9617,22 @@ export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResp
     message.secretAliasCount = object.secretAliasCount ?? 0;
     message.unsupportedContentTypeCount = object.unsupportedContentTypeCount ?? 0;
     message.unverifiedCount = object.unverifiedCount ?? 0;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
     return message;
   },
 };
 
 function createBaseReleaseWatchRegistration(): ReleaseWatchRegistration {
-  return { namespace: undefined, name: "", clientName: "", instanceId: "", lastSeenRevision: 0n };
+  return {
+    namespace: undefined,
+    name: "",
+    clientName: "",
+    instanceId: "",
+    lastSeenRevision: 0n,
+    schemaVersion: undefined,
+  };
 }
 
 export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
@@ -9218,6 +9654,12 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
         throw new globalThis.Error("value provided for field message.lastSeenRevision of type uint64 too large");
       }
       writer.uint32(40).uint64(message.lastSeenRevision);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -9275,6 +9717,14 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
             message.lastSeenRevision = reader.uint64() as bigint;
             continue;
           }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -9306,6 +9756,11 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
         : isSet(object.last_seen_revision)
         ? BigInt(object.last_seen_revision)
         : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -9326,6 +9781,9 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
     if (message.lastSeenRevision !== 0n) {
       obj.lastSeenRevision = message.lastSeenRevision.toString();
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -9343,6 +9801,9 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
     message.lastSeenRevision = (object.lastSeenRevision !== undefined && object.lastSeenRevision !== null)
       ? BigInt(object.lastSeenRevision)
       : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -9361,6 +9822,8 @@ function createBaseReleaseAcknowledgement(): ReleaseAcknowledgement {
     timestampUnixMs: 0n,
     appliedDivergent: false,
     divergentFieldCount: 0,
+    schemaVersion: 0n,
+    sequence: 0n,
   };
 }
 
@@ -9410,6 +9873,18 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     }
     if (message.divergentFieldCount !== 0) {
       writer.uint32(96).uint32(message.divergentFieldCount);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.schemaVersion);
+    }
+    if (message.sequence !== 0n) {
+      if (BigInt.asUintN(64, message.sequence) !== message.sequence) {
+        throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.sequence);
     }
     return writer;
   },
@@ -9523,6 +9998,22 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
             message.divergentFieldCount = reader.uint32();
             continue;
           }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.sequence = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -9577,6 +10068,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         : isSet(object.divergent_field_count)
         ? globalThis.Number(object.divergent_field_count)
         : 0,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+      sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
     };
   },
 
@@ -9618,6 +10115,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     if (message.divergentFieldCount !== 0) {
       obj.divergentFieldCount = Math.round(message.divergentFieldCount);
     }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.sequence !== 0n) {
+      obj.sequence = message.sequence.toString();
+    }
     return obj;
   },
 
@@ -9644,6 +10147,10 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
       : 0n;
     message.appliedDivergent = object.appliedDivergent ?? false;
     message.divergentFieldCount = object.divergentFieldCount ?? 0;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
     return message;
   },
 };
@@ -9893,6 +10400,264 @@ export const ReleaseActivationEvent: MessageFns<ReleaseActivationEvent> = {
   },
 };
 
+function createBaseReleaseAcknowledgementRejectedEvent(): ReleaseAcknowledgementRejectedEvent {
+  return {
+    namespace: undefined,
+    name: "",
+    schemaVersion: 0n,
+    version: 0n,
+    activationRevision: 0n,
+    clientName: "",
+    instanceId: "",
+    state: "",
+    sequence: 0n,
+    reason: "",
+  };
+}
+
+export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgementRejectedEvent> = {
+  encode(message: ReleaseAcknowledgementRejectedEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.version);
+    }
+    if (message.activationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.activationRevision) !== message.activationRevision) {
+        throw new globalThis.Error("value provided for field message.activationRevision of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.activationRevision);
+    }
+    if (message.clientName !== "") {
+      writer.uint32(50).string(message.clientName);
+    }
+    if (message.instanceId !== "") {
+      writer.uint32(58).string(message.instanceId);
+    }
+    if (message.state !== "") {
+      writer.uint32(66).string(message.state);
+    }
+    if (message.sequence !== 0n) {
+      if (BigInt.asUintN(64, message.sequence) !== message.sequence) {
+        throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.sequence);
+    }
+    if (message.reason !== "") {
+      writer.uint32(82).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReleaseAcknowledgementRejectedEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReleaseAcknowledgementRejectedEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.activationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.clientName = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.instanceId = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.state = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.sequence = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ReleaseAcknowledgementRejectedEvent {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      activationRevision: isSet(object.activationRevision)
+        ? BigInt(object.activationRevision)
+        : isSet(object.activation_revision)
+        ? BigInt(object.activation_revision)
+        : 0n,
+      clientName: isSet(object.clientName)
+        ? globalThis.String(object.clientName)
+        : isSet(object.client_name)
+        ? globalThis.String(object.client_name)
+        : "",
+      instanceId: isSet(object.instanceId)
+        ? globalThis.String(object.instanceId)
+        : isSet(object.instance_id)
+        ? globalThis.String(object.instance_id)
+        : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+    };
+  },
+
+  toJSON(message: ReleaseAcknowledgementRejectedEvent): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.activationRevision !== 0n) {
+      obj.activationRevision = message.activationRevision.toString();
+    }
+    if (message.clientName !== "") {
+      obj.clientName = message.clientName;
+    }
+    if (message.instanceId !== "") {
+      obj.instanceId = message.instanceId;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.sequence !== 0n) {
+      obj.sequence = message.sequence.toString();
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ReleaseAcknowledgementRejectedEvent>): ReleaseAcknowledgementRejectedEvent {
+    return ReleaseAcknowledgementRejectedEvent.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ReleaseAcknowledgementRejectedEvent>): ReleaseAcknowledgementRejectedEvent {
+    const message = createBaseReleaseAcknowledgementRejectedEvent();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.name = object.name ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.activationRevision = (object.activationRevision !== undefined && object.activationRevision !== null)
+      ? BigInt(object.activationRevision)
+      : 0n;
+    message.clientName = object.clientName ?? "";
+    message.instanceId = object.instanceId ?? "";
+    message.state = object.state ?? "";
+    message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
 function createBaseWatchReleaseEvent(): WatchReleaseEvent {
   return { event: undefined, revision: 0n };
 }
@@ -9908,6 +10673,9 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
         break;
       case "heartbeat":
         Heartbeat.encode(message.event.value, writer.uint32(26).fork()).join();
+        break;
+      case "acknowledgementRejected":
+        ReleaseAcknowledgementRejectedEvent.encode(message.event.value, writer.uint32(42).fork()).join();
         break;
     }
     if (message.revision !== 0n) {
@@ -9956,6 +10724,17 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
             message.event = { $case: "heartbeat", value: Heartbeat.decode(reader, reader.uint32()) };
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.event = {
+              $case: "acknowledgementRejected",
+              value: ReleaseAcknowledgementRejectedEvent.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
           case 4: {
             if (tag !== 32) {
               break;
@@ -9984,6 +10763,16 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
         ? { $case: "activation", value: ReleaseActivationEvent.fromJSON(object.activation) }
         : isSet(object.heartbeat)
         ? { $case: "heartbeat", value: Heartbeat.fromJSON(object.heartbeat) }
+        : isSet(object.acknowledgementRejected)
+        ? {
+          $case: "acknowledgementRejected",
+          value: ReleaseAcknowledgementRejectedEvent.fromJSON(object.acknowledgementRejected),
+        }
+        : isSet(object.acknowledgement_rejected)
+        ? {
+          $case: "acknowledgementRejected",
+          value: ReleaseAcknowledgementRejectedEvent.fromJSON(object.acknowledgement_rejected),
+        }
         : undefined,
       revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
     };
@@ -9997,6 +10786,8 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
       obj.activation = ReleaseActivationEvent.toJSON(message.event.value);
     } else if (message.event?.$case === "heartbeat") {
       obj.heartbeat = Heartbeat.toJSON(message.event.value);
+    } else if (message.event?.$case === "acknowledgementRejected") {
+      obj.acknowledgementRejected = ReleaseAcknowledgementRejectedEvent.toJSON(message.event.value);
     }
     if (message.revision !== 0n) {
       obj.revision = message.revision.toString();
@@ -10028,8 +10819,122 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
         }
         break;
       }
+      case "acknowledgementRejected": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = {
+            $case: "acknowledgementRejected",
+            value: ReleaseAcknowledgementRejectedEvent.fromPartial(object.event.value),
+          };
+        }
+        break;
+      }
     }
     message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
+function createBaseApplicationContractField(): ApplicationContractField {
+  return { alias: "", kind: "", contentType: "" };
+}
+
+export const ApplicationContractField: MessageFns<ApplicationContractField> = {
+  encode(message: ApplicationContractField, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.alias !== "") {
+      writer.uint32(10).string(message.alias);
+    }
+    if (message.kind !== "") {
+      writer.uint32(18).string(message.kind);
+    }
+    if (message.contentType !== "") {
+      writer.uint32(26).string(message.contentType);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplicationContractField {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseApplicationContractField();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.alias = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.kind = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.contentType = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ApplicationContractField {
+    return {
+      alias: isSet(object.alias) ? globalThis.String(object.alias) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      contentType: isSet(object.contentType)
+        ? globalThis.String(object.contentType)
+        : isSet(object.content_type)
+        ? globalThis.String(object.content_type)
+        : "",
+    };
+  },
+
+  toJSON(message: ApplicationContractField): unknown {
+    const obj: any = {};
+    if (message.alias !== "") {
+      obj.alias = message.alias;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.contentType !== "") {
+      obj.contentType = message.contentType;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplicationContractField>): ApplicationContractField {
+    return ApplicationContractField.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplicationContractField>): ApplicationContractField {
+    const message = createBaseApplicationContractField();
+    message.alias = object.alias ?? "";
+    message.kind = object.kind ?? "";
+    message.contentType = object.contentType ?? "";
     return message;
   },
 };
@@ -10044,6 +10949,8 @@ function createBaseConfigurationSchema(): ConfigurationSchema {
     createdAtUnixMs: 0n,
     application: "",
     releaseName: "",
+    contract: [],
+    contractEstablished: false,
   };
 }
 
@@ -10078,6 +10985,12 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     }
     if (message.releaseName !== "") {
       writer.uint32(66).string(message.releaseName);
+    }
+    for (const v of message.contract) {
+      ApplicationContractField.encode(v!, writer.uint32(74).fork()).join();
+    }
+    if (message.contractEstablished !== false) {
+      writer.uint32(80).bool(message.contractEstablished);
     }
     return writer;
   },
@@ -10159,6 +11072,22 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
             message.releaseName = reader.string();
             continue;
           }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.contract.push(ApplicationContractField.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.contractEstablished = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -10201,6 +11130,14 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
         : isSet(object.release_name)
         ? globalThis.String(object.release_name)
         : "",
+      contract: globalThis.Array.isArray(object?.contract)
+        ? object.contract.map((e: any) => ApplicationContractField.fromJSON(e))
+        : [],
+      contractEstablished: isSet(object.contractEstablished)
+        ? globalThis.Boolean(object.contractEstablished)
+        : isSet(object.contract_established)
+        ? globalThis.Boolean(object.contract_established)
+        : false,
     };
   },
 
@@ -10230,6 +11167,12 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     if (message.releaseName !== "") {
       obj.releaseName = message.releaseName;
     }
+    if (message.contract?.length) {
+      obj.contract = message.contract.map((e) => ApplicationContractField.toJSON(e));
+    }
+    if (message.contractEstablished !== false) {
+      obj.contractEstablished = message.contractEstablished;
+    }
     return obj;
   },
 
@@ -10248,6 +11191,8 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       : 0n;
     message.application = object.application ?? "";
     message.releaseName = object.releaseName ?? "";
+    message.contract = object.contract?.map((e) => ApplicationContractField.fromPartial(e)) || [];
+    message.contractEstablished = object.contractEstablished ?? false;
     return message;
   },
 };
@@ -12906,6 +13851,7 @@ function createBaseApplyApplicationDefaultsRequest(): ApplyApplicationDefaultsRe
     execute: false,
     planDigest: "",
     updateDefinition: false,
+    schemaVersion: undefined,
   };
 }
 
@@ -12928,6 +13874,12 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     }
     if (message.updateDefinition !== false) {
       writer.uint32(48).bool(message.updateDefinition);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -12993,6 +13945,14 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
             message.updateDefinition = reader.bool();
             continue;
           }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -13021,6 +13981,11 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
         : isSet(object.update_definition)
         ? globalThis.Boolean(object.update_definition)
         : false,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -13044,6 +14009,9 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     if (message.updateDefinition !== false) {
       obj.updateDefinition = message.updateDefinition;
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -13060,6 +14028,9 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     message.execute = object.execute ?? false;
     message.planDigest = object.planDigest ?? "";
     message.updateDefinition = object.updateDefinition ?? false;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -16385,6 +17356,7 @@ function createBaseSubscriber(): Subscriber {
     releaseState: "",
     releaseVersion: 0n,
     releaseRevision: 0n,
+    schemaVersion: 0n,
   };
 }
 
@@ -16440,6 +17412,12 @@ export const Subscriber: MessageFns<Subscriber> = {
         throw new globalThis.Error("value provided for field message.releaseRevision of type uint64 too large");
       }
       writer.uint32(96).uint64(message.releaseRevision);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -16553,6 +17531,14 @@ export const Subscriber: MessageFns<Subscriber> = {
             message.releaseRevision = reader.uint64() as bigint;
             continue;
           }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -16621,6 +17607,11 @@ export const Subscriber: MessageFns<Subscriber> = {
         : isSet(object.release_revision)
         ? BigInt(object.release_revision)
         : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
     };
   },
 
@@ -16662,6 +17653,9 @@ export const Subscriber: MessageFns<Subscriber> = {
     if (message.releaseRevision !== 0n) {
       obj.releaseRevision = message.releaseRevision.toString();
     }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -16691,6 +17685,9 @@ export const Subscriber: MessageFns<Subscriber> = {
       : 0n;
     message.releaseRevision = (object.releaseRevision !== undefined && object.releaseRevision !== null)
       ? BigInt(object.releaseRevision)
+      : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
       : 0n;
     return message;
   },
@@ -16861,6 +17858,7 @@ function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
     connected: false,
     appliedDivergent: false,
     divergentFieldCount: 0,
+    schemaVersion: 0n,
   };
 }
 
@@ -16922,6 +17920,12 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
     }
     if (message.divergentFieldCount !== 0) {
       writer.uint32(120).uint32(message.divergentFieldCount);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(128).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -17059,6 +18063,14 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
             message.divergentFieldCount = reader.uint32();
             continue;
           }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -17128,6 +18140,11 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
         : isSet(object.divergent_field_count)
         ? globalThis.Number(object.divergent_field_count)
         : 0,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
     };
   },
 
@@ -17178,6 +18195,9 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
     if (message.divergentFieldCount !== 0) {
       obj.divergentFieldCount = Math.round(message.divergentFieldCount);
     }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -17213,12 +18233,15 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
     message.connected = object.connected ?? false;
     message.appliedDivergent = object.appliedDivergent ?? false;
     message.divergentFieldCount = object.divergentFieldCount ?? 0;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
     return message;
   },
 };
 
 function createBaseListReleaseSubscribersRequest(): ListReleaseSubscribersRequest {
-  return { namespace: undefined, releaseName: "", pageSize: 0, pageToken: "" };
+  return { namespace: undefined, releaseName: "", pageSize: 0, pageToken: "", schemaVersion: undefined };
 }
 
 export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersRequest> = {
@@ -17234,6 +18257,12 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
     }
     if (message.pageToken !== "") {
       writer.uint32(34).string(message.pageToken);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -17283,6 +18312,14 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
             message.pageToken = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -17313,6 +18350,11 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
         : isSet(object.page_token)
         ? globalThis.String(object.page_token)
         : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -17330,6 +18372,9 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
     if (message.pageToken !== "") {
       obj.pageToken = message.pageToken;
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -17344,6 +18389,9 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
     message.releaseName = object.releaseName ?? "";
     message.pageSize = object.pageSize ?? 0;
     message.pageToken = object.pageToken ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -17663,7 +18711,14 @@ export const HealthResponse: MessageFns<HealthResponse> = {
 };
 
 function createBaseCreateApplicationReleaseRequest(): CreateApplicationReleaseRequest {
-  return { namespace: undefined, artifact: Buffer.alloc(0), metadataJson: "", execute: false, planDigest: "" };
+  return {
+    namespace: undefined,
+    artifact: Buffer.alloc(0),
+    metadataJson: "",
+    execute: false,
+    planDigest: "",
+    schemaVersion: undefined,
+  };
 }
 
 export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleaseRequest> = {
@@ -17682,6 +18737,12 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
     }
     if (message.planDigest !== "") {
       writer.uint32(42).string(message.planDigest);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.schemaVersion);
     }
     return writer;
   },
@@ -17739,6 +18800,14 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
             message.planDigest = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -17766,6 +18835,11 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
         : isSet(object.plan_digest)
         ? globalThis.String(object.plan_digest)
         : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
     };
   },
 
@@ -17786,6 +18860,9 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
     if (message.planDigest !== "") {
       obj.planDigest = message.planDigest;
     }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
     return obj;
   },
 
@@ -17801,6 +18878,9 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
     message.metadataJson = object.metadataJson ?? "";
     message.execute = object.execute ?? false;
     message.planDigest = object.planDigest ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
     return message;
   },
 };
@@ -18631,6 +19711,18 @@ export const ConfigurationReleaseServiceService = {
       Buffer.from(GetActiveReleaseResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetActiveReleaseResponse => GetActiveReleaseResponse.decode(value),
   },
+  /** Resolve an immutable schema digest within the authorized release lineage. */
+  resolveReleaseSchema: {
+    path: "/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ResolveReleaseSchemaRequest): Buffer =>
+      Buffer.from(ResolveReleaseSchemaRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ResolveReleaseSchemaRequest => ResolveReleaseSchemaRequest.decode(value),
+    responseSerialize: (value: ResolveReleaseSchemaResponse): Buffer =>
+      Buffer.from(ResolveReleaseSchemaResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ResolveReleaseSchemaResponse => ResolveReleaseSchemaResponse.decode(value),
+  },
   listReleases: {
     path: "/kms.v1.ConfigurationReleaseService/ListReleases" as const,
     requestStream: false as const,
@@ -18679,6 +19771,8 @@ export interface ConfigurationReleaseServiceServer extends UntypedServiceImpleme
   activateRelease: handleUnaryCall<ActivateReleaseRequest, ActivateReleaseResponse>;
   getRelease: handleUnaryCall<GetReleaseRequest, GetReleaseResponse>;
   getActiveRelease: handleUnaryCall<GetActiveReleaseRequest, GetActiveReleaseResponse>;
+  /** Resolve an immutable schema digest within the authorized release lineage. */
+  resolveReleaseSchema: handleUnaryCall<ResolveReleaseSchemaRequest, ResolveReleaseSchemaResponse>;
   listReleases: handleUnaryCall<ListReleasesRequest, ListReleasesResponse>;
   watchRelease: handleBidiStreamingCall<WatchReleaseRequest, WatchReleaseEvent>;
   /**
@@ -19038,5 +20132,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 2774f306326e2bfcac8b89ddade1045819513ed4873047d7e51ba4ef93564a0d
+// source-sha256: 130439f809827160f695d9f16e167ecc88fd929deaa337dc1a99ab667bdfb52e
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

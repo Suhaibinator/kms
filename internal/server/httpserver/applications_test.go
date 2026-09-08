@@ -3,12 +3,16 @@ package httpserver
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 const consoleSchemaJSON = `{"type":"object","properties":{"database":{"type":"object"},"rate_limits":{"type":"integer","minimum":0}},"required":["database","rate_limits"],"additionalProperties":false}`
@@ -61,7 +65,7 @@ func (e *testEnv) putSecret(env, key, value string) {
 func (e *testEnv) ship(env, alias, value string, dryRun bool) map[string]any {
 	e.t.Helper()
 	w := e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-		"application": "gradethis", "environment": env, "dry_run": dryRun,
+		"schema_version": 1, "application": "gradethis", "environment": env, "dry_run": dryRun,
 		"changes": []map[string]any{{"alias": alias, "value": value}},
 	})
 	mustStatus(e.t, w, http.StatusOK)
@@ -75,16 +79,17 @@ func (e *testEnv) ackInstance(env, instance, state, category string) {
 	ctx := context.Background()
 	ns := domain.NamespaceRef{Env: env, App: "gradethis"}
 	pr := consoleAdmin()
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	track := domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}
+	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, track)
 	if err != nil {
 		e.t.Fatalf("active release for ack: %v", err)
 	}
 	conn := "conn-" + instance
-	if err := e.svc.SetReleaseSubscriberConnected(ctx, ns, "runtime", "api", instance, pr.Identity.Name, conn, true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", instance, pr.Identity.Name, conn, true); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
-		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
+		Namespace: ns, ReleaseName: "runtime", SchemaVersion: 1, ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: instance, ConnectionID: conn, State: state, RejectionCategory: category,
 	}); err != nil {
 		e.t.Fatal(err)
@@ -368,7 +373,7 @@ func TestShipApplicationHTTP(t *testing.T) {
 	}
 
 	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-		"application": "gradethis", "environment": "dev", "expected_active_version": 0,
+		"schema_version": 1, "application": "gradethis", "environment": "dev", "expected_active_version": 0,
 		"changes": []map[string]any{{"alias": "rate_limits", "value": "3"}},
 	})
 	mustStatus(t, w, http.StatusConflict)
@@ -376,16 +381,16 @@ func TestShipApplicationHTTP(t *testing.T) {
 		t.Fatalf("stale expected_active_version code = %s", errCode(t, w))
 	}
 	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-		"application": "gradethis", "environment": "dev", "changes": []map[string]any{{"alias": "unknown", "value": "3"}},
+		"schema_version": 1, "application": "gradethis", "environment": "dev", "changes": []map[string]any{{"alias": "unknown", "value": "3"}},
 	})
 	mustStatus(t, w, http.StatusBadRequest)
 	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-		"application": "gradethis", "environment": "dev", "changes": []map[string]any{{"alias": "db_password", "value": "leak"}},
+		"schema_version": 1, "application": "gradethis", "environment": "dev", "changes": []map[string]any{{"alias": "db_password", "value": "leak"}},
 	})
 	mustStatus(t, w, http.StatusBadRequest)
 	// Pin-only changes (secrets included) are accepted.
 	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
-		"application": "gradethis", "environment": "dev", "dry_run": true, "changes": []map[string]any{{"alias": "db_password", "version": 1}},
+		"schema_version": 1, "application": "gradethis", "environment": "dev", "dry_run": true, "changes": []map[string]any{{"alias": "db_password", "version": 1}},
 	})
 	mustStatus(t, w, http.StatusOK)
 	if decodeBody(t, w)["status"] != "preview" {
@@ -397,7 +402,7 @@ func TestCloneEnvironmentHTTP(t *testing.T) {
 	e := newReleaseTestEnv(t)
 	e.seedConsoleApp("dev")
 	w := e.admin(http.MethodPost, "/api/v1/applications/environments/clone", map[string]any{
-		"application": "gradethis", "source_env": "dev", "target_env": "prod", "copy_values": true, "description": "Production",
+		"schema_version": 1, "application": "gradethis", "source_env": "dev", "target_env": "prod", "copy_values": true, "description": "Production",
 	})
 	mustStatus(t, w, http.StatusOK)
 	body := decodeBody(t, w)
@@ -415,6 +420,177 @@ func TestCloneEnvironmentHTTP(t *testing.T) {
 	if needs := body["needs_value"].([]any); len(needs) != 1 || needs[0] != "db_password" {
 		t.Fatalf("needs_value = %v", needs)
 	}
-	w = e.admin(http.MethodPost, "/api/v1/applications/environments/clone", map[string]any{"application": "gradethis", "source_env": "dev", "target_env": "dev"})
+	w = e.admin(http.MethodPost, "/api/v1/applications/environments/clone", map[string]any{"schema_version": 1, "application": "gradethis", "source_env": "dev", "target_env": "dev"})
 	mustStatus(t, w, http.StatusBadRequest)
+}
+
+func TestApplicationManagementHTTPRequiresExplicitSchemaVersion(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.seedConsoleApp("dev")
+	ctx := context.Background()
+	pr := consoleAdmin()
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	e.ship("dev", "rate_limits", "7", false)
+	newer, err := e.svc.CreateConfigurationSchema(ctx, pr, ns.App, `{"type":"object","x-kms-contract":[{"alias":"extra","kind":"parameter","content_type":"string"}]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
+		"application": ns.App, "environment": ns.Env, "schema_version": newer.Version,
+		"changes": []map[string]any{{"alias": "extra", "value": "initial"}},
+	})
+	mustStatus(t, w, http.StatusOK)
+	beforeRevision, err := e.svc.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReleases, _, err := e.svc.ListConfigurationReleases(ctx, pr, domain.ReleaseFilter{Namespace: ns}, storage.ListPage{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeActive := make(map[uint64]domain.ActiveConfigurationRelease)
+	for _, schemaVersion := range []uint64{1, newer.Version} {
+		active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: schemaVersion})
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeActive[schemaVersion] = active
+	}
+	for _, selector := range []string{"omitted", "null"} {
+		t.Run(selector, func(t *testing.T) {
+			for _, endpoint := range []string{"ship", "environments/clone"} {
+				body := map[string]any{"application": ns.App}
+				if selector == "null" {
+					body["schema_version"] = nil
+				}
+				if endpoint == "ship" {
+					body["environment"] = ns.Env
+					body["changes"] = []map[string]any{{"alias": "extra", "value": "must not write"}}
+				} else {
+					body["source_env"], body["target_env"], body["copy_values"] = ns.Env, "prod", true
+				}
+				w := e.admin(http.MethodPost, "/api/v1/applications/"+endpoint, body)
+				mustStatus(t, w, http.StatusBadRequest)
+				if errCode(t, w) != "invalid_argument" || !strings.Contains(w.Body.String(), "schema_version") {
+					t.Fatalf("%s without selector: %s", endpoint, w.Body.String())
+				}
+			}
+		})
+	}
+	if after, err := e.svc.CurrentRevision(ctx); err != nil || after != beforeRevision {
+		t.Fatalf("missing/null selectors wrote revisions: before=%d after=%d err=%v", beforeRevision, after, err)
+	}
+	if after, _, err := e.svc.ListConfigurationReleases(ctx, pr, domain.ReleaseFilter{Namespace: ns}, storage.ListPage{Limit: 100}); err != nil || !reflect.DeepEqual(beforeReleases, after) {
+		t.Fatalf("missing/null selectors changed releases: %+v %v", after, err)
+	}
+	if parameter, err := e.svc.GetParameter(ctx, pr, domain.Ref{NS: ns, Key: "extra"}, 0, domain.LabelCurrent); err != nil || parameter.Version != 1 || parameter.Value != "initial" {
+		t.Fatalf("missing/null selectors changed resource: %+v %v", parameter, err)
+	}
+	w = e.admin(http.MethodGet, "/api/v1/namespaces/get?env=prod&app=gradethis", nil)
+	mustStatus(t, w, http.StatusNotFound)
+	for schemaVersion, before := range beforeActive {
+		active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: schemaVersion})
+		if err != nil || !reflect.DeepEqual(before, active) {
+			t.Fatalf("missing/null selectors changed activation for schema %d: %+v %v", schemaVersion, active, err)
+		}
+	}
+
+	// Explicit older selectors are still passed through to each management flow.
+	if shipped := e.ship("dev", "rate_limits", "8", false); shipped["release"].(map[string]any)["version"] != float64(2) {
+		t.Fatalf("older schema ship: %v", shipped)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/applications/environments/clone", map[string]any{
+		"application": ns.App, "source_env": ns.Env, "target_env": "prod", "schema_version": 1, "copy_values": true,
+	})
+	mustStatus(t, w, http.StatusOK)
+	if items := decodeBody(t, w)["items"].([]any); len(items) != 3 {
+		t.Fatalf("older schema clone did not select its contract: %v", items)
+	}
+}
+
+func TestApplicationManagementHTTPExplicitSchemaZero(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	ctx := context.Background()
+	pr := consoleAdmin()
+	app, err := e.svc.CreateApplication(ctx, pr, domain.Application{Name: "legacy", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{{Alias: "setting", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	if _, err := e.svc.CreateNamespace(ctx, pr, ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+		t.Fatal(err)
+	}
+	newer, err := e.svc.CreateConfigurationSchema(ctx, pr, app.Name, `{"type":"object","x-kms-contract":[]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
+		"application": app.Name, "environment": ns.Env, "schema_version": 0,
+		"changes": []map[string]any{{"alias": "setting", "value": "schema-free"}},
+	})
+	mustStatus(t, w, http.StatusOK)
+	if body := decodeBody(t, w); body["status"] != "activated" || body["preview"].(map[string]any)["schema_version"] != float64(0) {
+		t.Fatalf("schema-free ship: %v", body)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/applications/environments/clone", map[string]any{
+		"application": app.Name, "source_env": ns.Env, "target_env": "prod", "schema_version": 0, "copy_values": true,
+	})
+	mustStatus(t, w, http.StatusOK)
+	if items := decodeBody(t, w)["items"].([]any); len(items) != 1 || items[0].(map[string]any)["alias"] != "setting" || items[0].(map[string]any)["action"] != "copied" {
+		t.Fatalf("schema-free clone: %v", items)
+	}
+	if _, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: newer.Version}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("schema-free management activated newer schema: %v", err)
+	}
+}
+
+func TestApplicationPatchPreservesOmittedContract(t *testing.T) {
+	for _, schemaVersion := range []uint64{0, 1} {
+		t.Run(fmt.Sprint(schemaVersion), func(t *testing.T) {
+			e := newReleaseTestEnv(t)
+			contract := []map[string]any{{"alias": "amount", "kind": "parameter", "content_type": "integer"}}
+			create := map[string]any{"name": "payments", "release_name": "runtime", "contract": contract}
+			if schemaVersion != 0 {
+				create["schema"] = map[string]any{"schema_json": `{"type":"object"}`}
+			}
+			mustStatus(t, e.admin(http.MethodPost, "/api/v1/applications", create), http.StatusCreated)
+			before, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, explicitNull := range []bool{false, true} {
+				patch := map[string]any{"name": "payments", "release_name": "runtime", "schema_version": schemaVersion, "description": "updated"}
+				if explicitNull {
+					patch["contract"] = nil
+				}
+				response := e.admin(http.MethodPatch, "/api/v1/applications", patch)
+				mustStatus(t, response, http.StatusOK)
+				updated, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if updated.Description != "updated" || !reflect.DeepEqual(updated.Contract, before.Contract) {
+					t.Fatalf("omitted contract changed definition (null=%t): %+v", explicitNull, updated)
+				}
+				if got := decodeBody(t, response)["application"].(map[string]any)["contract"].([]any); len(got) != 1 {
+					t.Fatalf("PATCH response contract = %v", got)
+				}
+			}
+			// Omission preserves the definition; explicitly clearing or replacing an
+			// established contract still fails atomically, including descriptive edits.
+			for _, replacement := range []any{[]any{}, []map[string]any{{"alias": "other", "kind": "parameter", "content_type": "integer"}}} {
+				response := e.admin(http.MethodPatch, "/api/v1/applications", map[string]any{
+					"name": "payments", "release_name": "runtime", "schema_version": schemaVersion,
+					"description": "must not persist", "contract": replacement,
+				})
+				if errCode(t, response) != "failed_precondition" {
+					t.Fatalf("replacement status %d: %s", response.Code, response.Body.String())
+				}
+				updated, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+				if err != nil || updated.Description != "updated" || !reflect.DeepEqual(updated.Contract, before.Contract) {
+					t.Fatalf("rejected replacement altered application: %+v err=%v", updated, err)
+				}
+			}
+		})
+	}
 }

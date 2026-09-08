@@ -43,6 +43,7 @@ Commands:
 
 Apply flags:
   --from FILE|-              Defaults artifact file, or - for stdin (required).
+  --schema-version VERSION   Select an exact schema track (0 is schema-free).
   --overwrite                Permit differing existing parameters to be updated.
   --update-definition        Permit the application contract and schema pin to be updated.
   --execute                  Apply after a fresh preview (preview is the default).
@@ -64,6 +65,8 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	fs := c.newFlags("defaults apply")
 	cf := addConnFlags(c, fs)
 	from := fs.String("from", "", "defaults artifact `file`, or - for stdin")
+	var schemaVersion optionalUint64
+	fs.Var(&schemaVersion, "schema-version", "explicit schema track (0 selects the schema-free track)")
 	overwrite := fs.Bool("overwrite", false, "permit updates to differing existing parameters")
 	updateDefinition := fs.Bool("update-definition", false, "permit application contract and schema pin updates")
 	execute := fs.Bool("execute", false, "apply after a fresh preview")
@@ -107,6 +110,7 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		Artifact:         artifact,
 		Overwrite:        *overwrite,
 		UpdateDefinition: *updateDefinition,
+		SchemaVersion:    optionalSchemaVersion(schemaVersion),
 	})
 	if err != nil {
 		return c.failErr("previewing defaults", err)
@@ -138,6 +142,7 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		UpdateDefinition: *updateDefinition,
 		Execute:          true,
 		PlanDigest:       preview.GetPlanDigest(),
+		SchemaVersion:    optionalSchemaVersion(schemaVersion),
 	})
 	if err != nil {
 		return c.failErr("applying defaults", err)
@@ -146,6 +151,13 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		return c.fail("invalid defaults apply response: %v", err)
 	}
 	return c.reportDefaultsResult("Applied", "writing defaults result", applied)
+}
+
+func optionalSchemaVersion(value optionalUint64) *uint64 {
+	if !value.set {
+		return nil
+	}
+	return &value.value
 }
 
 // dialConn honours the test transport override, otherwise dials the

@@ -18,7 +18,7 @@ from kms_paramstore.configstore import (
 
 _RootConfig = _source.ApplicationConfig
 
-SCHEMA_SHA256 = "3ea94877dd7e3054e51226eb22570a42b99744cf58872e8d3a471065c8bbed85"
+SCHEMA_SHA256 = "8939f3781ba788cba2dcc326d04da080bb068b410d3b707e1d272a19ca86c462"
 CONTRACT = (
     ContractEntry('db_password', 'secret', ''),
     ContractEntry('runtime', 'parameter', 'json'),
@@ -62,10 +62,10 @@ class GeneratedConfigStore(ConfigBinding[_RootConfig]):
         return cast(Snapshot, super().current)
 
     def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[_RootConfig]:
-        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)
 
     async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[_RootConfig]:
-        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)
 
     def defaults_artifact(self, profile: str) -> str:
         return _encode_defaults_artifact(profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, parameters=self.encode_defaults_groups())

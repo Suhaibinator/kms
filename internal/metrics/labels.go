@@ -137,6 +137,7 @@ var RouteLabels = []string{
 	"GET /api/v1/release-subscribers/stream",
 
 	"GET /api/v1/releases",
+	"GET /api/v1/releases/schema-versions",
 	"POST /api/v1/releases",
 	"GET /api/v1/releases/get",
 	"GET /api/v1/releases/active",

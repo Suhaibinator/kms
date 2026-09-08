@@ -224,6 +224,8 @@ test("the command palette opens with ⌘K, ranks the ship deep link first, and n
   await expect(first).toHaveText(/rate_limits/);
   await expect(first).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/applications\?app=gradethis&env=prod&ship=rate_limits/);
+  await expect(page).toHaveURL(
+    /\/applications\?app=gradethis&schema_version=0&env=prod&ship=rate_limits/,
+  );
   await expect(input).toHaveCount(0);
 });

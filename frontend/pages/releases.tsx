@@ -35,6 +35,7 @@ import { crumbs } from "@/lib/crumbs";
 import { useCursorPagination, useLatestRequest, useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
+import { parseSchemaVersion } from "@/lib/schema";
 import type { SortColumn } from "@/lib/sort";
 import type {
   ConfigurationRelease,
@@ -43,6 +44,7 @@ import type {
   ReleaseValidationError,
 } from "@/lib/types";
 import { queryValue, useQueryReplace } from "@/lib/url";
+import { useReleaseSchemaVersions } from "@/lib/useReleaseSchemaVersions";
 import { validateReleaseName } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
@@ -117,7 +119,7 @@ export default function ReleasesPage() {
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
   // A deep-linked release that is not in the loaded page, fetched on its own.
   const [linkedSummary, setLinkedSummary] = useState<ReleaseSummary | null>(null);
-  const [deepLink, setDeepLink] = useState<{ name: string; version: number } | null>(null);
+  const [deepLink, setDeepLink] = useState<ReturnType<typeof parseReleaseKey>>(null);
   // The workspace tab a deep link asked for; cleared with the workspace.
   const [linkedSection, setLinkedSection] = useState<"compare" | null>(null);
   const [linkedCompareKey, setLinkedCompareKey] = useState("");
@@ -146,8 +148,60 @@ export default function ReleasesPage() {
   const queryRelease = queryValue(router.query.release);
   const querySection = queryValue(router.query.section);
   const queryCompare = queryValue(router.query.compare);
-  const appliedFilters = useRef({ app: ns.app, env: ns.env, name });
-  appliedFilters.current = { app: ns.app, env: ns.env, name };
+  const querySchema = queryValue(router.query.schema_version);
+  const explicitSchema = parseSchemaVersion(querySchema);
+  const invalidSchema = querySchema !== "" && explicitSchema === undefined;
+  const tracks = useReleaseSchemaVersions(queryEnv, queryApp, queryName);
+  const [schemaDraft, setSchemaDraft] = useState("");
+  const linkedSchema = parseReleaseKey(queryRelease)?.schema_version;
+  const schemaVersion = invalidSchema
+    ? undefined
+    : (explicitSchema ??
+      linkedSchema ??
+      (tracks.versions === null ? undefined : (tracks.versions[0] ?? 0)));
+  // Local filters update before the router; only use schema discovery for
+  // the exact address currently represented by both.
+  const trackReady =
+    schemaVersion !== undefined &&
+    !invalidSchema &&
+    ns.env === queryEnv &&
+    ns.app === queryApp &&
+    name === queryName;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: discard a manual draft when its namespace or name changes, even if the selected number is unchanged.
+  useEffect(() => {
+    setSchemaDraft(schemaVersion === undefined ? "" : String(schemaVersion));
+  }, [schemaVersion, queryEnv, queryApp, queryName]);
+
+  const schemaURLRequest = useRef("");
+  useEffect(() => {
+    if (querySchema !== "") {
+      schemaURLRequest.current = "";
+      return;
+    }
+    if (!router.isReady || !queryApp || !queryEnv || !trackReady) return;
+    const target = JSON.stringify([queryApp, queryEnv, queryName, schemaVersion]);
+    if (schemaURLRequest.current === target) return;
+    schemaURLRequest.current = target;
+    void replaceQuery({ schema_version: String(schemaVersion) });
+  }, [
+    router.isReady,
+    queryApp,
+    queryEnv,
+    queryName,
+    trackReady,
+    querySchema,
+    schemaVersion,
+    replaceQuery,
+  ]);
+  const appliedFilters = useRef({ app: ns.app, env: ns.env, name, schema: schemaVersion });
+  // Namespace/name can change optimistically from local controls. Schema changes
+  // come from the URL, so retain its prior value until the effect invalidates work.
+  appliedFilters.current = {
+    app: ns.app,
+    env: ns.env,
+    name,
+    schema: appliedFilters.current.schema,
+  };
 
   // Only changes to applied URL filters replace the filter draft. Same-page
   // comparison links and browser history must also update the workspace.
@@ -161,19 +215,31 @@ export default function ReleasesPage() {
         : { app: queryApp, env: queryEnv },
     );
     const applied = appliedFilters.current;
-    if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name) {
+    if (
+      queryApp !== applied.app ||
+      queryEnv !== applied.env ||
+      queryName !== applied.name ||
+      schemaVersion !== applied.schema
+    ) {
       activationRequest.abort();
       setBusyAction("");
       setPendingAction(null);
       setActivationFailure(null);
       setLinkedSummary(null);
+      setBuilderOpen(false);
       linkRun.current += 1;
     }
     if (queryApp !== applied.app || queryEnv !== applied.env || queryName !== applied.name) {
       setNameDraft(queryName);
     }
+    appliedFilters.current = {
+      app: queryApp,
+      env: queryEnv,
+      name: queryName,
+      schema: schemaVersion,
+    };
     setName(queryName);
-  }, [queryApp, queryEnv, queryName, queryTab, router.isReady, activationRequest]);
+  }, [queryApp, queryEnv, queryName, queryTab, schemaVersion, router.isReady, activationRequest]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -182,9 +248,19 @@ export default function ReleasesPage() {
     linkRun.current += 1;
     setPendingAction((current) => (current?.kind === "rollback" ? null : current));
     const linked = queryRelease ? parseReleaseKey(queryRelease) : null;
+    if (
+      linked?.schema_version !== undefined &&
+      trackReady &&
+      linked.schema_version !== schemaVersion
+    ) {
+      setDeepLink(null);
+      setSelectedReleaseKey("");
+      setLinkedSummary(null);
+      return;
+    }
     if (linked && queryApp && queryEnv) {
       setDeepLink(linked);
-      setSelectedReleaseKey(`${linked.name}@${linked.version}`);
+      setSelectedReleaseKey(releaseKey(linked));
       setLinkedSection(querySection === "compare" ? "compare" : null);
       const comparison = parseReleaseKey(queryCompare);
       setLinkedCompareKey(comparison?.name === linked.name ? releaseKey(comparison) : "");
@@ -194,7 +270,16 @@ export default function ReleasesPage() {
       setLinkedSection(null);
       setLinkedCompareKey("");
     }
-  }, [queryApp, queryEnv, queryRelease, querySection, queryCompare, router.isReady]);
+  }, [
+    queryApp,
+    queryEnv,
+    queryRelease,
+    querySection,
+    queryCompare,
+    schemaVersion,
+    trackReady,
+    router.isReady,
+  ]);
 
   function changeTab(value: string | number) {
     const next = value === "schemas" ? "schemas" : "releases";
@@ -208,7 +293,12 @@ export default function ReleasesPage() {
     setLinkedSection(null);
     setLinkedCompareKey("");
     setSelectedReleaseKey(key);
-    replaceQuery({ release: key, section: "", compare: "" });
+    replaceQuery({
+      release: key,
+      schema_version: String(parseReleaseKey(key)?.schema_version ?? schemaVersion),
+      section: "",
+      compare: "",
+    });
   }
 
   function closeWorkspace() {
@@ -235,11 +325,19 @@ export default function ReleasesPage() {
     setNameDraft("");
     setName("");
     loadedReleaseScope.current = "";
-    replaceQuery({ app: next.app, env: next.env, name: "", release: "", section: "", compare: "" });
+    replaceQuery({
+      app: next.app,
+      env: next.env,
+      name: "",
+      schema_version: "",
+      release: "",
+      section: "",
+      compare: "",
+    });
   }
 
   const hasNS = Boolean(ns.env && ns.app);
-  const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name]) : "";
+  const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name, schemaVersion]) : "";
   const releasePaging = useCursorPagination(releaseScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
   const settled = loadedScope === releaseRequestScope || releasesErrorScope === releaseRequestScope;
@@ -253,7 +351,7 @@ export default function ReleasesPage() {
     async (force = false) => {
       refreshController.current?.abort();
       const generation = ++refreshGeneration.current;
-      if (!hasNS) {
+      if (!hasNS || !trackReady) {
         refreshController.current = null;
         loadedReleaseScope.current = "";
         setReleases([]);
@@ -283,6 +381,7 @@ export default function ReleasesPage() {
           100,
           releasePaging.pageToken || undefined,
           { signal: controller.signal },
+          schemaVersion,
         );
         if (generation !== refreshGeneration.current) return;
         loadedReleaseScope.current = releaseRequestScope;
@@ -305,11 +404,13 @@ export default function ReleasesPage() {
     [
       activeTab,
       hasNS,
+      trackReady,
       name,
       ns,
       releasePaging.pageToken,
       releasePaging.setNextToken,
       releaseRequestScope,
+      schemaVersion,
       toast,
     ],
   );
@@ -325,22 +426,50 @@ export default function ReleasesPage() {
   // in the cleanup) guards the result: the effect legitimately re-runs on
   // every render because `replaceQuery` follows the router object.
   useEffect(() => {
-    if (!deepLink || !settled || !hasNS) return;
-    const wanted = `${deepLink.name}@${deepLink.version}`;
+    if (!deepLink || !settled || !hasNS || schemaVersion === undefined) return;
+    const matching = releases.filter(
+      ({ release }) =>
+        release.name === deepLink.name &&
+        release.version === deepLink.version &&
+        release.schema_version === (deepLink.schema_version ?? schemaVersion),
+    );
+    const wanted = releaseKey(deepLink);
     setDeepLink(null);
-    if (releases.some((summary) => releaseKey(summary.release) === wanted)) return;
+    if (matching.length === 1) {
+      const resolved = releaseKey(matching[0].release);
+      setSelectedReleaseKey(resolved);
+      if (resolved !== queryRelease) {
+        replaceQuery({
+          release: resolved,
+          schema_version: String(matching[0].release.schema_version),
+        });
+      }
+      return;
+    }
     const run = ++linkRun.current;
     void (async () => {
       try {
         const [{ release }, active] = await Promise.all([
-          api.getRelease(ns, deepLink.name, deepLink.version),
-          api.getActiveRelease(ns, deepLink.name).catch((error: unknown) => {
-            if (error instanceof ApiError && error.code === "not_found") return null;
-            throw error;
-          }),
+          api.getRelease(
+            ns,
+            deepLink.name,
+            deepLink.version,
+            deepLink.schema_version ?? schemaVersion,
+          ),
+          api
+            .getActiveRelease(ns, deepLink.name, deepLink.schema_version ?? schemaVersion)
+            .catch((error: unknown) => {
+              if (error instanceof ApiError && error.code === "not_found") return null;
+              throw error;
+            }),
         ]);
         if (run !== linkRun.current) return;
         const current = active?.release.version === release.version;
+        const resolved = releaseKey(release);
+        setSelectedReleaseKey(resolved);
+        if (resolved !== queryRelease) {
+          replaceQuery({ release: resolved, schema_version: String(release.schema_version) });
+        }
         setLinkedSummary({
           release,
           current,
@@ -354,7 +483,7 @@ export default function ReleasesPage() {
         toast.error(error, `Could not open ${wanted}`);
       }
     })();
-  }, [deepLink, settled, hasNS, releases, ns, replaceQuery, toast]);
+  }, [deepLink, settled, hasNS, releases, ns, queryRelease, replaceQuery, schemaVersion, toast]);
 
   // Drop a deep-link fetch that lands after unmount.
   useEffect(
@@ -374,15 +503,28 @@ export default function ReleasesPage() {
     setLinkedSummary(null);
     setName(next);
     loadedReleaseScope.current = "";
-    replaceQuery({ name: next, release: "" });
+    replaceQuery({
+      name: next,
+      ...(next !== queryName ? { schema_version: "" } : {}),
+      release: "",
+      section: "",
+      compare: "",
+    });
   }
 
   async function validate(release: ConfigurationRelease) {
     if (busyAction) return;
     const target = releaseKey(release);
+    const run = activationRequest.begin();
     setBusyAction(`validate:${target}`);
     try {
-      const result = await api.validateRelease(release.namespace, release.name, release.version);
+      const result = await api.validateRelease(
+        release.namespace,
+        release.name,
+        release.version,
+        release.schema_version,
+      );
+      if (!run.current) return;
       if (result.valid) {
         toast.success(`${target} is valid`);
         if (activationFailure?.operation === "Validation" && activationFailure.target === target) {
@@ -394,11 +536,12 @@ export default function ReleasesPage() {
         toast.error(new Error("The release did not validate."), "Validation failed");
       }
     } catch (error) {
+      if (!run.current) return;
       const violations = activationViolations(error);
       if (violations) showViolations({ operation: "Validation", target, violations });
       else toast.error(error, "Validation failed");
     } finally {
-      setBusyAction("");
+      if (run.current) setBusyAction("");
     }
   }
 
@@ -406,7 +549,10 @@ export default function ReleasesPage() {
   // they belong to; the table is far more readable than a joined toast string.
   function showViolations(failure: ActivationFailure) {
     setSelectedReleaseKey(failure.target);
-    replaceQuery({ release: failure.target });
+    replaceQuery({
+      release: failure.target,
+      schema_version: String(parseReleaseKey(failure.target)?.schema_version ?? schemaVersion),
+    });
     setActivationFailure(failure);
   }
 
@@ -416,7 +562,12 @@ export default function ReleasesPage() {
     setBusyAction("activate");
     try {
       const active = await api
-        .getActiveRelease(summary.release.namespace, summary.release.name, { signal: run.signal })
+        .getActiveRelease(
+          summary.release.namespace,
+          summary.release.name,
+          summary.release.schema_version,
+          { signal: run.signal },
+        )
         .catch((error: unknown) => {
           if (error instanceof ApiError && error.code === "not_found") return null;
           throw error;
@@ -444,6 +595,7 @@ export default function ReleasesPage() {
         action.summary.release.namespace,
         releaseName,
         action.summary.release.version,
+        action.summary.release.schema_version,
         action.current?.version ?? 0,
       );
       if (!run.current) return;
@@ -469,44 +621,99 @@ export default function ReleasesPage() {
   }
 
   const selectedSummary =
-    releases.find((summary) => releaseKey(summary.release) === selectedReleaseKey) ??
-    (linkedSummary && releaseKey(linkedSummary.release) === selectedReleaseKey
+    releases.find(
+      (summary) =>
+        releaseKey(summary.release) === selectedReleaseKey &&
+        summary.release.schema_version === schemaVersion &&
+        summary.release.namespace.env === ns.env &&
+        summary.release.namespace.app === ns.app,
+    ) ??
+    (linkedSummary &&
+    linkedSummary.release.schema_version === schemaVersion &&
+    linkedSummary.release.namespace.env === ns.env &&
+    linkedSummary.release.namespace.app === ns.app &&
+    releaseKey(linkedSummary.release) === selectedReleaseKey
       ? linkedSummary
       : null);
   const currentNamedRelease = releases.find(
-    (summary) => summary.current && summary.release.name === name,
+    (summary) =>
+      summary.current &&
+      summary.release.name === name &&
+      summary.release.namespace.app === ns.app &&
+      summary.release.namespace.env === ns.env &&
+      (schemaVersion === undefined || summary.release.schema_version === schemaVersion),
   );
   const previousNamedRelease = releases.find(
-    (summary) => summary.previous && summary.release.name === name,
+    (summary) =>
+      summary.previous &&
+      summary.release.name === name &&
+      summary.release.schema_version === currentNamedRelease?.release.schema_version,
   );
   const pendingCurrentRelease = pendingAction?.kind === "activate" ? pendingAction.current : null;
   const rollbackAction = pendingAction?.kind === "rollback" ? pendingAction : null;
 
-  const loadedComparison = releases.some(
-    (summary) => releaseKey(summary.release) === linkedCompareKey,
+  const wantedComparison = parseReleaseKey(linkedCompareKey);
+  const matchingComparisons = releases.filter(
+    ({ release }) =>
+      wantedComparison &&
+      release.name === wantedComparison.name &&
+      release.version === wantedComparison.version &&
+      release.schema_version === (wantedComparison.schema_version ?? schemaVersion) &&
+      release.namespace.env === ns.env &&
+      release.namespace.app === ns.app,
   );
+  const linkedComparisonMatches = Boolean(
+    wantedComparison &&
+      linkedComparison &&
+      linkedComparison.release.name === wantedComparison.name &&
+      linkedComparison.release.version === wantedComparison.version &&
+      linkedComparison.release.schema_version ===
+        (wantedComparison.schema_version ?? schemaVersion) &&
+      linkedComparison.release.namespace.env === ns.env &&
+      linkedComparison.release.namespace.app === ns.app,
+  );
+  const loadedComparison = matchingComparisons.length === 1 || linkedComparisonMatches;
+  const resolvedCompareKey =
+    matchingComparisons.length === 1
+      ? releaseKey(matchingComparisons[0].release)
+      : linkedComparisonMatches && linkedComparison
+        ? releaseKey(linkedComparison.release)
+        : linkedCompareKey;
   useEffect(() => {
-    setLinkedComparison(null);
     setComparisonError(null);
     const wanted = parseReleaseKey(linkedCompareKey);
-    if (!wanted || !hasNS || loadedComparison) {
+    if (!wanted || !hasNS || schemaVersion === undefined) {
+      setLinkedComparison(null);
       setComparisonLoading(false);
       return;
     }
+    if (loadedComparison) {
+      setComparisonLoading(false);
+      return;
+    }
+    setLinkedComparison(null);
     let cancelled = false;
     const controller = new AbortController();
     setComparisonLoading(true);
     void api
-      .getRelease(ns, wanted.name, wanted.version, { signal: controller.signal })
+      .getRelease(ns, wanted.name, wanted.version, wanted.schema_version ?? schemaVersion, {
+        signal: controller.signal,
+      })
       .then(
         ({ release }) => {
-          if (!cancelled)
+          if (!cancelled) {
+            const resolved = releaseKey(release);
+            setLinkedCompareKey(resolved);
+            if (resolved !== linkedCompareKey) {
+              replaceQuery({ compare: resolved });
+            }
             setLinkedComparison({
               release,
               current: false,
               previous: false,
               activation_revision: 0,
             });
+          }
         },
         (error: unknown) => {
           if (!cancelled && !isAbortError(error))
@@ -522,27 +729,32 @@ export default function ReleasesPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [linkedCompareKey, hasNS, loadedComparison, ns]);
+  }, [linkedCompareKey, hasNS, loadedComparison, ns, replaceQuery, schemaVersion]);
 
   return (
     <>
       <PageHeader
         title="Configuration releases"
         subtitle="Build, validate, activate, and inspect immutable configuration manifests."
-        breadcrumbs={hasNS ? crumbs.environment({ env: ns.env, app: ns.app }) : undefined}
+        breadcrumbs={
+          hasNS ? crumbs.environment({ env: ns.env, app: ns.app }, schemaVersion) : undefined
+        }
         actions={
           activeTab === "releases" ? (
             <>
               <Button
                 variant="outline"
-                disabled={!hasNS || Boolean(busyAction)}
+                disabled={!hasNS || !trackReady || Boolean(busyAction)}
                 loading={releasesLoading}
                 onClick={() => void refresh(true)}
               >
                 {releasesLoading ? null : <RefreshCw size={16} aria-hidden />}
                 Refresh
               </Button>
-              <Button disabled={!hasNS || Boolean(busyAction)} onClick={() => setBuilderOpen(true)}>
+              <Button
+                disabled={!hasNS || !trackReady || Boolean(busyAction)}
+                onClick={() => setBuilderOpen(true)}
+              >
                 <Plus size={16} aria-hidden />
                 New release
               </Button>
@@ -566,6 +778,64 @@ export default function ReleasesPage() {
               disabled={Boolean(busyAction)}
               loading={namespacesLoading}
             />
+            {tracks.error || invalidSchema ? (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const selected = parseSchemaVersion(schemaDraft);
+                  if (selected === undefined) return;
+                  void replaceQuery({
+                    schema_version: String(selected),
+                    release: "",
+                    compare: "",
+                    section: "",
+                  });
+                }}
+              >
+                <Field label="Schema version" hint="Enter an exact version; 0 selects schema-free.">
+                  <div className="row-wrap">
+                    <Input
+                      aria-label="Schema version"
+                      inputMode="numeric"
+                      value={schemaDraft}
+                      onChange={(event) => setSchemaDraft(event.target.value)}
+                    />
+                    <Button type="submit" disabled={parseSchemaVersion(schemaDraft) === undefined}>
+                      Select schema
+                    </Button>
+                  </div>
+                </Field>
+              </form>
+            ) : (
+              <Field label="Schema version">
+                <select
+                  aria-label="Schema version"
+                  value={schemaVersion ?? ""}
+                  disabled={!hasNS || tracks.versions === null}
+                  onChange={(event) =>
+                    void replaceQuery({
+                      schema_version: event.target.value,
+                      release: "",
+                      compare: "",
+                      section: "",
+                    })
+                  }
+                >
+                  {schemaVersion === undefined ? <option value="">Select schema</option> : null}
+                  {schemaVersion !== undefined &&
+                  schemaVersion !== 0 &&
+                  !tracks.versions?.includes(schemaVersion) ? (
+                    <option value={schemaVersion}>v{schemaVersion}</option>
+                  ) : null}
+                  {(tracks.versions ?? []).map((version) => (
+                    <option key={version} value={version}>
+                      v{version}
+                    </option>
+                  ))}
+                  <option value={0}>v0 · schema-free</option>
+                </select>
+              </Field>
+            )}
             <form className="filters filter-grow" onSubmit={applyNameFilter}>
               <div className="filter-grow">
                 <Field label="Release name" error={nameTouched ? nameFilterError : null}>
@@ -591,6 +861,16 @@ export default function ReleasesPage() {
             </form>
           </div>
 
+          {invalidSchema ? (
+            <div role="alert" className="danger-panel">
+              Invalid schema version. Use a nonnegative safe integer; 0 selects schema-free.
+            </div>
+          ) : tracks.error ? (
+            <div role="alert" className="danger-panel">
+              Could not discover schema tracks. Enter a schema version to continue.
+            </div>
+          ) : null}
+
           {name && currentNamedRelease ? (
             <div className="release-status-strip mb-4">
               <div>
@@ -598,6 +878,7 @@ export default function ReleasesPage() {
                 <ReleaseIdent
                   name={currentNamedRelease.release.name}
                   version={currentNamedRelease.release.version}
+                  schemaVersion={currentNamedRelease.release.schema_version}
                 />
               </div>
               <div>
@@ -610,6 +891,7 @@ export default function ReleasesPage() {
                   <ReleaseIdent
                     name={previousNamedRelease.release.name}
                     version={previousNamedRelease.release.version}
+                    schemaVersion={previousNamedRelease.release.schema_version}
                   />
                 ) : (
                   <strong className="mono">—</strong>
@@ -640,6 +922,10 @@ export default function ReleasesPage() {
               title="Choose an application and environment"
             >
               Release history and creation are scoped to one isolated environment.
+            </EmptyState>
+          ) : !trackReady && tracks.error ? (
+            <EmptyState title="Select a schema version">
+              Enter the exact schema version above to load its release history.
             </EmptyState>
           ) : !seeded || !settled || releasesLoading ? (
             <TableSkeleton
@@ -691,7 +977,11 @@ export default function ReleasesPage() {
                     return (
                       <tr key={releaseKey(release)}>
                         <td data-label="Release">
-                          <ReleaseIdent name={release.name} version={release.version} />
+                          <ReleaseIdent
+                            name={release.name}
+                            version={release.version}
+                            schemaVersion={release.schema_version}
+                          />
                         </td>
                         <td data-label="State">
                           {summary.current ? (
@@ -711,7 +1001,7 @@ export default function ReleasesPage() {
                               value={`${release.namespace.app}/${release.name}@${release.schema_version}`}
                             />
                           ) : (
-                            <span className="faint">none</span>
+                            <span className="faint">v0 · schema-free</span>
                           )}
                         </td>
                         <td data-label="Entries">{release.entries.length}</td>
@@ -767,19 +1057,20 @@ export default function ReleasesPage() {
         </TabsContent>
 
         <TabsContent value="schemas">
-          {activeTab === "schemas" ? <SchemaRegistry /> : null}
+          {activeTab === "schemas" ? <SchemaRegistry onRegistered={tracks.reload} /> : null}
         </TabsContent>
       </Tabs>
 
       <ReleaseBuilder
         open={builderOpen}
         namespace={ns}
+        selectedSchemaVersion={schemaVersion}
         onClose={() => setBuilderOpen(false)}
         onCreated={(release) => {
           setNameDraft(release.name);
           setName(release.name);
           loadedReleaseScope.current = "";
-          replaceQuery({ name: release.name });
+          replaceQuery({ name: release.name, schema_version: String(release.schema_version) });
           // Same name as the active filter → no state changes, so the load
           // effect would not re-run on its own.
           if (release.name === name) void refresh(true);
@@ -789,11 +1080,13 @@ export default function ReleasesPage() {
       <ReleaseWorkspace
         summary={selectedSummary}
         initialSection={linkedSection ?? "overview"}
-        initialCompareKey={linkedCompareKey}
+        initialCompareKey={resolvedCompareKey}
         comparisonLoading={comparisonLoading}
         comparisonError={comparisonError}
         releases={
-          linkedComparison && !loadedComparison ? [...releases, linkedComparison] : releases
+          linkedComparison && matchingComparisons.length === 0
+            ? [...releases, linkedComparison]
+            : releases
         }
         busyAction={busyAction}
         activationFailure={activationFailure}

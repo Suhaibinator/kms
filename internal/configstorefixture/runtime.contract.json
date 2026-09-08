@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configstorefixture/config",
     "type": "Config"
   },
-  "schema_sha256": "0e4937a3d15e1ee3f254329c4ef75b0cb21cda15abdc7467af54ae88166cb963",
+  "schema_sha256": "dd8fda29205b8a4e6bf1a505b768bd8c96d1bf7042f9aad77ce843680fb2b098",
   "groups": [
     {
       "alias": "database",

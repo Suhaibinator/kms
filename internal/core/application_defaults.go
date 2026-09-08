@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
@@ -41,19 +42,22 @@ type defaultsPlanDigestEntry struct {
 }
 
 type defaultsPlanDigestInput struct {
-	ArtifactDigest       string                             `json:"artifact_digest"`
-	NamespaceID          int64                              `json:"namespace_id"`
-	ReleaseName          string                             `json:"release_name"`
-	SchemaVersion        uint64                             `json:"schema_version"`
-	Contract             []domain.ApplicationContractField  `json:"contract"`
-	DesiredSchemaVersion uint64                             `json:"desired_schema_version"`
-	DesiredContract      []domain.ApplicationContractField  `json:"desired_contract"`
-	UpdateDefinition     bool                               `json:"update_definition"`
-	Resolution           []storage.DefaultsResolutionState  `json:"resolution"`
-	Resources            []storage.DefaultsResourceIdentity `json:"resources"`
-	Entries              []defaultsPlanDigestEntry          `json:"entries"`
-	MissingSecrets       []string                           `json:"missing_secrets"`
-	Overwrite            bool                               `json:"overwrite"`
+	ExpectedApplicationSchemaVersion uint64                             `json:"expected_application_schema_version,omitempty"`
+	ExpectedApplicationContract      []domain.ApplicationContractField  `json:"expected_application_contract,omitempty"`
+	ExpectedApplicationUpdatedAt     time.Time                          `json:"expected_application_updated_at,omitempty"`
+	ArtifactDigest                   string                             `json:"artifact_digest"`
+	NamespaceID                      int64                              `json:"namespace_id"`
+	ReleaseName                      string                             `json:"release_name"`
+	SchemaVersion                    uint64                             `json:"schema_version"`
+	Contract                         []domain.ApplicationContractField  `json:"contract"`
+	DesiredSchemaVersion             uint64                             `json:"desired_schema_version"`
+	DesiredContract                  []domain.ApplicationContractField  `json:"desired_contract"`
+	UpdateDefinition                 bool                               `json:"update_definition"`
+	Resolution                       []storage.DefaultsResolutionState  `json:"resolution"`
+	Resources                        []storage.DefaultsResourceIdentity `json:"resources"`
+	Entries                          []defaultsPlanDigestEntry          `json:"entries"`
+	MissingSecrets                   []string                           `json:"missing_secrets"`
+	Overwrite                        bool                               `json:"overwrite"`
 }
 
 func (s *Service) defaultsApplyStore() (storage.DefaultsApplyStore, error) {
@@ -73,17 +77,49 @@ func (s *Service) ApplyApplicationDefaults(ctx context.Context, pr Principal, in
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.DefaultsApplyResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.defaults", domain.ResourceApplication, in.Namespace.App); err != nil {
 		return domain.DefaultsApplyResult{}, err
 	}
+	errorMetadata := func(reason, digest string) map[string]string {
+		meta := map[string]string{"reason": reason}
+		if in.SchemaVersion != nil {
+			return releaseAuditMetadata(*in.SchemaVersion, 0, meta)
+		}
+		// Failed artifact preflight can still name a registered track. Resolve
+		// only for this audit enrichment; unknown/malformed artifacts remain
+		// unscoped and lookup failures never replace the original error.
+		if digest == "" {
+			return meta
+		}
+		apps, err := s.applicationStore()
+		if err != nil {
+			return meta
+		}
+		app, err := apps.GetApplication(ctx, in.Namespace.App)
+		if err != nil {
+			return meta
+		}
+		releases, err := s.releaseStore()
+		if err != nil {
+			return meta
+		}
+		schema, err := releases.GetConfigurationSchemaByDigest(ctx, app.Name, app.ReleaseName, digest)
+		if err == nil {
+			return releaseAuditMetadata(schema.Version, 0, meta)
+		}
+		return meta
+	}
 	artifact, err := parseDefaultsArtifact(in.Artifact)
 	if err != nil {
-		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", map[string]string{"reason": "invalid_artifact"})
+		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", errorMetadata("invalid_artifact", ""))
 		return domain.DefaultsApplyResult{}, err
 	}
 	plan, err := s.buildDefaultsPlan(ctx, in, artifact)
 	if err != nil {
-		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", map[string]string{"reason": "preflight_failed"})
+		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", errorMetadata("preflight_failed", artifact.SchemaSHA256))
 		return domain.DefaultsApplyResult{}, err
 	}
 	if !in.Execute {
@@ -146,12 +182,21 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if !app.ArchivedAt.IsZero() {
 		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	persistedApp := app
+	if in.UpdateDefinition && in.SchemaVersion != nil {
+		return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "schema override cannot update the application default")
+	}
+	app, err = s.selectArtifactApplicationTrack(ctx, app, in.SchemaVersion, artifact.SchemaSHA256)
+	if err != nil {
+		return defaultsPlan{}, err
+	}
 	desiredApp := app
 	desiredContract := applicationContractFromArtifact(artifact.Contract)
-	contractChanged := !reflect.DeepEqual(desiredContract, app.Contract)
-	if contractChanged {
-		desiredApp.Contract = desiredContract
+	if app.Contract != nil && !reflect.DeepEqual(desiredContract, app.Contract) {
+		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema contract")
 	}
+	desiredApp.Contract = desiredContract
+	app.Contract = desiredContract
 	for _, parameter := range artifact.Parameters {
 		if err := validateParameterValue(parameter.Value, parameter.ContentType); err != nil {
 			return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "defaults parameter %q does not parse as %s", parameter.Alias, parameter.ContentType)
@@ -165,22 +210,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
-	schemaMatches := false
-	if app.SchemaVersion != 0 {
-		schema, schemaErr := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-		schemaMatches = schemaErr == nil && schema.Digest == artifact.SchemaSHA256
-		if schemaErr != nil && !errors.Is(schemaErr, domain.ErrNotFound) {
-			return defaultsPlan{}, schemaErr
-		}
-	}
-	if !schemaMatches {
-		matching, err := findConfigurationSchemaByDigest(ctx, releaseStore, app.Name, app.ReleaseName, artifact.SchemaSHA256)
-		if err != nil {
-			return defaultsPlan{}, err
-		}
-		desiredApp.SchemaVersion = matching.Version
-	}
-	definitionChanged := contractChanged || desiredApp.SchemaVersion != app.SchemaVersion
+	definitionChanged := in.UpdateDefinition && (persistedApp.SchemaVersion != desiredApp.SchemaVersion || !reflect.DeepEqual(persistedApp.Contract, desiredApp.Contract))
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
 	if err != nil {
 		return defaultsPlan{}, err
@@ -210,11 +240,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	otherActive := make(map[string]domain.ConfigurationRelease)
 	var targetActive, targetLatest *domain.ConfigurationRelease
 	for _, environment := range environments {
-		facts, err := s.loadEnvironmentReleaseFacts(ctx, releaseStore, environment.NamespaceRef, app.ReleaseName, false)
+		facts, err := s.loadEnvironmentReleaseFacts(ctx, releaseStore, applicationTrack(app, environment.NamespaceRef), false)
 		if err != nil {
 			return defaultsPlan{}, err
 		}
-		state := storage.DefaultsResolutionState{Environment: environment.Env, NamespaceID: environment.ID, LatestVersion: facts.LatestVersion}
+		state := storage.DefaultsResolutionState{SchemaVersion: app.SchemaVersion, Environment: environment.Env, NamespaceID: environment.ID, LatestVersion: facts.LatestVersion}
 		if facts.Active != nil {
 			state.ActiveVersion = facts.Active.Release.Version
 			state.ActivationRevision = facts.Active.ActivationRevision
@@ -249,6 +279,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		DesiredSchemaVersion: desiredApp.SchemaVersion,
 		DesiredContract:      append([]domain.ApplicationContractField(nil), desiredApp.Contract...),
 		ResolutionState:      resolution, Resources: resources,
+	}
+	if in.UpdateDefinition {
+		transaction.ExpectedApplicationSchemaVersion = persistedApp.SchemaVersion
+		transaction.ExpectedApplicationContract = persistedApp.Contract
+		transaction.ExpectedApplicationUpdatedAt = persistedApp.UpdatedAt
 	}
 	digestEntries := make([]defaultsPlanDigestEntry, 0, len(artifact.Parameters))
 	blocked := 0
@@ -328,6 +363,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		Resolution: resolution, Resources: resources, Entries: digestEntries,
 		MissingSecrets: result.MissingSecrets, Overwrite: in.Overwrite,
 	}
+	if in.UpdateDefinition {
+		digestInput.ExpectedApplicationSchemaVersion = persistedApp.SchemaVersion
+		digestInput.ExpectedApplicationContract = persistedApp.Contract
+		digestInput.ExpectedApplicationUpdatedAt = persistedApp.UpdatedAt
+	}
 	digestJSON, err := json.Marshal(digestInput, json.Deterministic(true))
 	if err != nil {
 		return defaultsPlan{}, fmt.Errorf("encode defaults plan: %w", err)
@@ -344,31 +384,13 @@ func applicationContractFromArtifact(artifact []configstore.ContractEntry) []dom
 	return converted
 }
 
-func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, application, releaseName, digest string) (domain.ConfigurationSchema, error) {
-	page := storage.ListPage{Limit: 100}
-	for {
-		schemas, next, err := store.ListConfigurationSchemas(ctx, application, releaseName, page)
-		if err != nil {
-			return domain.ConfigurationSchema{}, err
-		}
-		for _, schema := range schemas {
-			if schema.Digest == digest {
-				return schema, nil
-			}
-		}
-		if next == "" {
-			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema for %s/%s before updating the application definition", application, releaseName)
-		}
-		page.Token = next
-	}
-}
-
 func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.NamespaceRef, plan defaultsPlan, eventType, decision string) {
 	counts := map[string]int{}
 	for _, entry := range plan.result.Entries {
 		counts[entry.Status]++
 	}
 	meta := map[string]string{
+		"schema_version":       strconv.FormatUint(plan.transaction.SchemaVersion, 10),
 		"create_count":         strconv.Itoa(counts[domain.DefaultsStatusCreate]),
 		"unchanged_count":      strconv.Itoa(counts[domain.DefaultsStatusUnchanged]),
 		"update_count":         strconv.Itoa(counts[domain.DefaultsStatusUpdate]),

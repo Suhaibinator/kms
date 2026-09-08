@@ -81,6 +81,29 @@ test("a toast never covers an open dialog's title or close button", async ({ pag
   // The whole header band, not only the two boxes: the toast starts below the
   // lower of the ✕ and the title, so neither is even partly obscured.
   expect(toast.top).toBeGreaterThanOrEqual(Math.max(close.bottom, title.bottom));
+
+  const toastElement = page.locator("[data-sonner-toast]").first();
+  await toastElement.getByRole("button", { name: "Close toast" }).click();
+  await expect(toastElement).toBeHidden();
+  await expect(page.getByRole("dialog").first()).toBeVisible();
+});
+
+test("a toast action remains interactive over an open dialog", async ({ page }) => {
+  const state = incidentState();
+  await mockConsole(page, state);
+  await page.goto("/applications?app=gradethis&env=prod");
+  await page.getByRole("button", { name: "Edit & ship rate_limits in prod" }).click();
+  const modal = page.getByTestId("ship-modal");
+  await modal.getByRole("textbox", { name: "rate_limits value" }).fill("250");
+  await expect(modal.getByTestId("ship-validation")).toContainText("valid");
+  await modal.getByTestId("ship-confirm-env").fill("prod");
+  await page.getByTestId("ship-submit").click();
+  await expect(modal).toHaveAttribute("data-phase", "rollout");
+
+  const action = page.getByRole("button", { name: "Open release" });
+  await expect(action).toBeVisible();
+  await action.click();
+  await expect(page).toHaveURL(/\/releases\?.*app=gradethis/);
 });
 
 test("a toast never covers the mobile drawer trigger", async ({ page }) => {

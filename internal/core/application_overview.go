@@ -19,6 +19,7 @@ const maxOverviewAcks = 1000
 
 // OverviewOptions tunes GetApplicationOverview / GetFleetOverview.
 type OverviewOptions struct {
+	SchemaVersion *uint64
 	// Environments restricts the named overview to these environments (all
 	// when empty). Every named environment must exist.
 	Environments []string
@@ -36,9 +37,9 @@ type environmentReleaseFacts struct {
 	Acks          []domain.ReleaseAcknowledgement
 }
 
-func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.ReleaseStore, ns domain.NamespaceRef, releaseName string, withAcks bool) (environmentReleaseFacts, error) {
+func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.ReleaseStore, track domain.ReleaseTrack, withAcks bool) (environmentReleaseFacts, error) {
 	var facts environmentReleaseFacts
-	active, err := rs.GetActiveConfigurationRelease(ctx, ns, releaseName)
+	active, err := rs.GetActiveConfigurationRelease(ctx, track)
 	switch {
 	case err == nil:
 		facts.Active = &active
@@ -46,7 +47,7 @@ func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.Re
 	default:
 		return facts, err
 	}
-	latest, _, err := rs.ListConfigurationReleases(ctx, ns, releaseName, storage.ListPage{Limit: 1})
+	latest, _, err := rs.ListConfigurationReleases(ctx, trackFilter(track), storage.ListPage{Limit: 1})
 	if err != nil {
 		return facts, err
 	}
@@ -55,11 +56,11 @@ func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.Re
 		facts.Latest = &release
 		facts.LatestVersion = release.Version
 	}
-	if facts.Count, err = rs.CountConfigurationReleases(ctx, ns, releaseName); err != nil {
+	if facts.Count, err = rs.CountConfigurationReleases(ctx, trackFilter(track)); err != nil {
 		return facts, err
 	}
 	if withAcks {
-		if facts.Acks, _, err = rs.ListReleaseAcknowledgements(ctx, ns, "", storage.ListPage{Limit: maxOverviewAcks}); err != nil {
+		if facts.Acks, _, err = rs.ListReleaseAcknowledgements(ctx, trackFilter(track), storage.ListPage{Limit: maxOverviewAcks}); err != nil {
 			return facts, err
 		}
 	}
@@ -152,6 +153,10 @@ func (s *Service) GetApplicationOverview(ctx context.Context, pr Principal, name
 	if err != nil {
 		return domain.ApplicationOverview{}, err
 	}
+	app, err = s.selectApplicationTrack(ctx, app, opts.SchemaVersion)
+	if err != nil {
+		return domain.ApplicationOverview{}, err
+	}
 	environments, err := store.ListApplicationNamespaces(ctx, name)
 	if err != nil {
 		return domain.ApplicationOverview{}, err
@@ -196,7 +201,7 @@ func (s *Service) GetApplicationOverview(ctx context.Context, pr Principal, name
 	facts := make(map[string]environmentReleaseFacts, len(environments))
 	otherActive := map[string]domain.ConfigurationRelease{}
 	for _, ns := range environments {
-		f, err := s.loadEnvironmentReleaseFacts(ctx, rs, ns.NamespaceRef, app.ReleaseName, true)
+		f, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns.NamespaceRef), true)
 		if err != nil {
 			return domain.ApplicationOverview{}, err
 		}
@@ -262,6 +267,10 @@ func (s *Service) GetFleetOverview(ctx context.Context, pr Principal, opts Overv
 	now := s.now()
 	out := make([]domain.FleetApplication, 0, len(apps))
 	for _, app := range apps {
+		app, err = s.selectApplicationTrack(ctx, app, opts.SchemaVersion)
+		if err != nil {
+			return nil, err
+		}
 		environments, err := store.ListApplicationNamespaces(ctx, app.Name)
 		if err != nil {
 			return nil, err
@@ -277,7 +286,7 @@ func (s *Service) GetFleetOverview(ctx context.Context, pr Principal, opts Overv
 		facts := make(map[string]environmentReleaseFacts, len(environments))
 		otherActive := map[string]domain.ConfigurationRelease{}
 		for _, ns := range environments {
-			f, err := s.loadEnvironmentReleaseFacts(ctx, rs, ns.NamespaceRef, app.ReleaseName, false)
+			f, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns.NamespaceRef), false)
 			if err != nil {
 				return nil, err
 			}

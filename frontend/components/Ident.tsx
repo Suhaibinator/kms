@@ -76,24 +76,31 @@ export function Ident({ kind, value, href, tooltip, production, className }: Ide
 export function ReleaseIdent({
   name,
   version,
+  schemaVersion,
   href,
   tooltip,
   className,
 }: {
   name: string;
   version: number;
+  schemaVersion?: number;
   href?: string;
   tooltip?: ReactNode | false;
   className?: string;
 }) {
   return (
-    <Ident
-      kind="release"
-      value={`${name}@${version}`}
-      href={href}
-      tooltip={tooltip}
-      className={className}
-    />
+    <>
+      <Ident
+        kind="release"
+        value={`${name}@${version}`}
+        href={href}
+        tooltip={tooltip}
+        className={className}
+      />
+      {schemaVersion === undefined ? null : (
+        <span className="faint text-sm mono">schema v{schemaVersion}</span>
+      )}
+    </>
   );
 }
 

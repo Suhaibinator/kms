@@ -58,11 +58,13 @@ func envTestBoundSecret(key string) *kmsv1.SecretMetadata {
 // selectors it carried. Identity is metadata; a per-secret credential is the
 // exact GetSecret request field.
 type envCall struct {
-	method  string
-	path    string
-	version uint64
-	prefix  string
-	auth    string
+	method           string
+	path             string
+	version          uint64
+	prefix           string
+	auth             string
+	schemaVersion    uint64
+	schemaVersionSet bool
 }
 
 type envRecorder struct {
@@ -225,7 +227,7 @@ type envReleaseStub struct {
 }
 
 func (s *envReleaseStub) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
-	s.rec.record(ctx, envCall{method: "GetActiveRelease", path: req.GetName()})
+	s.rec.record(ctx, envCall{method: "GetActiveRelease", path: req.GetName(), schemaVersion: req.GetSchemaVersion(), schemaVersionSet: req.SchemaVersion != nil})
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -609,7 +611,7 @@ func TestEnvReleaseBoundPinFailsClosed(t *testing.T) {
 		{Version: 8, State: "enabled"},
 		{Version: 9, State: "enabled", Bound: true},
 	}
-	if code := f.run("--release", "runtime"); code != exitError {
+	if code := f.run("--release", "runtime", "--schema-version", "0"); code != exitError {
 		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 	}
 	if f.stdout() != "" {
@@ -657,7 +659,7 @@ func TestEnvReleaseRejectsUnavailableBoundMetadataBeforeEmission(t *testing.T) {
 			f := newEnvFixture(t)
 			f.installRelease()
 			f.secrets.metadata["/prod/app/stripe-key"].Versions = tc.versions
-			if code := f.run("--release", "runtime"); code != exitError {
+			if code := f.run("--release", "runtime", "--schema-version", "0"); code != exitError {
 				t.Fatalf("exit = %d, want %d (stdout=%q stderr=%s)", code, exitError, f.stdout(), f.stderr())
 			}
 			if !strings.Contains(f.stderr(), "metadata") {
@@ -746,7 +748,7 @@ func TestEnvServerErrorsKeepTheirExitCode(t *testing.T) {
 			set: func(f *envFixture) {
 				f.releases.err = status.Error(codes.NotFound, "no such release")
 			},
-			args: []string{"--release", "runtime"},
+			args: []string{"--release", "runtime", "--schema-version", "0"},
 			want: exitNotFound,
 		},
 		{
@@ -769,7 +771,7 @@ func TestEnvServerErrorsKeepTheirExitCode(t *testing.T) {
 				f.installRelease()
 				f.params.getErr["/prod/app/db/host"] = status.Error(codes.ResourceExhausted, "slow down")
 			},
-			args: []string{"--release", "runtime"},
+			args: []string{"--release", "runtime", "--schema-version", "0"},
 			want: exitResourceExhausted,
 		},
 	} {
@@ -797,7 +799,7 @@ func TestEnvReleaseInjectsVerifiedPins(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
 	f.installRelease()
-	code := f.run("--release", "runtime")
+	code := f.run("--release", "runtime", "--schema-version", "0")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
@@ -808,6 +810,10 @@ func TestEnvReleaseInjectsVerifiedPins(t *testing.T) {
 	// Namespace listing is not consulted at all: a release is its own selection.
 	if n := f.rec.count("ListParameters") + f.rec.count("ListSecrets"); n != 0 {
 		t.Fatalf("release mode made %d list calls", n)
+	}
+	active := f.rec.call(t, "GetActiveRelease", "runtime")
+	if !active.schemaVersionSet || active.schemaVersion != 0 {
+		t.Fatalf("GetActiveRelease schema selector = (%d, set=%t), want explicit 0", active.schemaVersion, active.schemaVersionSet)
 	}
 	if got := f.rec.call(t, "GetParameter", "/prod/app/db/host").version; got != 3 {
 		t.Fatalf("GetParameter version = %d, want the pinned 3", got)
@@ -827,7 +833,7 @@ func TestEnvReleaseWithoutSecrets(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
 	f.installRelease()
-	if code := f.run("--release", "runtime", "--no-secrets"); code != 0 {
+	if code := f.run("--release", "runtime", "--schema-version", "0", "--no-secrets"); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	want := "API_URL=" + envTestAPIURLValue + "\nDB_HOST=" + envTestHostValue + "\n"
@@ -959,7 +965,7 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			f := newEnvFixture(t)
 			f.installRelease()
 			tc.set(f)
-			code := f.run("--release", "runtime")
+			code := f.run("--release", "runtime", "--schema-version", "0")
 			if code != exitError {
 				t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 			}
@@ -982,7 +988,7 @@ func TestEnvReleaseRejectsTamperedManifestBeforeReads(t *testing.T) {
 	f.installRelease()
 	f.releases.release.MetadataJson = `{"tampered":true}`
 
-	if code := f.run("--release", "runtime"); code != exitError {
+	if code := f.run("--release", "runtime", "--schema-version", "0"); code != exitError {
 		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 	}
 	if !strings.Contains(f.stderr(), "release runtime: manifest digest mismatch") {
@@ -993,6 +999,71 @@ func TestEnvReleaseRejectsTamperedManifestBeforeReads(t *testing.T) {
 	}
 	if f.stdout() != "" {
 		t.Fatalf("stdout = %q, want no partial candidate", f.stdout())
+	}
+}
+
+func TestEnvReleaseValidatesReturnedSchemaBeforeResourceReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, command       string
+		requested, returned uint64
+		wantSuccess         bool
+	}{
+		{name: "env explicit zero rejects schema seven", command: "env", requested: 0, returned: 7},
+		{name: "env explicit seven rejects schema zero", command: "env", requested: 7, returned: 0},
+		{name: "exec explicit zero rejects schema seven", command: "exec", requested: 0, returned: 7},
+		{name: "exec explicit seven rejects schema zero", command: "exec", requested: 7, returned: 0},
+		{name: "env matching positive schema", command: "env", requested: 7, returned: 7, wantSuccess: true},
+		{name: "exec matching positive schema", command: "exec", requested: 7, returned: 7, wantSuccess: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var f *envFixture
+			var launched func() bool
+			if tc.command == "exec" {
+				execFixture := newExecFixture(t, exitOK, nil)
+				f = execFixture.envFixture
+				launched = func() bool { return execFixture.launched.called }
+			} else {
+				f = newEnvFixture(t)
+				launched = func() bool { return false }
+			}
+			f.installRelease()
+			f.releases.release.SchemaVersion = tc.returned
+			setEnvTestReleaseDigest(f.releases.release)
+			selector := strconv.FormatUint(tc.requested, 10)
+			var code int
+			if tc.command == "exec" {
+				code = f.runExec([]string{"--release", "runtime", "--schema-version", selector, "--no-secrets"}, "workload")
+			} else {
+				code = f.run("--release", "runtime", "--schema-version", selector, "--no-secrets")
+			}
+			if tc.wantSuccess {
+				if code != exitOK {
+					t.Fatalf("exit=%d stderr=%s", code, f.stderr())
+				}
+				if tc.command == "exec" && !launched() {
+					t.Fatal("matching release schema did not launch child")
+				}
+				return
+			}
+			if code != exitError {
+				t.Fatalf("exit=%d, want %d; stderr=%s", code, exitError, f.stderr())
+			}
+			want := fmt.Sprintf("server returned schema %d, requested %d", tc.returned, tc.requested)
+			if !strings.Contains(f.stderr(), want) {
+				t.Fatalf("stderr=%q, want %q", f.stderr(), want)
+			}
+			if f.stdout() != "" {
+				t.Fatalf("stdout=%q, want no values", f.stdout())
+			}
+			if got := f.rec.count("GetParameter") + f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); got != 0 {
+				t.Fatalf("foreign schema caused %d resource reads: %+v", got, f.rec.snapshot())
+			}
+			if launched() {
+				t.Fatal("foreign schema launched child")
+			}
+		})
 	}
 }
 
@@ -1033,7 +1104,7 @@ func TestEnvReleaseRejectsForeignPinsBeforeReads(t *testing.T) {
 			f := newEnvFixture(t)
 			f.installRelease()
 			tc.set(f.releases.release)
-			if code := f.run("--release", "runtime"); code != exitError {
+			if code := f.run("--release", "runtime", "--schema-version", "0"); code != exitError {
 				t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 			}
 			if !strings.Contains(f.stderr(), tc.want) {
@@ -1054,7 +1125,7 @@ func TestEnvReleaseRejectsForeignPinsBeforeReads(t *testing.T) {
 func TestEnvPrefixAndReleaseConflict(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
-	if code := f.run("--release", "runtime", "--prefix", "db/"); code != exitUsage {
+	if code := f.run("--release", "runtime", "--schema-version", "0", "--prefix", "db/"); code != exitUsage {
 		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitUsage, f.stderr())
 	}
 	if !strings.Contains(f.stderr(), "--prefix and --release are mutually exclusive") {
@@ -1074,7 +1145,7 @@ func TestEnvIncompleteModeFlagConflicts(t *testing.T) {
 	}{
 		{
 			name: "release is atomic",
-			args: []string{"--release", "runtime", "--allow-incomplete-secrets"},
+			args: []string{"--release", "runtime", "--schema-version", "0", "--allow-incomplete-secrets"},
 			want: "--allow-incomplete-secrets cannot be used with --release",
 		},
 		{
@@ -1142,7 +1213,7 @@ func TestEnvOutputFlagConflicts(t *testing.T) {
 		},
 		{
 			name: "invalid --release",
-			args: []string{"--release", "not a name"},
+			args: []string{"--release", "not a name", "--schema-version", "0"},
 			want: "invalid --release",
 		},
 	} {

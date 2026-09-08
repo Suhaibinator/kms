@@ -37,6 +37,7 @@ func (s *defaultsAdminStub) ApplyApplicationDefaults(ctx context.Context, req *k
 		Namespace: &kmsv1.NamespaceRef{Env: req.GetNamespace().GetEnv(), App: req.GetNamespace().GetApp()},
 		Artifact:  append([]byte(nil), req.GetArtifact()...), Overwrite: req.GetOverwrite(),
 		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(), UpdateDefinition: req.GetUpdateDefinition(),
+		SchemaVersion: req.SchemaVersion,
 	}
 	s.calls = append(s.calls, copyReq)
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -169,7 +170,7 @@ func TestDefaultsApplyExecuteReadsStdinAndUsesFreshPlan(t *testing.T) {
 	c.dialOverride = dial
 	code := c.Run([]string{
 		"defaults", "apply", "dev/app", "--from", "-", "--execute", "--overwrite",
-		"--insecure",
+		"--schema-version", "0", "--insecure",
 	})
 	if code != 0 {
 		t.Fatalf("execute exit = %d, stderr=%s", code, c.stderr())
@@ -188,6 +189,9 @@ func TestDefaultsApplyExecuteReadsStdinAndUsesFreshPlan(t *testing.T) {
 	}
 	if !first.GetOverwrite() || !second.GetOverwrite() {
 		t.Fatal("overwrite was not preserved across preview and execute")
+	}
+	if first.SchemaVersion == nil || second.SchemaVersion == nil || first.GetSchemaVersion() != 0 || second.GetSchemaVersion() != 0 {
+		t.Fatal("explicit schema version zero was not preserved across preview and execute")
 	}
 	if string(first.GetArtifact()) != artifact || string(second.GetArtifact()) != artifact {
 		t.Fatal("artifact was not preserved across preview and execute")

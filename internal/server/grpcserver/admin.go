@@ -73,7 +73,7 @@ func (h *adminServer) ApplyApplicationDefaults(ctx context.Context, req *kmsv1.A
 		return nil, err
 	}
 	result, err := h.s.svc.ApplyApplicationDefaults(ctx, pr, domain.DefaultsApplyInput{
-		Namespace: nsRefFromProto(req.GetNamespace()), Artifact: req.GetArtifact(),
+		SchemaVersion: req.SchemaVersion, Namespace: nsRefFromProto(req.GetNamespace()), Artifact: req.GetArtifact(),
 		Overwrite: req.GetOverwrite(), UpdateDefinition: req.GetUpdateDefinition(),
 		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
 	})
@@ -105,8 +105,9 @@ func (h *adminServer) CreateApplicationRelease(ctx context.Context, req *kmsv1.C
 		return nil, err
 	}
 	result, err := h.s.svc.CreateApplicationRelease(ctx, pr, domain.ApplicationReleaseCreateInput{
-		Namespace: nsRefFromProto(req.GetNamespace()),
-		Artifact:  req.GetArtifact(), Metadata: req.GetMetadataJson(),
+		SchemaVersion: req.SchemaVersion,
+		Namespace:     nsRefFromProto(req.GetNamespace()),
+		Artifact:      req.GetArtifact(), Metadata: req.GetMetadataJson(),
 		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
 	})
 	if err != nil {
@@ -371,7 +372,7 @@ func (h *adminServer) ListReleaseSubscribers(ctx context.Context, req *kmsv1.Lis
 	if err != nil {
 		return nil, err
 	}
-	rows, next, rev, err := h.s.svc.ListReleaseSubscribers(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetReleaseName(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	rows, next, rev, err := h.s.svc.ListReleaseSubscribers(ctx, pr, domain.ReleaseFilter{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetReleaseName(), SchemaVersion: req.SchemaVersion}, pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

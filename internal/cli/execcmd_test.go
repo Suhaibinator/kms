@@ -236,7 +236,7 @@ func TestExecReleaseNoSecretsLaunchesWithParametersOnly(t *testing.T) {
 	t.Parallel()
 	f := newExecFixture(t, 0, nil)
 	f.installRelease()
-	if code := f.runExec([]string{"--release", "runtime", "--no-secrets"}, "/usr/bin/app"); code != exitOK {
+	if code := f.runExec([]string{"--release", "runtime", "--schema-version", "0", "--no-secrets"}, "/usr/bin/app"); code != exitOK {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	if !f.launched.called {
@@ -477,13 +477,13 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		},
 		{
 			name: "incomplete mode with release",
-			args: []string{"--release", "runtime", "--allow-incomplete-secrets"},
+			args: []string{"--release", "runtime", "--schema-version", "0", "--allow-incomplete-secrets"},
 			set:  func(*envFixture) {},
 			want: exitUsage,
 		},
 		{
 			name: "release secret unavailable",
-			args: []string{"--release", "runtime"},
+			args: []string{"--release", "runtime", "--schema-version", "0"},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.secrets.getErr["/prod/app/stripe-key"] = status.Error(codes.FailedPrecondition, "unavailable")
@@ -505,7 +505,7 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		},
 		{
 			name: "a pinned parameter digest does not verify",
-			args: []string{"--release", "runtime"},
+			args: []string{"--release", "runtime", "--schema-version", "0"},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.params.get["/prod/app/db/host"].Value = "db.tampered"
@@ -514,7 +514,7 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		},
 		{
 			name: "a release manifest digest does not verify",
-			args: []string{"--release", "runtime"},
+			args: []string{"--release", "runtime", "--schema-version", "0"},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.releases.release.MetadataJson = `{"tampered":true}`

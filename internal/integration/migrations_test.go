@@ -41,6 +41,7 @@ func TestV03GreenfieldBaselineAndExactReopen(t *testing.T) {
 		"ca_keys",
 		"change_log",
 		"configuration_release_activations",
+		"configuration_release_counters",
 		"configuration_release_entries",
 		"configuration_release_labels",
 		"configuration_releases",
@@ -55,6 +56,7 @@ func TestV03GreenfieldBaselineAndExactReopen(t *testing.T) {
 		"policies",
 		"release_subscriber_connections",
 		"release_subscriber_states",
+		"schema_free_contracts",
 		"schema_migrations",
 		"secret_labels",
 		"secret_version_high_water",
@@ -91,9 +93,9 @@ func TestV03GreenfieldBaselineAndExactReopen(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("close schema-version rows: %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{2}) {
+	if !reflect.DeepEqual(versions, []int{3}) {
 		_ = db.Close()
-		t.Fatalf("schema versions = %v, want [2]", versions)
+		t.Fatalf("schema versions = %v, want [3]", versions)
 	}
 	var changeLogDDL string
 	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'change_log'").Scan(&changeLogDDL); err != nil {
@@ -134,6 +136,19 @@ func TestV03RejectsIncompatibleDatabasesWithoutMutation(t *testing.T) {
 				`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
 				`INSERT INTO schema_migrations VALUES (1, 'partial')`,
 				`CREATE TABLE secrets (id INTEGER PRIMARY KEY, client_bound INTEGER NOT NULL DEFAULT 0)`,
+			)
+		},
+		"previous baseline version": func(t *testing.T, path string) {
+			store, err := storage.Open(path)
+			if err != nil {
+				t.Fatalf("create database for previous-version rejection: %v", err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			createRawDatabase(t, path,
+				`PRAGMA journal_mode = DELETE`,
+				`UPDATE schema_migrations SET version = 2`,
 			)
 		},
 		"drifted baseline": func(t *testing.T, path string) {

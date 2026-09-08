@@ -21,8 +21,9 @@ func TestApplyApplicationDefaults(t *testing.T) {
 		DefinitionChanged: true,
 	}, nil)
 
+	schemaVersion := uint64(0)
 	result, err := client.ApplyApplicationDefaults(context.Background(), ApplicationDefaultsApplyOptions{
-		Namespace: "dev/gradethis", Artifact: []byte("artifact"), Overwrite: true, UpdateDefinition: true,
+		Namespace: "dev/gradethis", SchemaVersion: &schemaVersion, Artifact: []byte("artifact"), Overwrite: true, UpdateDefinition: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +36,7 @@ func TestApplyApplicationDefaults(t *testing.T) {
 	calls := server.ApplicationDefaultsCalls()
 	if len(calls) != 1 || calls[0].GetNamespace().GetEnv() != "dev" ||
 		calls[0].GetNamespace().GetApp() != "gradethis" || !calls[0].GetOverwrite() ||
-		!calls[0].GetUpdateDefinition() ||
+		!calls[0].GetUpdateDefinition() || calls[0].SchemaVersion == nil ||
 		string(calls[0].GetArtifact()) != "artifact" {
 		t.Fatalf("calls = %#v", calls)
 	}

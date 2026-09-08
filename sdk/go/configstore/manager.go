@@ -115,6 +115,8 @@ func Start(
 	validateManifest := manifestValidator(options.Contract)
 	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
 		Name:              options.Release,
+		SchemaVersion:     options.SchemaVersion,
+		SchemaSHA256:      options.SchemaSHA256,
 		ReconcileInterval: options.ReconcileInterval,
 		BindingKeys:       bindingKeys,
 		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
@@ -388,12 +390,15 @@ func (m *Manager) Status() Status {
 	observed := m.observed
 	if loaderStatus.ObservedVersion != observed.version || loaderStatus.ObservedRevision != observed.activationRevision {
 		// Prefetch contract and resolution failures do not produce a resolved
-		// snapshot. Preserve the safe version/revision observed by ReleaseLoader
-		// while leaving unavailable schema/digest fields empty.
+		// snapshot. Preserve the selected track from the last trusted manifest
+		// with the safe version/revision observed by ReleaseLoader, while leaving
+		// the unavailable candidate digest empty.
 		observed = ReleaseIdentity{
+			namespace:          observed.namespace,
 			name:               m.options.Release,
 			version:            loaderStatus.ObservedVersion,
 			activationRevision: loaderStatus.ObservedRevision,
+			schemaVersion:      observed.schemaVersion,
 		}
 	}
 	status := Status{

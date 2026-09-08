@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/token"
 	"math"
+	"sort"
 )
 
 const maxGeneratedSchemaBytes = 1 << 20
@@ -19,6 +20,7 @@ type schemaDocument struct {
 	AdditionalProperties bool                      `json:"additionalProperties"`
 	Required             []string                  `json:"required"`
 	Properties           map[string]map[string]any `json:"properties"`
+	Contract             []contractEntry           `json:"x-kms-contract"`
 }
 
 func renderSchema(model *ir) ([]byte, error) {
@@ -29,6 +31,7 @@ func renderSchema(model *ir) ([]byte, error) {
 		AdditionalProperties: false,
 		Required:             make([]string, 0, len(model.Groups)),
 		Properties:           make(map[string]map[string]any, len(model.Groups)),
+		Contract:             schemaContract(model),
 	}
 	for _, group := range model.Groups {
 		required := make([]string, 0, len(group.Fields))
@@ -63,6 +66,18 @@ func renderSchema(model *ir) ([]byte, error) {
 		return nil, fmt.Errorf("configgen: generated schema is %d bytes; maximum is %d", len(data), maxGeneratedSchemaBytes)
 	}
 	return data, err
+}
+
+func schemaContract(model *ir) []contractEntry {
+	entries := make([]contractEntry, 0, len(model.Groups)+len(model.Secrets))
+	for _, group := range model.Groups {
+		entries = append(entries, contractEntry{Alias: group.Alias, Kind: "parameter", ContentType: "json"})
+	}
+	for _, field := range model.Secrets {
+		entries = append(entries, contractEntry{Alias: field.Source, Kind: "secret"})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
+	return entries
 }
 
 // annotatedSchema renders a property schema and adds the source-level
@@ -278,9 +293,9 @@ type renderedContract struct {
 }
 
 type contractEntry struct {
-	Alias       string
-	Kind        string
-	ContentType string
+	Alias       string `json:"alias"`
+	Kind        string `json:"kind"`
+	ContentType string `json:"content_type"`
 }
 
 func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) {
@@ -299,7 +314,7 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 		Secrets:      make([]contractSecret, 0, len(model.Secrets)),
 		Views:        make([]contractView, 0, len(model.Views)),
 	}
-	rendered := renderedContract{SchemaSHA256: hashText}
+	rendered := renderedContract{SchemaSHA256: hashText, Entries: schemaContract(model)}
 	for _, group := range model.Groups {
 		contractGroup := contractGroup{Alias: group.Alias, Kind: "parameter", ContentType: "json"}
 		for _, field := range group.Fields {
@@ -310,14 +325,12 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 			})
 		}
 		doc.Groups = append(doc.Groups, contractGroup)
-		rendered.Entries = append(rendered.Entries, contractEntry{Alias: group.Alias, Kind: "parameter", ContentType: "json"})
 	}
 	for _, field := range model.Secrets {
 		doc.Secrets = append(doc.Secrets, contractSecret{
 			Alias: field.Source, Kind: "secret", GoName: field.GoName, GoPath: field.GoPath, Reload: field.Reload,
 			Encoding: "secret", Views: append([]string(nil), field.Views...),
 		})
-		rendered.Entries = append(rendered.Entries, contractEntry{Alias: field.Source, Kind: "secret"})
 	}
 	for _, view := range model.Views {
 		contractView := contractView{Name: view.Name, Method: view.Method}

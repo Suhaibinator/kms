@@ -39,13 +39,13 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 
 	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
 	created, err := releases.CreateRelease(actx, &kmsv1.CreateReleaseRequest{
-		Namespace: ref.GetNamespace(), Name: "runtime",
+		Namespace: ref.GetNamespace(), Name: "runtime", SchemaVersion: new(uint64),
 		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "history", Kind: "secret", Ref: ref, Version: 7}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{
+	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(0),
 		Namespace: ref.GetNamespace(), Name: "runtime", Version: created.GetRelease().GetVersion(),
 	}); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 		{"default", []string{"get-secret", "/prod/review/history"}, "value-300"},
 		{"current", []string{"get-secret", "/prod/review/history", "--label", "current"}, "value-300"},
 		{"previous", []string{"get-secret", "/prod/review/history", "--label", "previous"}, "value-299"},
-		{"release", []string{"env", "prod/review", "--release", "runtime"}, "HISTORY=value-7"},
+		{"release", []string{"env", "prod/review", "--release", "runtime", "--schema-version", "0"}, "HISTORY=value-7"},
 		{"bind", []string{"secret", "bind", "/prod/review/history"}, "Bound"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -46,6 +46,7 @@ const (
 )
 
 type DefaultsApplyInput struct {
+	SchemaVersion    *uint64
 	Namespace        NamespaceRef
 	Artifact         []byte
 	Overwrite        bool
@@ -80,11 +81,12 @@ type DefaultsApplyResult struct {
 // application's canonical release from one generated defaults artifact.
 // Execute never activates the release; the exact preview digest is required.
 type ApplicationReleaseCreateInput struct {
-	Namespace  NamespaceRef
-	Artifact   []byte
-	Metadata   string
-	Execute    bool
-	PlanDigest string
+	SchemaVersion *uint64
+	Namespace     NamespaceRef
+	Artifact      []byte
+	Metadata      string
+	Execute       bool
+	PlanDigest    string
 }
 
 const (
@@ -229,6 +231,7 @@ type ShipChange struct {
 }
 
 type ShipInput struct {
+	SchemaVersion         *uint64 // Required; 0 selects the schema-free track.
 	Application           string
 	Environment           string
 	Changes               []ShipChange
@@ -301,12 +304,13 @@ type ShipResult struct {
 // --- clone ------------------------------------------------------------------
 
 type CloneEnvironmentInput struct {
-	Application string
-	SourceEnv   string
-	TargetEnv   string
-	CopyValues  bool
-	AuthMethods []AuthMethod
-	Description string
+	SchemaVersion *uint64 // Required; 0 selects the schema-free track.
+	Application   string
+	SourceEnv     string
+	TargetEnv     string
+	CopyValues    bool
+	AuthMethods   []AuthMethod
+	Description   string
 }
 
 const (

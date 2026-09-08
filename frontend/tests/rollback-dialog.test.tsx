@@ -73,7 +73,12 @@ describe("RollbackDialog", () => {
   it("validates the previous release on open and rolls back with the CAS guard", async () => {
     const props = renderDialog({ namespace: devNs });
     await waitFor(() =>
-      expect(mocks.validateRelease).toHaveBeenCalledWith(devNs, name, active.previous_version),
+      expect(mocks.validateRelease).toHaveBeenCalledWith(
+        devNs,
+        name,
+        active.previous_version,
+        active.schema_version,
+      ),
     );
     const check = await within(dialog()).findByTestId("rollback-check");
     expect(check).toHaveTextContent(`${name}@${active.previous_version}`);
@@ -88,6 +93,7 @@ describe("RollbackDialog", () => {
         env: "dev",
         app: incident.application.name,
         name,
+        schema_version: active.schema_version,
         expected_current_version: active.version,
       }),
     );
@@ -106,9 +112,10 @@ describe("RollbackDialog", () => {
         app: incident.application.name,
         env: "prod",
         name,
-        release: `${name}@${active.previous_version}`,
+        schemaVersion: active.schema_version,
+        release: `${name}@${active.schema_version}:${active.previous_version}`,
         section: "compare",
-        compare: `${name}@${active.version}`,
+        compare: `${name}@${active.schema_version}:${active.version}`,
       }),
     );
     fireEvent.click(within(dialog()).getByRole("link", { name: /^See what changes/ }));
@@ -155,7 +162,10 @@ describe("RollbackDialog", () => {
     expect(check).toHaveTextContent("can no longer be activated");
     expect(
       within(check).getByRole("link", { name: "Activate a different version…" }),
-    ).toHaveAttribute("href", `/releases?app=${incident.application.name}&env=prod&name=${name}`);
+    ).toHaveAttribute(
+      "href",
+      `/releases?app=${incident.application.name}&env=prod&name=${name}&schema_version=${active.schema_version}`,
+    );
     // The violation row links to the secret it names, keyed from the active release's entries.
     const entry = active.entries.find((candidate) => candidate.alias === "db_password");
     expect(within(check).getByRole("link", { name: "Open db_password" })).toHaveAttribute(
@@ -198,7 +208,12 @@ describe("RollbackDialog", () => {
 
     fireEvent.click(within(dialog()).getByRole("button", { name: "Refresh" }));
     await waitFor(() =>
-      expect(mocks.validateRelease).toHaveBeenLastCalledWith(devNs, name, active.version),
+      expect(mocks.validateRelease).toHaveBeenLastCalledWith(
+        devNs,
+        name,
+        active.version,
+        active.schema_version,
+      ),
     );
     expect(within(dialog()).getByTestId("rollback-check")).toHaveTextContent(
       `${name}@${active.version}`,
@@ -209,6 +224,7 @@ describe("RollbackDialog", () => {
         env: "dev",
         app: incident.application.name,
         name,
+        schema_version: active.schema_version,
         expected_current_version: active.version + 1,
       }),
     );

@@ -215,7 +215,7 @@ commit, a rejected candidate preserves the last-known-good value.
 import type { PreparedRelease, ReleaseSnapshot } from "@suhaibinator/kms";
 
 let active: Readonly<{ requestTimeoutMs: number }> | undefined;
-const loader = await client.createReleaseLoader({ name: "runtime" });
+const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
 
 await loader.run(async (snapshot: ReleaseSnapshot): Promise<PreparedRelease> => {
   const raw = snapshot.parameter("request_timeout")?.value();
@@ -430,6 +430,13 @@ travels in either direction; the `VerifyResult` exposes `passed()`,
 `configuration-release:verify-defaults` operation and is rate limited per
 identity; `RateLimitedError` means the budget is spent, so wait for the window
 to reset instead of retrying.
+
+Generated verification selects the binding's embedded schema digest. For custom
+schema-free inputs, call `verifyDefaults` from `@suhaibinator/kms/configstore`
+with `input.schemaSha256: ""` and `options.schemaVersion: 0n`. Numeric selection
+and a nonempty input digest are mutually exclusive, so generated bindings reject
+numeric overrides. Results retain the resolved `schemaVersion`, including zero,
+in the returned object, JSON, and human report.
 
 ```ts
 import { verifyReleaseDefaults } from "./config.generated.js";

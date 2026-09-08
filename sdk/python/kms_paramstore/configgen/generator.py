@@ -53,10 +53,22 @@ def generate_artifacts(
             "type": "object", "additionalProperties": False,
             "required": [field.json_name for field in fields], "properties": properties,
         }
+    schema_contract = sorted(
+        [
+            {"alias": alias, "kind": "parameter", "content_type": "json"}
+            for alias in groups
+        ]
+        + [
+            {"alias": field.alias, "kind": "secret", "content_type": ""}
+            for field in spec.secrets
+        ],
+        key=lambda entry: entry["alias"],
+    )
     schema_object = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object", "additionalProperties": False,
         "required": list(groups), "properties": groups,
+        "x-kms-contract": schema_contract,
     }
     compact_schema = json.dumps(schema_object, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     schema_sha256 = hashlib.sha256(compact_schema.encode()).hexdigest()
@@ -365,10 +377,10 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
         "        return cast(Snapshot, super().current)",
         "",
         "    def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[_RootConfig]:",
-        "        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
+        "        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)",
         "",
         "    async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[_RootConfig]:",
-        "        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
+        "        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, schema_sha256=SCHEMA_SHA256, **options)",
         "",
         "    def defaults_artifact(self, profile: str) -> str:",
         "        return _encode_defaults_artifact(profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, parameters=self.encode_defaults_groups())",

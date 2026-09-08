@@ -145,9 +145,10 @@ type kmsverifyFixture struct {
 	admin core.Principal
 	ns    domain.NamespaceRef
 	// otherNS is a second real namespace the verify policy does not cover.
-	otherNS     domain.NamespaceRef
-	sdkContract []configstore.ContractEntry
-	spec        kmsverify.Spec[fixtureconfig.Config]
+	otherNS       domain.NamespaceRef
+	schemaVersion uint64
+	sdkContract   []configstore.ContractEntry
+	spec          kmsverify.Spec[fixtureconfig.Config]
 
 	// verifyToken belongs to the unbound verify-only identity.
 	verifyName  string
@@ -226,7 +227,7 @@ func setupKMSVerifyFixture(t *testing.T) *kmsverifyFixture {
 		}
 	}
 
-	shipped, err := env.svc.ShipApplicationChange(ctx, admin, domain.ShipInput{Application: kmsverifyApp, Environment: kmsverifyEnv})
+	shipped, err := env.svc.ShipApplicationChange(ctx, admin, domain.ShipInput{SchemaVersion: &schema.Version, Application: kmsverifyApp, Environment: kmsverifyEnv})
 	if err != nil {
 		t.Fatalf("ship first release: %v", err)
 	}
@@ -235,7 +236,7 @@ func setupKMSVerifyFixture(t *testing.T) *kmsverifyFixture {
 	}
 
 	f := &kmsverifyFixture{
-		env: env, ctx: ctx, admin: admin, ns: ns, otherNS: otherNS, sdkContract: sdkContract,
+		env: env, ctx: ctx, admin: admin, ns: ns, otherNS: otherNS, schemaVersion: schema.Version, sdkContract: sdkContract,
 		spec: kmsverify.Spec[fixtureconfig.Config]{
 			Defaults: func(profile string) (*fixtureconfig.Config, error) {
 				if profile != kmsverifyProfile {
@@ -314,7 +315,7 @@ func (f *kmsverifyFixture) verifyEnv(t *testing.T) kmsverify.Env {
 func (f *kmsverifyFixture) shipRuntime(t *testing.T, value string, expectedActive uint64) uint64 {
 	t.Helper()
 	shipped, err := f.env.svc.ShipApplicationChange(f.ctx, f.admin, domain.ShipInput{
-		Application: kmsverifyApp, Environment: kmsverifyEnv, ExpectedActiveVersion: &expectedActive,
+		SchemaVersion: &f.schemaVersion, Application: kmsverifyApp, Environment: kmsverifyEnv, ExpectedActiveVersion: &expectedActive,
 		Changes: []domain.ShipChange{{Alias: "runtime", Value: &value}},
 	})
 	if err != nil {
@@ -458,10 +459,10 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		}
 		releases := kmsv1.NewConfigurationReleaseServiceClient(f.env.dial(t, nil))
 		verifyCtx := networkAuthContext(f.ctx, f.verifyToken)
-		if _, err := releases.GetActiveRelease(verifyCtx, &kmsv1.GetActiveReleaseRequest{Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease}); status.Code(err) != codes.PermissionDenied {
+		if _, err := releases.GetActiveRelease(verifyCtx, &kmsv1.GetActiveReleaseRequest{SchemaVersion: integrationSchemaVersion(1), Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("GetActiveRelease as verify-only = %v, want PermissionDenied", err)
 		}
-		if _, err := releases.GetRelease(verifyCtx, &kmsv1.GetReleaseRequest{Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease, Version: driftedVersion}); status.Code(err) != codes.PermissionDenied {
+		if _, err := releases.GetRelease(verifyCtx, &kmsv1.GetReleaseRequest{SchemaVersion: integrationSchemaVersion(1), Namespace: networkNS(f.ns.Env, f.ns.App), Name: kmsverifyRelease, Version: driftedVersion}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("GetRelease as verify-only = %v, want PermissionDenied", err)
 		}
 		if _, err := releases.ListReleases(verifyCtx, &kmsv1.ListReleasesRequest{Namespace: networkNS(f.ns.Env, f.ns.App)}); status.Code(err) != codes.PermissionDenied {
@@ -575,21 +576,18 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 			t.Fatalf("one mismatch after budget exhaustion = (%+v, %v), want ErrRateLimited", result, err)
 		}
 
-		// A non-matching schema digest is one bit about the pinned schema and
-		// is charged like an alias mismatch: the first all-match call with a
-		// wrong digest is answered (schema: differs), the second is refused.
+		// An unknown digest selects no track. It must fail before comparing
+		// aliases, even when another schema has an active release.
 		f.env.svc.SetVerifyDefaultsLimits(tight)
-		result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
-		if err != nil || result.SchemaMatches || len(result.Failures()) != 0 || result.Passed() {
-			t.Fatalf("wrong schema digest within budget = (%+v, %v)", result, err)
-		}
-		result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
-		if !errors.Is(err, kmsclient.ErrRateLimited) || len(result.Entries) != 0 {
-			t.Fatalf("wrong schema digest after budget exhaustion = (%+v, %v), want ErrRateLimited", result, err)
+		for range 2 {
+			result, err = f.verifyWithSchema(client, runtimeDriftRoot(), strings.Repeat("0", 64))
+			if !errors.Is(err, kmsclient.ErrNotFound) || result.SchemaMatches || len(result.Entries) != 0 || result.ReleaseVersion != 0 {
+				t.Fatalf("unknown schema digest = (%+v, %v), want ErrNotFound without verdicts", result, err)
+			}
 		}
 	})
 
-	t.Run("audit rows carry counts only", func(t *testing.T) {
+	t.Run("audit rows carry track identity and counts only", func(t *testing.T) {
 		rows := f.auditRows(t)
 		if len(rows) == 0 {
 			t.Fatal("no verify audit rows")
@@ -615,6 +613,13 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 			if err := json.Unmarshal([]byte(row.Metadata), &meta); err != nil {
 				t.Fatalf("verify audit metadata %q: %v", row.Metadata, err)
 			}
+			// A resolved fixture release belongs to schema 1. Refusals before
+			// digest resolution may be unscoped, but must not invent a track.
+			schemaVersion, scoped := meta["schema_version"]
+			if (scoped && schemaVersion != "1") || (!scoped && row.ResourceVersion != 0) {
+				t.Fatalf("verify audit schema = %q (present=%t) for release %d", schemaVersion, scoped, row.ResourceVersion)
+			}
+			delete(meta, "schema_version")
 			if len(meta) != len(wantKeys) {
 				t.Fatalf("verify audit metadata keys = %v, want exactly %v", meta, wantKeys)
 			}
@@ -659,7 +664,7 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		if !sawPass || !sawDrift || !sawRequestLimited || !sawMismatchLimited {
 			t.Fatalf("verify audit coverage pass=%t drift=%t request_limited=%t mismatch_limited=%t decisions=%v", sawPass, sawDrift, sawRequestLimited, sawMismatchLimited, decisions)
 		}
-		if decisions["deny"] < 5 || decisions["allow"] < 8 {
+		if decisions["deny"] < 4 || decisions["allow"] < 8 || decisions["error"] < 2 {
 			t.Fatalf("verify audit decisions = %v", decisions)
 		}
 		// Authorization denials of the oracle are audited as authz denials,

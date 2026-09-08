@@ -69,11 +69,12 @@ type VerifyDefaultsEntry struct {
 
 // VerifyReleaseDefaultsInput is the value-free verification request.
 type VerifyReleaseDefaultsInput struct {
-	Namespace    NamespaceRef
-	ReleaseName  string
-	Profile      string
-	SchemaSHA256 string
-	Entries      []VerifyDefaultsEntry
+	SchemaVersion *uint64
+	Namespace     NamespaceRef
+	ReleaseName   string
+	Profile       string
+	SchemaSHA256  string
+	Entries       []VerifyDefaultsEntry
 }
 
 // VerifyEntryVerdict is the bounded verdict for one requested alias.
@@ -96,6 +97,7 @@ type VerifyDefaultsSummary struct {
 
 // VerifyReleaseDefaultsResult is the value-free verification response.
 type VerifyReleaseDefaultsResult struct {
+	SchemaVersion      uint64
 	ReleaseName        string
 	ReleaseVersion     uint64
 	ActivationRevision uint64
@@ -119,6 +121,27 @@ type ConfigurationReleaseEntry struct {
 	ContentType         string
 	Metadata            string
 	ParameterDigest     string
+}
+
+// ReleaseTrack selects one independent release history. SchemaVersion zero is explicit.
+type ReleaseTrack struct {
+	Namespace     NamespaceRef
+	Name          string
+	SchemaVersion uint64
+}
+
+// ReleaseFilter selects histories; nil SchemaVersion includes all schemas.
+type ReleaseFilter struct {
+	Namespace     NamespaceRef
+	Name          string
+	SchemaVersion *uint64
+}
+
+func (r ConfigurationRelease) Track() ReleaseTrack {
+	return ReleaseTrack{r.Namespace, r.Name, r.SchemaVersion}
+}
+func (a ReleaseAcknowledgement) Track() ReleaseTrack {
+	return ReleaseTrack{a.Namespace, a.ReleaseName, a.SchemaVersion}
 }
 
 // ConfigurationRelease is an immutable namespace-scoped release version.
@@ -199,6 +222,7 @@ func (e *ReleaseValidationFailedError) Violations() []ReleaseValidationError {
 
 // ConfigurationSchema is one immutable JSON Schema version.
 type ConfigurationSchema struct {
+	Contract    []ApplicationContractField
 	Application string
 	ReleaseName string
 	Version     uint64
@@ -212,6 +236,7 @@ type ConfigurationSchema struct {
 // ReleaseAcknowledgement records one application lifecycle state. InstanceID
 // is stable for one process lifetime and reused across stream reconnects.
 type ReleaseAcknowledgement struct {
+	SchemaVersion      uint64
 	Namespace          NamespaceRef
 	ReleaseName        string
 	ReleaseVersion     uint64
@@ -240,6 +265,7 @@ type ReleaseAcknowledgement struct {
 // It is separate from application lifecycle acknowledgements so registration
 // never fabricates a received/prepared/applied state.
 type ReleaseSubscriberConnection struct {
+	SchemaVersion   uint64
 	Namespace       NamespaceRef
 	ReleaseName     string
 	ClientName      string

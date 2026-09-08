@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { KmsClient } from "../src/client.js";
 import { parameterHash } from "../src/configstore/canonical.js";
 import type { ContractEntry } from "../src/configstore/contract.js";
 import { VerifyResult, verifyDefaults } from "../src/configstore/verify.js";
-import { RateLimitedError } from "../src/errors.js";
+import { ConfigError, RateLimitedError } from "../src/errors.js";
+import {
+  VerifyReleaseDefaultsRequest,
+  VerifyReleaseDefaultsResponse,
+} from "../src/generated/kms.js";
 import type {
   VerifyReleaseDefaultsOptions,
   VerifyReleaseDefaultsResult,
 } from "../src/releases/verify.js";
+import { FakeTransport } from "./helpers/fake-transport.js";
 
 const contract: readonly ContractEntry[] = [
   { alias: "runtime", kind: "parameter", contentType: "json" },
@@ -41,6 +47,7 @@ function wireResult(
   return {
     releaseName: "runtime",
     releaseVersion: 4n,
+    schemaVersion: 2n,
     activationRevision: 9n,
     schemaMatches,
     entries,
@@ -59,6 +66,78 @@ function wireResult(
 describe("configstore.verifyDefaults", () => {
   const groups = { runtime: '{"b":1,"a":2}', database: '{"host":"db.internal"}' };
   const schemaSha256 = "a".repeat(64);
+
+  it.each([0n, 2n])(
+    "retains schema %s in managed results, JSON, and reports",
+    async (schemaVersion) => {
+      const transport = new FakeTransport(() =>
+        VerifyReleaseDefaultsResponse.fromPartial({
+          name: "runtime",
+          version: 1n,
+          schemaVersion,
+          activationRevision: 9n,
+          schemaMatches: true,
+          matchCount: 2,
+          entries: [
+            { alias: "runtime", verdict: "match" },
+            { alias: "database", verdict: "match" },
+          ],
+        }),
+      );
+      const client = new KmsClient({ transport });
+      try {
+        const result = await verifyDefaults(
+          client,
+          { schemaSha256: schemaVersion === 0n ? "" : schemaSha256, contract, groups },
+          { namespace: "prod/api", ...(schemaVersion === 0n ? { schemaVersion } : {}) },
+        );
+        expect(transport.calls).toHaveLength(1);
+        expect(transport.calls[0]?.path).toBe(
+          "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults",
+        );
+        const request = transport.calls[0]?.request as VerifyReleaseDefaultsRequest;
+        expect(request.schemaVersion).toBe(schemaVersion === 0n ? 0n : undefined);
+        expect(request.schemaSha256).toBe(schemaVersion === 0n ? "" : schemaSha256);
+        const decoded = VerifyReleaseDefaultsRequest.decode(
+          VerifyReleaseDefaultsRequest.encode(request).finish(),
+        );
+        expect(decoded.schemaVersion).toBe(schemaVersion === 0n ? 0n : undefined);
+        expect(decoded.schemaSha256).toBe(schemaVersion === 0n ? "" : schemaSha256);
+        expect(result.schemaVersion).toBe(schemaVersion);
+        expect(result.passed()).toBe(true);
+        expect(JSON.parse(JSON.stringify(result))).toMatchObject({
+          releaseVersion: "1",
+          schemaVersion: schemaVersion.toString(),
+        });
+        expect(result.report()).toContain(
+          `prod/api runtime@1#9  schema_version: ${schemaVersion}  schema: match`,
+        );
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it.each([
+    { label: "missing", schemaSha256: "", options: {} },
+    { label: "digest and zero", schemaSha256, options: { schemaVersion: 0n } },
+    { label: "digest and registered version", schemaSha256, options: { schemaVersion: 2n } },
+  ])("rejects $label selectors before any RPC", async (selection) => {
+    const transport = new FakeTransport(() => undefined);
+    const client = new KmsClient({ transport });
+    try {
+      await expect(
+        verifyDefaults(
+          client,
+          { schemaSha256: selection.schemaSha256, contract, groups },
+          { namespace: "prod/api", ...selection.options },
+        ),
+      ).rejects.toThrow(ConfigError);
+      expect(transport.calls).toHaveLength(0);
+    } finally {
+      await client.close();
+    }
+  });
 
   it("hashes parameter groups canonically, skips secrets, and never sends values", async () => {
     const client = fakeClient(() =>
@@ -92,6 +171,7 @@ describe("configstore.verifyDefaults", () => {
       namespace: "prod/api",
       releaseName: "runtime",
       releaseVersion: 4n,
+      schemaVersion: 2n,
       activationRevision: 9n,
       schemaMatches: true,
       unverified: 0,
@@ -100,7 +180,7 @@ describe("configstore.verifyDefaults", () => {
     expect(Object.isFrozen(result.entries)).toBe(true);
     expect(result.report()).toBe(
       [
-        "prod/api runtime@4#9  schema: match",
+        "prod/api runtime@4#9  schema_version: 2  schema: match",
         "VERDICT  ALIAS     CONTENT_TYPE",
         "match    database  json",
         "match    runtime   json",
@@ -135,7 +215,7 @@ describe("configstore.verifyDefaults", () => {
     const report = result.report();
     expect(report).toBe(
       [
-        "prod/api runtime@4#9  schema: differs",
+        "prod/api runtime@4#9  schema_version: 2  schema: differs",
         "VERDICT             ALIAS     CONTENT_TYPE",
         "missing_in_release  database  json",
         "differs             runtime   json",

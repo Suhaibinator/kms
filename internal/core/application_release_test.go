@@ -51,7 +51,7 @@ func TestCreateApplicationReleaseCarriesActiveSecretAndNeverActivates(t *testing
 		t.Fatal(err)
 	}
 	zero := uint64(0)
-	active, _, err := svc.ActivateConfigurationRelease(ctx, admin, ns, app.ReleaseName, baseline.Version, &zero)
+	active, _, err := svc.ActivateConfigurationRelease(ctx, admin, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: baseline.SchemaVersion}, baseline.Version, &zero)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCreateApplicationReleaseCarriesActiveSecretAndNeverActivates(t *testing
 	if !retried.Executed || retried.Created || retried.Release == nil || retried.Release.Version != executed.Release.Version {
 		t.Fatalf("idempotent retry = %+v", retried)
 	}
-	stillActive, err := store.GetActiveConfigurationRelease(ctx, ns, app.ReleaseName)
+	stillActive, err := store.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: 1})
 	if err != nil || stillActive.Release.Version != active.Release.Version || stillActive.ActivationRevision != active.ActivationRevision {
 		t.Fatalf("application release creation activated: before=%+v after=%+v err=%v", active, stillActive, err)
 	}
@@ -136,7 +136,7 @@ func TestCreateApplicationReleaseBootstrapsCurrentAndRejectsStalePlan(t *testing
 	if _, err := svc.CreateApplicationRelease(ctx, admin, domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: artifact, Metadata: "{}", Execute: true, PlanDigest: preview.PlanDigest}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale plan error = %v", err)
 	}
-	rows, _, err := store.ListConfigurationReleases(ctx, ns, app.ReleaseName, storage.ListPage{Limit: 10})
+	rows, _, err := store.ListConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: app.ReleaseName}, storage.ListPage{Limit: 10})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("stale execute created a release: rows=%+v err=%v", rows, err)
 	}
@@ -235,8 +235,8 @@ func TestCreateApplicationReleaseRejectsSourceAndDefinitionDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateApplicationRelease(ctx, admin, domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: registeredSchemaArtifact}); !errors.Is(err, domain.ErrFailedPrecondition) || !strings.Contains(err.Error(), "defaults apply") || strings.Contains(err.Error(), "schema upload") {
-		t.Fatalf("registered schema drift error = %v", err)
+	if _, err := svc.CreateApplicationRelease(ctx, admin, domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: registeredSchemaArtifact}); err != nil {
+		t.Fatalf("registered schema first contract preview = %v", err)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestCreateApplicationReleaseOmitsRemovedAliasAndResolvesNewSecretCurrent(t 
 		t.Fatal(err)
 	}
 	zero := uint64(0)
-	if _, _, err := svc.ActivateConfigurationRelease(ctx, admin, ns, app.ReleaseName, baseline.Version, &zero); err != nil {
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, admin, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: baseline.SchemaVersion}, baseline.Version, &zero); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.PutSecret(ctx, admin, PutSecretInput{
@@ -297,8 +297,12 @@ func TestCreateApplicationReleaseOmitsRemovedAliasAndResolvesNewSecretCurrent(t 
 	}); err != nil {
 		t.Fatal(err)
 	}
+	newSchema, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"description":"new contract","type":"object"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifact, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
-		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: sha256Hex([]byte(consoleSchema)),
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: newSchema.Digest,
 		Contract: []configstore.ContractEntry{
 			{Alias: "database", Kind: configstore.ContractKindParameter, ContentType: "json"},
 			{Alias: "rate_limits", Kind: configstore.ContractKindParameter, ContentType: "integer"},

@@ -81,6 +81,7 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/release-subscribers/stream", s.handleReleaseSubscriberStream)
 
 	mux.HandleFunc("GET /api/v1/releases", s.handleListReleases)
+	mux.HandleFunc("GET /api/v1/releases/schema-versions", s.handleListReleaseSchemaVersions)
 	mux.HandleFunc("POST /api/v1/releases", s.handleCreateRelease)
 	mux.HandleFunc("GET /api/v1/releases/get", s.handleGetRelease)
 	mux.HandleFunc("GET /api/v1/releases/active", s.handleGetActiveRelease)

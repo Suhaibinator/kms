@@ -27,7 +27,7 @@ const client = createClient({
     requiredEnvironment("KMS_CA_FILE"),
   ),
 });
-const loader = await client.createReleaseLoader({ name: "runtime" });
+const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
 const shutdown = new AbortController();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

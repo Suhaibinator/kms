@@ -25,7 +25,7 @@ func TestConfigurationReleaseConcurrentActivationCAS(t *testing.T) {
 		versions[i] = release.Version
 	}
 	zero := uint64(0)
-	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", versions[0], &zero); err != nil || !changed {
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, versions[0], &zero); err != nil || !changed {
 		t.Fatalf("initial activation changed=%v err=%v", changed, err)
 	}
 	before, err := st.CurrentRevision(ctx)
@@ -46,7 +46,7 @@ func TestConfigurationReleaseConcurrentActivationCAS(t *testing.T) {
 			defer wg.Done()
 			<-start
 			expected := versions[0]
-			_, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", version, &expected)
+			_, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, version, &expected)
 			results <- result{changed: changed, err: err}
 		}(version)
 	}
@@ -113,7 +113,7 @@ func TestCreateFirstConfigurationReleaseConcurrentGuard(t *testing.T) {
 	if created != 1 || aborted != 1 {
 		t.Fatalf("created=%d aborted=%d, want 1/1", created, aborted)
 	}
-	if count, err := st.CountConfigurationReleases(ctx, ns, "runtime"); err != nil || count != 1 {
+	if count, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}); err != nil || count != 1 {
 		t.Fatalf("release count = %d err=%v, want 1", count, err)
 	}
 }

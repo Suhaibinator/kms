@@ -534,14 +534,16 @@ class CreateReleaseResponse(_message.Message):
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
 
 class ValidateReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "name", "version")
+    __slots__ = ("namespace", "name", "version", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseValidationError(_message.Message):
     __slots__ = ("alias", "code", "schema_pointer", "message")
@@ -564,16 +566,18 @@ class ValidateReleaseResponse(_message.Message):
     def __init__(self, valid: _Optional[bool] = ..., errors: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ...) -> None: ...
 
 class ActivateReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "name", "version", "expected_current_version")
+    __slots__ = ("namespace", "name", "version", "expected_current_version", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
     expected_current_version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., expected_current_version: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., expected_current_version: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ActivateReleaseResponse(_message.Message):
     __slots__ = ("release", "current_version", "previous_version", "activation_revision", "changed")
@@ -590,14 +594,16 @@ class ActivateReleaseResponse(_message.Message):
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ..., current_version: _Optional[int] = ..., previous_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., changed: _Optional[bool] = ...) -> None: ...
 
 class GetReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "name", "version")
+    __slots__ = ("namespace", "name", "version", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class GetReleaseResponse(_message.Message):
     __slots__ = ("release",)
@@ -606,12 +612,30 @@ class GetReleaseResponse(_message.Message):
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
 
 class GetActiveReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "name")
+    __slots__ = ("namespace", "name", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
+
+class ResolveReleaseSchemaRequest(_message.Message):
+    __slots__ = ("namespace", "name", "schema_sha256")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_SHA256_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    name: str
+    schema_sha256: str
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_sha256: _Optional[str] = ...) -> None: ...
+
+class ResolveReleaseSchemaResponse(_message.Message):
+    __slots__ = ("schema_version",)
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    schema_version: int
+    def __init__(self, schema_version: _Optional[int] = ...) -> None: ...
 
 class GetActiveReleaseResponse(_message.Message):
     __slots__ = ("release", "activation_revision", "previous_version")
@@ -624,16 +648,18 @@ class GetActiveReleaseResponse(_message.Message):
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ..., activation_revision: _Optional[int] = ..., previous_version: _Optional[int] = ...) -> None: ...
 
 class ListReleasesRequest(_message.Message):
-    __slots__ = ("namespace", "name", "page_size", "page_token")
+    __slots__ = ("namespace", "name", "page_size", "page_token", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     page_size: int
     page_token: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseSummary(_message.Message):
     __slots__ = ("release", "current", "previous", "activation_revision")
@@ -666,18 +692,20 @@ class VerifyEntry(_message.Message):
     def __init__(self, alias: _Optional[str] = ..., content_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
 
 class VerifyReleaseDefaultsRequest(_message.Message):
-    __slots__ = ("namespace", "name", "profile", "schema_sha256", "entries")
+    __slots__ = ("namespace", "name", "profile", "schema_sha256", "entries", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     PROFILE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_SHA256_FIELD_NUMBER: _ClassVar[int]
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     profile: str
     schema_sha256: str
     entries: _containers.RepeatedCompositeFieldContainer[VerifyEntry]
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., profile: _Optional[str] = ..., schema_sha256: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[VerifyEntry, _Mapping]]] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., profile: _Optional[str] = ..., schema_sha256: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[VerifyEntry, _Mapping]]] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class VerifyEntryVerdict(_message.Message):
     __slots__ = ("alias", "verdict")
@@ -688,7 +716,7 @@ class VerifyEntryVerdict(_message.Message):
     def __init__(self, alias: _Optional[str] = ..., verdict: _Optional[str] = ...) -> None: ...
 
 class VerifyReleaseDefaultsResponse(_message.Message):
-    __slots__ = ("name", "version", "activation_revision", "schema_matches", "entries", "match_count", "differs_count", "missing_in_release_count", "unknown_alias_count", "secret_alias_count", "unsupported_content_type_count", "unverified_count")
+    __slots__ = ("name", "version", "activation_revision", "schema_matches", "entries", "match_count", "differs_count", "missing_in_release_count", "unknown_alias_count", "secret_alias_count", "unsupported_content_type_count", "unverified_count", "schema_version")
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
@@ -701,6 +729,7 @@ class VerifyReleaseDefaultsResponse(_message.Message):
     SECRET_ALIAS_COUNT_FIELD_NUMBER: _ClassVar[int]
     UNSUPPORTED_CONTENT_TYPE_COUNT_FIELD_NUMBER: _ClassVar[int]
     UNVERIFIED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     name: str
     version: int
     activation_revision: int
@@ -713,24 +742,27 @@ class VerifyReleaseDefaultsResponse(_message.Message):
     secret_alias_count: int
     unsupported_content_type_count: int
     unverified_count: int
-    def __init__(self, name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., schema_matches: _Optional[bool] = ..., entries: _Optional[_Iterable[_Union[VerifyEntryVerdict, _Mapping]]] = ..., match_count: _Optional[int] = ..., differs_count: _Optional[int] = ..., missing_in_release_count: _Optional[int] = ..., unknown_alias_count: _Optional[int] = ..., secret_alias_count: _Optional[int] = ..., unsupported_content_type_count: _Optional[int] = ..., unverified_count: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., schema_matches: _Optional[bool] = ..., entries: _Optional[_Iterable[_Union[VerifyEntryVerdict, _Mapping]]] = ..., match_count: _Optional[int] = ..., differs_count: _Optional[int] = ..., missing_in_release_count: _Optional[int] = ..., unknown_alias_count: _Optional[int] = ..., secret_alias_count: _Optional[int] = ..., unsupported_content_type_count: _Optional[int] = ..., unverified_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseWatchRegistration(_message.Message):
-    __slots__ = ("namespace", "name", "client_name", "instance_id", "last_seen_revision")
+    __slots__ = ("namespace", "name", "client_name", "instance_id", "last_seen_revision", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     LAST_SEEN_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     client_name: str
     instance_id: str
     last_seen_revision: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseAcknowledgement(_message.Message):
-    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count")
+    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -743,6 +775,8 @@ class ReleaseAcknowledgement(_message.Message):
     TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
@@ -755,7 +789,9 @@ class ReleaseAcknowledgement(_message.Message):
     timestamp_unix_ms: int
     applied_divergent: bool
     divergent_field_count: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    sequence: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ..., sequence: _Optional[int] = ...) -> None: ...
 
 class WatchReleaseRequest(_message.Message):
     __slots__ = ("register", "acknowledgement")
@@ -777,20 +813,56 @@ class ReleaseActivationEvent(_message.Message):
     release: ConfigurationRelease
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
 
+class ReleaseAcknowledgementRejectedEvent(_message.Message):
+    __slots__ = ("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    name: str
+    schema_version: int
+    version: int
+    activation_revision: int
+    client_name: str
+    instance_id: str
+    state: str
+    sequence: int
+    reason: str
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., sequence: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
+
 class WatchReleaseEvent(_message.Message):
-    __slots__ = ("snapshot", "activation", "heartbeat", "revision")
+    __slots__ = ("snapshot", "activation", "heartbeat", "acknowledgement_rejected", "revision")
     SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
     ACTIVATION_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
+    ACKNOWLEDGEMENT_REJECTED_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     snapshot: ReleaseSnapshotEvent
     activation: ReleaseActivationEvent
     heartbeat: Heartbeat
+    acknowledgement_rejected: ReleaseAcknowledgementRejectedEvent
     revision: int
-    def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., acknowledgement_rejected: _Optional[_Union[ReleaseAcknowledgementRejectedEvent, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class ApplicationContractField(_message.Message):
+    __slots__ = ("alias", "kind", "content_type")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    kind: str
+    content_type: str
+    def __init__(self, alias: _Optional[str] = ..., kind: _Optional[str] = ..., content_type: _Optional[str] = ...) -> None: ...
 
 class ConfigurationSchema(_message.Message):
-    __slots__ = ("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name")
+    __slots__ = ("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract", "contract_established")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
     DIGEST_FIELD_NUMBER: _ClassVar[int]
@@ -799,6 +871,8 @@ class ConfigurationSchema(_message.Message):
     CREATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     APPLICATION_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_ESTABLISHED_FIELD_NUMBER: _ClassVar[int]
     version: int
     schema_json: str
     digest: str
@@ -807,7 +881,9 @@ class ConfigurationSchema(_message.Message):
     created_at_unix_ms: int
     application: str
     release_name: str
-    def __init__(self, version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ...) -> None: ...
+    contract: _containers.RepeatedCompositeFieldContainer[ApplicationContractField]
+    contract_established: bool
+    def __init__(self, version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ..., contract: _Optional[_Iterable[_Union[ApplicationContractField, _Mapping]]] = ..., contract_established: _Optional[bool] = ...) -> None: ...
 
 class CreateSchemaRequest(_message.Message):
     __slots__ = ("schema_json", "metadata_json", "application")
@@ -1048,20 +1124,22 @@ class ListNamespacesResponse(_message.Message):
     def __init__(self, namespaces: _Optional[_Iterable[_Union[Namespace, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class ApplyApplicationDefaultsRequest(_message.Message):
-    __slots__ = ("namespace", "artifact", "overwrite", "execute", "plan_digest", "update_definition")
+    __slots__ = ("namespace", "artifact", "overwrite", "execute", "plan_digest", "update_definition", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_FIELD_NUMBER: _ClassVar[int]
     OVERWRITE_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
     UPDATE_DEFINITION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     artifact: bytes
     overwrite: bool
     execute: bool
     plan_digest: str
     update_definition: bool
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., overwrite: _Optional[bool] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., update_definition: _Optional[bool] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., overwrite: _Optional[bool] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., update_definition: _Optional[bool] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class DefaultsApplyEntry(_message.Message):
     __slots__ = ("alias", "key", "content_type", "status", "current_version", "applied_version", "revision")
@@ -1362,7 +1440,7 @@ class ListAuditEventsResponse(_message.Message):
     def __init__(self, events: _Optional[_Iterable[_Union[AuditEvent, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class Subscriber(_message.Message):
-    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision", "release_name", "release_state", "release_version", "release_revision")
+    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision", "release_name", "release_state", "release_version", "release_revision", "schema_version")
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
@@ -1375,6 +1453,7 @@ class Subscriber(_message.Message):
     RELEASE_STATE_FIELD_NUMBER: _ClassVar[int]
     RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
     RELEASE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     client_name: str
     instance_id: str
     identity: str
@@ -1387,7 +1466,8 @@ class Subscriber(_message.Message):
     release_state: str
     release_version: int
     release_revision: int
-    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ..., release_name: _Optional[str] = ..., release_state: _Optional[str] = ..., release_version: _Optional[int] = ..., release_revision: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ..., release_name: _Optional[str] = ..., release_state: _Optional[str] = ..., release_version: _Optional[int] = ..., release_revision: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListSubscribersRequest(_message.Message):
     __slots__ = ()
@@ -1402,7 +1482,7 @@ class ListSubscribersResponse(_message.Message):
     def __init__(self, subscribers: _Optional[_Iterable[_Union[Subscriber, _Mapping]]] = ..., current_revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseSubscriberState(_message.Message):
-    __slots__ = ("namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count")
+    __slots__ = ("namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -1418,6 +1498,7 @@ class ReleaseSubscriberState(_message.Message):
     CONNECTED_FIELD_NUMBER: _ClassVar[int]
     APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     release_name: str
     client_name: str
@@ -1433,19 +1514,22 @@ class ReleaseSubscriberState(_message.Message):
     connected: bool
     applied_divergent: bool
     divergent_field_count: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersRequest(_message.Message):
-    __slots__ = ("namespace", "release_name", "page_size", "page_token")
+    __slots__ = ("namespace", "release_name", "page_size", "page_token", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     release_name: str
     page_size: int
     page_token: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersResponse(_message.Message):
     __slots__ = ("subscribers", "next_page_token", "current_revision")
@@ -1476,18 +1560,20 @@ class HealthResponse(_message.Message):
     def __init__(self, healthy: _Optional[bool] = ..., ready: _Optional[bool] = ..., version: _Optional[str] = ..., current_revision: _Optional[int] = ..., details_json: _Optional[str] = ...) -> None: ...
 
 class CreateApplicationReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "artifact", "metadata_json", "execute", "plan_digest")
+    __slots__ = ("namespace", "artifact", "metadata_json", "execute", "plan_digest", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     artifact: bytes
     metadata_json: str
     execute: bool
     plan_digest: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ...) -> None: ...
+    schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ApplicationReleasePlanEntry(_message.Message):
     __slots__ = ("alias", "kind", "ref", "from_version", "to_version", "source")

@@ -563,3 +563,50 @@ describe("audit events", () => {
     expect(screen.getByText("secret.read")).toBeVisible();
   });
 });
+
+it("labels and links duplicate release versions by their recorded schema tracks", async () => {
+  vi.mocked(api.listAudit).mockResolvedValue({
+    events: [0, 1, 2, 999].map((schemaVersion) =>
+      event(schemaVersion + 1, {
+        event_type: "configuration_release.activate",
+        resource_type: "configuration_release",
+        resource_key: "runtime",
+        resource_version: 1,
+        metadata_json: JSON.stringify({
+          schema_version: String(schemaVersion),
+          activation_revision: "123",
+        }),
+      }),
+    ),
+    next_page_token: "",
+  });
+  render(<AuditPage />);
+  for (const schemaVersion of [0, 1, 2, 999]) {
+    const link = await screen.findByRole("link", {
+      name: `/prod/billing/runtime · schema v${schemaVersion} · v1`,
+    });
+    const url = new URL(link.getAttribute("href")!, "https://kms.example");
+    expect(url.searchParams.get("schema_version")).toBe(String(schemaVersion));
+    expect(url.searchParams.get("release")).toBe(`runtime@${schemaVersion}:1`);
+  }
+});
+
+it("renders malformed and legacy release audit metadata without guessing a track", async () => {
+  vi.mocked(api.listAudit).mockResolvedValue({
+    events: ["{", "{}", '{"schema_version":"9007199254740992"}', '{"schema_version":null}'].map(
+      (metadata_json, index) =>
+        event(index + 1, {
+          event_type: "configuration_release.create",
+          resource_type: "configuration_release",
+          resource_key: `runtime-${index}`,
+          metadata_json,
+        }),
+    ),
+    next_page_token: "",
+  });
+  render(<AuditPage />);
+  for (let index = 0; index < 4; index++) {
+    const link = await screen.findByRole("link", { name: `/prod/billing/runtime-${index} · v1` });
+    expect(link).toHaveAttribute("href", `/releases?app=billing&env=prod&name=runtime-${index}`);
+  }
+});

@@ -52,7 +52,7 @@ export function ValuesSection({
           <span className="faint text-sm">The contract has no aliases.</span>
           <Button type="button" variant="outline" size="sm" onClick={onEditContract}>
             <SlidersHorizontal size={13} />
-            Edit contract
+            Manage releases
           </Button>
         </div>
       ) : (

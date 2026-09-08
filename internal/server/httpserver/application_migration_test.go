@@ -20,7 +20,7 @@ func migrationHTTPBody(t *testing.T, e *testEnv) map[string]any {
 	mustStatus(t, w, http.StatusCreated)
 	version := decodeBody(t, w)["schema"].(map[string]any)["version"]
 	return map[string]any{
-		"environment": "dev", "schema_version": version,
+		"environment": "dev", "source_schema_version": 1, "schema_version": version,
 		"contract": []map[string]any{
 			{"alias": "database", "kind": "parameter", "content_type": "json"},
 			{"alias": "rate_limits", "kind": "parameter", "content_type": "integer"},
@@ -37,7 +37,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	body := migrationHTTPBody(t, e)
 	ctx, pr := context.Background(), consoleAdmin()
 	ns := domain.NamespaceRef{App: "gradethis", Env: "dev"}
-	source, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	source, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	w := e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusOK)
 	preview := decodeBody(t, w)
-	if preview["valid"] != true || preview["executed"] != false || preview["plan_digest"] == "" || preview["definition_changed"] != true {
+	if preview["valid"] != true || preview["executed"] != false || preview["plan_digest"] == "" || preview["definition_changed"] != false {
 		t.Fatalf("unexpected preview: %v", preview)
 	}
 	if len(preview["affected_environments"].([]any)) != 1 {
@@ -61,12 +61,16 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	if result["executed"] != true || result["release"] == nil || result["activation"] == nil {
 		t.Fatalf("unexpected apply: %v", result)
 	}
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active.Release.Version == source.Release.Version || active.Release.SchemaVersion == source.Release.SchemaVersion {
-		t.Fatal("migration did not activate a new schema/release")
+	if active.Release.Version != 1 || active.Release.SchemaVersion != 2 || active.ActivationRevision <= source.ActivationRevision {
+		t.Fatalf("migration did not activate destination release 1: %+v", active)
+	}
+	sourceAfter, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1})
+	if err != nil || sourceAfter.Release.Version != source.Release.Version || sourceAfter.ActivationRevision != source.ActivationRevision {
+		t.Fatalf("migration changed source activation: before=%+v after=%+v err=%v", source, sourceAfter, err)
 	}
 	for _, entry := range active.Release.Entries {
 		for _, old := range source.Release.Entries {
@@ -78,7 +82,7 @@ func TestApplicationMigrationHTTPPreservesPinsAndActivates(t *testing.T) {
 	// The same reviewed request cannot create a second release.
 	w = e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusConflict)
-	// A subsequent environment can migrate to the now-current app schema.
+	// A subsequent environment can migrate to the same destination schema.
 	body["environment"], body["execute"], body["plan_digest"] = "prod", false, ""
 	w = e.admin(http.MethodPost, migrationHTTPPath, body)
 	mustStatus(t, w, http.StatusOK)
@@ -113,7 +117,11 @@ func TestApplicationMigrationHTTPValidationAndConflict(t *testing.T) {
 		t.Fatalf("missing plan digest returned %v", code)
 	}
 	delete(body, "execute")
-	e.ship("dev", "rate_limits", "8", false)
+	w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{
+		"application": "gradethis", "environment": "dev", "schema_version": 1,
+		"changes": []map[string]any{{"alias": "rate_limits", "value": "8"}},
+	})
+	mustStatus(t, w, http.StatusOK)
 	body["expected_source_version"] = preview["source_version"]
 	body["expected_source_activation_revision"] = preview["source_activation_revision"]
 	mustStatus(t, e.admin(http.MethodPost, migrationHTTPPath, body), http.StatusConflict)
@@ -131,9 +139,11 @@ func TestApplicationMigrationHTTPInputAndAuthorization(t *testing.T) {
 	mustStatus(t, e.admin(http.MethodPost, migrationHTTPPath, body), http.StatusPreconditionFailed)
 	mustStatus(t, e.do(http.MethodPost, migrationHTTPPath, body, nil), http.StatusUnauthorized)
 	authEnv := newTestEnv(t)
-	w := rawDefaultsRequest(authEnv, authEnv.clientToken, migrationHTTPPath, []byte(`{"environment":"dev","schema_version":2}`))
+	w := rawDefaultsRequest(authEnv, authEnv.clientToken, migrationHTTPPath, []byte(`{"environment":"dev","source_schema_version":0,"schema_version":2}`))
 	mustStatus(t, w, http.StatusForbidden)
 	for _, raw := range []string{
+		`{"environment":"dev","schema_version":2}`,
+		`{"environment":"dev","source_schema_version":null,"schema_version":2}`,
 		`{"environment":"dev","schema_version":-1}`,
 		`{"environment":"dev","unknown":"do-not-echo"}`,
 		`{"environment":"dev","changes":[{"alias":"db_password","secret_value":"do-not-echo"}]}`,

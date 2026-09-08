@@ -8,6 +8,7 @@ import time
 from dataclasses import FrozenInstanceError
 from typing import Dict, List, Optional
 
+import grpc
 import pytest
 
 import kms_paramstore.release as release_module
@@ -16,6 +17,7 @@ from kms_paramstore import (
     ReleaseCommitError,
     ReleaseLoader,
     ReleaseLoaderConfig,
+    ReleaseLoaderError,
     ReleaseStartupError,
     run_typed_release,
 )
@@ -24,6 +26,18 @@ from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
 from kms_paramstore.secret import Secret
 from tests.helpers import wait_until
+
+
+class _RpcFailure(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
 
 
 def _ref(key: str) -> kms_pb2.ResourceRef:
@@ -36,14 +50,20 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _release(version: int, revision: int, param_version: Optional[int] = None):
+def _release(
+    version: int,
+    revision: int,
+    param_version: Optional[int] = None,
+    *,
+    schema_version: int = 1,
+):
     param_version = param_version or version
     value = f"value-{param_version}"
     release = kms_pb2.ConfigurationRelease(
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
         name="runtime",
         version=version,
-        schema_version=1,
+        schema_version=schema_version,
         entries=[
             kms_pb2.ConfigurationReleaseEntry(
                 alias="setting",
@@ -161,6 +181,8 @@ class _Call:
             raise StopIteration
         if item is self._CLOSED:
             raise RuntimeError("stream disconnected")
+        if isinstance(item, BaseException):
+            raise item
         return item
 
     def push(self, event) -> None:
@@ -180,13 +202,27 @@ class _Call:
 class _ReleaseStub:
     def __init__(self, initial) -> None:
         self.lock = threading.Lock()
-        self.release, self.revision = initial
+        if initial is None:
+            self.release, self.revision = kms_pb2.ConfigurationRelease(), 0
+        else:
+            self.release, self.revision = initial
         self.calls: List[_Call] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
+        self.active_requests: List[object] = []
+        self.resolve_requests: List[object] = []
+        self.resolved_schema = 1
+        self.inactive = initial is None
 
-    def GetActiveRelease(self, _request, **_kwargs):
+    def ResolveReleaseSchema(self, request, **_kwargs):
+        self.resolve_requests.append(request)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=self.resolved_schema)
+
+    def GetActiveRelease(self, request, **_kwargs):
+        self.active_requests.append(request)
         with self.lock:
+            if self.inactive:
+                raise _RpcFailure(grpc.StatusCode.NOT_FOUND, "track has no active release")
             release = kms_pb2.ConfigurationRelease()
             release.CopyFrom(self.release)
             revision = self.revision
@@ -205,6 +241,7 @@ class _ReleaseStub:
         with self.lock:
             self.release = release
             self.revision = revision
+            self.inactive = False
             calls = list(self.calls)
         event = kms_pb2.WatchReleaseEvent(
             activation=kms_pb2.ReleaseActivationEvent(release=release), revision=revision
@@ -217,6 +254,12 @@ class _ReleaseStub:
             calls = list(self.calls)
         for call in calls:
             call.disconnect()
+
+    def reject_watch(self, code: grpc.StatusCode) -> None:
+        with self.lock:
+            calls = list(self.calls)
+        for call in calls:
+            call.push(_RpcFailure(code, "watch rejected"))
 
 
 class _Client:
@@ -300,6 +343,7 @@ def _loader(monkeypatch, initial, **config):
     client = _Client()
     settings = {
         "name": "runtime",
+        "schema_version": 1,
         "reconcile_interval": 10.0,
         "reconnect_initial": 0.01,
         "reconnect_max": 0.02,
@@ -310,6 +354,235 @@ def _loader(monkeypatch, initial, **config):
         ReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
+
+
+def test_schema_selector_requires_exactly_one_valid_track() -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        ReleaseLoaderConfig(name="runtime")
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        ReleaseLoaderConfig(name="runtime", schema_version=0, schema_sha256="a" * 64)
+    assert ReleaseLoaderConfig(name="runtime", schema_version=0).schema_version == 0
+
+
+@pytest.mark.parametrize("digest", ["A" * 64, "a" * 63 + "F"])
+def test_schema_digest_selector_rejects_uppercase_before_start(digest: str) -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="lowercase"):
+        ReleaseLoaderConfig(name="runtime", schema_sha256=digest)
+
+
+def test_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
+    loader, stub, _client = _loader(
+        monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64
+    )
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: loader.status().state == "applied")
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert len(stub.resolve_requests) == 1
+    assert stub.resolve_requests[0].schema_sha256 == "a" * 64
+    assert all(request.schema_version == 1 for request in stub.active_requests)
+    assert wait_until(lambda: bool(stub.registrations and stub.acknowledgements))
+    assert all(request.schema_version == 1 for request in stub.registrations)
+    assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+
+def _ack_rejection(loader, acknowledgement, *, sequence=None, revision=999):
+    return kms_pb2.WatchReleaseEvent(
+        acknowledgement_rejected=kms_pb2.ReleaseAcknowledgementRejectedEvent(
+            namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
+            name="runtime",
+            schema_version=1,
+            version=acknowledgement.version,
+            activation_revision=acknowledgement.activation_revision,
+            client_name=loader.client_name,
+            instance_id=loader.instance_id,
+            state=acknowledgement.state,
+            sequence=sequence if sequence is not None else acknowledgement.sequence,
+            reason="activation_unavailable",
+        ),
+        revision=revision,
+    )
+
+
+def test_delayed_ack_rejection_preserves_newer_generation(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    first = release_module._Candidate(*_release(1, 10))
+    second = release_module._Candidate(*_release(2, 20))
+    loader._ack(first, "received")
+    old = loader._ack_latest["received"][1]
+    assert old.sequence > 0
+    loader._ack(second, "received")
+    newer = loader._ack_latest["received"][1]
+    loader._discard_rejected_ack(_ack_rejection(loader, old).acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    foreign = _ack_rejection(loader, newer)
+    foreign.acknowledgement_rejected.instance_id = "other"
+    loader._discard_rejected_ack(foreign.acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    loader._discard_rejected_ack(_ack_rejection(loader, newer).acknowledgement_rejected)
+    assert "received" not in loader._ack_latest
+
+
+def test_ack_rejection_does_not_advance_cursor_or_block_activation(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    prepared = []
+    thread, raised = _run_in_thread(
+        loader, lambda _cancel, snapshot: prepared.append(snapshot.version) or _Prepared()
+    )
+    assert wait_until(lambda: prepared == [1])
+    assert wait_until(lambda: bool(stub.acknowledgements and stub.calls))
+    acknowledgement = stub.acknowledgements[-1]
+    stub.calls[-1].push(_ack_rejection(loader, acknowledgement, revision=10_000))
+    stub.activate(_release(2, 11))
+    assert wait_until(lambda: prepared == [1, 2])
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert loader._last_seen_revision == 11
+
+
+def test_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatch):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        None,
+        reconcile_interval=0.02,
+        schema_version=None,
+        schema_sha256="a" * 64,
+    )
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
+    assert wait_until(lambda: len(stub.active_requests) >= 2)
+    assert prepared.commits == 0
+    stub.activate(_release(1, 1))
+    assert wait_until(lambda: prepared.commits == 1)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert not raised
+    assert len(stub.resolve_requests) == 1
+    assert stub.registrations[0].last_seen_revision == 0
+    assert stub.registrations[0].schema_version == 1
+
+
+@pytest.mark.parametrize("code", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+def test_inactive_track_retries_transient_reconciliation_before_first_activation(monkeypatch, code):
+    loader, stub, _ = _loader(monkeypatch, None, reconcile_interval=0.02)
+    original = stub.GetActiveRelease
+    requests = 0
+
+    def active(request, **kwargs):
+        nonlocal requests
+        requests += 1
+        if requests == 2:
+            raise _RpcFailure(code, "one transient reconciliation failure")
+        return original(request, **kwargs)
+
+    stub.GetActiveRelease = active
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    try:
+        assert wait_until(lambda: bool(stub.registrations))
+        assert wait_until(lambda: requests >= 3), repr(raised)
+        stub.activate(_release(1, 1))
+        assert wait_until(lambda: prepared.commits == 1), repr(raised)
+        assert raised == []
+    finally:
+        loader.stop()
+        thread.join(timeout=2)
+
+
+def test_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, None)
+    external_stop = threading.Event()
+    thread = threading.Thread(
+        target=lambda: loader.run(
+            lambda _cancel, _snapshot: _Prepared(), stop_event=external_stop
+        )
+    )
+    thread.start()
+    assert wait_until(lambda: bool(stub.registrations))
+    external_stop.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type", "initial"),
+    [
+        (grpc.StatusCode.NOT_FOUND, kms_paramstore.NotFoundError, None),
+        (grpc.StatusCode.PERMISSION_DENIED, kms_paramstore.PermissionDeniedError, None),
+        (grpc.StatusCode.UNAUTHENTICATED, kms_paramstore.UnauthenticatedError, None),
+        (
+            grpc.StatusCode.PERMISSION_DENIED,
+            kms_paramstore.PermissionDeniedError,
+            _release(1, 10),
+        ),
+    ],
+)
+def test_loader_surfaces_terminal_watch_rejection(
+    monkeypatch, code, error_type, initial
+):
+    loader, stub, _client = _loader(monkeypatch, initial)
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
+    if initial is not None:
+        assert wait_until(lambda: loader.status().state == "applied")
+    stub.reject_watch(code)
+    assert wait_until(lambda: bool(raised), timeout=3)
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert len(raised) == 1
+    assert isinstance(raised[0], error_type)
+
+
+def test_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):
+    matching = _release(1, 10)
+    foreign = _release(2, 20)
+    foreign[0].schema_version = 2
+    foreign[0].digest = release_module._release_digest(foreign[0])
+    loader, _stub, _client = _loader(monkeypatch, matching)
+    loader._offer_candidate(release_module._Candidate(*matching))
+    loader._offer_candidate(release_module._Candidate(*foreign))
+    assert loader._pending_candidate is not None
+    assert loader._pending_candidate.release.schema_version == 1
+    assert loader.status().observed_revision == 10
+
+
+def test_active_read_and_digest_resolution_reject_foreign_schema(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    stub.release.schema_version = 2
+    with pytest.raises(ReleaseLoaderError, match="wrong schema"):
+        loader._read_active()
+
+    digest_loader, digest_stub, _client = _loader(
+        monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64
+    )
+    digest_stub.resolved_schema = 0
+    with pytest.raises(ReleaseLoaderError, match="version 0"):
+        digest_loader._ensure_schema_version()
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+@pytest.mark.parametrize("foreign_field", ["env", "app", "name"])
+def test_active_read_rejects_foreign_release_track(
+    monkeypatch, schema_version, foreign_field
+):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        _release(1, 10, schema_version=schema_version),
+        schema_version=schema_version,
+    )
+    if foreign_field == "env":
+        stub.release.namespace.env = "other-env"
+    elif foreign_field == "app":
+        stub.release.namespace.app = "other-app"
+    else:
+        stub.release.name = "other-release"
+
+    with pytest.raises(ReleaseLoaderError, match="wrong release track"):
+        loader._read_active()
 
 
 def _run_in_thread(loader, prepare):
@@ -397,6 +670,23 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     assert "secret-1" not in repr(snapshot)
     assert "value-1" not in repr(snapshot)
     assert "[REDACTED]" in repr(snapshot)
+    assert "schema_version=1" in repr(snapshot)
+    schema_zero = release_module.ReleaseSnapshot(
+        **{**snapshot.__dict__, "schema_version": 0}
+    )
+    assert "schema_version=0" in str(schema_zero)
+    manifest = release_module.ReleaseManifest(
+        namespace="prod/app",
+        name="runtime",
+        version=1,
+        activation_revision=10,
+        schema_version=17,
+        digest="digest",
+        metadata_json="metadata-canary",
+        entries={},
+    )
+    assert "schema_version=17" in repr(manifest)
+    assert "metadata-canary" not in repr(manifest)
     assert client._secret_stub.metadata_versions == [1]
     with pytest.raises(TypeError):
         snapshot.parameters["setting"] = "changed"
@@ -741,25 +1031,46 @@ def test_superseded_candidate_stops_after_blocked_live_metadata(monkeypatch):
     assert prepared[3].commits == 1
 
 
-def test_active_fence_includes_release_name(monkeypatch):
-    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+@pytest.mark.parametrize("schema_version", [0, 1])
+@pytest.mark.parametrize("foreign_field", ["env", "app", "name"])
+def test_active_precommit_fence_includes_full_track(
+    monkeypatch, schema_version, foreign_field
+):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        _release(1, 10, schema_version=schema_version),
+        schema_version=schema_version,
+    )
+    initial = _Prepared()
     stale = _Prepared()
     current = _Prepared()
 
     def prepare(_cancel, snapshot):
-        if snapshot.version == 1:
+        if snapshot.version == 2:
             with stub.lock:
-                renamed = kms_pb2.ConfigurationRelease()
-                renamed.CopyFrom(stub.release)
-                renamed.name = "different-release"
-                stub.release = renamed
+                foreign = kms_pb2.ConfigurationRelease()
+                foreign.CopyFrom(stub.release)
+                if foreign_field == "env":
+                    foreign.namespace.env = "other-env"
+                elif foreign_field == "app":
+                    foreign.namespace.app = "other-app"
+                else:
+                    foreign.name = "different-release"
+                stub.release = foreign
             return stale
-        return current
+        return initial if snapshot.version == 1 else current
 
     thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: initial.commits == 1)
+    # Initial commit can precede watch registration; this fake only broadcasts
+    # to existing calls and does not send the server's registration snapshot.
+    assert wait_until(lambda: bool(stub.registrations and stub.calls))
+    stub.activate(_release(2, 20, schema_version=schema_version))
     assert wait_until(lambda: stale.aborts == 1)
-    stub.activate(_release(2, 11))
-    assert wait_until(lambda: loader.status().applied_version == 2)
+    assert loader.status().applied_version == 1
+    assert loader.status().last_failure_category == "active_check_failed"
+    stub.activate(_release(3, 30, schema_version=schema_version))
+    assert wait_until(lambda: loader.status().applied_version == 3)
     loader.stop()
     thread.join(timeout=2)
     assert not raised
@@ -902,6 +1213,159 @@ def test_reconnect_reuses_instance_id_and_resumes_last_seen_revision(monkeypatch
     assert len(loader._ack_latest) <= 4
 
 
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_sync_watch_validates_envelopes_before_cursor_and_reconnect(
+    monkeypatch, schema_version
+):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        _release(1, 10, schema_version=schema_version),
+        schema_version=schema_version,
+    )
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: loader.status().applied_version == 1 and bool(stub.calls))
+    candidates = loader.stats().candidates
+
+    invalid_events = []
+    for index, foreign_field in enumerate(("env", "app", "name", "schema"), start=1):
+        foreign, _ = _release(2, 100 + index, schema_version=schema_version)
+        if foreign_field == "env":
+            foreign.namespace.env = "other-env"
+        elif foreign_field == "app":
+            foreign.namespace.app = "other-app"
+        elif foreign_field == "name":
+            foreign.name = "other-release"
+        else:
+            foreign.schema_version = schema_version + 1
+        envelope = (
+            kms_pb2.ReleaseSnapshotEvent(release=foreign)
+            if index % 2
+            else kms_pb2.ReleaseActivationEvent(release=foreign)
+        )
+        invalid_events.append(
+            kms_pb2.WatchReleaseEvent(
+                **({"snapshot": envelope} if index % 2 else {"activation": envelope}),
+                revision=100 + index,
+            )
+        )
+    invalid_events.extend(
+        [
+            kms_pb2.WatchReleaseEvent(
+                snapshot=kms_pb2.ReleaseSnapshotEvent(), revision=110
+            ),
+            kms_pb2.WatchReleaseEvent(revision=111),
+        ]
+    )
+    for event in invalid_events:
+        stub.calls[-1].push(event)
+    time.sleep(0.1)
+    assert loader._last_seen_revision == 10
+    assert loader.stats().candidates == candidates
+
+    registrations = len(stub.registrations)
+    stub.disconnect()
+    assert wait_until(lambda: len(stub.registrations) > registrations)
+    assert stub.registrations[-1].last_seen_revision == 10
+
+    stub.calls[-1].push(
+        kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=200)
+    )
+    assert wait_until(lambda: loader._last_seen_revision == 200)
+    stub.calls[-1].push(
+        kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=150)
+    )
+    time.sleep(0.05)
+    assert loader._last_seen_revision == 200
+
+    registrations = len(stub.registrations)
+    stub.disconnect()
+    assert wait_until(lambda: len(stub.registrations) > registrations)
+    assert stub.registrations[-1].last_seen_revision == 200
+
+    # A selected-track activation may legitimately predate a global heartbeat.
+    stub.activate(_release(2, 20, schema_version=schema_version))
+    assert wait_until(lambda: loader.status().applied_version == 2)
+    assert loader._last_seen_revision == 200
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_sync_retries_selected_candidate_after_newer_heartbeat(
+    monkeypatch, schema_version
+):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        _release(1, 10, schema_version=schema_version),
+        schema_version=schema_version,
+        reconcile_interval=0.5,
+    )
+    attempts = []
+
+    def prepare(_cancel, snapshot):
+        attempts.append(snapshot.version)
+        if snapshot.version == 2 and attempts.count(2) == 1:
+            raise ValueError("temporary prepare failure")
+        return _Prepared()
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: loader.status().applied_version == 1 and bool(stub.calls))
+    stub.activate(_release(2, 20, schema_version=schema_version))
+    assert wait_until(lambda: loader.status().state == "rejected")
+    stub.calls[-1].push(
+        kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=100)
+    )
+    assert wait_until(lambda: loader._last_seen_revision == 100)
+    assert wait_until(lambda: loader.status().applied_version == 2, timeout=2)
+    assert attempts.count(2) == 2
+
+    candidates = loader.stats().candidates
+    stale, _ = _release(1, 10, schema_version=schema_version)
+    stub.calls[-1].push(
+        kms_pb2.WatchReleaseEvent(
+            activation=kms_pb2.ReleaseActivationEvent(release=stale), revision=10
+        )
+    )
+    time.sleep(0.1)
+    assert loader.status().applied_version == 2
+    assert loader.stats().candidates == candidates
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_sync_reconciliation_rejects_foreign_track_and_recovers(
+    monkeypatch, schema_version
+):
+    loader, stub, _client = _loader(
+        monkeypatch,
+        _release(1, 10, schema_version=schema_version),
+        schema_version=schema_version,
+        reconcile_interval=0.05,
+    )
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    assert wait_until(lambda: loader.status().applied_version == 1)
+    foreign, _ = _release(2, 20, schema_version=schema_version)
+    foreign.namespace.env = "other-env"
+    with stub.lock:
+        stub.release = foreign
+        stub.revision = 20
+    assert wait_until(
+        lambda: loader.status().last_failure_category == "active_check_failed"
+    )
+    assert loader.status().applied_version == 1
+
+    valid, _ = _release(2, 20, schema_version=schema_version)
+    with stub.lock:
+        stub.release = valid
+    assert wait_until(lambda: loader.status().applied_version == 2)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
 def test_successful_stream_event_resets_reconnect_backoff(monkeypatch):
     loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
     outcomes = iter((False, False, True, False))
@@ -942,6 +1406,7 @@ def test_resource_resolution_respects_concurrency_bound(monkeypatch):
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
         name="runtime",
         version=1,
+        schema_version=1,
         entries=entries,
     )
     release.digest = release_module._release_digest(release)
@@ -1140,3 +1605,214 @@ def test_sync_external_stop_relay_exits_after_each_reused_run(monkeypatch):
         thread.join(timeout=2)
         assert not raised
         assert not relay.is_alive()
+
+
+@pytest.mark.parametrize("prepare_result", ["prepared", "failed", "stopped"])
+def test_terminal_watch_cancels_cooperative_prepare(monkeypatch, prepare_result):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    cancelled = threading.Event()
+    cleanup = threading.Event()
+    prepared = _Prepared()
+
+    def prepare(cancel, _snapshot):
+        entered.set()
+        if cancel.wait(2):
+            cancelled.set()
+        assert cleanup.wait(2)
+        if prepare_result == "failed":
+            raise RuntimeError("preparation failed during cancellation")
+        if prepare_result == "stopped":
+            loader.stop()
+        return prepared
+
+    thread, raised = _run_in_thread(loader, prepare)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        assert cancelled.wait(0.5)
+        assert thread.is_alive(), "cooperative cleanup must finish before run exits"
+        cleanup.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == (0 if prepare_result == "failed" else 1)
+    finally:
+        cleanup.set()
+        loader.stop()
+        thread.join(3)
+
+
+def test_terminal_watch_before_candidate_install_fences_preparation(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    proceed = threading.Event()
+    prepared = _Prepared()
+    preparations = []
+    process = loader._process_candidate
+
+    def held_process(candidate, prepare):
+        entered.set()
+        assert proceed.wait(2)
+        return process(candidate, prepare)
+
+    def prepare(_cancel, snapshot):
+        preparations.append(snapshot)
+        return prepared
+
+    monkeypatch.setattr(loader, "_process_candidate", held_process)
+    thread, raised = _run_in_thread(loader, prepare)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.UNAUTHENTICATED)
+        assert loader._watch_done.wait(2)
+        proceed.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.UnauthenticatedError)
+        assert preparations == []
+        assert loader.stats().resolutions == 0
+        assert prepared.commits == prepared.aborts == 0
+    finally:
+        proceed.set()
+        loader.stop()
+        thread.join(3)
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fails):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    entered = threading.Event()
+    proceed = threading.Event()
+    prepared = _Prepared()
+    read_active = loader._read_active
+    reads = 0
+
+    def held_read():
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            entered.set()
+            assert proceed.wait(2)
+            if read_fails:
+                raise RuntimeError("active read failed after watch rejection")
+        return read_active()
+
+    monkeypatch.setattr(loader, "_read_active", held_read)
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        proceed.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(raised) == 1
+        assert isinstance(raised[0], kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == 1
+    finally:
+        proceed.set()
+        loader.stop()
+        thread.join(3)
+
+
+def test_terminal_watch_error_survives_concurrent_run_restart(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    processed = threading.Event()
+    finish_first = threading.Event()
+    first_unlocked = threading.Event()
+    second_started = threading.Event()
+    process = loader._process_candidate
+    run_lock = loader._run_lock
+
+    class RestartBoundaryLock:
+        def __enter__(self):
+            run_lock.acquire()
+
+        def __exit__(self, *_args):
+            first_finished = loader._run_generation == 1 and not loader._running
+            second_running = loader._run_generation == 2 and loader._running
+            run_lock.release()
+            if first_finished:
+                first_unlocked.set()
+                assert second_started.wait(2)
+            if second_running:
+                second_started.set()
+
+    def held_process(candidate, prepare):
+        outcome = process(candidate, prepare)
+        if loader._run_generation == 1:
+            processed.set()
+            assert finish_first.wait(2)
+        return outcome
+
+    monkeypatch.setattr(loader, "_run_lock", RestartBoundaryLock())
+    monkeypatch.setattr(loader, "_process_candidate", held_process)
+    first, first_errors = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
+    second = None
+    try:
+        assert processed.wait(2)
+        assert wait_until(lambda: bool(stub.calls))
+        stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+        assert loader._watch_done.wait(2)
+        loader.stop()
+        finish_first.set()
+        assert first_unlocked.wait(2)
+
+        def prepare_second(_cancel, _snapshot):
+            loader.stop()
+            return _Prepared()
+
+        second, second_errors = _run_in_thread(loader, prepare_second)
+        first.join(2)
+        second.join(2)
+        assert not first.is_alive() and not second.is_alive()
+        assert not second_errors
+        assert len(first_errors) == 1
+        assert isinstance(first_errors[0], kms_paramstore.PermissionDeniedError)
+    finally:
+        finish_first.set()
+        second_started.set()
+        loader.stop()
+        first.join(3)
+        if second is not None:
+            second.join(3)
+
+
+@pytest.mark.parametrize("failure", ["commit", "abort"])
+def test_terminal_watch_does_not_mask_lifecycle_contract_failure(monkeypatch, failure):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+    class BrokenPrepared(_Prepared):
+        def commit(self):
+            self.commits += 1
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            raise RuntimeError("commit failed")
+
+        def abort(self):
+            self.aborts += 1
+            raise RuntimeError("abort failed")
+
+    prepared = BrokenPrepared()
+
+    def prepare(cancel, _snapshot):
+        assert wait_until(lambda: bool(stub.calls))
+        if failure == "abort":
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            assert cancel.wait(2)
+        return prepared
+
+    with pytest.raises(ReleaseCommitError, match=failure):
+        loader.run(prepare)
+    assert isinstance(loader._watch_error, kms_paramstore.PermissionDeniedError)
+    assert prepared.commits == (1 if failure == "commit" else 0)
+    assert prepared.aborts == (1 if failure == "abort" else 0)
+    assert loader.status().last_failure_category == "internal"

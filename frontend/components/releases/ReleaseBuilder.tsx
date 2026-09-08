@@ -8,9 +8,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { useFocusFirstInvalid } from "@/lib/forms";
+import { schemaVersionError } from "@/lib/schema";
 import { useFieldErrors } from "@/lib/hooks";
 import type {
-  ApplicationDashboard,
+  ApplicationOverview,
   ConfigurationRelease,
   CreateReleaseRequest,
   NamespaceRef,
@@ -68,7 +69,7 @@ function prettyDefinition(request: Omit<CreateReleaseRequest, "namespace">): str
   return JSON.stringify(
     {
       name: request.name,
-      ...(request.schema_version ? { schema_version: request.schema_version } : {}),
+      schema_version: request.schema_version,
       entries: request.entries,
       ...(request.metadata_json && request.metadata_json !== "{}"
         ? { metadata_json: request.metadata_json }
@@ -143,9 +144,9 @@ function builderError(
   if (nameError) return nameError;
   if (
     schemaVersion.trim() &&
-    (!Number.isInteger(Number(schemaVersion)) || Number(schemaVersion) < 1)
+    (!Number.isSafeInteger(Number(schemaVersion)) || Number(schemaVersion) < 0)
   ) {
-    return "Schema version must be a positive whole number.";
+    return "Schema version must be a nonnegative safe integer.";
   }
   const metadataError = validateMetadataJson(metadataJSON.trim() || "{}");
   if (metadataError) return metadataError;
@@ -154,12 +155,11 @@ function builderError(
 }
 
 /** JSON mode may choose selectors and cross-namespace refs, but never a
- * different schema pin. Omitted and explicit zero both mean "not pinned". */
+ * different schema track. Schema-free releases explicitly select zero. */
 function releaseSchemaVersionError(
   definition: string,
   applicationSchemaVersion: number | null,
 ): string | null {
-  if (applicationSchemaVersion === null) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(definition);
@@ -167,12 +167,14 @@ function releaseSchemaVersionError(
     return null;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!Object.hasOwn(parsed, "schema_version")) {
+    return `schema_version is required${applicationSchemaVersion === null ? "." : ` and must match the selected track: ${applicationSchemaVersion}.`}`;
+  }
   const raw = (parsed as Record<string, unknown>).schema_version;
-  const requested = raw === undefined || raw === 0 ? 0 : raw;
-  if (requested === applicationSchemaVersion) return null;
-  return applicationSchemaVersion === 0
-    ? "This application has no pinned schema; schema_version must be omitted or 0."
-    : `schema_version is owned by the application and must remain ${applicationSchemaVersion}.`;
+  const invalid = schemaVersionError(raw);
+  if (invalid) return invalid;
+  if (applicationSchemaVersion === null || raw === applicationSchemaVersion) return null;
+  return `schema_version must match the selected track: ${applicationSchemaVersion}.`;
 }
 
 interface GuidedSnapshot {
@@ -198,16 +200,18 @@ function entriesKey(entries: readonly BuilderEntry[]): string {
 export function ReleaseBuilder({
   open,
   namespace,
+  selectedSchemaVersion,
   onClose,
   onCreated,
 }: {
   open: boolean;
   namespace: NamespaceRef;
+  selectedSchemaVersion?: number;
   onClose: () => void;
   onCreated: (release: ConfigurationRelease) => void;
 }) {
   const toast = useToast();
-  const [dashboard, setDashboard] = useState<ApplicationDashboard | null>(null);
+  const [dashboard, setDashboard] = useState<ApplicationOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<unknown>(null);
   // Bumped by Retry so the load effect re-runs without reopening the modal.
@@ -252,14 +256,17 @@ export function ReleaseBuilder({
     setJSONText("");
     setSnapshot(null);
     void api
-      .applicationDashboard(namespace.app, { signal: controller.signal })
+      .applicationOverview(
+        namespace.app,
+        undefined,
+        { signal: controller.signal },
+        selectedSchemaVersion,
+      )
       .then((result) => {
         if (generation.current !== currentGeneration) return;
         setDashboard(result);
         const nextName = result.application.release_name || "runtime";
-        const nextSchemaVersion = result.application.schema_version
-          ? String(result.application.schema_version)
-          : "";
+        const nextSchemaVersion = String(result.application.schema_version);
         const nextEntries = result.application.contract.map((field) => {
           const candidates = result.rows.filter(
             (row) => row.kind === field.kind && row.environments[namespace.env]?.present,
@@ -306,8 +313,11 @@ export function ReleaseBuilder({
       .finally(() => {
         if (generation.current === currentGeneration) setLoading(false);
       });
-    return () => controller.abort();
-  }, [loadAttempt, namespace.app, namespace.env, open, toast]);
+    return () => {
+      generation.current += 1;
+      controller.abort();
+    };
+  }, [loadAttempt, namespace.app, namespace.env, open, selectedSchemaVersion, toast]);
 
   useEffect(() => {
     if (open) return;
@@ -410,7 +420,7 @@ export function ReleaseBuilder({
       (dashboard?.application.contract ?? []).map((field) => [field.alias, field]),
     );
     setName(parsed.name ?? "");
-    setSchemaVersion(parsed.schema_version ? String(parsed.schema_version) : "");
+    setSchemaVersion(String(parsed.schema_version ?? 0));
     setMetadataJSON(parsed.metadata_json ?? "{}");
     setEntries(
       parsedEntries.map((entry) => {
@@ -440,15 +450,18 @@ export function ReleaseBuilder({
     }
     const request: CreateReleaseRequest =
       mode === "guided" ? guidedRequest() : { ...parseReleaseDefinition(jsonText), namespace };
+    const submittedGeneration = generation.current;
     savingRef.current = true;
     setSaving(true);
     try {
       const result = await api.createRelease(request);
+      if (generation.current !== submittedGeneration) return;
       toast.success(`Created ${result.release.name}@${result.release.version}`);
       onCreated(result.release);
       onClose();
     } catch (error) {
-      toast.error(error, "Could not create release");
+      if (generation.current === submittedGeneration)
+        toast.error(error, "Could not create release");
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -532,7 +545,7 @@ export function ReleaseBuilder({
                 <Field label="Release name" hint="Owned by the selected application.">
                   <Input className="font-mono" value={name} disabled />
                 </Field>
-                <Field label="Schema" hint="Owned and pinned by the application definition.">
+                <Field label="Schema" hint="Selected schema track.">
                   <Input
                     className="font-mono"
                     value={

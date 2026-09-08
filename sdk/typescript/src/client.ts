@@ -177,6 +177,10 @@ export interface ParameterMetadata {
 
 export interface ClientReleaseLoaderOptions {
   readonly name: string;
+  /** Select an exact numeric schema track, including the schema-free track 0. */
+  readonly schemaVersion?: bigint;
+  /** Resolve this generated schema digest once, then pin its numeric track. */
+  readonly schemaSHA256?: string;
   readonly namespace?: string;
   readonly clientName?: string;
   readonly instanceId?: string;
@@ -781,9 +785,35 @@ export class KmsClient {
     const namespace = options.namespace
       ? parseNamespace(options.namespace)
       : await this.requireNamespace("createReleaseLoader");
+    const hasVersion = options.schemaVersion !== undefined;
+    const hasDigest = options.schemaSHA256 !== undefined;
+    if (hasVersion === hasDigest) {
+      throw new ConfigError("exactly one of schemaVersion or schemaSHA256 is required");
+    }
+    let schemaVersion: bigint;
+    if (hasVersion) {
+      assertUint64(options.schemaVersion, "schemaVersion");
+      schemaVersion = options.schemaVersion;
+    } else {
+      const digest = options.schemaSHA256 ?? "";
+      if (!validLowerHex64(digest)) throw new ConfigError("invalid schema SHA-256");
+      try {
+        const response = await this.#transport.unary(
+          ConfigurationReleaseServiceService.resolveReleaseSchema,
+          { namespace: toWireNamespace(namespace), name: options.name, schemaSha256: digest },
+          this.#callOptions({}),
+        );
+        if (!response) throw new KmsError("internal", "KMS schema resolution response was empty");
+        assertUint64(response.schemaVersion, "resolved schemaVersion", true);
+        schemaVersion = response.schemaVersion;
+      } catch (error) {
+        throwMapped(error);
+      }
+    }
     return ReleaseLoader._create(this.#releaseTransport(), {
       ...options,
       namespace: toWireNamespace(namespace),
+      schemaVersion,
       clientName: options.clientName?.trim() || this.clientName,
       acknowledgementTimeoutMs: this.timeoutMs,
     });
@@ -821,6 +851,11 @@ export class KmsClient {
       });
     }
     const schemaSha256 = options.schemaSha256 ?? "";
+    const hasSchemaVersion = options.schemaVersion !== undefined;
+    if (hasSchemaVersion === (schemaSha256 !== "")) {
+      throw new ConfigError("exactly one of schemaVersion or schemaSha256 is required");
+    }
+    if (hasSchemaVersion) assertUint64(options.schemaVersion, "schemaVersion");
     if (schemaSha256 !== "" && !validLowerHex64(schemaSha256)) {
       throw new ConfigError("invalid schema sha256");
     }
@@ -832,6 +867,7 @@ export class KmsClient {
           name: options.release ?? "",
           profile: options.profile ?? "",
           schemaSha256,
+          ...(hasSchemaVersion ? { schemaVersion: options.schemaVersion } : {}),
           entries,
         },
         this.#callOptions(options),
@@ -951,12 +987,13 @@ export class KmsClient {
   _getActiveRelease(
     namespace: NamespaceRef,
     name: string,
+    schemaVersion: bigint,
     options: CallOptions = {},
   ): Promise<GetActiveReleaseResponse> {
     return this.#transport
       .unary(
         ConfigurationReleaseServiceService.getActiveRelease,
-        { namespace: toWireNamespace(namespace), name },
+        { namespace: toWireNamespace(namespace), name, schemaVersion },
         this.#callOptions(options),
       )
       .catch((error: unknown) => {
@@ -1009,9 +1046,21 @@ export class KmsClient {
 
   #releaseTransport(): ReleaseTransport {
     return {
-      getActiveRelease: async (namespace, name, signal) => {
+      getActiveRelease: async (namespace, name, schemaVersion, signal) => {
         if (!namespace) throw new KmsError("invalid_argument", "release namespace is required");
-        return this._getActiveRelease(fromWireNamespace(namespace), name, signal ? { signal } : {});
+        try {
+          return await this._getActiveRelease(
+            fromWireNamespace(namespace),
+            name,
+            schemaVersion,
+            signal ? { signal } : {},
+          );
+        } catch (error) {
+          if (error instanceof KmsError && error.code === "not_found") {
+            return { release: undefined, activationRevision: 0n, previousVersion: 0n };
+          }
+          throw error;
+        }
       },
       fetchParameter: async (wireRef, version, signal) => {
         try {

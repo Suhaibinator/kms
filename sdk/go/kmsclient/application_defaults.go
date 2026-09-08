@@ -11,6 +11,7 @@ import (
 // generated, parameter-only application defaults artifact.
 type ApplicationDefaultsApplyOptions struct {
 	Namespace        string
+	SchemaVersion    *uint64
 	Artifact         []byte
 	Overwrite        bool
 	UpdateDefinition bool
@@ -63,6 +64,7 @@ func (c *Client) ApplyApplicationDefaults(
 	defer cancel()
 	response, err := c.admin.ApplyApplicationDefaults(cctx, &kmsv1.ApplyApplicationDefaultsRequest{
 		Namespace:        namespace.proto(),
+		SchemaVersion:    options.SchemaVersion,
 		Artifact:         options.Artifact,
 		Overwrite:        options.Overwrite,
 		UpdateDefinition: options.UpdateDefinition,

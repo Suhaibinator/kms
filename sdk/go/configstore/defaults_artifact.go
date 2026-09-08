@@ -160,8 +160,8 @@ func validateDefaultsArtifact(artifact DefaultsArtifact, requireSorted bool) (De
 	if !canonicalDefaultsText(artifact.Profile, false) {
 		return DefaultsArtifact{}, errors.New("configstore: defaults artifact profile must be nonempty and canonical")
 	}
-	if !validLowerSHA256(artifact.SchemaSHA256) {
-		return DefaultsArtifact{}, errors.New("configstore: defaults artifact schema_sha256 must be 64 lowercase hexadecimal characters")
+	if artifact.SchemaSHA256 != "" && !validLowerSHA256(artifact.SchemaSHA256) {
+		return DefaultsArtifact{}, errors.New("configstore: defaults artifact schema_sha256 must be empty or 64 lowercase hexadecimal characters")
 	}
 	if len(artifact.Contract) == 0 {
 		return DefaultsArtifact{}, errors.New("configstore: defaults artifact contract must not be empty")

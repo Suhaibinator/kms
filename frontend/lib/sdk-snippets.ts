@@ -8,6 +8,8 @@ export interface SnippetInput {
   env: string;
   app: string;
   releaseName: string;
+  /** Exact schema track selected in the console; zero is the schema-free track. */
+  schemaVersion: number;
   /** The first contract alias; the snippet reads it. Empty when the contract is empty. */
   alias: string;
   /** false when health reports `tls_enabled: false`; the snippet then opts into cleartext. */
@@ -64,8 +66,10 @@ if err != nil {
 }
 defer client.Close()
 
+schemaVersion := uint64(${input.schemaVersion})
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
-    Name: ${goString(input.releaseName)}, // must equal the application's release name
+    Name:          ${goString(input.releaseName)}, // must equal the application's release name
+    SchemaVersion: &schemaVersion,
 })
 if err != nil {
     return err
@@ -109,7 +113,10 @@ const client = createClient({
 ${credentials}
   namespace: ${tsString(`${input.env}/${input.app}`)}, // optional when the identity is bound to it
 });
-const loader = await client.createReleaseLoader({ name: ${tsString(input.releaseName)} });
+const loader = await client.createReleaseLoader({
+  name: ${tsString(input.releaseName)},
+  schemaVersion: ${input.schemaVersion}n,
+});
 
 await loader.run((snapshot) => {
   const ${name} = snapshot.parameter(${tsString(alias)})?.value();

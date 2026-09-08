@@ -114,13 +114,13 @@ func TestLoopbackDefaultsReleaseCreationCarriesSecretAndStaysInactive(t *testing
 		t.Fatalf("first release create = %+v", createdFirst)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
-	if _, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{
+	if _, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{SchemaVersion: integrationSchemaVersion(schema.GetVersion()),
 		Namespace: networkNS(ns.Env, ns.App), Name: "runtime",
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("release creation unexpectedly activated v1: %v", err)
 	}
 	zero := uint64(0)
-	activatedFirst, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+	activatedFirst, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(schema.GetVersion()),
 		Namespace: networkNS(ns.Env, ns.App), Name: "runtime", Version: firstRelease.GetVersion(), ExpectedCurrentVersion: &zero,
 	})
 	if err != nil || !activatedFirst.GetChanged() {
@@ -188,7 +188,7 @@ func TestLoopbackDefaultsReleaseCreationCarriesSecretAndStaysInactive(t *testing
 	if !createdNext.GetCreated() || nextRelease == nil || nextRelease.GetVersion() != 2 {
 		t.Fatalf("next release create = %+v", createdNext)
 	}
-	stillActive, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{
+	stillActive, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{SchemaVersion: integrationSchemaVersion(schema.GetVersion()),
 		Namespace: networkNS(ns.Env, ns.App), Name: "runtime",
 	})
 	if err != nil || stillActive.GetRelease().GetVersion() != 1 || stillActive.GetActivationRevision() != activatedFirst.GetActivationRevision() {
@@ -201,7 +201,7 @@ func TestLoopbackDefaultsReleaseCreationCarriesSecretAndStaysInactive(t *testing
 		t.Fatalf("portal release list = %+v err=%v", listed, err)
 	}
 	expectedFirst := uint64(1)
-	activatedNext, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+	activatedNext, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(schema.GetVersion()),
 		Namespace: networkNS(ns.Env, ns.App), Name: "runtime", Version: nextRelease.GetVersion(), ExpectedCurrentVersion: &expectedFirst,
 	})
 	if err != nil || !activatedNext.GetChanged() || activatedNext.GetCurrentVersion() != 2 {

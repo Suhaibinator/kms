@@ -8,6 +8,13 @@ when gradethis builds and runs with no dependency on
 > in-place upgrade from a `0.2.x` SQLite database and no compatibility path for
 > its client-bound tokens or release digests.
 
+> **Schema-track cutover:** independent release tracks use a new database
+> baseline. Existing KMS databases, including earlier `0.3.x` baselines, are not
+> upgraded in place. Provision a fresh database and deploy the updated server,
+> SDKs, and regenerated configuration bindings together. Existing databases
+> are rejected without being converted or deleted. See
+> [schema selection and deployment cutover](configuration-releases.md#schema-selection-and-deployment-cutover).
+
 The versioned protection-transition update within this greenfield `0.3.x`
 contract changes SecretService and SDK signatures, but not the SQLite table
 layout, application configuration schema, release-entry schema, or release
@@ -232,10 +239,10 @@ entries:
 parameter-store release create runtime-release.yaml \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
-parameter-store release validate prod/gradethis runtime 1 \
+parameter-store release validate prod/gradethis runtime 1 --schema-version 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
-parameter-store release activate prod/gradethis runtime 1 \
+parameter-store release activate prod/gradethis runtime 1 --schema-version 1 \
   --expected-current-version 0 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
@@ -245,7 +252,9 @@ The Go process replaces manifest watching, parallel ad hoc reads, and apply
 bookkeeping with one loader:
 
 ```go
+schemaVersion := uint64(1) // Select the schema compiled into this application.
 loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
+    SchemaVersion: &schemaVersion,
     Name: "runtime",
 
     BindingKeys: map[string]kmsclient.BindingKey{
@@ -260,7 +269,7 @@ return loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnaps
 })
 ```
 
-Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
+Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", schema_version=1, ...))`
 and synchronous `loader.run(prepare)`, or the event-loop-native
 `AsyncReleaseLoader`, with the same resolution, cancellation,
 prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
@@ -271,7 +280,7 @@ Pydantic-based `kms-config-gen-py` layer, which emits a typed binding, strict
 release schema, and machine contract; see the
 [`Python managed configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 
-TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
+TypeScript uses `await client.createReleaseLoader({ name: "runtime", schemaVersion: 1n })` and
 `await loader.run(prepare, signal)`. Decode and validate the complete
 `ReleaseSnapshot` before returning `{ commit, abort }`; keep `commit`
 synchronous and infallible so the application snapshot swaps atomically. Pass
@@ -282,13 +291,13 @@ compile-checked example is in
 Roll back by reactivating any retained immutable version:
 
 ```bash
-parameter-store release rollback prod/gradethis runtime 1 \
+parameter-store release rollback prod/gradethis runtime 1 --schema-version 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$KMS_CA_FILE"
 ```
 
 Use the Releases frontend or `parameter-store release subscribers
-prod/gradethis runtime` until every expected instance reports the target as
+prod/gradethis runtime --schema-version 1` until every expected instance reports the target as
 `applied`. Replicas apply independently—version 1 has no fleet-wide barrier.
 An activation racing immediately after a loader's final active read is handled
 as the next candidate, so do not treat activation as a distributed commit.

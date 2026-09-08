@@ -36,12 +36,12 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 	}
 	r1, r2 := create("one"), create("two")
 	zero := uint64(0)
-	a1, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r1.Version, &zero)
+	a1, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r1.Version, &zero)
 	if err != nil || !changed || a1.ActivationRevision == 0 {
 		t.Fatalf("activate v1 = %+v, %v, %v", a1, changed, err)
 	}
 	before, _ := st.CurrentRevision(ctx)
-	same, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r1.Version, nil)
+	same, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r1.Version, nil)
 	if err != nil || changed || same.ActivationRevision != a1.ActivationRevision {
 		t.Fatalf("idempotent activate = %+v,%v,%v", same, changed, err)
 	}
@@ -50,15 +50,15 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 		t.Fatalf("idempotent activation appended revision: %d -> %d", before, after)
 	}
 	wrong := uint64(99)
-	if _, _, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r2.Version, &wrong); !errors.Is(err, domain.ErrAborted) {
+	if _, _, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r2.Version, &wrong); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("CAS err = %v", err)
 	}
 	expect1 := uint64(1)
-	a2, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r2.Version, &expect1)
+	a2, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r2.Version, &expect1)
 	if err != nil || !changed || a2.PreviousVersion != 1 {
 		t.Fatalf("activate v2 = %+v,%v,%v", a2, changed, err)
 	}
-	rollback, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r1.Version, nil)
+	rollback, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r1.Version, nil)
 	if err != nil || !changed || rollback.PreviousVersion != 2 {
 		t.Fatalf("rollback = %+v,%v,%v", rollback, changed, err)
 	}
@@ -71,11 +71,11 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 	if _, err := st.DeleteSecret(ctx, secretRef); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("protected secret delete err=%v", err)
 	}
-	exists, err := st.ConfigurationReleaseActivationExists(ctx, ns, "runtime", 1, rollback.ActivationRevision)
+	exists, err := st.ConfigurationReleaseActivationExists(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, 1, rollback.ActivationRevision)
 	if err != nil || !exists {
 		t.Fatalf("activation history exists=%v err=%v", exists, err)
 	}
-	rows, _, err := st.ListConfigurationReleases(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestCreateLatestApplicationReleaseIsSpecializedAndIdempotent(t *testing.T) 
 	if err != nil || created || retry.Version != generic.Version {
 		t.Fatalf("latest identical release = %+v created=%v err=%v", retry, created, err)
 	}
-	if _, err := st.GetActiveConfigurationRelease(ctx, namespace.NamespaceRef, app.ReleaseName); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: namespace.NamespaceRef, Name: app.ReleaseName}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("application release creation changed activation labels: %v", err)
 	}
 }
@@ -220,14 +220,16 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 		}
 		return release
 	}
-	previous := create("previous", nil)
-	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", previous.Version, nil); err != nil || !changed {
+	previous := create("previous", []domain.ConfigurationReleaseEntry{{
+		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, ContentType: "application/octet-stream", Metadata: "{}",
+	}})
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, previous.Version, nil); err != nil || !changed {
 		t.Fatalf("activate previous changed=%v err=%v", changed, err)
 	}
 	current := create("current", []domain.ConfigurationReleaseEntry{{
 		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, ContentType: "application/octet-stream", Metadata: "{}",
 	}})
-	activated, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, nil)
+	activated, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, current.Version, nil)
 	if err != nil || !changed {
 		t.Fatalf("activate current = %+v, changed=%v err=%v", activated, changed, err)
 	}
@@ -238,7 +240,7 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectedCurrent := current.Version
-	same, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &expectedCurrent)
+	same, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, current.Version, &expectedCurrent)
 	if err != nil || changed {
 		t.Fatalf("valid idempotent activation = %+v, changed=%v err=%v", same, changed, err)
 	}
@@ -260,7 +262,7 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeRejectedActive, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	beforeRejectedActive, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,11 +270,11 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 	// CAS failure retains precedence over pin validation, even when the current
 	// release has since become unreadable.
 	staleExpected := previous.Version
-	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &staleExpected); !errors.Is(err, domain.ErrAborted) || changed {
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, current.Version, &staleExpected); !errors.Is(err, domain.ErrAborted) || changed {
 		t.Fatalf("stale CAS idempotent activation changed=%v err=%v, want ErrAborted", changed, err)
 	}
 
-	_, changed, err = st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &expectedCurrent)
+	_, changed, err = st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, current.Version, &expectedCurrent)
 	if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
 		t.Fatalf("invalid idempotent activation changed=%v err=%v, want ErrFailedPrecondition", changed, err)
 	}
@@ -291,7 +293,7 @@ func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
 	if afterRejectedRevision != beforeRejectedRevision {
 		t.Fatalf("rejected idempotent activation appended revision: %d -> %d", beforeRejectedRevision, afterRejectedRevision)
 	}
-	afterRejectedActive, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	afterRejectedActive, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +334,7 @@ func TestConfigurationReleaseActivationRejectsEnabledDestroyedSecretVersion(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", release.Version, nil)
+	_, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, release.Version, nil)
 	if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
 		t.Fatalf("activation changed=%v err=%v, want unreadable failure", changed, err)
 	}
@@ -351,7 +353,7 @@ func TestConfigurationReleaseActivationRejectsEnabledDestroyedSecretVersion(t *t
 	if after != before {
 		t.Fatalf("rejected activation appended revision: %d -> %d", before, after)
 	}
-	if _, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("rejected activation created active label: %v", err)
 	}
 }
@@ -395,7 +397,7 @@ func TestConfigurationReleaseActivationRequiresExactContentTypeIncludingEmptyPin
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", release.Version, nil)
+			_, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, release.Version, nil)
 			if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
 				t.Fatalf("activation changed=%v err=%v, want content-type failure", changed, err)
 			}
@@ -438,7 +440,7 @@ func TestConfigurationReleaseActivationHistoryDoesNotCrossNamespaceIncarnations(
 	if recreated.ID == old.ID {
 		t.Fatalf("namespace row ID was reused: %d", recreated.ID)
 	}
-	exists, err := st.ConfigurationReleaseActivationExists(ctx, ns, "runtime", 1, revision)
+	exists, err := st.ConfigurationReleaseActivationExists(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, 1, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +476,7 @@ func TestConfigurationReleaseActivationExistsRequiresAuthoritativeHistory(t *tes
 		t.Fatal(err)
 	}
 
-	exists, err := st.ConfigurationReleaseActivationExists(ctx, ns, "runtime", 7, revision)
+	exists, err := st.ConfigurationReleaseActivationExists(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, 7, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +536,7 @@ func TestConfigurationReleaseRequiresHomeNamespace(t *testing.T) {
 		Update("resource_app", "other").Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.ActivateConfigurationRelease(ctx, home.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, _, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: home.NamespaceRef, Name: release.Name}, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("activation accepted corrupt cross-namespace entry: %v", err)
 	}
 	if err := st.db.Model(&configurationReleaseEntryModel{}).
@@ -542,7 +544,7 @@ func TestConfigurationReleaseRequiresHomeNamespace(t *testing.T) {
 		Updates(map[string]any{"resource_namespace_id": 0, "resource_app": home.App}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.ActivateConfigurationRelease(ctx, home.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, _, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: home.NamespaceRef, Name: release.Name}, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("activation accepted zero resource namespace identity: %v", err)
 	}
 }
@@ -558,7 +560,7 @@ func TestNamespaceDeleteRetiresConfigurationReleaseState(t *testing.T) {
 	if err := st.DeleteNamespace(ctx, ns); err != nil {
 		t.Fatalf("DeleteNamespace: %v", err)
 	}
-	if _, err := st.GetConfigurationRelease(ctx, ns, "runtime", 1); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, 1); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("release survived namespace retirement: %v", err)
 	}
 	if _, err := st.GetNamespace(ctx, ns); !errors.Is(err, domain.ErrNotFound) {
@@ -571,6 +573,7 @@ func TestConfigurationSchemaAndReleaseAcknowledgementRoundTrip(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: "app", ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "d", Metadata: "{}"})
 	if err != nil || schema.Version != 1 {
 		t.Fatalf("schema=%+v err=%v", schema, err)
@@ -582,18 +585,18 @@ func TestConfigurationSchemaAndReleaseAcknowledgementRoundTrip(t *testing.T) {
 	if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", Connected: true, ServerTimestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "redacted", ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
+	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "redacted", ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 || rows[0].State != domain.ReleaseStateRejected {
 		t.Fatalf("acks=%+v err=%v", rows, err)
 	}
 	if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", Connected: false, ServerTimestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("acks after disconnect=%+v err=%v", rows, err)
 	}
@@ -612,7 +615,7 @@ func TestReleaseAcknowledgementDoesNotRegressAndSurvivesChangelogPrune(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		active, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", release.Version, nil)
+		active, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, release.Version, nil)
 		if err != nil || !changed {
 			t.Fatalf("activate %s changed=%v err=%v", digest, changed, err)
 		}
@@ -646,7 +649,7 @@ func TestReleaseAcknowledgementDoesNotRegressAndSurvivesChangelogPrune(t *testin
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack(a1, now.Add(2*time.Second))); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("acks=%+v err=%v", rows, err)
 	}
@@ -656,7 +659,7 @@ func TestReleaseAcknowledgementDoesNotRegressAndSurvivesChangelogPrune(t *testin
 	if _, err := st.PruneChangeLog(ctx, time.Nanosecond, 0); err != nil {
 		t.Fatal(err)
 	}
-	if exists, err := st.ConfigurationReleaseActivationExists(ctx, ns, "runtime", a1.Release.Version, a1.ActivationRevision); err != nil || !exists {
+	if exists, err := st.ConfigurationReleaseActivationExists(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, a1.Release.Version, a1.ActivationRevision); err != nil || !exists {
 		t.Fatalf("historical activation after changelog prune exists=%v err=%v", exists, err)
 	}
 }
@@ -672,7 +675,7 @@ func TestReleaseConnectionIsVisibleFencedAndReset(t *testing.T) {
 	if err := st.SetReleaseInstanceConnected(ctx, connection("old", true)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 || rows[0].State != "" || !rows[0].Connected {
 		t.Fatalf("registration-only rows=%+v err=%v", rows, err)
 	}
@@ -682,7 +685,7 @@ func TestReleaseConnectionIsVisibleFencedAndReset(t *testing.T) {
 	if err := st.SetReleaseInstanceConnected(ctx, connection("old", false)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("acks after stale disconnect=%+v err=%v", rows, err)
 	}
@@ -692,7 +695,7 @@ func TestReleaseConnectionIsVisibleFencedAndReset(t *testing.T) {
 	if err := st.ResetReleaseInstanceConnections(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("acks after reset=%+v err=%v", rows, err)
 	}
@@ -706,6 +709,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	base := time.Now().UTC().Add(-time.Minute)
 
 	connection := func(identity, id string, connected bool, at time.Time) domain.ReleaseSubscriberConnection {
@@ -723,7 +727,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 
 	ack := func(identity, diagnostic string, clientAt, serverAt time.Time) domain.ReleaseAcknowledgement {
 		return domain.ReleaseAcknowledgement{
-			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 			ClientName: "api", InstanceID: "replica-1", Identity: identity, ConnectionID: identity + "-1",
 			State: domain.ReleaseStateReceived, Diagnostic: diagnostic,
 			ClientTimestamp: clientAt, ServerTimestamp: serverAt,
@@ -741,7 +745,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +766,7 @@ func TestReleaseSubscriberStateIsScopedByIdentity(t *testing.T) {
 	if err := st.SetReleaseInstanceConnected(ctx, connection("alice", "alice-1", false, base.Add(5*time.Second))); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,6 +784,7 @@ func TestReleaseAcknowledgementPaginationIsStableAndComplete(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	states := []string{domain.ReleaseStateReceived, domain.ReleaseStatePrepared, domain.ReleaseStateApplied, domain.ReleaseStateRejected}
 	base := time.Now().UTC().Add(-time.Minute)
 	if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
@@ -792,7 +797,7 @@ func TestReleaseAcknowledgementPaginationIsStableAndComplete(t *testing.T) {
 		at := base.Add(time.Duration(i) * time.Second)
 		ack := domain.ReleaseAcknowledgement{
 			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1,
-			ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one",
+			ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one",
 			State: state, ClientTimestamp: at, ServerTimestamp: at,
 		}
 		if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
@@ -802,7 +807,7 @@ func TestReleaseAcknowledgementPaginationIsStableAndComplete(t *testing.T) {
 	var got []string
 	token := ""
 	for {
-		rows, next, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{Limit: 2, Token: token})
+		rows, next, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{Limit: 2, Token: token})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -834,6 +839,7 @@ func TestLateReleaseAcknowledgementCannotResurrectDisconnectedSubscriber(t *test
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	base := time.Now().UTC().Add(-time.Minute)
 	connection := func(connected bool, at time.Time) domain.ReleaseSubscriberConnection {
 		return domain.ReleaseSubscriberConnection{
@@ -845,7 +851,7 @@ func TestLateReleaseAcknowledgementCannotResurrectDisconnectedSubscriber(t *test
 		t.Fatal(err)
 	}
 	ack := domain.ReleaseAcknowledgement{
-		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "generation-1",
 		State: domain.ReleaseStateReceived, ClientTimestamp: base, ServerTimestamp: base,
 	}
@@ -863,7 +869,7 @@ func TestLateReleaseAcknowledgementCannotResurrectDisconnectedSubscriber(t *test
 	if _, err := st.PruneReleaseAcknowledgements(ctx, base.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -877,6 +883,7 @@ func TestReleaseAcknowledgementPaginationUsesIdentityTieBreaker(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	at := time.Now().UTC().Add(-time.Minute)
 	for _, identity := range []string{"alice", "bob"} {
 		connectionID := identity + "-1"
@@ -887,7 +894,7 @@ func TestReleaseAcknowledgementPaginationUsesIdentityTieBreaker(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := st.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
-			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+			Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision,
 			ClientName: "api", InstanceID: "replica-1", Identity: identity, ConnectionID: connectionID,
 			State: domain.ReleaseStateReceived, ClientTimestamp: at, ServerTimestamp: at,
 		}); err != nil {
@@ -898,7 +905,7 @@ func TestReleaseAcknowledgementPaginationUsesIdentityTieBreaker(t *testing.T) {
 	var identities []string
 	token := ""
 	for {
-		rows, next, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{Limit: 1, Token: token})
+		rows, next, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{Limit: 1, Token: token})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -924,7 +931,7 @@ func TestReleaseAcknowledgementPaginationRejectsPreIdentityCursor(t *testing.T) 
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	legacy := encodeToken(`{"server_timestamp":"2026-01-01T00:00:00.000000000Z","release_name":"runtime","client_name":"api","instance_id":"one","state":"received"}`)
-	_, _, err := st.ListReleaseAcknowledgements(context.Background(), nsRef("prod", "app"), "runtime", ListPage{Token: legacy})
+	_, _, err := st.ListReleaseAcknowledgements(context.Background(), domain.ReleaseFilter{Namespace: nsRef("prod", "app"), Name: "runtime"}, ListPage{Token: legacy})
 	if !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("legacy pre-identity cursor err = %v, want ErrInvalidArgument", err)
 	}
@@ -942,7 +949,7 @@ func TestPruneConfigurationReleasesProtectsReplayDependencies(t *testing.T) {
 			t.Fatal(err)
 		}
 		releases = append(releases, r)
-		if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", r.Version, nil); err != nil || !changed {
+		if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, r.Version, nil); err != nil || !changed {
 			t.Fatalf("activate %d changed=%v err=%v", r.Version, changed, err)
 		}
 	}
@@ -969,7 +976,7 @@ func TestPruneConfigurationReleasesProtectsReplayDependencies(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("removed=%d want historical v1 only", removed)
 	}
-	if _, err := st.GetConfigurationRelease(ctx, ns, "runtime", releases[0].Version); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, releases[0].Version); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("v1 after prune err=%v", err)
 	}
 }
@@ -987,10 +994,10 @@ func TestPruneConfigurationReleasesRetainsInactiveCountBeyondLabels(t *testing.T
 		}
 		releases = append(releases, release)
 	}
-	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", releases[3].Version, nil); err != nil || !changed {
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, releases[3].Version, nil); err != nil || !changed {
 		t.Fatalf("activate v4 changed=%v err=%v", changed, err)
 	}
-	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", releases[4].Version, nil); err != nil || !changed {
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, releases[4].Version, nil); err != nil || !changed {
 		t.Fatalf("activate v5 changed=%v err=%v", changed, err)
 	}
 	if err := st.db.Model(&configurationReleaseModel{}).Where("1 = 1").Update("created_at", fmtTime(time.Now().Add(-365*24*time.Hour))).Error; err != nil {
@@ -1004,7 +1011,7 @@ func TestPruneConfigurationReleasesRetainsInactiveCountBeyondLabels(t *testing.T
 		t.Fatalf("removed=%d, want only oldest inactive release", removed)
 	}
 	for _, release := range releases[1:] {
-		if _, err := st.GetConfigurationRelease(ctx, ns, "runtime", release.Version); err != nil {
+		if _, err := st.GetConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, release.Version); err != nil {
 			t.Fatalf("retained version %d: %v", release.Version, err)
 		}
 	}
@@ -1020,25 +1027,30 @@ func TestCountConfigurationReleases(t *testing.T) {
 	if _, _, err := st.PutParameter(ctx, paramRef, "1", "integer", "{}", "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := st.CountConfigurationReleases(ctx, ns, ""); err != nil || n != 0 {
+	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: ""}); err != nil || n != 0 {
 		t.Fatalf("empty count = %d, %v", n, err)
 	}
-	if _, err := st.CountConfigurationReleases(ctx, nsRef("prod", "missing"), ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: nsRef("prod", "missing"), Name: ""}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing namespace count error = %v", err)
 	}
 	entries := []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "integer", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("1"))), Metadata: "{}"}}
-	for i, name := range []string{"runtime", "runtime", "batch"} {
-		if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: name, Digest: fmt.Sprintf("d%d", i), Metadata: "{}", Entries: entries}); err != nil {
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: ns.App, ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "schema"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, version := range []uint64{0, 0, schema.Version} {
+		if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", SchemaVersion: version, Digest: fmt.Sprintf("d%d", i), Metadata: "{}", Entries: entries}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n, err := st.CountConfigurationReleases(ctx, ns, "runtime"); err != nil || n != 2 {
+	zero := uint64(0)
+	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime", SchemaVersion: &zero}); err != nil || n != 2 {
 		t.Fatalf("runtime count = %d, %v", n, err)
 	}
-	if n, err := st.CountConfigurationReleases(ctx, ns, ""); err != nil || n != 3 {
+	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: ns, Name: ""}); err != nil || n != 3 {
 		t.Fatalf("namespace count = %d, %v", n, err)
 	}
-	if n, err := st.CountConfigurationReleases(ctx, nsRef("dev", "app"), "runtime"); err != nil || n != 0 {
+	if n, err := st.CountConfigurationReleases(ctx, domain.ReleaseFilter{Namespace: nsRef("dev", "app"), Name: "runtime"}); err != nil || n != 0 {
 		t.Fatalf("other namespace count = %d, %v", n, err)
 	}
 }
@@ -1051,6 +1063,7 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
+	active := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	connect := func(instance string) {
 		t.Helper()
 		if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: instance, Identity: "client", ConnectionID: "one", Connected: true, ServerTimestamp: time.Now()}); err != nil {
@@ -1059,11 +1072,11 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	}
 	connect("replica-1")
 	connect("registered-only")
-	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 3, ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
+	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 3, ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("acks=%+v err=%v", rows, err)
 	}
@@ -1079,18 +1092,36 @@ func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testi
 	}
 
 	// A later applied acknowledgement at a newer revision clears divergence.
-	ack.ActivationRevision, ack.AppliedDivergent, ack.DivergentFieldCount = 8, false, 0
+	next := seedReleaseAcknowledgementActivation(t, st, domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
+	ack.ReleaseVersion = next.Release.Version
+	ack.ActivationRevision, ack.AppliedDivergent, ack.DivergentFieldCount = next.ActivationRevision, false, 0
 	ack.ServerTimestamp = time.Now()
 	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: "runtime"}, ListPage{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range rows {
-		if row.InstanceID == "replica-1" && (row.AppliedDivergent || row.DivergentFieldCount != 0 || row.ActivationRevision != 8) {
+		if row.InstanceID == "replica-1" && (row.AppliedDivergent || row.DivergentFieldCount != 0 || row.ActivationRevision != next.ActivationRevision) {
 			t.Fatalf("divergence not cleared on upsert: %+v", row)
 		}
 	}
+}
+
+// seedReleaseAcknowledgementActivation gives ACK persistence tests real
+// authoritative activation identities instead of fabricated revision numbers.
+func seedReleaseAcknowledgementActivation(t *testing.T, st *SQLStore, track domain.ReleaseTrack) domain.ActiveConfigurationRelease {
+	t.Helper()
+	ctx := context.Background()
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: track.Namespace, Name: track.Name, SchemaVersion: track.SchemaVersion, Digest: "ack-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := st.ActivateConfigurationRelease(ctx, track, release.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return active
 }

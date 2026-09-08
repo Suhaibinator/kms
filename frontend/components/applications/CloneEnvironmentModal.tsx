@@ -130,6 +130,7 @@ export default function CloneEnvironmentModal({
     try {
       const response = await api.cloneEnvironment({
         application: application.name,
+        schema_version: application.schema_version,
         source_env: source,
         target_env: target.trim(),
         copy_values: copyValues,

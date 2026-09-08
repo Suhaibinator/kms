@@ -25,6 +25,8 @@ export interface VerifyOptions {
   readonly release?: string;
   /** Informational label sent with the request. */
   readonly profile?: string;
+  /** Exact numeric track, including 0. Mutually exclusive with input.schemaSha256. */
+  readonly schemaVersion?: bigint;
   readonly signal?: AbortSignal;
   readonly deadline?: Date;
 }
@@ -48,6 +50,7 @@ export class VerifyResult {
   readonly namespace: string;
   readonly releaseName: string;
   readonly releaseVersion: bigint;
+  readonly schemaVersion: bigint;
   readonly activationRevision: bigint;
   /** True when the server's pinned application schema digest equals the generated contract's digest. */
   readonly schemaMatches: boolean;
@@ -60,6 +63,7 @@ export class VerifyResult {
     readonly namespace: string;
     readonly releaseName: string;
     readonly releaseVersion: bigint;
+    readonly schemaVersion: bigint;
     readonly activationRevision: bigint;
     readonly schemaMatches: boolean;
     readonly entries: readonly VerifyEntryResult[];
@@ -68,6 +72,7 @@ export class VerifyResult {
     this.namespace = init.namespace;
     this.releaseName = init.releaseName;
     this.releaseVersion = init.releaseVersion;
+    this.schemaVersion = init.schemaVersion;
     this.activationRevision = init.activationRevision;
     this.schemaMatches = init.schemaMatches;
     this.entries = Object.freeze(init.entries.map((entry) => Object.freeze({ ...entry })));
@@ -89,7 +94,7 @@ export class VerifyResult {
   report(): string {
     const lines: string[] = [];
     lines.push(
-      `${this.namespace} ${this.releaseName}@${this.releaseVersion}#${this.activationRevision}  schema: ${this.schemaMatches ? "match" : "differs"}`,
+      `${this.namespace} ${this.releaseName}@${this.releaseVersion}#${this.activationRevision}  schema_version: ${this.schemaVersion}  schema: ${this.schemaMatches ? "match" : "differs"}`,
     );
     const rows = [
       ["VERDICT", "ALIAS", "CONTENT_TYPE"],
@@ -116,6 +121,7 @@ export class VerifyResult {
       namespace: this.namespace,
       releaseName: this.releaseName,
       releaseVersion: this.releaseVersion.toString(),
+      schemaVersion: this.schemaVersion.toString(),
       activationRevision: this.activationRevision.toString(),
       schemaMatches: this.schemaMatches,
       entries: this.entries,
@@ -173,6 +179,7 @@ export async function verifyDefaults(
     ...(options.release ? { release: options.release } : {}),
     ...(options.profile ? { profile: options.profile } : {}),
     ...(input.schemaSha256 ? { schemaSha256: input.schemaSha256 } : {}),
+    ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
     entries,
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.deadline ? { deadline: options.deadline } : {}),
@@ -181,6 +188,7 @@ export async function verifyDefaults(
     namespace,
     releaseName: response.releaseName,
     releaseVersion: response.releaseVersion,
+    schemaVersion: response.schemaVersion,
     activationRevision: response.activationRevision,
     schemaMatches: response.schemaMatches,
     entries: response.entries.map((verdict) => ({

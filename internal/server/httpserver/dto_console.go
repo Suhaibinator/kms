@@ -194,6 +194,7 @@ type shipChangeDTO struct {
 }
 
 type shipRequestDTO struct {
+	SchemaVersion         *uint64         `json:"schema_version"`
 	Application           string          `json:"application"`
 	Environment           string          `json:"environment"`
 	Changes               []shipChangeDTO `json:"changes"`
@@ -208,7 +209,7 @@ func (d shipRequestDTO) toDomain() domain.ShipInput {
 	for _, c := range d.Changes {
 		changes = append(changes, domain.ShipChange{Alias: c.Alias, Value: c.Value, ContentType: c.ContentType, Version: c.Version, Label: c.Label})
 	}
-	return domain.ShipInput{Application: d.Application, Environment: d.Environment, Changes: changes, Metadata: d.MetadataJSON, DryRun: d.DryRun, ExpectedActiveVersion: d.ExpectedActiveVersion, RequestID: d.RequestID}
+	return domain.ShipInput{Application: d.Application, Environment: d.Environment, SchemaVersion: d.SchemaVersion, Changes: changes, Metadata: d.MetadataJSON, DryRun: d.DryRun, ExpectedActiveVersion: d.ExpectedActiveVersion, RequestID: d.RequestID}
 }
 
 type shipPreviewEntryDTO struct {
@@ -305,12 +306,13 @@ func toShipResultDTO(r domain.ShipResult) shipResultDTO {
 // --- clone ------------------------------------------------------------------
 
 type cloneEnvironmentRequestDTO struct {
-	Application string   `json:"application"`
-	SourceEnv   string   `json:"source_env"`
-	TargetEnv   string   `json:"target_env"`
-	CopyValues  bool     `json:"copy_values"`
-	AuthMethods []string `json:"auth_methods"`
-	Description string   `json:"description"`
+	Application   string   `json:"application"`
+	SourceEnv     string   `json:"source_env"`
+	TargetEnv     string   `json:"target_env"`
+	CopyValues    bool     `json:"copy_values"`
+	AuthMethods   []string `json:"auth_methods"`
+	Description   string   `json:"description"`
+	SchemaVersion *uint64  `json:"schema_version"`
 }
 
 type cloneEnvironmentItemDTO struct {

@@ -12,6 +12,8 @@ validation for the application's release, and set:
 - `KMS_CLIENT_CERT_FILE`
 - `KMS_CLIENT_KEY_FILE`
 - `KMS_CA_FILE`
+- `KMS_SCHEMA_VERSION` to the exact numeric schema track compiled into the application (`0` for
+  the schema-free track)
 - `KMS_PASSWORD_PEPPER_BINDING_KEY` for the bound release secret
 
 The deployment must use the Node runtime. Static export and Edge deployments

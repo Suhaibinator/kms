@@ -530,6 +530,7 @@ export interface PostureFilters {
 
 export interface Subscriber {
   release_name?: string;
+  schema_version?: number;
   release_state?: string;
   release_version?: number;
   release_revision?: number;
@@ -618,6 +619,8 @@ export interface ValidateReleaseResponse {
 }
 
 export interface ConfigurationSchema {
+  /** Omitted until first adoption; an empty array is an established empty contract. */
+  contract?: ApplicationContractField[];
   application: string;
   release_name: string;
   version: number;
@@ -645,6 +648,7 @@ export interface SchemaMigrationChange {
 export interface SchemaMigrationRequest {
   environment: string;
   schema_version: number;
+  source_schema_version: number;
   contract: ApplicationContractField[];
   changes: SchemaMigrationChange[];
   metadata_json?: string;
@@ -697,6 +701,7 @@ export interface ActivateReleaseResponse {
 export interface ReleaseSubscriberState {
   namespace: NamespaceRef;
   release_name: string;
+  schema_version?: number;
   client_name: string;
   instance_id: string;
   identity: string;
@@ -963,6 +968,7 @@ export interface ShipChange {
 export interface ShipRequest {
   application: string;
   environment: string;
+  schema_version?: number;
   changes: ShipChange[];
   metadata_json?: string;
   dry_run?: boolean;
@@ -1016,6 +1022,7 @@ export interface ShipResult {
 
 export interface CloneEnvironmentRequest {
   application: string;
+  schema_version?: number;
   source_env: string;
   target_env: string;
   copy_values: boolean;
@@ -1048,6 +1055,7 @@ export interface RollbackRequest {
   env: string;
   app: string;
   name: string;
+  schema_version?: number;
   expected_current_version?: number;
 }
 

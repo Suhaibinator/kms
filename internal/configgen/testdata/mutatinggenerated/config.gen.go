@@ -14,8 +14,8 @@ import (
 	time "time"
 )
 
-const generatedSchemaSHA256 = "95e30071e4dfde584cdb41e43d8659ab36523b8dee1ae8ad3b5614eeca36a850"
-const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"description\": \"Config is a generation fixture whose validation canonicalizes a field in place. The generated store must compare the two validated copies, not the original unvalidated defaults retained by the Store.\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"runtime\"\n  ],\n  \"properties\": {\n    \"runtime\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"name\": \"  canonical name  \"\n      },\n      \"properties\": {\n        \"name\": {\n          \"default\": \"  canonical name  \",\n          \"type\": \"string\"\n        }\n      },\n      \"required\": [\n        \"name\"\n      ],\n      \"type\": \"object\"\n    }\n  }\n}\n"
+const generatedSchemaSHA256 = "ac5a5fc80b07e1d1f5bbbe385513af6f77b188f8c2d0ecb1707d1f2aecbae66c"
+const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"description\": \"Config is a generation fixture whose validation canonicalizes a field in place. The generated store must compare the two validated copies, not the original unvalidated defaults retained by the Store.\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"runtime\"\n  ],\n  \"properties\": {\n    \"runtime\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"name\": \"  canonical name  \"\n      },\n      \"properties\": {\n        \"name\": {\n          \"default\": \"  canonical name  \",\n          \"type\": \"string\"\n        }\n      },\n      \"required\": [\n        \"name\"\n      ],\n      \"type\": \"object\"\n    }\n  },\n  \"x-kms-contract\": [\n    {\n      \"alias\": \"runtime\",\n      \"kind\": \"parameter\",\n      \"content_type\": \"json\"\n    },\n    {\n      \"alias\": \"token\",\n      \"kind\": \"secret\",\n      \"content_type\": \"\"\n    }\n  ]\n}\n"
 
 // GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.
 func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }
@@ -134,6 +134,7 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	store := &Store{defaults: sanitizedDefaults}
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
+		SchemaSHA256:         generatedSchemaSHA256,
 		Contract:             generatedContract,
 		Callbacks:            options.Callbacks,
 		BindingKeys:          bindingKeys,

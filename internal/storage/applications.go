@@ -48,12 +48,23 @@ func (s *SQLStore) CreateApplication(ctx context.Context, app domain.Application
 	if err != nil {
 		return domain.Application{}, err
 	}
-	if err := s.db.WithContext(ctx).Create(&m).Error; err != nil {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&m).Error; err != nil {
+			return err
+		}
+		if app.Contract != nil {
+			_, err := adoptSchemaContractTx(tx, app.Name, app.ReleaseName, app.SchemaVersion, app.Contract)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		if isUniqueErr(err) {
 			return domain.Application{}, domain.Errorf(domain.ErrAlreadyExists, "application %s", app.Name)
 		}
 		return domain.Application{}, err
 	}
+
 	return toApplication(m), nil
 }
 
@@ -96,12 +107,18 @@ func (s *SQLStore) CreateApplicationWithSchema(ctx context.Context, app domain.A
 			}
 			return err
 		}
+		if schema.Contract == nil && app.Contract != nil {
+			schema.Contract = app.Contract
+		}
 		createdSchema, err = createConfigurationSchemaTx(tx, schema)
 		if err != nil {
 			return err
 		}
-		return tx.Model(&applicationModel{}).Where("name = ?", app.Name).
-			Update("schema_version", createdSchema.Version).Error
+		m.ContractJSON, err = canonicalSchemaContract(createdSchema.Contract)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&applicationModel{}).Where("name = ?", app.Name).Updates(map[string]any{"schema_version": createdSchema.Version, "contract_json": m.ContractJSON}).Error
 	})
 	if err != nil {
 		return domain.Application{}, domain.ConfigurationSchema{}, err
@@ -131,17 +148,26 @@ func (s *SQLStore) GetApplication(ctx context.Context, name string) (domain.Appl
 // Concurrent first releases race on the conditional update; callers always
 // receive the winning canonical application and compare their candidate to it.
 func (s *SQLStore) AdoptApplicationContract(ctx context.Context, name string, fields []domain.ApplicationContractField) (domain.Application, error) {
-	contract, err := contractJSON(fields)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var app applicationModel
+		if err := tx.Where("name = ?", name).First(&app).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.ErrNotFound
+			}
+			return err
+		}
+		adopted, err := adoptSchemaContractTx(tx, name, app.ReleaseName, uint64(app.SchemaVersion), fields)
+		if err != nil {
+			return err
+		}
+		contract, err := canonicalSchemaContract(adopted.Contract)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&applicationModel{}).Where("name = ?", name).Updates(map[string]any{"contract_json": contract, "updated_at": fmtTime(nowUTC())}).Error
+	})
 	if err != nil {
 		return domain.Application{}, err
-	}
-	res := s.db.WithContext(ctx).Model(&applicationModel{}).
-		Where("name = ? AND contract_json = ? AND archived_at IS NULL", name, "[]").
-		Updates(map[string]any{
-			"contract_json": contract, "updated_at": fmtTime(nowUTC()),
-		})
-	if res.Error != nil {
-		return domain.Application{}, res.Error
 	}
 	return s.GetApplication(ctx, name)
 }
@@ -151,18 +177,34 @@ func (s *SQLStore) UpdateApplication(ctx context.Context, app domain.Application
 	if err != nil {
 		return domain.Application{}, err
 	}
-	res := s.db.WithContext(ctx).Model(&applicationModel{}).
-		Where("name = ? AND release_name = ? AND archived_at IS NULL", app.Name, app.ReleaseName).
-		Updates(map[string]any{
-			"description":   app.Description,
-			"contract_json": contract, "updated_at": fmtTime(nowUTC()),
-		})
-	if res.Error != nil {
-		return domain.Application{}, res.Error
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := verifyApplicationDefinitionExpectation(ctx, tx, app.Name); err != nil {
+			return err
+		}
+		if app.Contract != nil {
+			if _, err := adoptSchemaContractTx(tx, app.Name, app.ReleaseName, app.SchemaVersion, app.Contract); err != nil {
+				return err
+			}
+		}
+		res := tx.Model(&applicationModel{}).
+			Where("name = ? AND release_name = ? AND archived_at IS NULL", app.Name, app.ReleaseName).
+			Updates(map[string]any{
+				"description":    app.Description,
+				"schema_version": app.SchemaVersion,
+				"contract_json":  contract, "updated_at": fmtTime(nowUTC()),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return domain.Errorf(domain.ErrNotFound, "application %s", app.Name)
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.Application{}, err
 	}
-	if res.RowsAffected == 0 {
-		return domain.Application{}, domain.Errorf(domain.ErrNotFound, "application %s", app.Name)
-	}
+
 	return s.GetApplication(ctx, app.Name)
 }
 

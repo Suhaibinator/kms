@@ -32,6 +32,8 @@ export interface VerifyReleaseDefaultsOptions {
   readonly profile?: string;
   /** Generated contract schema digest; empty skips the schema check and leaves schemaMatches false. */
   readonly schemaSha256?: string;
+  /** Exact numeric schema track. Mutually exclusive with schemaSha256. */
+  readonly schemaVersion?: bigint;
   readonly entries: readonly VerifyDefaultsEntry[];
   readonly signal?: AbortSignal;
   readonly deadline?: Date;
@@ -47,6 +49,7 @@ export interface VerifyDefaultsVerdict {
 export interface VerifyReleaseDefaultsResult {
   readonly releaseName: string;
   readonly releaseVersion: bigint;
+  readonly schemaVersion: bigint;
   readonly activationRevision: bigint;
   readonly schemaMatches: boolean;
   readonly entries: readonly VerifyDefaultsVerdict[];
@@ -111,6 +114,7 @@ export function verifyResultFromWire(
   return Object.freeze({
     releaseName: response.name,
     releaseVersion: response.version,
+    schemaVersion: response.schemaVersion,
     activationRevision: response.activationRevision,
     schemaMatches,
     entries: frozenEntries,

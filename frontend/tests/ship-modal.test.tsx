@@ -347,6 +347,7 @@ describe("ShipModal", () => {
     expect(dryRuns()[0]).toEqual({
       application: app.name,
       environment: "dev",
+      schema_version: app.schema_version,
       changes: [{ alias: "rate_limits", value: EDIT_A, content_type: rateLimitsType }],
       dry_run: true,
     });
@@ -394,6 +395,7 @@ describe("ShipModal", () => {
     expect(realShips()[0]).toEqual({
       application: app.name,
       environment: "dev",
+      schema_version: app.schema_version,
       changes: [{ alias: "rate_limits", value: EDIT_A, content_type: rateLimitsType }],
       expected_active_version: base,
       request_id: expect.any(String),
@@ -510,7 +512,7 @@ describe("ShipModal", () => {
     expect(within(panel).queryByRole("button", { name: "Retry activation" })).toBeNull();
     expect(within(panel).getByRole("link", { name: `Open v${next} in Releases` })).toHaveAttribute(
       "href",
-      `/releases?app=${app.name}&env=dev&name=${releaseName}&release=${encodeURIComponent(`${releaseName}@${next}`)}`,
+      `/releases?app=${app.name}&env=dev&name=${releaseName}&schema_version=${app.schema_version}&release=${encodeURIComponent(`${releaseName}@${app.schema_version}:${next}`)}`,
     );
     expect(props.onShipped).toHaveBeenCalledWith(notActivated, "dev");
 
@@ -553,6 +555,7 @@ describe("ShipModal", () => {
         { env: "dev", app: app.name },
         releaseName,
         next,
+        app.schema_version,
         base,
       ),
     );
@@ -580,6 +583,7 @@ describe("ShipModal", () => {
     expect(panel).toHaveTextContent(`v${conflictWritten}`);
     expect(panel).toHaveTextContent(`${releaseName}@${conflictRelease}`);
     expect(panel).toHaveTextContent("created, not activated");
+    expect(within(panel).getAllByText(`schema v${preview.preview.schema_version}`)).toHaveLength(3);
     expect(within(panel).queryByRole("button", { name: /activate anyway/i })).toBeNull();
     expect(props.onShipped).toHaveBeenCalledWith(conflict, "prod");
 
@@ -1288,6 +1292,7 @@ describe("ShipModal", () => {
         { env: "dev", app: app.name },
         releaseName,
         base,
+        app.schema_version,
       ),
     );
     await waitFor(() => expect(within(rollback).getByTestId("rollback-confirm")).toBeEnabled());
@@ -1297,6 +1302,7 @@ describe("ShipModal", () => {
         env: "dev",
         app: app.name,
         name: releaseName,
+        schema_version: app.schema_version,
         expected_current_version: next,
       }),
     );

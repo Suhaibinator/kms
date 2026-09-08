@@ -1,5 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-kms-contract": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "database_password",
+      "kind": "secret",
+      "content_type": ""
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [

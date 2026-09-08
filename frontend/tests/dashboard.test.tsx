@@ -427,6 +427,7 @@ describe("DashboardPage", () => {
         expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
       }
     });
+    expect(within(gradethis).getAllByText("schema v1")).toHaveLength(2);
     expect(within(gradethis).getByText("2 rejected")).toHaveClass("fleet-card-rejected-some");
     expect(within(gradethis).getByText(/^activated /)).toBeVisible();
 
@@ -458,6 +459,44 @@ describe("DashboardPage", () => {
     expect(grid.querySelectorAll(".fleet-card")).toHaveLength(3);
     expect(screen.getByText("Recent activity")).toBeVisible();
     expect(screen.queryByText("Live subscribers")).toBeNull();
+  });
+
+  it("labels a schema-free active release on the fleet card", async () => {
+    const schemaFree = {
+      ...ready,
+      application: { ...ready.application, name: "gradethis", schema_version: 0 },
+      environments: ready.environments.map((environment) => ({
+        ...environment,
+        release: {
+          ...environment.release,
+          active: environment.release.active
+            ? { ...environment.release.active, schema_version: 0 }
+            : undefined,
+        },
+      })),
+    };
+    mocks.listApplications.mockResolvedValue({
+      applications: [schemaFree.application],
+      next_page_token: "",
+    });
+    mocks.fleetOverview.mockResolvedValue({
+      applications: [
+        {
+          application: schemaFree.application,
+          status: "ready",
+          environments: schemaFree.environments.map((environment) => ({
+            env: environment.namespace.env,
+            status: "ready",
+            production: environment.namespace.env === "prod",
+          })),
+        },
+      ],
+    });
+    mocks.applicationOverview.mockResolvedValue(schemaFree);
+
+    render(<DashboardPage />);
+    const card = await screen.findByRole("article");
+    await waitFor(() => expect(within(card).getAllByText("schema v0")).toHaveLength(2));
   });
 
   it("paints the grid from the fleet overview before any per-app overview resolves", async () => {

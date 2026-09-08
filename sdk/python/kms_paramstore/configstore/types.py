@@ -50,8 +50,11 @@ class ReleaseIdentity:
 
     def __str__(self) -> str:
         if not self.namespace and not self.name:
-            return f"release@{self.version}#{self.activation_revision}"
-        return f"{self.namespace}/{self.name}@{self.version}#{self.activation_revision}"
+            return f"release@{self.version}#{self.activation_revision} schema_version={self.schema_version}"
+        return (
+            f"{self.namespace}/{self.name}@{self.version}#{self.activation_revision} "
+            f"schema_version={self.schema_version}"
+        )
 
 
 class ConfigSnapshot(Generic[T]):

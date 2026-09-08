@@ -179,14 +179,14 @@ func TestMTLS_ReleaseWatchHeartbeatRejectsRevokedCertificate(t *testing.T) {
 	}
 	adminReleases := kmsv1.NewConfigurationReleaseServiceClient(adminConn)
 	created, err := adminReleases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
-		Namespace: pNS(ns.Env, ns.App), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{{
+		Namespace: pNS(ns.Env, ns.App), Name: "runtime", SchemaVersion: new(uint64), Entries: []*kmsv1.ReleaseEntrySelector{{
 			Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: pRef(ns.Env, ns.App, "config"), Label: domain.LabelCurrent,
 		}},
 	})
 	if err != nil {
 		t.Fatalf("create release: %v", err)
 	}
-	active, err := adminReleases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{
+	active, err := adminReleases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: new(uint64(0)),
 		Namespace: pNS(ns.Env, ns.App), Name: "runtime", Version: created.GetRelease().GetVersion(),
 	})
 	if err != nil || !active.GetChanged() {
@@ -200,7 +200,7 @@ func TestMTLS_ReleaseWatchHeartbeatRejectsRevokedCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)),
 		Namespace: pNS(ns.Env, ns.App), Name: "runtime", ClientName: "mtls-client", InstanceId: "replica-1",
 	}}}); err != nil {
 		t.Fatal(err)

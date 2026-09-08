@@ -24,6 +24,7 @@ export interface DefaultsArtifactParameter {
 export interface DefaultsArtifact {
   readonly format: typeof DEFAULTS_ARTIFACT_FORMAT;
   readonly profile: string;
+  /** Empty only for an explicitly schema-free/manual artifact. */
   readonly schemaSHA256: string;
   readonly contract: readonly DefaultsArtifactContractEntry[];
   readonly parameters: readonly DefaultsArtifactParameter[];
@@ -31,6 +32,7 @@ export interface DefaultsArtifact {
 
 export interface EncodeDefaultsArtifactInput {
   readonly profile: string;
+  /** Empty only for an explicitly schema-free/manual artifact. */
   readonly schemaSHA256: string;
   readonly contract: readonly ContractEntry[];
   readonly parameters: Readonly<Record<string, string>>;
@@ -257,7 +259,7 @@ function stringNode(node: JsonNode | undefined): string {
 }
 
 function schemaDigest(value: unknown): string {
-  if (typeof value !== "string" || !SCHEMA_SHA256_PATTERN.test(value)) {
+  if (typeof value !== "string" || (value !== "" && !SCHEMA_SHA256_PATTERN.test(value))) {
     throw invalid("schema SHA-256 is invalid");
   }
   return value;

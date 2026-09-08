@@ -445,7 +445,11 @@ func (s *Service) namespaceMethodCheck(ctx context.Context, pr Principal, ns dom
 		allowed[i] = string(m)
 	}
 	s.m().AuthzMethodDenied(authFailureReason(pr.Method))
-	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
+	ref := domain.Ref{NS: ns}
+	if track, ok := ctx.Value(releaseAuditTrackKey{}).(domain.ReleaseTrack); ok && resourceType == domain.ResourceConfigurationRelease && track.Namespace == ns {
+		ref.Key = track.Name
+	}
+	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, ref, n.ID, 0, "deny",
 		map[string]string{"method": string(pr.Method), "required": strings.Join(allowed, ",")})
 	return domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied,
 		"namespace %s requires %s", ns, strings.Join(allowed, " or "))
@@ -801,7 +805,7 @@ func (s *Service) auditRef(ctx context.Context, pr Principal, eventType, resourc
 // operation. Callers use it for mutable/delete paths where a post-operation
 // name lookup could otherwise stamp a newly recreated namespace (ABA).
 func (s *Service) auditRefWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) {
-	s.audit(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
+	s.audit(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, scopedReleaseAuditMetadata(ctx, resourceType, ref, meta)))
 }
 
 func (s *Service) auditRefStrictWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) error {
@@ -813,7 +817,7 @@ func (s *Service) auditRefRequiredStrictWithNamespaceID(ctx context.Context, pr 
 }
 
 func (s *Service) buildRefEvent(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, version uint64, decision string, meta map[string]string) domain.AuditEvent {
-	event := s.buildEvent(pr, eventType, resourceType, ref, version, decision, meta)
+	event := s.buildEvent(pr, eventType, resourceType, ref, version, decision, scopedReleaseAuditMetadata(ctx, resourceType, ref, meta))
 	if ref.NS.Env != "" && ref.NS.App != "" {
 		if namespaceID, ok := storage.ExpectedNamespaceIncarnation(ctx, ref.NS); ok {
 			event.ResourceNamespaceID = namespaceID

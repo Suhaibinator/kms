@@ -1458,6 +1458,16 @@ function handle(
       };
     case "GET /release-subscribers/stream":
       return error(404, "not_found", "no stream on this server");
+    case "GET /releases/schema-versions":
+      return {
+        status: 200,
+        body: {
+          schema_versions: state.application.schema_version
+            ? [state.application.schema_version]
+            : [],
+          next_page_token: "",
+        },
+      };
     case "GET /configuration-schemas":
       return {
         status: 200,

@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/composed",
     "type": "Config"
   },
-  "schema_sha256": "8aab8bd7749e19e7a1929fabd77debdc519b318d3aab39651d4cc33503bc6bfa",
+  "schema_sha256": "3d5e0bef47096ce904f9e20d2782d3ff2f0e11fc8552a648573f911f505a12bd",
   "groups": [
     {
       "alias": "database",

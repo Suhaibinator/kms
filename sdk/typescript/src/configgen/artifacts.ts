@@ -86,6 +86,18 @@ function buildSchema(descriptor: ConfigDescriptor): JsonValue {
   }
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
+    "x-kms-contract": [
+      ...descriptor.groups.map((group) => ({
+        alias: group.alias,
+        kind: "parameter",
+        content_type: "json",
+      })),
+      ...descriptor.secrets.map((secret) => ({
+        alias: secret.alias,
+        kind: "secret",
+        content_type: "",
+      })),
+    ].sort((left, right) => compareText(left.alias, right.alias)),
     type: "object",
     additionalProperties: false,
     required,
@@ -485,7 +497,9 @@ function renderBinding(
   line();
 
   line(`export type ValidateConfig = (config: ${root}) => void | Promise<void>;`);
-  line(`export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;`);
+  line(
+    `export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys" | "schemaVersion" | "schemaSHA256">;`,
+  );
   line();
   line("export class Store {");
   line(`  readonly #defaults: ConfigSnapshot<${root}>;`);
@@ -527,7 +541,9 @@ function renderBinding(
   line("    this.#started = true;");
   line("    return startManagedConfig(");
   line("      client,");
-  line("      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },");
+  line(
+    "      { ...options, schemaSHA256, bindingKeys: this.#bindingKeys, contract: generatedContract },",
+  );
   line("      (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),");
   line("      signal,");
   line("    );");

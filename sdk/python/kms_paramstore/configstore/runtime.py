@@ -385,9 +385,20 @@ class ManagedConfigManager(Generic[T]):
 
     def status(self) -> ManagedConfigStatus:
         status = getattr(self.loader, "status")()
+        observed = self._observed
+        version = getattr(status, "observed_version", observed.version)
+        revision = getattr(status, "observed_revision", observed.activation_revision)
+        if not observed.is_zero and (version, revision) != (observed.version, observed.activation_revision):
+            # Queued or unresolved candidates have a known track, but their
+            # digest must not be borrowed from the previous resolved snapshot.
+            observed = ReleaseIdentity(
+                namespace=observed.namespace, name=observed.name,
+                version=version, activation_revision=revision,
+                schema_version=observed.schema_version,
+            )
         return ManagedConfigStatus(
             state=getattr(status, "state", "idle"), ready=self._ready.is_set(),
-            observed=self._observed, applied=self._applied,
+            observed=observed, applied=self._applied,
             default_divergent=self._divergent,
             last_rejection_category=getattr(status, "last_failure_category", ""),
             last_failure_unix_ms=getattr(status, "last_failure_unix_ms", 0),

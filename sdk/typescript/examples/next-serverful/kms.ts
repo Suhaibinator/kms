@@ -65,6 +65,7 @@ export const kms = createNextKms<
     try {
       const loader = await client.createReleaseLoader({
         name: "runtime",
+        schemaVersion: BigInt(requiredEnvironment("KMS_SCHEMA_VERSION")),
         bindingKeys: { password_pepper: requiredEnvironment("KMS_PASSWORD_PEPPER_BINDING_KEY") },
       });
       let closing = false;

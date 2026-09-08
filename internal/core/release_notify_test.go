@@ -13,11 +13,11 @@ import (
 func TestReleaseSubscriberNotifierCoalescesAndScopes(t *testing.T) {
 	n := newReleaseSubscriberNotifier()
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
-	ch, cancel := n.Subscribe(ns, "runtime")
-	other, cancelOther := n.Subscribe(ns, "batch")
+	ch, cancel := n.Subscribe(domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
+	other, cancelOther := n.Subscribe(domain.ReleaseTrack{Namespace: ns, Name: "batch"})
 	defer cancelOther()
 	for range 5 {
-		n.Notify(ns, "runtime")
+		n.Notify(domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	}
 	select {
 	case <-ch:
@@ -35,7 +35,7 @@ func TestReleaseSubscriberNotifierCoalescesAndScopes(t *testing.T) {
 	default:
 	}
 	cancel()
-	n.Notify(ns, "runtime")
+	n.Notify(domain.ReleaseTrack{Namespace: ns, Name: "runtime"})
 	select {
 	case <-ch:
 		t.Fatal("cancelled subscription must not be woken")
@@ -63,7 +63,7 @@ func TestServiceNotifiesOnConnectionAckAndActivation(t *testing.T) {
 	}
 	svc := New(st, nil, "test")
 	pr := adminPrincipal()
-	wake, cancel := svc.SubscribeReleaseSubscribers(ns, "runtime")
+	wake, cancel := svc.SubscribeReleaseSubscribers(domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0})
 	defer cancel()
 	expectWake := func(step string) {
 		t.Helper()
@@ -77,12 +77,12 @@ func TestServiceNotifiesOnConnectionAckAndActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", release.Version, nil)
+	active, _, err := svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: release.SchemaVersion}, release.Version, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expectWake("activation")
-	if err := svc.SetReleaseSubscriberConnected(ctx, ns, "runtime", "api", "i1", pr.Identity.Name, "conn-1", true); err != nil {
+	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, "api", "i1", pr.Identity.Name, "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 	expectWake("connection")
@@ -90,11 +90,11 @@ func TestServiceNotifiesOnConnectionAckAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectWake("acknowledgement")
-	snapshot, err := svc.GetReleaseRolloutSnapshot(ctx, pr, ns, "runtime")
+	snapshot, err := svc.GetReleaseRolloutSnapshot(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0})
 	if err != nil || snapshot.CurrentRevision != active.ActivationRevision || snapshot.Summary.Total != 1 || snapshot.Summary.AppliedCurrent != 1 || len(snapshot.Subscribers) == 0 || snapshot.ServerTime.IsZero() {
 		t.Fatalf("snapshot = %+v err=%v", snapshot, err)
 	}
-	if _, err := svc.GetReleaseRolloutSnapshot(ctx, clientPrincipal("c"), ns, "runtime"); err == nil {
+	if _, err := svc.GetReleaseRolloutSnapshot(ctx, clientPrincipal("c"), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}); err == nil {
 		t.Fatal("snapshot must be admin-only")
 	}
 }

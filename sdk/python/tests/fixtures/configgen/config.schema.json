@@ -24,5 +24,17 @@
   "required": [
     "runtime"
   ],
-  "type": "object"
+  "type": "object",
+  "x-kms-contract": [
+    {
+      "alias": "db_password",
+      "content_type": "",
+      "kind": "secret"
+    },
+    {
+      "alias": "runtime",
+      "content_type": "json",
+      "kind": "parameter"
+    }
+  ]
 }

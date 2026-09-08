@@ -139,7 +139,11 @@ export function ShipPreview({
             <h4 className="ship-subtitle">
               Release{" "}
               {nextVersion !== null ? (
-                <ReleaseIdent name={preview.release_name} version={nextVersion} />
+                <ReleaseIdent
+                  name={preview.release_name}
+                  schemaVersion={preview.schema_version}
+                  version={nextVersion}
+                />
               ) : null}
             </h4>
             <div className="table-wrap card-table">
@@ -250,7 +254,7 @@ export function ShipPreview({
                   value={`${application}/${preview.release_name}@${preview.schema_version}`}
                 />
               ) : (
-                <span className="faint">no schema pinned</span>
+                <span className="faint">v0 · schema-free</span>
               )}
             </dd>
             <dt>Activation</dt>

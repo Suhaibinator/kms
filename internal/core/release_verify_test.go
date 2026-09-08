@@ -35,7 +35,7 @@ type activeReleaseOverrideStore struct {
 	active domain.ActiveConfigurationRelease
 }
 
-func (s *activeReleaseOverrideStore) GetActiveConfigurationRelease(context.Context, domain.NamespaceRef, string) (domain.ActiveConfigurationRelease, error) {
+func (s *activeReleaseOverrideStore) GetActiveConfigurationRelease(context.Context, domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
 	return s.active, nil
 }
 
@@ -103,7 +103,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, _, err := svc.ActivateConfigurationRelease(ctx, admin, ns, "runtime", rel.Version, nil)
+	active, _, err := svc.ActivateConfigurationRelease(ctx, admin, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: rel.SchemaVersion}, rel.Version, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +114,8 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		t.Fatal(err)
 	}
 	app.Contract = append(app.Contract, domain.ApplicationContractField{Alias: "future_cfg", Kind: domain.ReleaseEntryParameter, ContentType: "string"})
-	if _, err := st.UpdateApplication(ctx, app); err != nil {
-		t.Fatal(err)
+	if _, err := st.UpdateApplication(ctx, app); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("established contract must be immutable: %v", err)
 	}
 	return &verifyFixture{st: st, svc: svc, admin: admin, ns: ns, release: active, schema: schema}
 }
@@ -170,7 +170,7 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 		"text_cfg":    domain.VerifyVerdictDiffers,
 		"num_cfg":     domain.VerifyVerdictDiffers, // content-type mismatch
 		"db_password": domain.VerifyVerdictSecretAlias,
-		"future_cfg":  domain.VerifyVerdictMissingInRelease,
+		"future_cfg":  domain.VerifyVerdictUnknownAlias,
 		"nope":        domain.VerifyVerdictUnknownAlias,
 	}
 	if len(out.Entries) != len(want) {
@@ -184,19 +184,20 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 			t.Errorf("%s verdict = %s, want %s", e.Alias, e.Verdict, want[e.Alias])
 		}
 	}
-	if out.Summary != (domain.VerifyDefaultsSummary{Match: 1, Differs: 2, MissingInRelease: 1, UnknownAlias: 1, SecretAlias: 1, Unverified: 1}) {
+	if out.Summary != (domain.VerifyDefaultsSummary{Match: 1, Differs: 2, MissingInRelease: 0, UnknownAlias: 2, SecretAlias: 1, Unverified: 1}) {
 		t.Fatalf("summary = %+v", out.Summary)
 	}
 
-	// A wrong schema digest is reported, not rejected; an omitted digest is
-	// simply not checked.
+	// Unknown digests fail without selecting another track. A numeric selector
+	// explicitly verifies the already selected schema.
 	in.SchemaSHA256 = wrong
-	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || out.SchemaMatches {
+	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); !errors.Is(err, domain.ErrNotFound) || out.SchemaMatches {
 		t.Fatalf("wrong schema: matches=%v err=%v", out.SchemaMatches, err)
 	}
 	in.SchemaSHA256 = ""
-	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || out.SchemaMatches {
-		t.Fatalf("omitted schema: matches=%v err=%v", out.SchemaMatches, err)
+	in.SchemaVersion = &f.schema.Version
+	if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil || !out.SchemaMatches {
+		t.Fatalf("numeric schema: matches=%v err=%v", out.SchemaMatches, err)
 	}
 
 	// Audit carries counts only.
@@ -208,7 +209,7 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 	if first.Decision != "allow" || first.ResourceKey != "runtime" || first.ResourceVersion != f.release.Release.Version {
 		t.Fatalf("audit event = %+v", first)
 	}
-	for _, want := range []string{`"entry_count":"6"`, `"match_count":"1"`, `"differs_count":"2"`, `"missing_count":"1"`, `"unknown_alias_count":"1"`, `"secret_alias_count":"1"`, `"unsupported_count":"0"`, `"unverified_count":"1"`, `"schema_matches":"true"`, `"limited":"false"`} {
+	for _, want := range []string{`"entry_count":"6"`, `"match_count":"1"`, `"differs_count":"2"`, `"missing_count":"0"`, `"unknown_alias_count":"2"`, `"secret_alias_count":"1"`, `"unsupported_count":"0"`, `"unverified_count":"1"`, `"schema_matches":"true"`, `"limited":"false"`} {
 		if !strings.Contains(first.Metadata, want) {
 			t.Errorf("audit metadata missing %s: %s", want, first.Metadata)
 		}
@@ -247,7 +248,7 @@ func TestVerifyReleaseDefaultsRejectsMalformedActiveReleaseIdentity(t *testing.T
 				Store: f.st, ReleaseStore: f.st, ApplicationStore: f.st, active: malformed,
 			}
 			svc := New(store, nil, "test")
-			out, err := svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{
+			out, err := svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version,
 				Namespace: f.ns,
 				Entries:   []domain.VerifyDefaultsEntry{{Alias: "json_cfg", ContentType: "json", SHA256: mustHash(t, "json", verifyCanonical)}},
 			})
@@ -276,17 +277,17 @@ func TestVerifyReleaseDefaultsValidation(t *testing.T) {
 		name string
 		in   domain.VerifyReleaseDefaultsInput
 	}{
-		{"uppercase hex", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: entry("text_cfg", strings.ToUpper(good))}},
-		{"short hex", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: entry("text_cfg", good[:63])}},
-		{"non hex", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: entry("text_cfg", strings.Repeat("z", 64))}},
-		{"empty alias", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: entry("", good)}},
-		{"long alias", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: entry(strings.Repeat("a", 65), good)}},
-		{"duplicate alias", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: append(entry("text_cfg", good), entry("text_cfg", good)...)}},
-		{"too many entries", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: tooMany}},
+		{"uppercase hex", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: entry("text_cfg", strings.ToUpper(good))}},
+		{"short hex", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: entry("text_cfg", good[:63])}},
+		{"non hex", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: entry("text_cfg", strings.Repeat("z", 64))}},
+		{"empty alias", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: entry("", good)}},
+		{"long alias", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: entry(strings.Repeat("a", 65), good)}},
+		{"duplicate alias", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: append(entry("text_cfg", good), entry("text_cfg", good)...)}},
+		{"too many entries", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: tooMany}},
 		{"bad schema sha", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, SchemaSHA256: strings.ToUpper(good), Entries: entry("text_cfg", good)}},
-		{"long profile", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Profile: strings.Repeat("p", 65), Entries: entry("text_cfg", good)}},
-		{"bad namespace", domain.VerifyReleaseDefaultsInput{Namespace: domain.NamespaceRef{Env: "prod"}, Entries: entry("text_cfg", good)}},
-		{"bad release name", domain.VerifyReleaseDefaultsInput{Namespace: f.ns, ReleaseName: "bad name!", Entries: entry("text_cfg", good)}},
+		{"long profile", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Profile: strings.Repeat("p", 65), Entries: entry("text_cfg", good)}},
+		{"bad namespace", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: domain.NamespaceRef{Env: "prod"}, Entries: entry("text_cfg", good)}},
+		{"bad release name", domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, ReleaseName: "bad name!", Entries: entry("text_cfg", good)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,7 +319,7 @@ func TestVerifyReleaseDefaultsNotFound(t *testing.T) {
 	ctx := context.Background()
 	good := mustHash(t, "string", "hello")
 	// A release name that has never been activated.
-	_, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{Namespace: f.ns, ReleaseName: "other", Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: good}}})
+	_, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, ReleaseName: "other", Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: good}}})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("err = %v, want not found", err)
 	}
@@ -328,7 +329,7 @@ func TestVerifyReleaseDefaultsNotFound(t *testing.T) {
 	}
 	// Legacy namespace-less lookups must not be reachable either: an unknown
 	// namespace is NotFound as well.
-	_, err = f.svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{Namespace: domain.NamespaceRef{Env: "prod", App: "ghost"}, Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: good}}})
+	_, err = f.svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: domain.NamespaceRef{Env: "prod", App: "ghost"}, Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: good}}})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ghost namespace err = %v, want not found", err)
 	}
@@ -337,7 +338,7 @@ func TestVerifyReleaseDefaultsNotFound(t *testing.T) {
 func TestVerifyReleaseDefaultsAuthorization(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
-	in := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")}}}
+	in := domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")}}}
 
 	// Unbound client without a rule: denied and audited.
 	ci := clientPrincipal("ci")
@@ -385,7 +386,7 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
 	wrong := strings.Repeat("1", 64)
-	in := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
+	in := domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
 		{Alias: "text_cfg", ContentType: "string", SHA256: wrong},
 		{Alias: "num_cfg", ContentType: "integer", SHA256: wrong},
 	}}
@@ -407,14 +408,14 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 		// A refusal is not free: it drains both buckets, so the one token that
 		// was left no longer serves a one-mismatch request and even an
 		// all-match request is refused until the request bucket refills.
-		one := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
+		one := domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
 			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
 			{Alias: "num_cfg", ContentType: "integer", SHA256: wrong},
 		}}
 		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, one); !errors.Is(err, domain.ErrResourceExhausted) {
 			t.Fatalf("after a refusal the leftover token must be gone: err = %v", err)
 		}
-		allMatch := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
+		allMatch := domain.VerifyReleaseDefaultsInput{SchemaVersion: &f.schema.Version, Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
 			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
 		}}
 		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatch); !errors.Is(err, domain.ErrResourceExhausted) {
@@ -446,12 +447,12 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 		}
 	})
 
-	t.Run("schema mismatch is charged", func(t *testing.T) {
-		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1000, Burst: 1000, MismatchBudgetPerHour: 1})
+	t.Run("unknown schema is rejected and request budget is charged", func(t *testing.T) {
+		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1, Burst: 1, MismatchBudgetPerHour: 1})
 		allMatchWrongSchema := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, SchemaSHA256: strings.Repeat("2", 64), Entries: []domain.VerifyDefaultsEntry{
 			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
 		}}
-		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatchWrongSchema); err != nil || out.SchemaMatches {
+		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatchWrongSchema); !errors.Is(err, domain.ErrNotFound) || out.SchemaMatches {
 			t.Fatalf("first schema probe: out=%+v err=%v", out, err)
 		}
 		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatchWrongSchema); !errors.Is(err, domain.ErrResourceExhausted) {

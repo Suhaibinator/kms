@@ -19,7 +19,7 @@ import { validateContractField } from "@/lib/validation";
 /** What a setup-panel step (or a finding's Fix) asks the application page to do. */
 export type SetupAction =
   | { kind: "create-app" }
-  | { kind: "edit-definition" }
+  | { kind: "manage-contract" }
   | { kind: "register-schema" }
   | { kind: "add-environment" }
   | { kind: "fill-values"; env: string; alias?: string }
@@ -82,6 +82,8 @@ export interface ConnectSdkPanelProps {
   /** Credential methods accepted by this environment, independently of transport TLS. */
   allowedAuthMethods?: readonly AuthMethod[];
   releaseName: string;
+  /** Exact schema track selected on the application page. */
+  schemaVersion: number;
   /** Contract aliases; the snippet reads the first one. */
   aliases: string[];
   /** null while health has not loaded; `tls_enabled: false` shows a warning. */

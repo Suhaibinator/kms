@@ -820,7 +820,7 @@ def test_all_async_public_operations_fail_after_close():
             lambda: client.set_secret_enabled("key", True),
             lambda: client.destroy_secret_version("key", 1),
             lambda: client.promote_secret_version("key", 1),
-            lambda: client.verify_release_defaults(namespace=NS, entries=[]),
+            lambda: client.verify_release_defaults(namespace=NS, schema_version=0, entries=[]),
             lambda: client.apply_application_defaults(namespace=NS, artifact=b"{}"),
             lambda: client.resolve(Config()),
             lambda: client.watch(lambda event: None),

@@ -34,6 +34,7 @@ from .release import (
     ReleaseStatus,
     _Candidate,
     _CandidateFailure,
+    _EmptyActiveReleaseError,
     _REJECTION_CATEGORIES,
     _STATES,
     _classified_rejection_category,
@@ -43,6 +44,7 @@ from .release import (
     _grpc_code_name,
     _now_ms,
     _release_digest,
+    _release_matches_track,
     _validate_release_timing,
     _valid_sha256_hex,
 )
@@ -52,6 +54,14 @@ AsyncManifestValidator = Callable[
     [asyncio.Event, ReleaseManifest], Union[None, Awaitable[None]]
 ]
 
+_TERMINAL_WATCH_CODES = frozenset({
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNAUTHENTICATED,
+})
+
 
 @dataclass(frozen=True)
 class AsyncReleaseLoaderConfig:
@@ -59,6 +69,8 @@ class AsyncReleaseLoaderConfig:
 
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
+    schema_version: Optional[int] = None
+    schema_sha256: str = ""
     reconcile_interval: float = 60.0
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
@@ -72,6 +84,21 @@ class AsyncReleaseLoaderConfig:
     request_timeout: Optional[float] = None
 
     def __post_init__(self) -> None:
+        if (self.schema_version is None) == (not self.schema_sha256):
+            raise errors.ConfigError(
+                "exactly one of release schema_version or schema_sha256 is required"
+            )
+        if self.schema_version is not None and (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or not 0 <= self.schema_version < 2**64
+        ):
+            raise errors.ConfigError("release schema_version must be a uint64 integer")
+        if self.schema_sha256 and (
+            not _valid_sha256_hex(self.schema_sha256)
+            or self.schema_sha256 != self.schema_sha256.lower()
+        ):
+            raise errors.ConfigError("release schema_sha256 must be lowercase 64-character hex")
         object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
@@ -99,9 +126,11 @@ class AsyncReleaseLoader:
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
+        self._schema_version = config.schema_version
         self._running = False
         self._stop_event = asyncio.Event()
         self._candidate_queue: "asyncio.Queue[_Candidate]" = asyncio.Queue(maxsize=1)
+        self._watch_error: Optional[BaseException] = None
         self._active_cancel: Optional[asyncio.Event] = None
         self._active_identity: Optional[Tuple[int, int, str, str]] = None
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
@@ -179,29 +208,38 @@ class AsyncReleaseLoader:
         self._running = True
         self._stop_event = asyncio.Event()
         self._candidate_queue = asyncio.Queue(maxsize=1)
+        self._watch_error = None
         self._active_cancel = None
         self._active_identity = None
         self._latest_identity = None
         self._retry_identity = None
         self._graceful_watch_stop = asyncio.Event()
         self._watch_done = asyncio.Event()
+        contract_failed = False
         try:
             namespace = self._client._resolve_namespace_arg(self._config.namespace)
             if inspect.isawaitable(namespace):
                 namespace = await namespace
             self._namespace = namespace
 
+            await self._ensure_schema_version()
+
+            initial: Optional[_Candidate] = None
             try:
                 initial = await self._read_active()
+            except errors.NotFoundError:
+                # A known schema track may exist before its first activation.
+                # Subscribe immediately and let watch/reconciliation deliver it.
+                pass
+            except _EmptyActiveReleaseError:
+                raise ReleaseStartupError(
+                    "active configuration release response was empty"
+                ) from None
             except Exception:
                 raise ReleaseStartupError(
                     "unable to read the initial active configuration release"
                 ) from None
-            if not initial.release.name:
-                raise ReleaseStartupError(
-                    "active configuration release response was empty"
-                )
-            self._last_seen_revision = initial.revision
+            self._last_seen_revision = initial.revision if initial is not None else 0
             watch_task = asyncio.create_task(self._watch_loop(), name="kms-release-watch")
             reconcile_task = asyncio.create_task(
                 self._reconcile_loop(), name="kms-release-reconcile"
@@ -211,16 +249,27 @@ class AsyncReleaseLoader:
                 if stop_event is not None
                 else None
             )
-            self._offer_candidate(initial, source="reconciliation")
+            if initial is not None:
+                self._offer_candidate(initial, source="reconciliation")
             applied_once = False
             try:
                 while not self._stop_event.is_set():
                     candidate_task = asyncio.create_task(self._candidate_queue.get())
                     stopped_task = asyncio.create_task(self._stop_event.wait())
                     done, _ = await asyncio.wait(
-                        {candidate_task, stopped_task},
+                        {candidate_task, stopped_task, watch_task},
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if watch_task in done:
+                        candidate_task.cancel()
+                        stopped_task.cancel()
+                        await asyncio.gather(
+                            candidate_task, stopped_task, return_exceptions=True
+                        )
+                        error = watch_task.exception()
+                        if error is not None:
+                            raise error
+                        break
                     if stopped_task in done:
                         candidate_task.cancel()
                         await asyncio.gather(candidate_task, return_exceptions=True)
@@ -254,21 +303,56 @@ class AsyncReleaseLoader:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+        except ReleaseCommitError:
+            contract_failed = True
+            raise
         finally:
             self._watch_call = None
             self._running = False
+            # A terminal watch failure outranks cancellation/preparation errors,
+            # but commit/abort violations must retain their safety diagnostics.
+            if not contract_failed:
+                self._raise_watch_error()
 
     async def _relay_stop(self, stop_event: asyncio.Event) -> None:
         await stop_event.wait()
         self.stop()
 
+    async def _ensure_schema_version(self) -> None:
+        if self._schema_version is not None:
+            return
+        try:
+            response = await self._stub.ResolveReleaseSchema(
+                kms_pb2.ResolveReleaseSchemaRequest(
+                    namespace=to_proto_namespace(self._require_namespace()),
+                    name=self._config.name,
+                    schema_sha256=self._config.schema_sha256,
+                ),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        if response.schema_version == 0:
+            raise ReleaseStartupError("release schema digest resolved to schema version 0")
+        self._schema_version = response.schema_version
+
+    def _require_schema_version(self) -> int:
+        if self._schema_version is None:
+            raise ReleaseStartupError("release schema has not been resolved")
+        return self._schema_version
+
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
-        if self._stop_event.is_set() or not candidate.release.name:
+        namespace = self._namespace
+        if self._stop_event.is_set() or namespace is None:
             return
-        if candidate.revision and candidate.revision < self._last_seen_revision:
+        if not _release_matches_track(
+            candidate.release,
+            namespace,
+            self._config.name,
+            self._require_schema_version(),
+        ):
             return
-        if candidate.revision > self._last_seen_revision:
-            self._last_seen_revision = candidate.revision
         if self._latest_identity is not None:
             if candidate.revision < self._latest_identity[0]:
                 return
@@ -303,9 +387,15 @@ class AsyncReleaseLoader:
         elif self._retry_identity == candidate.identity:
             self._retry_identity = None
 
+    def _raise_watch_error(self) -> None:
+        if self._watch_error is not None:
+            raise self._watch_error
+
     async def _process_candidate(
         self, candidate: _Candidate, prepare: Any
     ) -> Tuple[str, str, int]:
+        # No await separates the fatal check from cancellation-event installation.
+        self._raise_watch_error()
         cancel = asyncio.Event()
         self._active_cancel = cancel
         self._active_identity = candidate.identity
@@ -383,6 +473,7 @@ class AsyncReleaseLoader:
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return ("applied", "", 0)
         except _CandidateFailure as exc:
+            self._raise_watch_error()
             if prepared is not None and exc.category != "prepare_failed":
                 # All paths that need cleanup normally abort above. This guard
                 # covers validator/fencing refactors without double-aborting.
@@ -396,6 +487,7 @@ class AsyncReleaseLoader:
         except asyncio.CancelledError:
             if prepared is not None:
                 self._abort_or_fail(candidate, prepared)
+            self._raise_watch_error()
             raise
         finally:
             if self._active_cancel is cancel:
@@ -422,6 +514,7 @@ class AsyncReleaseLoader:
             or release.name != self._config.name
             or release.namespace.env != namespace.env
             or release.namespace.app != namespace.app
+            or release.schema_version != self._require_schema_version()
         ):
             raise _CandidateFailure("version_mismatch")
         try:
@@ -587,12 +680,27 @@ class AsyncReleaseLoader:
                 kms_pb2.GetActiveReleaseRequest(
                     namespace=to_proto_namespace(self._require_namespace()),
                     name=self._config.name,
+                    schema_version=self._require_schema_version(),
                 ),
                 metadata=self._client._auth_metadata(),
                 timeout=self._client._call_timeout(self._config.request_timeout),
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
+        if not response.HasField("release") or not response.release.name:
+            raise _EmptyActiveReleaseError(
+                "active configuration release response was empty"
+            )
+        schema_version = self._require_schema_version()
+        if response.release.schema_version != schema_version:
+            raise ReleaseStartupError("active release response has the wrong schema version")
+        if not _release_matches_track(
+            response.release,
+            self._require_namespace(),
+            self._config.name,
+            schema_version,
+        ):
+            raise ReleaseStartupError("active release response has the wrong release track")
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     async def _reconcile_loop(self) -> None:
@@ -660,6 +768,7 @@ class AsyncReleaseLoader:
                         client_name=self._client_name,
                         instance_id=self._instance_id,
                         last_seen_revision=self._last_seen_revision,
+                        schema_version=self._require_schema_version(),
                     )
                 )
             )
@@ -669,20 +778,53 @@ class AsyncReleaseLoader:
             async for event in call:
                 if self._stop_event.is_set():
                     break
-                received = True
-                if event.revision > self._last_seen_revision:
-                    self._last_seen_revision = event.revision
                 kind = event.WhichOneof("event")
                 if kind == "snapshot":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.snapshot.release), event.revision)
-                    )
+                    if event.snapshot.HasField("release") and _release_matches_track(
+                        event.snapshot.release,
+                        self._require_namespace(),
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.snapshot.release), event.revision)
+                        )
+                        received = True
                 elif kind == "activation":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.activation.release), event.revision)
+                    if event.activation.HasField("release") and _release_matches_track(
+                        event.activation.release,
+                        self._require_namespace(),
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.activation.release), event.revision)
+                        )
+                        received = True
+                elif kind == "heartbeat":
+                    self._last_seen_revision = max(
+                        self._last_seen_revision, event.revision
+                    )
+                    received = True
+                elif kind == "acknowledgement_rejected":
+                    received = (
+                        self._discard_rejected_ack(event.acknowledgement_rejected)
+                        or received
                     )
         except asyncio.CancelledError:
             raise
+        except grpc.RpcError as exc:
+            if exc.code() in _TERMINAL_WATCH_CODES:
+                self._watch_error = errors.map_grpc_error(exc)
+                if self._active_cancel is not None:
+                    self._active_cancel.set()
+                raise self._watch_error from None
         except Exception:
             pass
         finally:
@@ -697,6 +839,34 @@ class AsyncReleaseLoader:
                 except Exception:
                     pass
         return received
+
+    def _discard_rejected_ack(
+        self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
+    ) -> bool:
+        namespace = self._require_namespace()
+        if (
+            rejection.reason != "activation_unavailable"
+            or rejection.namespace.env != namespace.env
+            or rejection.namespace.app != namespace.app
+            or rejection.name != self._config.name
+            or rejection.schema_version != self._require_schema_version()
+            or rejection.client_name != self._client_name
+            or rejection.instance_id != self._instance_id
+        ):
+            return False
+        current = self._ack_latest.get(rejection.state)
+        if current is None:
+            return True
+        generation, acknowledgement, _dirty = current
+        if (
+            generation == rejection.sequence
+            and acknowledgement.sequence == rejection.sequence
+            and acknowledgement.version == rejection.version
+            and acknowledgement.activation_revision == rejection.activation_revision
+            and acknowledgement.state == rejection.state
+        ):
+            del self._ack_latest[rejection.state]
+        return True
 
     async def _ack_sender(self, call: Any) -> None:
         while not self._stop_event.is_set():
@@ -776,11 +946,13 @@ class AsyncReleaseLoader:
             timestamp_unix_ms=_now_ms(),
             applied_divergent=state == "applied" and divergence[0],
             divergent_field_count=divergence[1] if state == "applied" and divergence[0] else 0,
+            schema_version=self._require_schema_version(),
         )
         current = self._ack_latest.get(state)
         if current is None or current[1].activation_revision <= candidate.revision:
             self._ack_generation += 1
             generation = self._ack_generation
+            acknowledgement.sequence = generation
             self._ack_latest[state] = (generation, acknowledgement, True)
             self._ack_event.set()
             self._ack_counts[state] += 1

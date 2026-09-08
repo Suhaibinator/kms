@@ -15,6 +15,7 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 type sseFrame struct {
@@ -70,7 +71,7 @@ func TestReleaseSubscriberStream(t *testing.T) {
 
 	open := func(ctx context.Context) *http.Response {
 		t.Helper()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +117,7 @@ func TestReleaseSubscriberStream(t *testing.T) {
 
 	// A subscriber connecting wakes the stream into a fresh snapshot.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
-	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), ns, "runtime", "api", "i1", "admin", "conn-1", true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, "api", "i1", "admin", "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 	frame, err = readFrame(t, reader)
@@ -175,11 +176,11 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestReleaseSubscriberStreamRejectsUnauthenticatedAndUnknown(t *testing.T) {
 	e := newReleaseTestEnv(t)
-	w := e.do(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil, nil)
+	w := e.do(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil, nil)
 	mustStatus(t, w, http.StatusUnauthorized)
-	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 	mustStatus(t, w, http.StatusNotFound)
-	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis", nil)
+	w = e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&schema_version=1", nil)
 	mustStatus(t, w, http.StatusBadRequest)
 }
 
@@ -251,7 +252,7 @@ func TestReleaseSubscriberStreamEndsOnTokenRotation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil)
+		ts.URL+"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime", nil).WithContext(ctx)
+		"/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=1", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+e.adminToken)
 	req = withPeerCert(req, cert)
 
@@ -342,7 +343,7 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 	// Wake the stream: the refresh it triggers must refuse to send a snapshot to
 	// a principal whose certificate is gone.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
-	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), ns, "runtime", "api", "i1", "admin", "conn-1", true); err != nil {
+	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, "api", "i1", "admin", "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -357,5 +358,42 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 	}
 	if strings.Contains(body, "event: end") {
 		t.Fatalf("stream ended at its lifetime cap instead of on the revoked certificate:\n%s", body)
+	}
+}
+
+func TestReleaseSubscriberStreamLimitAuditPreservesSelectedSchema(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.seedConsoleApp("dev")
+	s := newServer(e.svc, Config{Addr: ":0", Version: "test"})
+	// Exhaust the real limiter without opening a long-lived stream.
+	s.stream.global = 0
+	handler := s.handler()
+	for _, schema := range []string{"0", "1"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version="+schema, nil)
+		req.Header.Set("Authorization", "Bearer "+e.adminToken)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		mustStatus(t, w, http.StatusTooManyRequests)
+	}
+	events, _, err := e.svc.ListAuditEvents(context.Background(), consoleAdmin(), domain.AuditFilter{EventType: "configuration_release.subscribers_stream", Decision: "deny"}, storage.ListPage{Limit: 10})
+	if err != nil || len(events) != 2 {
+		t.Fatalf("stream rejection audits: %+v %v", events, err)
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		var metadata map[string]string
+		if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+			t.Fatal(err)
+		}
+		if event.ResourceType != domain.ResourceConfigurationRelease || event.ResourceEnv != "dev" || event.ResourceApp != "gradethis" || event.ResourceKey != "runtime" || metadata["reason"] != reasonGlobalStreamLimit {
+			t.Fatalf("stream rejection lost identity/reason: %+v", event)
+		}
+		if len(metadata) != 2 {
+			t.Fatalf("unexpected rejection metadata: %v", metadata)
+		}
+		seen[metadata["schema_version"]] = true
+	}
+	if !seen["0"] || !seen["1"] {
+		t.Fatalf("stream rejection schemas: %v", seen)
 	}
 }

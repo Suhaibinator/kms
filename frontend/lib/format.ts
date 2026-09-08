@@ -1,3 +1,9 @@
+import {
+  type AuditResource,
+  auditReleaseSchemaVersion,
+  auditReleaseVersion,
+} from "./audit-release";
+
 // Presentation helpers. Timestamps arrive as Unix milliseconds (*_unix_ms).
 
 const EMPTY = "—"; // em dash
@@ -14,17 +20,19 @@ export function displayNamespace(ns: { env: string; app: string }): string {
   return `${ns.env}/${ns.app}`;
 }
 
-export function displayAuditResource(event: {
-  resource_env?: string;
-  resource_app?: string;
-  resource_key?: string;
-}): string | null {
+export function displayAuditResource(event: AuditResource): string | null {
   if (event.resource_env && event.resource_app && event.resource_key) {
-    return displayPath({
+    const path = displayPath({
       env: event.resource_env,
       app: event.resource_app,
       key: event.resource_key,
     });
+    if (event.resource_type === "configuration_release") {
+      const schemaVersion = auditReleaseSchemaVersion(event);
+      const version = auditReleaseVersion(event);
+      return `${path}${schemaVersion !== undefined ? ` · schema v${schemaVersion}` : ""}${version !== undefined ? ` · v${version}` : ""}`;
+    }
+    return path;
   }
   if (event.resource_env && event.resource_app) {
     return displayNamespace({ env: event.resource_env, app: event.resource_app });

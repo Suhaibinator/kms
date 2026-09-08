@@ -450,6 +450,7 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 
 type subscriberDTO struct {
 	ReleaseName         string            `json:"release_name,omitempty"`
+	SchemaVersion       uint64            `json:"schema_version,omitempty"`
 	ReleaseState        string            `json:"release_state,omitempty"`
 	ReleaseVersion      uint64            `json:"release_version,omitempty"`
 	ReleaseRevision     uint64            `json:"release_revision,omitempty"`
@@ -469,7 +470,7 @@ func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
 		namespaces = append(namespaces, namespaceRefDTO{Env: ns.Env, App: ns.App})
 	}
 	return subscriberDTO{
-		ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
+		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,
 		Identity:            s.Identity,
@@ -550,7 +551,7 @@ type releaseSelectorDTO struct {
 type createReleaseDTO struct {
 	Namespace     namespaceRefDTO      `json:"namespace"`
 	Name          string               `json:"name"`
-	SchemaVersion uint64               `json:"schema_version"`
+	SchemaVersion *uint64              `json:"schema_version"`
 	Entries       []releaseSelectorDTO `json:"entries"`
 	MetadataJSON  string               `json:"metadata_json"`
 }
@@ -564,7 +565,7 @@ func (d createReleaseDTO) toDomain() domain.CreateConfigurationReleaseInput {
 		})
 	}
 	return domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: d.Name, SchemaVersion: d.SchemaVersion,
+		Namespace: ns, Name: d.Name, SchemaVersion: *d.SchemaVersion,
 		Entries: entries, Metadata: d.MetadataJSON,
 	}
 }
@@ -577,24 +578,32 @@ type releaseValidationErrorDTO struct {
 }
 
 type schemaDTO struct {
-	Application     string `json:"application"`
-	ReleaseName     string `json:"release_name"`
-	Version         uint64 `json:"version"`
-	SchemaJSON      string `json:"schema_json"`
-	Digest          string `json:"digest"`
-	MetadataJSON    string `json:"metadata_json"`
-	CreatedBy       string `json:"created_by"`
-	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
+	Application     string                             `json:"application"`
+	ReleaseName     string                             `json:"release_name"`
+	Version         uint64                             `json:"version"`
+	SchemaJSON      string                             `json:"schema_json"`
+	Digest          string                             `json:"digest"`
+	MetadataJSON    string                             `json:"metadata_json"`
+	CreatedBy       string                             `json:"created_by"`
+	CreatedAtUnixMS int64                              `json:"created_at_unix_ms"`
+	Contract        *[]domain.ApplicationContractField `json:"contract,omitzero"`
 }
 
 func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
-	return schemaDTO{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
+	dto := schemaDTO{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
 		MetadataJSON: rawJSON(s.Metadata), CreatedBy: s.CreatedBy, CreatedAtUnixMS: unixMS(s.CreatedAt)}
+	if s.Contract != nil {
+		contract := make([]domain.ApplicationContractField, len(s.Contract))
+		copy(contract, s.Contract)
+		dto.Contract = &contract
+	}
+	return dto
 }
 
 type releaseSubscriberDTO struct {
 	Namespace             namespaceRefDTO `json:"namespace"`
 	ReleaseName           string          `json:"release_name"`
+	SchemaVersion         uint64          `json:"schema_version"`
 	ClientName            string          `json:"client_name"`
 	InstanceID            string          `json:"instance_id"`
 	Identity              string          `json:"identity"`
@@ -616,7 +625,7 @@ type releaseSubscriberDTO struct {
 func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDTO {
 	return releaseSubscriberDTO{
 		Namespace:   namespaceRefDTO{Env: s.Namespace.Env, App: s.Namespace.App},
-		ReleaseName: s.ReleaseName, ClientName: s.ClientName, InstanceID: s.InstanceID,
+		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ClientName: s.ClientName, InstanceID: s.InstanceID,
 		Identity: s.Identity, State: s.State, ReleaseVersion: s.ReleaseVersion,
 		ActivationRevision: s.ActivationRevision, RejectionCategory: s.RejectionCategory,
 		Diagnostic: s.Diagnostic, ClientTimestampUnixMS: unixMS(s.ClientTimestamp),

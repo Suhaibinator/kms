@@ -37,6 +37,7 @@ const listPageSize = 1000
 type envSelection struct {
 	prefix                 string
 	release                string
+	schemaVersion          optionalUint64
 	noSecrets              bool
 	envPrefix              string
 	allowIncompleteSecrets bool
@@ -47,6 +48,7 @@ type envSelection struct {
 func addEnvSelectionFlags(fs *flag.FlagSet, sel *envSelection) {
 	fs.StringVar(&sel.prefix, "prefix", "", "inject only keys under this relative `prefix` (namespace mode)")
 	fs.StringVar(&sel.release, "release", "", "inject the entries of the active release `NAME` (exact versions, verified digests) instead of the namespace's current values")
+	fs.Var(&sel.schemaVersion, "schema-version", "required with --release; 0 selects the schema-free track")
 	fs.BoolVar(&sel.noSecrets, "no-secrets", false, "inject parameters only")
 	fs.StringVar(&sel.envPrefix, "env-prefix", "", "prepend this `prefix` to every variable name")
 	fs.BoolVar(&sel.allowUnsafeEnvNames, "allow-unsafe-env-names", false, "allow known runtime-control variable names (trusted configuration only)")
@@ -64,6 +66,9 @@ func (sel *envSelection) validate() error {
 		}
 	}
 	if sel.release != "" {
+		if !sel.schemaVersion.set {
+			return usageError("--schema-version is required with --release")
+		}
 		if err := keyutil.ValidateKey(sel.release); err != nil {
 			return usageError(fmt.Sprintf("invalid --release: %v", err))
 		}
@@ -119,7 +124,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		err     error
 	)
 	if sel.release != "" {
-		items, secrets, err = c.resolveReleaseValues(ctx, conn, cf, ns, sel.release)
+		items, secrets, err = c.resolveReleaseValues(ctx, conn, cf, ns, sel.release, sel.schemaVersion.value)
 	} else {
 		items, secrets, err = c.resolveNamespaceValues(ctx, conn, cf, ns, sel.prefix, !sel.noSecrets)
 	}
@@ -273,9 +278,9 @@ func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn,
 // pins, verifying version, resource, content type and digest exactly as the
 // SDK's release loader does, so that what the process sees is what the
 // release recorded.
-func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, cf *connFlags, ns *kmsv1.NamespaceRef, name string) ([]envinject.Item, []secretItem, error) {
+func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, cf *connFlags, ns *kmsv1.NamespaceRef, name string, schemaVersion uint64) ([]envinject.Item, []secretItem, error) {
 	actx := cf.authCtx(ctx)
-	active, err := kmsv1.NewConfigurationReleaseServiceClient(conn).GetActiveRelease(actx, &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name})
+	active, err := kmsv1.NewConfigurationReleaseServiceClient(conn).GetActiveRelease(actx, &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name, SchemaVersion: &schemaVersion})
 	if err != nil {
 		return nil, nil, fmt.Errorf("get active release %s: %w", name, err)
 	}
@@ -288,6 +293,9 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 	}
 	if rel.GetName() != name {
 		return nil, nil, fmt.Errorf("release %s: server returned a different release", name)
+	}
+	if rel.GetSchemaVersion() != schemaVersion {
+		return nil, nil, fmt.Errorf("release %s: server returned schema %d, requested %d", name, rel.GetSchemaVersion(), schemaVersion)
 	}
 	// Validate the whole manifest's namespace boundary before fetching any
 	// resource. A malformed foreign pin must not become a resource-existence

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ReleaseWorkspace } from "@/components/releases/ReleaseWorkspace";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
 import ReleasesPage from "@/pages/releases";
@@ -7,7 +8,13 @@ import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
-  replace: vi.fn(async () => true),
+  replace: vi.fn(
+    async (
+      _url: { pathname: string; query: Record<string, string> },
+      _as?: unknown,
+      _options?: unknown,
+    ) => true,
+  ),
   listReleases: vi.fn(),
   validateRelease: vi.fn(),
   getActiveRelease: vi.fn(),
@@ -16,12 +23,13 @@ const mocks = vi.hoisted(() => ({
   subscriberStream: vi.fn(),
   getRelease: vi.fn(),
   rollbackRelease: vi.fn(),
-  applicationDashboard: vi.fn(),
+  applicationOverview: vi.fn(),
   parameterMetadata: vi.fn(),
   secretMetadata: vi.fn(),
   createRelease: vi.fn(),
   listApplications: vi.fn(),
   listSchemas: vi.fn(),
+  releaseSchemaVersions: vi.fn(),
   createSchema: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
@@ -83,12 +91,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
       subscriberStream: mocks.subscriberStream,
       getRelease: mocks.getRelease,
       rollbackRelease: mocks.rollbackRelease,
-      applicationDashboard: mocks.applicationDashboard,
+      applicationOverview: mocks.applicationOverview,
       parameterMetadata: mocks.parameterMetadata,
       secretMetadata: mocks.secretMetadata,
       createRelease: mocks.createRelease,
       listApplications: mocks.listApplications,
       listSchemas: mocks.listSchemas,
+      releaseSchemaVersions: mocks.releaseSchemaVersions,
       createSchema: mocks.createSchema,
     },
   };
@@ -165,12 +174,31 @@ describe("ReleasesPage", () => {
     }
     for (const mock of Object.values(mocks.toast)) mock.mockReset();
     mocks.listReleases.mockResolvedValue({ releases: [], next_page_token: "" });
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [1], next_page_token: "" });
     mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "none", 404));
     mocks.listApplications.mockResolvedValue({
       applications: [dashboardWithContract.application],
       next_page_token: "",
     });
-    mocks.listSchemas.mockResolvedValue({ schemas: [], next_page_token: "" });
+    mocks.listSchemas.mockImplementation(async () => ({
+      schemas:
+        mocks.query.tab === "schemas"
+          ? []
+          : [
+              {
+                application: "payments",
+                release_name: "runtime",
+                version: 1,
+                contract: [],
+                schema_json: "{}",
+                digest: "abc",
+                created_by: "admin",
+                created_at_unix_ms: 1,
+                metadata_json: "{}",
+              },
+            ],
+      next_page_token: "",
+    }));
     mocks.releaseSubscribers.mockResolvedValue({
       subscribers: [],
       current_revision: 0,
@@ -179,6 +207,393 @@ describe("ReleasesPage", () => {
     // No stream endpoint: the rollout hook falls back to polling at once.
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
   });
+
+  it("discovers the newest registered track without admin schema access, including inactive tracks", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listSchemas.mockRejectedValue(new ApiError("permission_denied", "admin only", 403));
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [3, 1], next_page_token: "" });
+    render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        3,
+      ),
+    );
+    expect(mocks.listSchemas).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("3");
+    expect(screen.getByRole("option", { name: "v0 · schema-free" })).toBeVisible();
+    expect(mocks.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ schema_version: "3" }) }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("keeps an explicit URL track usable when discovery is denied", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime", schema_version: "0" };
+    mocks.releaseSchemaVersions.mockRejectedValue(new ApiError("permission_denied", "denied", 403));
+    render(<ReleasesPage />);
+    await screen.findByText(/Could not discover schema tracks/);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        0,
+      ),
+    );
+    expect(screen.getByRole("textbox", { name: "Schema version" })).toHaveValue("0");
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("allows exact numeric selection after discovery denial without a newest fallback", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.releaseSchemaVersions.mockRejectedValue(new ApiError("permission_denied", "denied", 403));
+    const { rerender } = render(<ReleasesPage />);
+    const input = await screen.findByRole("textbox", { name: "Schema version" });
+    const select = screen.getByRole("button", { name: "Select schema" });
+    expect(mocks.listReleases).not.toHaveBeenCalled();
+    for (const value of ["", "-1", "1.5", "1e3", "9007199254740992"]) {
+      fireEvent.change(input, { target: { value } });
+      expect(select).toBeDisabled();
+    }
+    for (const value of ["0", "99"]) {
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(select);
+      expect(mocks.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ schema_version: value }) }),
+        undefined,
+        expect.anything(),
+      );
+    }
+    mocks.query = { ...mocks.query, schema_version: "99" };
+    rerender(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenLastCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        99,
+      ),
+    );
+  });
+
+  it("keeps the name filter usable and retries discovery when its scope changes", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.releaseSchemaVersions.mockImplementation(async (_ns, name) => {
+      if (!name) throw new ApiError("unavailable", "temporarily unavailable", 503);
+      return { schema_versions: [2], next_page_token: "" };
+    });
+    const { rerender } = render(<ReleasesPage />);
+    await screen.findByText(/Could not discover schema tracks/);
+    const nameFilter = screen.getByRole("textbox", { name: "Release name" });
+    expect(nameFilter).toBeEnabled();
+    fireEvent.change(nameFilter, {
+      target: { value: "runtime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    mocks.query = { ...mocks.query, name: "runtime" };
+    rerender(<ReleasesPage />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+    );
+    expect(mocks.releaseSchemaVersions).toHaveBeenLastCalledWith(
+      { env: "prod", app: "payments" },
+      "runtime",
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("selects the scoped newest schema after changing a persisted broad name filter", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    let resolveNamed!: (result: { schema_versions: number[]; next_page_token: string }) => void;
+    const named = new Promise<{ schema_versions: number[]; next_page_token: string }>((resolve) => {
+      resolveNamed = resolve;
+    });
+    mocks.releaseSchemaVersions.mockImplementation(async (_ns, name) =>
+      name ? named : { schema_versions: [5, 2, 1], next_page_token: "" },
+    );
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ schema_version: "5" }) }),
+        undefined,
+        expect.anything(),
+      ),
+    );
+    mocks.query = mocks.replace.mock.lastCall?.[0].query ?? {};
+    rerender(<ReleasesPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("textbox", { name: "Release name" }), {
+      target: { value: "runtime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    const filterQuery = mocks.replace.mock.lastCall?.[0].query ?? {};
+    expect(filterQuery).toEqual({ app: "payments", env: "prod", name: "runtime" });
+    // Until the router and scoped discovery settle, the old schema cannot be
+    // used for a read or release builder under the newly entered name.
+    expect(screen.getByRole("button", { name: "New release" })).toBeDisabled();
+    mocks.query = filterQuery;
+    rerender(<ReleasesPage />);
+    expect(screen.getByRole("button", { name: "New release" })).toBeDisabled();
+    expect(mocks.listReleases.mock.calls.some((call) => call[1] === "runtime")).toBe(false);
+    await act(async () => resolveNamed({ schema_versions: [2, 1], next_page_token: "" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+    );
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: { app: "payments", env: "prod", name: "runtime", schema_version: "2" },
+      }),
+      undefined,
+      expect.anything(),
+    );
+    await waitFor(() =>
+      expect(mocks.listReleases).toHaveBeenLastCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        100,
+        undefined,
+        expect.anything(),
+        2,
+      ),
+    );
+    expect(
+      mocks.listReleases.mock.calls
+        .filter((call) => call[1] === "runtime")
+        .every((call) => call[5] === 2),
+    ).toBe(true);
+  });
+
+  it("rollback uses the selected schema previous release", async () => {
+    const current = { release: releaseV2, current: true, previous: false, activation_revision: 8 };
+    const previous = { release: releaseV1, current: false, previous: true, activation_revision: 7 };
+    const rows = [
+      {
+        release: { ...releaseV2, schema_version: 2, version: 4 },
+        current: true,
+        previous: false,
+        activation_revision: 12,
+      },
+      {
+        release: { ...releaseV1, schema_version: 2, version: 3 },
+        current: false,
+        previous: true,
+        activation_revision: 11,
+      },
+      current,
+      previous,
+    ];
+    const rollback = vi.fn();
+    render(
+      <ReleaseWorkspace
+        summary={current}
+        releases={rows}
+        busyAction=""
+        activationFailure={null}
+        onDismissFailure={vi.fn()}
+        onClose={vi.fn()}
+        onValidate={vi.fn()}
+        onActivate={vi.fn()}
+        onRollback={rollback}
+      />,
+    );
+    const workspace = screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" });
+    fireEvent.click(within(workspace).getByRole("button", { name: "Roll back to previous" }));
+    expect(rollback).toHaveBeenCalledWith(current, previous);
+  });
+
+  it("schema navigation cancels a pending activation snapshot", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: false, previous: false, activation_revision: 0 }],
+      next_page_token: "",
+    });
+    let finish: (value: { release: typeof releaseV1 }) => void = () => undefined;
+    mocks.getActiveRelease.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    await waitFor(() => expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1));
+    mocks.query = { ...mocks.query, schema_version: "2" };
+    rerender(<ReleasesPage />);
+    await act(async () => finish({ release: releaseV1 }));
+    expect(screen.queryByRole("dialog", { name: "Activate release?" })).toBeNull();
+    expect(mocks.activateRelease).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2])(
+    "publishes the explicitly selected schema %s and its contract",
+    async (schema) => {
+      mocks.query = { app: "payments", env: "prod", schema_version: String(schema) };
+      const alias = `settings_${schema}`;
+      mocks.applicationOverview.mockResolvedValue({
+        ...dashboardWithContract,
+        application: {
+          ...dashboardWithContract.application,
+          schema_version: schema,
+          contract: [{ alias, kind: "parameter", content_type: "json" }],
+        },
+        rows: [
+          {
+            key: alias,
+            kind: "parameter",
+            environments: { prod: { present: true, content_type: "json", version: 1 } },
+          },
+        ],
+      });
+      mocks.parameterMetadata.mockResolvedValue({
+        ref: { namespace: releaseV1.namespace, key: alias },
+        current_version: 1,
+        versions: [],
+        labels: { current: 1 },
+      });
+      mocks.createRelease.mockResolvedValue({ release: { ...releaseV1, schema_version: schema } });
+      render(<ReleasesPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "New release" }));
+      const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+      await within(dialog).findByRole("textbox", { name: "Release name" });
+      expect(mocks.applicationOverview).toHaveBeenCalledWith(
+        "payments",
+        undefined,
+        expect.anything(),
+        schema,
+      );
+      fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
+      const json = JSON.parse(
+        (within(dialog).getByRole("textbox", { name: "Release definition" }) as HTMLTextAreaElement)
+          .value,
+      );
+      expect(json.schema_version).toBe(schema);
+      expect(json.entries[0].alias).toBe(alias);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+      await waitFor(() =>
+        expect(mocks.createRelease).toHaveBeenCalledWith(
+          expect.objectContaining({
+            schema_version: schema,
+            entries: [expect.objectContaining({ alias })],
+          }),
+        ),
+      );
+    },
+  );
+
+  it("does not reopen an old track after its pending create completes", async () => {
+    mocks.query = { app: "payments", env: "prod", schema_version: "1" };
+    mocks.applicationOverview.mockResolvedValue({
+      ...dashboardWithContract,
+      application: { ...dashboardWithContract.application, schema_version: 1 },
+    });
+    let finish: (value: unknown) => void = () => undefined;
+    mocks.createRelease.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "New release" }));
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+    await waitFor(() => expect(mocks.createRelease).toHaveBeenCalledTimes(1));
+    mocks.query = { ...mocks.query, schema_version: "2" };
+    rerender(<ReleasesPage />);
+    mocks.replace.mockClear();
+    await act(async () => finish({ release: releaseV1 }));
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+  });
+
+  it("does not seed a new builder with the prior schema's late overview", async () => {
+    mocks.query = { app: "payments", env: "prod", schema_version: "1" };
+    let finish: (value: unknown) => void = () => undefined;
+    mocks.applicationOverview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { rerender } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "New release" }));
+    await waitFor(() => expect(mocks.applicationOverview).toHaveBeenCalledTimes(1));
+    mocks.query = { ...mocks.query, schema_version: "0" };
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
+    rerender(<ReleasesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "New release" }));
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    await act(async () => finish(dashboardWithContract));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
+    expect(
+      JSON.parse(
+        (within(dialog).getByRole("textbox", { name: "Release definition" }) as HTMLTextAreaElement)
+          .value,
+      ).schema_version,
+    ).toBe(0);
+    expect(mocks.applicationOverview).toHaveBeenLastCalledWith(
+      "payments",
+      undefined,
+      expect.anything(),
+      0,
+    );
+  });
+
+  it("resolves legacy links in the newest track and never probes schema0", async () => {
+    mocks.query = { app: "payments", env: "prod", release: "runtime@99" };
+    mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [3], next_page_token: "" });
+    mocks.getRelease.mockResolvedValue({
+      release: { ...releaseV1, version: 99, schema_version: 3 },
+    });
+    render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        99,
+        3,
+      ),
+    );
+    expect(mocks.listReleases).toHaveBeenCalledWith(
+      { env: "prod", app: "payments" },
+      undefined,
+      100,
+      undefined,
+      expect.anything(),
+      3,
+    );
+    expect(mocks.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ schema_version: "3" }) }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it.each(["9007199254740993", "1.5", "-1"])(
+    "rejects unsafe schema URL %s before release requests",
+    async (schema) => {
+      mocks.query = { app: "payments", env: "prod", schema_version: schema };
+      render(<ReleasesPage />);
+      expect(await screen.findByRole("alert")).toHaveTextContent("Invalid schema version");
+      expect(mocks.listReleases).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "New release" })).toBeDisabled();
+    },
+  );
 
   it("reorders the loaded page from a column header and records the sort in the URL", async () => {
     mocks.query = { app: "payments", env: "prod" };
@@ -197,7 +612,7 @@ describe("ReleasesPage", () => {
 
     const { rerender } = render(<ReleasesPage />);
     expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
-    expect(versions()).toEqual(["releaseruntime@2", "releaseruntime@1"]);
+    expect(versions()).toEqual(["releaseruntime@2schema v1", "releaseruntime@1schema v1"]);
     expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 releases");
 
     fireEvent.click(screen.getByRole("button", { name: "Release" }));
@@ -213,7 +628,7 @@ describe("ReleasesPage", () => {
     // The URL is the source of truth, so land the router on what the click asked for.
     mocks.query = { app: "payments", env: "prod", sort: "release", dir: "asc" };
     rerender(<ReleasesPage />);
-    expect(versions()).toEqual(["releaseruntime@1", "releaseruntime@2"]);
+    expect(versions()).toEqual(["releaseruntime@1schema v1", "releaseruntime@2schema v1"]);
     expect(screen.getByRole("button", { name: "Release" }).closest("th")).toHaveAttribute(
       "aria-sort",
       "ascending",
@@ -322,7 +737,7 @@ describe("ReleasesPage", () => {
     render(<ReleasesPage />);
     expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
     fireEvent.click(screen.getAllByRole("button", { name: "View" })[0]);
-    const dialog = screen.getByRole("dialog", { name: "Release runtime@2" });
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" });
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Compare" }));
     expect(await within(dialog).findByText(/old-digest/)).toBeVisible();
@@ -337,6 +752,7 @@ describe("ReleasesPage", () => {
       1000,
       undefined,
       expect.objectContaining({ signal: expect.anything() }),
+      releaseV2.schema_version,
     );
   });
 
@@ -349,7 +765,7 @@ describe("ReleasesPage", () => {
 
     render(<ReleasesPage />);
     fireEvent.click(await screen.findByRole("button", { name: "View" }));
-    const dialog = screen.getByRole("dialog", { name: "Release runtime@2" });
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" });
     fireEvent.click(within(dialog).getByRole("tab", { name: "Compare" }));
 
     const compare = within(dialog).getByRole("combobox", { name: "Compare with" });
@@ -376,7 +792,7 @@ describe("ReleasesPage", () => {
     });
 
     render(<ReleasesPage />);
-    const dialog = await screen.findByRole("dialog", { name: "Release runtime@2" });
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@2 · schema v1" });
     expect(within(dialog).getByRole("tab", { name: "Compare" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -416,7 +832,7 @@ describe("ReleasesPage", () => {
     render(<ReleasesPage />);
     expect((await screen.findAllByText("runtime@1"))[0]).toBeVisible();
     fireEvent.click(screen.getAllByRole("button", { name: "View" })[1]);
-    const dialog = screen.getByRole("dialog", { name: "Release runtime@1" });
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@1 · schema v1" });
     fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
     await waitFor(() => expect(mocks.releaseSubscribers).toHaveBeenCalled());
 
@@ -430,7 +846,7 @@ describe("ReleasesPage", () => {
     // The table now carries the refreshed summaries (v1 is current)...
     expect((await screen.findAllByText(/current · rev 9/))[0]).toBeInTheDocument();
     // ...and the workspace is still open on the same release and the same tab.
-    const reopened = screen.getByRole("dialog", { name: "Release runtime@1" });
+    const reopened = screen.getByRole("dialog", { name: "Release runtime@1 · schema v1" });
     expect(within(reopened).getByRole("tab", { name: "Rollout status" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -469,7 +885,13 @@ describe("ReleasesPage", () => {
     fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
     fireEvent.click(within(confirm).getByRole("button", { name: "Activate release" }));
     await waitFor(() =>
-      expect(mocks.activateRelease).toHaveBeenCalledWith(releaseV2.namespace, "runtime", 2, 1),
+      expect(mocks.activateRelease).toHaveBeenCalledWith(
+        releaseV2.namespace,
+        "runtime",
+        2,
+        releaseV2.schema_version,
+        1,
+      ),
     );
     expect(mocks.getActiveRelease).toHaveBeenCalledTimes(1);
     await waitFor(() =>
@@ -525,9 +947,9 @@ describe("ReleasesPage", () => {
       app: "payments",
       env: "prod",
       name: "runtime",
-      release: "runtime@1",
+      release: "runtime@1:1",
       section: "compare",
-      compare: "runtime@3",
+      compare: "runtime@1:3",
     };
     const releaseV3 = { ...releaseV2, version: 3 };
     mocks.listReleases.mockResolvedValue({
@@ -540,19 +962,19 @@ describe("ReleasesPage", () => {
     });
     mocks.getRelease.mockResolvedValue({ release: releaseV3 });
     const { rerender } = render(<ReleasesPage />);
-    let workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
+    let workspace = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
     expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
-      "runtime@3",
+      "runtime@1:3",
     );
     expect(
       within(workspace)
         .getAllByRole("columnheader")
         .map((cell) => cell.textContent),
-    ).toEqual(["Alias", "runtime@3", "runtime@1"]);
+    ).toEqual(["Alias", "runtime@1:3", "runtime@1:1"]);
     // The inverse reactivation link works on the same mounted route too.
-    mocks.query = { ...mocks.query, release: "runtime@3", compare: "runtime@1" };
+    mocks.query = { ...mocks.query, release: "runtime@1:3", compare: "runtime@1:1" };
     rerender(<ReleasesPage />);
-    workspace = await screen.findByRole("dialog", { name: "Release runtime@3" });
+    workspace = await screen.findByRole("dialog", { name: "Release runtime@3 · schema v1" });
     expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
       "runtime@1",
     );
@@ -574,19 +996,75 @@ describe("ReleasesPage", () => {
     });
     mocks.getRelease.mockResolvedValue({ release: releaseV3 });
     render(<ReleasesPage />);
-    const workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
+    const workspace = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
     await waitFor(() =>
       expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
-        "runtime@3",
+        "runtime@1:3",
       ),
     );
     expect(mocks.getRelease).toHaveBeenCalledWith(
       releaseV1.namespace,
       "runtime",
       3,
+      1,
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(within(workspace).getByText(/new-digest/)).toBeVisible();
+  });
+
+  it("refetches an off-page comparison after namespace history navigation", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      schema_version: "1",
+      release: "runtime@1:1",
+      section: "compare",
+      compare: "runtime@1:3",
+    };
+    mocks.listReleases.mockImplementation(async (namespace: { env: string; app: string }) => ({
+      releases: [
+        {
+          release: { ...releaseV1, namespace },
+          current: true,
+          previous: false,
+          activation_revision: 7,
+        },
+      ],
+      next_page_token: "older",
+    }));
+    mocks.getRelease.mockImplementation(async (namespace: { env: string; app: string }) => ({
+      release: { ...releaseV2, namespace, version: 3 },
+    }));
+
+    const { rerender } = render(<ReleasesPage />);
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        3,
+        1,
+        expect.anything(),
+      ),
+    );
+
+    mocks.query = { ...mocks.query, env: "dev" };
+    rerender(<ReleasesPage />);
+
+    await waitFor(() =>
+      expect(mocks.getRelease).toHaveBeenCalledWith(
+        { env: "dev", app: "payments" },
+        "runtime",
+        3,
+        1,
+        expect.anything(),
+      ),
+    );
+    const comparisonNamespaces = mocks.getRelease.mock.calls
+      .filter((call) => call[2] === 3)
+      .map((call) => call[0]);
+    expect(comparisonNamespaces).toContainEqual({ env: "prod", app: "payments" });
+    expect(comparisonNamespaces).toContainEqual({ env: "dev", app: "payments" });
   });
 
   it("renders validation failures in the workspace violations table", async () => {
@@ -611,9 +1089,9 @@ describe("ReleasesPage", () => {
     expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Validate" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Release runtime@2" });
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@2 · schema v1" });
     const panel = await within(dialog).findByRole("alert");
-    expect(panel).toHaveTextContent("runtime@2 failed validation");
+    expect(panel).toHaveTextContent("runtime@1:2 failed validation");
     expect(within(panel).getByText("expected boolean")).toBeVisible();
     expect(within(panel).getByText("/properties/enabled")).toBeVisible();
     // The violation row links to the parameter the alias pins.
@@ -672,7 +1150,7 @@ describe("ReleasesPage", () => {
 
   it("refreshes the list after creating a release that matches the active name filter", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithContract);
     mocks.createRelease.mockResolvedValue({ release: releaseV2 });
 
     render(<ReleasesPage />);
@@ -689,7 +1167,7 @@ describe("ReleasesPage", () => {
 
   it("submits an immutable release only once while creation is pending", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithContract);
     let finish!: (value: { release: typeof releaseV2 }) => void;
     mocks.createRelease.mockReturnValue(
       new Promise((resolve) => {
@@ -733,7 +1211,7 @@ describe("ReleasesPage", () => {
 
   it("pre-populates the guided builder from the application contract and submits its API shape", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithContract);
     mocks.createRelease.mockResolvedValue({ release: releaseV2 });
 
     render(<ReleasesPage />);
@@ -771,7 +1249,7 @@ describe("ReleasesPage", () => {
 
   it("disables a resource picker when no matching resources exist", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue({
+    mocks.applicationOverview.mockResolvedValue({
       ...dashboardWithContract,
       application: {
         ...dashboardWithContract.application,
@@ -793,7 +1271,7 @@ describe("ReleasesPage", () => {
 
   it("disables label and version selectors until metadata provides choices", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
 
     render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -814,7 +1292,7 @@ describe("ReleasesPage", () => {
 
   it("keeps invalid advanced JSON in place and blocks returning to Guided mode", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
 
     render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -836,7 +1314,7 @@ describe("ReleasesPage", () => {
 
   it("never allows JSON mode to repin the application's schema version", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithContract);
 
     const { unmount } = render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -850,15 +1328,15 @@ describe("ReleasesPage", () => {
 
     delete pinned.schema_version;
     fireEvent.change(editor, { target: { value: JSON.stringify(pinned) } });
-    expect(within(dialog).getByText(/must remain 3/)).toBeVisible();
+    expect(within(dialog).getByText(/selected track: 3/)).toBeVisible();
     expect(within(dialog).getByRole("button", { name: "Create release" })).toBeDisabled();
     fireEvent.change(editor, {
       target: { value: JSON.stringify({ ...pinned, schema_version: 4 }) },
     });
-    expect(within(dialog).getByText(/must remain 3/)).toBeVisible();
+    expect(within(dialog).getByText(/selected track: 3/)).toBeVisible();
 
     unmount();
-    mocks.applicationDashboard.mockResolvedValue({
+    mocks.applicationOverview.mockResolvedValue({
       ...dashboardWithContract,
       application: { ...dashboardWithContract.application, schema_version: 0 },
     });
@@ -870,21 +1348,44 @@ describe("ReleasesPage", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
     editor = within(dialog).getByRole("textbox", { name: "Release definition" });
     const unpinned = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
-    expect(unpinned.schema_version).toBeUndefined();
+    expect(unpinned.schema_version).toBe(0);
+    const omitted = { ...unpinned };
+    delete omitted.schema_version;
+    fireEvent.change(editor, { target: { value: JSON.stringify(omitted) } });
+    expect(within(dialog).getByText(/schema_version is required/)).toBeVisible();
+    const create = within(dialog).getByRole("button", { name: "Create release" });
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(mocks.createRelease).not.toHaveBeenCalled();
+    for (const invalid of [null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      fireEvent.change(editor, {
+        target: { value: JSON.stringify({ ...unpinned, schema_version: invalid }) },
+      });
+      expect(create).toBeDisabled();
+      fireEvent.click(create);
+    }
+    expect(mocks.createRelease).not.toHaveBeenCalled();
     fireEvent.change(editor, {
       target: { value: JSON.stringify({ ...unpinned, schema_version: 1 }) },
     });
-    expect(within(dialog).getByText(/has no pinned schema/)).toBeVisible();
+    expect(within(dialog).getByText(/selected track: 0/)).toBeVisible();
     fireEvent.change(editor, {
       target: { value: JSON.stringify({ ...unpinned, schema_version: 0 }) },
     });
-    expect(within(dialog).queryByText(/has no pinned schema/)).toBeNull();
+    expect(within(dialog).queryByText(/selected track: 0/)).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Create release" })).toBeEnabled();
+    mocks.createRelease.mockResolvedValue({ release: { ...releaseV1, schema_version: 0 } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+    await waitFor(() =>
+      expect(mocks.createRelease).toHaveBeenCalledWith(
+        expect.objectContaining({ schema_version: 0 }),
+      ),
+    );
   });
 
   it("shows the guided blocking reason on click instead of an inert Create button", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
 
     render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -915,7 +1416,7 @@ describe("ReleasesPage", () => {
 
   it("refuses a release with no entries and asks before discarding an edit", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
 
     render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -941,7 +1442,7 @@ describe("ReleasesPage", () => {
 
   it("rejects an unknown entry kind in JSON mode", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+    mocks.applicationOverview.mockResolvedValue(dashboardWithoutContract);
 
     render(<ReleasesPage />);
     await screen.findByText("No releases found");
@@ -963,7 +1464,7 @@ describe("ReleasesPage", () => {
 
   it("clears the form and offers Retry when the application contract fails to load", async () => {
     mocks.query = { app: "payments", env: "prod" };
-    mocks.applicationDashboard
+    mocks.applicationOverview
       .mockRejectedValueOnce(new Error("gateway timeout"))
       .mockResolvedValue(dashboardWithContract);
 
@@ -1148,7 +1649,13 @@ describe("ReleasesPage", () => {
   });
 
   it("opens a ?release= deep link that is not in the loaded page by fetching it", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1:1",
+      schema_version: "1",
+    };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",
@@ -1161,19 +1668,24 @@ describe("ReleasesPage", () => {
     });
 
     render(<ReleasesPage />);
-    const dialog = await screen.findByRole("dialog", { name: "Release runtime@1" });
-    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1);
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
+    expect(mocks.getRelease).toHaveBeenCalledWith(
+      { env: "prod", app: "payments" },
+      "runtime",
+      1,
+      1,
+    );
     expect(within(dialog).getByText("previous")).toBeVisible();
 
     // Closing writes the parameter back out of the URL.
     fireEvent.click(within(dialog).getByRole("button", { name: "Dismiss dialog" }));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Release runtime@1" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Release runtime@1 · schema v1" })).toBeNull(),
     );
     expect(mocks.replace).toHaveBeenLastCalledWith(
       {
         pathname: "/releases",
-        query: { app: "payments", env: "prod", name: "runtime" },
+        query: { app: "payments", env: "prod", name: "runtime", schema_version: "1" },
       },
       undefined,
       { shallow: true, scroll: false },
@@ -1191,7 +1703,13 @@ describe("ReleasesPage", () => {
     expect(mocks.replace).toHaveBeenLastCalledWith(
       {
         pathname: "/releases",
-        query: { app: "payments", env: "prod", name: "runtime", release: "runtime@2" },
+        query: {
+          app: "payments",
+          env: "prod",
+          name: "runtime",
+          release: "runtime@1:2",
+          schema_version: "1",
+        },
       },
       undefined,
       { shallow: true, scroll: false },
@@ -1199,7 +1717,13 @@ describe("ReleasesPage", () => {
   });
 
   it("keeps a loaded selection open when an older off-page deep link fails", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1:1",
+      schema_version: "1",
+    };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",
@@ -1212,17 +1736,19 @@ describe("ReleasesPage", () => {
     );
     const { rerender } = render(<ReleasesPage />);
     await waitFor(() =>
-      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1),
+      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1, 1),
     );
 
-    mocks.query = { ...mocks.query, release: "runtime@2" };
+    mocks.query = { ...mocks.query, release: "runtime@1:2" };
     rerender(<ReleasesPage />);
-    expect(await screen.findByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    expect(
+      await screen.findByRole("dialog", { name: "Release runtime@2 · schema v1" }),
+    ).toBeVisible();
     await act(async () => rejectLink(new Error("late failure")));
 
-    expect(screen.getByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" })).toBeVisible();
     expect(mocks.replace).not.toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@2" }) }),
+      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@1:2" }) }),
       undefined,
       expect.anything(),
     );
@@ -1274,7 +1800,7 @@ describe("ReleasesPage", () => {
     render(<ReleasesPage />);
     const view = await screen.findAllByRole("button", { name: "View" });
     fireEvent.click(view[1]);
-    const dialog = screen.getByRole("dialog", { name: "Release runtime@1" });
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@1 · schema v1" });
     fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
 
     expect(await within(dialog).findByText("api/api-1")).toBeVisible();
@@ -1308,6 +1834,7 @@ describe("ReleasesPage", () => {
         { env: "prod", app: "payments" },
         "runtime",
         1,
+        releaseV1.schema_version,
       ),
     );
     await within(dialog).findByText("is valid and can be activated.");
@@ -1324,6 +1851,7 @@ describe("ReleasesPage", () => {
         env: "prod",
         app: "payments",
         name: "runtime",
+        schema_version: 1,
         expected_current_version: 2,
       }),
     );
@@ -1346,7 +1874,7 @@ describe("ReleasesPage", () => {
 
     render(<ReleasesPage />);
     fireEvent.click((await screen.findAllByRole("button", { name: "View" }))[0]);
-    const workspace = screen.getByRole("dialog", { name: "Release runtime@2" });
+    const workspace = screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" });
     fireEvent.click(within(workspace).getByRole("button", { name: "Roll back to previous" }));
     expect(await screen.findByRole("dialog", { name: "Roll back release?" })).toBeVisible();
   });

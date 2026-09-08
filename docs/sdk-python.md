@@ -539,6 +539,7 @@ from kms_paramstore import (
 
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
+    schema_version=1,             # Exact schema; use 0 for a schema-free track.
     reconcile_interval=60.0,       # default
     max_concurrent_fetches=16,     # default; maximum 256
     binding_keys={"db_password": os.environ["DB_PASSWORD_KMS_BIND_KEY"]},
@@ -566,7 +567,9 @@ def prepare(cancel: threading.Event, snapshot: ReleaseSnapshot) -> PreparedRunti
 loader.run(prepare)  # blocks until loader.stop() or the optional stop_event
 ```
 
-`ReleaseLoaderConfig.name` is required. `namespace=None` uses the client's
+`ReleaseLoaderConfig.name` and exactly one of `schema_version` or `schema_sha256`
+are required. Generated managed clients supply the schema digest automatically.
+`namespace=None` uses the client's
 namespace/discovery; set a namespace string or `NamespaceRef` only when a
 loader should be explicitly scoped. `client_name=None` uses the client's
 name. A loader-specific UUID is used as `instance_id` and reused across
@@ -618,6 +621,7 @@ from kms_paramstore import AsyncReleaseLoader, AsyncReleaseLoaderConfig
 
 loader = AsyncReleaseLoader(async_client, AsyncReleaseLoaderConfig(
     name="runtime",
+    schema_version=1,
     binding_keys={"db_password": db_password_binding_key},
     validate_manifest=async_manifest_validator,  # (cancel, manifest)
 ))

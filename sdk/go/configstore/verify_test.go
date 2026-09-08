@@ -131,6 +131,42 @@ func TestVerifyDefaultsRejectsMissingGroupAndBadInputs(t *testing.T) {
 	}
 }
 
+func TestVerifyDefaultsRequiresExactlyOneSchemaSelector(t *testing.T) {
+	client := &fakeVerifyClient{}
+	in := verifyTestInput()
+	version := uint64(0)
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app", SchemaVersion: &version}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("both selectors error = %v", err)
+	}
+	in.SchemaSHA256 = ""
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app"}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("missing selector error = %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("invalid selectors reached client: %d calls", len(client.calls))
+	}
+}
+
+func TestVerifyDefaultsAcceptsExplicitSchemaZeroWithoutArtifactDigest(t *testing.T) {
+	client := &fakeVerifyClient{response: kmsclient.VerifyReleaseDefaultsResult{
+		SchemaMatches: true,
+		Entries: []kmsclient.VerifyDefaultsVerdict{
+			{Alias: "limits", Verdict: kmsclient.VerifyVerdictMatch},
+			{Alias: "database", Verdict: kmsclient.VerifyVerdictMatch},
+			{Alias: "banner", Verdict: kmsclient.VerifyVerdictMatch},
+		},
+	}}
+	in := verifyTestInput()
+	in.SchemaSHA256 = ""
+	version := uint64(0)
+	if _, err := VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app", SchemaVersion: &version}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.calls) != 1 || client.calls[0].SchemaVersion == nil || *client.calls[0].SchemaVersion != 0 || client.calls[0].SchemaSHA256 != "" {
+		t.Fatalf("selector = digest %q version %v", client.calls[0].SchemaSHA256, client.calls[0].SchemaVersion)
+	}
+}
+
 func TestVerifyDefaultsWrapsRateLimitWithGuidance(t *testing.T) {
 	client := &fakeVerifyClient{err: fmt.Errorf("%w: budget spent", kmsclient.ErrRateLimited)}
 	_, err := VerifyDefaults(context.Background(), client, verifyTestInput(), VerifyOptions{Namespace: "prod/app"})
@@ -191,7 +227,7 @@ func TestVerifyResultVerdictsDrivePassedFailuresAndReport(t *testing.T) {
 					t.Fatalf("report contains a value %q:\n%s", value, report)
 				}
 			}
-			if !strings.Contains(report, "prod/app runtime@2#5  schema: match") {
+			if !strings.Contains(report, "prod/app runtime@2#5  schema_version: 0  schema: match") {
 				t.Fatalf("report lacks identity line:\n%s", report)
 			}
 			lines := strings.Split(strings.TrimSpace(report), "\n")
@@ -218,6 +254,39 @@ func TestVerifyResultVerdictsDrivePassedFailuresAndReport(t *testing.T) {
 			}
 			if !strings.HasSuffix(strings.TrimSpace(report), wantResult) {
 				t.Fatalf("report result line mismatch:\n%s", report)
+			}
+		})
+	}
+}
+
+func TestVerifyDefaultsReportDistinguishesSchemaTracks(t *testing.T) {
+	for _, schemaVersion := range []uint64{0, 2} {
+		t.Run(fmt.Sprint(schemaVersion), func(t *testing.T) {
+			client := &fakeVerifyClient{response: kmsclient.VerifyReleaseDefaultsResult{
+				ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 9,
+				SchemaVersion: schemaVersion, SchemaMatches: true,
+				Entries: []kmsclient.VerifyDefaultsVerdict{
+					{Alias: "limits", Verdict: kmsclient.VerifyVerdictMatch},
+					{Alias: "database", Verdict: kmsclient.VerifyVerdictMatch},
+					{Alias: "banner", Verdict: kmsclient.VerifyVerdictMatch},
+				},
+			}}
+			input := verifyTestInput()
+			options := VerifyOptions{Namespace: "prod/app"}
+			if schemaVersion == 0 {
+				input.SchemaSHA256 = ""
+				options.SchemaVersion = &schemaVersion
+			}
+			result, err := VerifyDefaults(context.Background(), client, input, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.SchemaVersion != schemaVersion || result.ReleaseVersion != 1 {
+				t.Fatalf("verification identity = %+v", result)
+			}
+			want := fmt.Sprintf("prod/app runtime@1#9  schema_version: %d  schema: match", schemaVersion)
+			if !strings.Contains(result.Report(), want) {
+				t.Fatalf("report omits schema track: %s", result.Report())
 			}
 		})
 	}

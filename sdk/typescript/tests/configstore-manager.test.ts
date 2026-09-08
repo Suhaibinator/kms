@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClientReleaseLoaderOptions } from "../src/client.js";
+import { KmsClient, type ClientReleaseLoaderOptions } from "../src/client.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
 import type {
   AppliedReport,
@@ -26,6 +26,7 @@ import {
   type ReleaseTransport,
   type ReleaseWatchStream,
 } from "../src/releases/loader.js";
+import { FakeTransport } from "./helpers/fake-transport.js";
 
 const namespace: NamespaceRef = { env: "prod", app: "api" };
 
@@ -45,8 +46,15 @@ describe("ManagedConfigManager", () => {
     const transport = new FakeReleaseTransport(release, 1n);
     let receivedOptions: ClientReleaseLoaderOptions | undefined;
     const client = {
-      createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+      async createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
         receivedOptions = options;
+        // Exercise the real public selector validation before substituting the
+        // focused release transport used by this manager test.
+        const validated = await new KmsClient({
+          transport: new FakeTransport(() => ({})),
+          namespace: "prod/api",
+        }).createReleaseLoader(options);
+        await validated.stop();
         return managedClient(transport).createReleaseLoader(options);
       },
     };
@@ -55,6 +63,7 @@ describe("ManagedConfigManager", () => {
       client,
       {
         release: "runtime",
+        schemaVersion: 0n,
         instanceId: "stable-test-instance",
         contract: [{ alias: "settings", kind: "parameter", contentType: "json" }],
         onDefaultMismatch: () => undefined,
@@ -63,12 +72,101 @@ describe("ManagedConfigManager", () => {
       controller.signal,
     );
 
-    expect(receivedOptions).toMatchObject({ name: "runtime" });
+    expect(receivedOptions).toMatchObject({ name: "runtime", schemaVersion: 0n });
     expect(receivedOptions).not.toHaveProperty("namespace");
     expect(receivedOptions).not.toHaveProperty("clientName");
     controller.abort();
     await manager.wait();
   });
+
+  it("forwards a generated schema digest through real client resolution", async () => {
+    const release = makeRelease(1n, '{"hot":1,"restart":"a"}');
+    const transport = new FakeReleaseTransport(release, 1n);
+    const digest = "a".repeat(64);
+    let receivedOptions: ClientReleaseLoaderOptions | undefined;
+    const selectorTransport = new FakeTransport((path, request) => {
+      expect(path).toBe("/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema");
+      expect(request).toMatchObject({ schemaSha256: digest });
+      return { schemaVersion: 1n };
+    });
+    const realClient = new KmsClient({ transport: selectorTransport, namespace: "prod/api" });
+    const client = {
+      async createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+        receivedOptions = options;
+        const validated = await realClient.createReleaseLoader(options);
+        await validated.stop();
+        return managedClient(transport).createReleaseLoader(options);
+      },
+    };
+    const controller = new AbortController();
+    const manager = await startManagedConfig(
+      client,
+      {
+        release: "runtime",
+        schemaSHA256: digest,
+        instanceId: "stable-digest-instance",
+        contract: [{ alias: "settings", kind: "parameter", contentType: "json" }],
+        onDefaultMismatch: () => undefined,
+      },
+      () => ({ publish: () => undefined }),
+      controller.signal,
+    );
+
+    expect(receivedOptions).toMatchObject({ name: "runtime", schemaSHA256: digest });
+    expect(selectorTransport.calls).toHaveLength(1);
+    controller.abort();
+    await manager.wait();
+    await realClient.close();
+  });
+
+  it.each([0n, 7n])(
+    "preserves selected schema %s while a newer activation is queued",
+    async (schemaVersion) => {
+      const transport = new FakeReleaseTransport(
+        makeRelease(1n, '{"hot":1,"restart":"a"}', schemaVersion),
+        1n,
+      );
+      const controller = new AbortController();
+      let secondPreparing = false;
+      const releaseSecond = deferred<void>();
+      const manager = await startManagedConfig(
+        managedClient(transport),
+        { ...options(() => undefined), schemaVersion },
+        async (snapshot) => {
+          if (snapshot.version === 2n) {
+            secondPreparing = true;
+            await releaseSecond.promise;
+          }
+          return { publish: () => undefined };
+        },
+        controller.signal,
+      );
+      try {
+        await waitFor(() => transport.registration !== undefined);
+
+        transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}', schemaVersion), 2n);
+        await waitFor(() => secondPreparing);
+        transport.activate(makeRelease(3n, '{"hot":3,"restart":"a"}', schemaVersion), 3n);
+        await waitFor(() => manager.status().observed.version === 3n);
+
+        expect(manager.status().observed).toMatchObject({
+          namespace: "prod/api",
+          name: "runtime",
+          version: 3n,
+          activationRevision: 3n,
+          schemaVersion,
+          digest: "",
+        });
+
+        releaseSecond.resolve();
+        await waitFor(() => manager.status().applied.version === 3n);
+      } finally {
+        releaseSecond.resolve();
+        controller.abort();
+        await manager.wait();
+      }
+    },
+  );
 
   it("applies and reports startup drift, notifies onApplied, and acknowledges divergence", async () => {
     const release = makeRelease(1n, '{"hot":2,"restart":"a"}');
@@ -424,6 +522,7 @@ function options(onDefaultMismatch: (report: DefaultMismatchReport) => void) {
     namespace: "prod/api",
     release: "runtime",
     clientName: "configstore-test",
+    schemaVersion: 0n,
     instanceId: "stable-test-instance",
     contract: [{ alias: "settings", kind: "parameter" as const, contentType: "json" }],
     onDefaultMismatch,
@@ -442,6 +541,7 @@ function managedClient(transport: FakeReleaseTransport) {
             app: selectedNamespace?.[1] ?? namespace.app,
           },
           clientName: options.clientName ?? "configstore-test",
+          schemaVersion: options.schemaVersion ?? 0n,
         }),
       );
     },
@@ -566,12 +666,12 @@ class FakeReleaseTransport implements ReleaseTransport {
   }
 }
 
-function makeRelease(version: bigint, value: string): ConfigurationRelease {
+function makeRelease(version: bigint, value: string, schemaVersion = 0n): ConfigurationRelease {
   const release = ConfigurationRelease.create({
     namespace,
     name: "runtime",
     version,
-    schemaVersion: 0n,
+    schemaVersion,
     entries: [parameterEntry("settings", "settings", version, value)],
     metadataJson: "{}",
   });
@@ -615,4 +715,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     if (Date.now() >= deadline) throw new Error("condition was not met before timeout");
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
+}
+
+function deferred<T = void>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }

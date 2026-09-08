@@ -18,19 +18,31 @@ from kms_paramstore.release import ReleaseCommitError, ReleaseStartupError
 from kms_paramstore.secret import Secret
 
 
+class _RpcFailure(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
+
+
 def _ref(key: str) -> kms_pb2.ResourceRef:
     return kms_pb2.ResourceRef(
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"), key=key
     )
 
 
-def _release(version: int, revision: int):
+def _release(version: int, revision: int, schema_version: int = 1):
     value = f"value-{version}"
     release = kms_pb2.ConfigurationRelease(
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
         name="runtime",
         version=version,
-        schema_version=1,
+        schema_version=schema_version,
         entries=[
             kms_pb2.ConfigurationReleaseEntry(
                 alias="setting",
@@ -90,6 +102,8 @@ class _AsyncCall:
         if item is self._CLOSED:
             self.drained = True
             raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
         return item
 
     def push(self, event) -> None:
@@ -108,12 +122,26 @@ class _AsyncCall:
 
 class _AsyncReleaseStub:
     def __init__(self, initial) -> None:
-        self.release, self.revision = initial
+        if initial is None:
+            self.release, self.revision = kms_pb2.ConfigurationRelease(), 0
+        else:
+            self.release, self.revision = initial
         self.calls: List[_AsyncCall] = []
         self.registrations: List[object] = []
         self.acknowledgements: List[object] = []
+        self.active_requests: List[object] = []
+        self.resolve_requests: List[object] = []
+        self.resolved_schema = 1
+        self.inactive = initial is None
 
-    async def GetActiveRelease(self, _request, **_kwargs):
+    async def ResolveReleaseSchema(self, request, **_kwargs):
+        self.resolve_requests.append(request)
+        return kms_pb2.ResolveReleaseSchemaResponse(schema_version=self.resolved_schema)
+
+    async def GetActiveRelease(self, request, **_kwargs):
+        self.active_requests.append(request)
+        if self.inactive:
+            raise _RpcFailure(grpc.StatusCode.NOT_FOUND, "track has no active release")
         release = kms_pb2.ConfigurationRelease()
         release.CopyFrom(self.release)
         return kms_pb2.GetActiveReleaseResponse(
@@ -127,6 +155,7 @@ class _AsyncReleaseStub:
 
     def activate(self, release_and_revision) -> None:
         self.release, self.revision = release_and_revision
+        self.inactive = False
         event = kms_pb2.WatchReleaseEvent(
             activation=kms_pb2.ReleaseActivationEvent(release=self.release),
             revision=self.revision,
@@ -137,6 +166,10 @@ class _AsyncReleaseStub:
     def disconnect(self) -> None:
         for call in list(self.calls):
             call.push(_AsyncCall._CLOSED)
+
+    def reject_watch(self, code: grpc.StatusCode) -> None:
+        for call in list(self.calls):
+            call.push(_RpcFailure(code, "watch rejected"))
 
 
 class _AsyncClient:
@@ -235,6 +268,7 @@ def _loader(monkeypatch, initial, **config):
     client = _AsyncClient()
     settings = {
         "name": "runtime",
+        "schema_version": 1,
         "reconcile_interval": 10.0,
         "reconnect_initial": 0.01,
         "reconnect_max": 0.02,
@@ -245,6 +279,230 @@ def _loader(monkeypatch, initial, **config):
         AsyncReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
+
+
+def test_async_schema_selector_requires_exactly_one_valid_track() -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        AsyncReleaseLoaderConfig(name="runtime")
+    with pytest.raises(kms_paramstore.ConfigError, match="exactly one"):
+        AsyncReleaseLoaderConfig(
+            name="runtime", schema_version=0, schema_sha256="a" * 64
+        )
+    assert AsyncReleaseLoaderConfig(name="runtime", schema_version=0).schema_version == 0
+
+
+@pytest.mark.parametrize("digest", ["A" * 64, "a" * 63 + "F"])
+def test_async_schema_digest_selector_rejects_uppercase_before_start(digest: str) -> None:
+    with pytest.raises(kms_paramstore.ConfigError, match="lowercase"):
+        AsyncReleaseLoaderConfig(name="runtime", schema_sha256=digest)
+
+
+def test_async_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch, _release(1, 10), schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: _Prepared()))
+        await _wait_for(lambda: loader.status().state == "applied")
+        loader.stop()
+        await task
+        assert len(stub.resolve_requests) == 1
+        assert stub.resolve_requests[0].schema_sha256 == "a" * 64
+        assert all(request.schema_version == 1 for request in stub.active_requests)
+        assert stub.registrations and stub.acknowledgements
+        assert all(request.schema_version == 1 for request in stub.registrations)
+        assert all(request.schema_version == 1 for request in stub.acknowledgements)
+
+    asyncio.run(scenario())
+
+
+def _ack_rejection(loader, acknowledgement, *, sequence=None, revision=999):
+    return kms_pb2.WatchReleaseEvent(
+        acknowledgement_rejected=kms_pb2.ReleaseAcknowledgementRejectedEvent(
+            namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
+            name="runtime",
+            schema_version=1,
+            version=acknowledgement.version,
+            activation_revision=acknowledgement.activation_revision,
+            client_name=loader.client_name,
+            instance_id=loader.instance_id,
+            state=acknowledgement.state,
+            sequence=sequence if sequence is not None else acknowledgement.sequence,
+            reason="activation_unavailable",
+        ),
+        revision=revision,
+    )
+
+
+def test_async_delayed_ack_rejection_preserves_newer_generation(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    loader._namespace = NamespaceRef("prod", "app")
+    first = release_module._Candidate(*_release(1, 10))
+    second = release_module._Candidate(*_release(2, 20))
+    loader._ack(first, "received")
+    old = loader._ack_latest["received"][1]
+    assert old.sequence > 0
+    loader._ack(second, "received")
+    newer = loader._ack_latest["received"][1]
+    loader._discard_rejected_ack(_ack_rejection(loader, old).acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    foreign = _ack_rejection(loader, newer)
+    foreign.acknowledgement_rejected.instance_id = "other"
+    loader._discard_rejected_ack(foreign.acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    loader._discard_rejected_ack(_ack_rejection(loader, newer).acknowledgement_rejected)
+    assert "received" not in loader._ack_latest
+
+
+def test_async_ack_rejection_does_not_advance_cursor_or_block_activation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        prepared = []
+
+        def prepare(_cancel, snapshot):
+            prepared.append(snapshot.version)
+            return _Prepared()
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: prepared == [1])
+        await _wait_for(lambda: bool(stub.acknowledgements and stub.calls))
+        acknowledgement = stub.acknowledgements[-1]
+        stub.calls[-1].push(_ack_rejection(loader, acknowledgement, revision=10_000))
+        stub.activate(_release(2, 11))
+        await _wait_for(lambda: prepared == [1, 2])
+        loader.stop()
+        await task
+        assert loader._last_seen_revision == 11
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            None,
+            reconcile_interval=0.02,
+            schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        prepared = _Prepared()
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        await _wait_for(lambda: bool(stub.registrations))
+        await _wait_for(lambda: len(stub.active_requests) >= 2)
+        assert prepared.commits == 0
+        stub.activate(_release(1, 1))
+        await _wait_for(lambda: prepared.commits == 1)
+        loader.stop()
+        await task
+        assert len(stub.resolve_requests) == 1
+        assert stub.registrations[0].last_seen_revision == 0
+        assert stub.registrations[0].schema_version == 1
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_can_cancel_while_waiting_on_inactive_track(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, None)
+        external_stop = asyncio.Event()
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared(), stop_event=external_stop)
+        )
+        await _wait_for(lambda: bool(stub.registrations))
+        external_stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("code", "error_type", "initial"),
+    [
+        (grpc.StatusCode.NOT_FOUND, kms_paramstore.NotFoundError, None),
+        (
+            grpc.StatusCode.PERMISSION_DENIED,
+            kms_paramstore.PermissionDeniedError,
+            _release(1, 10),
+        ),
+    ],
+)
+def test_async_loader_surfaces_terminal_watch_rejection(
+    monkeypatch, code, error_type, initial
+):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, initial)
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared())
+        )
+        await _wait_for(lambda: bool(stub.registrations))
+        if initial is not None:
+            await _wait_for(lambda: loader.status().state == "applied")
+        stub.reject_watch(code)
+        with pytest.raises(error_type):
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_async_foreign_schema_event_cannot_replace_pending_candidate(monkeypatch):
+    matching = _release(1, 10)
+    foreign = _release(2, 20)
+    foreign[0].schema_version = 2
+    foreign[0].digest = release_module._release_digest(foreign[0])
+    loader, _stub, _client = _loader(monkeypatch, matching)
+    loader._namespace = NamespaceRef("prod", "app")
+    loader._offer_candidate(release_module._Candidate(*matching))
+    loader._offer_candidate(release_module._Candidate(*foreign))
+    assert loader._candidate_queue.qsize() == 1
+    assert loader._candidate_queue.get_nowait().release.schema_version == 1
+    assert loader.status().observed_revision == 10
+
+
+def test_async_active_read_and_digest_resolution_reject_foreign_schema(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        loader._namespace = NamespaceRef("prod", "app")
+        stub.release.schema_version = 2
+        with pytest.raises(ReleaseStartupError, match="wrong schema"):
+            await loader._read_active()
+
+        digest_loader, digest_stub, _client = _loader(
+            monkeypatch, _release(1, 10), schema_version=None,
+            schema_sha256="a" * 64,
+        )
+        digest_loader._namespace = NamespaceRef("prod", "app")
+        digest_stub.resolved_schema = 0
+        with pytest.raises(ReleaseStartupError, match="version 0"):
+            await digest_loader._ensure_schema_version()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+@pytest.mark.parametrize("foreign_field", ["env", "app", "name"])
+def test_async_active_read_rejects_foreign_release_track(
+    monkeypatch, schema_version, foreign_field
+):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            _release(1, 10, schema_version),
+            schema_version=schema_version,
+        )
+        loader._namespace = NamespaceRef("prod", "app")
+        if foreign_field == "env":
+            stub.release.namespace.env = "other-env"
+        elif foreign_field == "app":
+            stub.release.namespace.app = "other-app"
+        else:
+            stub.release.name = "other-release"
+
+        with pytest.raises(ReleaseStartupError, match="wrong release track"):
+            await loader._read_active()
+
+    asyncio.run(scenario())
 
 
 def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
@@ -348,25 +606,43 @@ def test_async_loader_supersedes_and_aborts_stale_candidate(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_async_active_fence_includes_release_name(monkeypatch):
+@pytest.mark.parametrize("schema_version", [0, 1])
+@pytest.mark.parametrize("foreign_field", ["env", "app", "name"])
+def test_async_active_precommit_fence_includes_full_track(
+    monkeypatch, schema_version, foreign_field
+):
     async def scenario():
-        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        loader, stub, _client = _loader(
+            monkeypatch,
+            _release(1, 10, schema_version),
+            schema_version=schema_version,
+        )
+        initial = _Prepared()
         stale = _Prepared()
         current = _Prepared()
 
         async def prepare(_cancel, snapshot):
-            if snapshot.version == 1:
-                renamed = kms_pb2.ConfigurationRelease()
-                renamed.CopyFrom(stub.release)
-                renamed.name = "different-release"
-                stub.release = renamed
+            if snapshot.version == 2:
+                foreign = kms_pb2.ConfigurationRelease()
+                foreign.CopyFrom(stub.release)
+                if foreign_field == "env":
+                    foreign.namespace.env = "other-env"
+                elif foreign_field == "app":
+                    foreign.namespace.app = "other-app"
+                else:
+                    foreign.name = "different-release"
+                stub.release = foreign
                 return stale
-            return current
+            return initial if snapshot.version == 1 else current
 
         task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: initial.commits == 1)
+        stub.activate(_release(2, 20, schema_version))
         await _wait_for(lambda: stale.aborts == 1)
-        stub.activate(_release(2, 11))
-        await _wait_for(lambda: loader.status().applied_version == 2)
+        assert loader.status().applied_version == 1
+        assert loader.status().last_failure_category == "active_check_failed"
+        stub.activate(_release(3, 30, schema_version))
+        await _wait_for(lambda: loader.status().applied_version == 3)
         loader.stop()
         await task
         assert stale.commits == 0
@@ -429,6 +705,175 @@ def test_async_uppercase_parameter_digest_is_accepted(monkeypatch):
         loader.stop()
         await task
         assert loader.status().state == "applied"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_async_watch_validates_envelopes_before_cursor_and_reconnect(
+    monkeypatch, schema_version
+):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            _release(1, 10, schema_version),
+            schema_version=schema_version,
+        )
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared())
+        )
+        await _wait_for(
+            lambda: loader.status().applied_version == 1 and bool(stub.calls)
+        )
+        candidates = loader.stats().candidates
+
+        invalid_events = []
+        for index, foreign_field in enumerate(
+            ("env", "app", "name", "schema"), start=1
+        ):
+            foreign, _ = _release(2, 100 + index, schema_version)
+            if foreign_field == "env":
+                foreign.namespace.env = "other-env"
+            elif foreign_field == "app":
+                foreign.namespace.app = "other-app"
+            elif foreign_field == "name":
+                foreign.name = "other-release"
+            else:
+                foreign.schema_version = schema_version + 1
+            envelope = (
+                kms_pb2.ReleaseSnapshotEvent(release=foreign)
+                if index % 2
+                else kms_pb2.ReleaseActivationEvent(release=foreign)
+            )
+            invalid_events.append(
+                kms_pb2.WatchReleaseEvent(
+                    **(
+                        {"snapshot": envelope}
+                        if index % 2
+                        else {"activation": envelope}
+                    ),
+                    revision=100 + index,
+                )
+            )
+        invalid_events.extend(
+            [
+                kms_pb2.WatchReleaseEvent(
+                    activation=kms_pb2.ReleaseActivationEvent(), revision=110
+                ),
+                kms_pb2.WatchReleaseEvent(revision=111),
+            ]
+        )
+        for event in invalid_events:
+            stub.calls[-1].push(event)
+        await asyncio.sleep(0.1)
+        assert loader._last_seen_revision == 10
+        assert loader.stats().candidates == candidates
+
+        registrations = len(stub.registrations)
+        stub.disconnect()
+        await _wait_for(lambda: len(stub.registrations) > registrations)
+        assert stub.registrations[-1].last_seen_revision == 10
+
+        stub.calls[-1].push(
+            kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=200)
+        )
+        await _wait_for(lambda: loader._last_seen_revision == 200)
+        stub.calls[-1].push(
+            kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=150)
+        )
+        await asyncio.sleep(0.05)
+        assert loader._last_seen_revision == 200
+
+        registrations = len(stub.registrations)
+        stub.disconnect()
+        await _wait_for(lambda: len(stub.registrations) > registrations)
+        assert stub.registrations[-1].last_seen_revision == 200
+
+        stub.activate(_release(2, 20, schema_version))
+        await _wait_for(lambda: loader.status().applied_version == 2)
+        assert loader._last_seen_revision == 200
+        loader.stop()
+        await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_async_retries_selected_candidate_after_newer_heartbeat(
+    monkeypatch, schema_version
+):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            _release(1, 10, schema_version),
+            schema_version=schema_version,
+            reconcile_interval=0.5,
+        )
+        attempts = []
+
+        def prepare(_cancel, snapshot):
+            attempts.append(snapshot.version)
+            if snapshot.version == 2 and attempts.count(2) == 1:
+                raise ValueError("temporary prepare failure")
+            return _Prepared()
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(
+            lambda: loader.status().applied_version == 1 and bool(stub.calls)
+        )
+        stub.activate(_release(2, 20, schema_version))
+        await _wait_for(lambda: loader.status().state == "rejected")
+        stub.calls[-1].push(
+            kms_pb2.WatchReleaseEvent(heartbeat=kms_pb2.Heartbeat(), revision=100)
+        )
+        await _wait_for(lambda: loader._last_seen_revision == 100)
+        await _wait_for(lambda: loader.status().applied_version == 2)
+        assert attempts.count(2) == 2
+
+        candidates = loader.stats().candidates
+        stale, _ = _release(1, 10, schema_version)
+        stub.calls[-1].push(
+            kms_pb2.WatchReleaseEvent(
+                snapshot=kms_pb2.ReleaseSnapshotEvent(release=stale), revision=10
+            )
+        )
+        await asyncio.sleep(0.1)
+        assert loader.status().applied_version == 2
+        assert loader.stats().candidates == candidates
+        loader.stop()
+        await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("schema_version", [0, 1])
+def test_async_reconciliation_rejects_foreign_track_and_recovers(
+    monkeypatch, schema_version
+):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch,
+            _release(1, 10, schema_version),
+            schema_version=schema_version,
+            reconcile_interval=0.05,
+        )
+        task = asyncio.create_task(
+            loader.run(lambda _cancel, _snapshot: _Prepared())
+        )
+        await _wait_for(lambda: loader.status().applied_version == 1)
+        foreign, _ = _release(2, 20, schema_version)
+        foreign.namespace.env = "other-env"
+        stub.release = foreign
+        stub.revision = 20
+        await _wait_for(
+            lambda: loader.status().last_failure_category == "active_check_failed"
+        )
+        assert loader.status().applied_version == 1
+
+        stub.release, _ = _release(2, 20, schema_version)
+        await _wait_for(lambda: loader.status().applied_version == 2)
+        loader.stop()
+        await task
 
     asyncio.run(scenario())
 
@@ -596,6 +1041,7 @@ def test_async_status_stats_and_prepared_state_are_canonical(monkeypatch):
 def test_async_old_outcome_cannot_unlock_newer_inflight_reconciliation(monkeypatch, outcome):
     async def scenario():
         loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+        loader._namespace = NamespaceRef("prod", "app")
         release_a, revision_a = _release(1, 10)
         release_b, revision_b = _release(2, 11)
         candidate_a = release_module._Candidate(release_a, revision_a)
@@ -621,6 +1067,7 @@ def test_async_old_outcome_cannot_unlock_newer_inflight_reconciliation(monkeypat
 def test_async_exact_latest_rejection_retries_only_from_reconciliation(monkeypatch):
     async def scenario():
         loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+        loader._namespace = NamespaceRef("prod", "app")
         release, revision = _release(1, 10)
         candidate = release_module._Candidate(release, revision)
         loader._offer_candidate(candidate)
@@ -692,5 +1139,154 @@ def test_async_initial_grpc_failure_is_wrapped_as_startup_error(monkeypatch):
         with pytest.raises(ReleaseStartupError, match="unable to read"):
             await loader.run(lambda _cancel, _snapshot: _Prepared())
         assert not stub.calls
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("prepare_result", ["prepared", "failed", "cancelled", "stopped"])
+def test_async_terminal_watch_cancels_cooperative_prepare(monkeypatch, prepare_result):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        cleanup = asyncio.Event()
+        prepared = _Prepared()
+
+        async def prepare(cancel, _snapshot):
+            entered.set()
+            await cancel.wait()
+            cancelled.set()
+            await cleanup.wait()
+            if prepare_result == "failed":
+                raise RuntimeError("preparation failed during cancellation")
+            if prepare_result == "cancelled":
+                raise asyncio.CancelledError()
+            if prepare_result == "stopped":
+                loader.stop()
+            return prepared
+
+        task = asyncio.create_task(loader.run(prepare))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            await asyncio.wait_for(cancelled.wait(), 0.5)
+            assert not task.done(), "cooperative cleanup must finish before run exits"
+            cleanup.set()
+            with pytest.raises(kms_paramstore.PermissionDeniedError):
+                await asyncio.wait_for(task, 2)
+            assert prepared.commits == 0
+            assert prepared.aborts == (1 if prepare_result in {"prepared", "stopped"} else 0)
+        finally:
+            cleanup.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_async_terminal_watch_before_candidate_install_fences_preparation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+        prepared = _Prepared()
+        preparations = []
+        process = loader._process_candidate
+
+        async def held_process(candidate, prepare):
+            entered.set()
+            await proceed.wait()
+            return await process(candidate, prepare)
+
+        def prepare(_cancel, snapshot):
+            preparations.append(snapshot)
+            return prepared
+
+        monkeypatch.setattr(loader, "_process_candidate", held_process)
+        task = asyncio.create_task(loader.run(prepare))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.UNAUTHENTICATED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            proceed.set()
+            with pytest.raises(kms_paramstore.UnauthenticatedError):
+                await asyncio.wait_for(task, 2)
+            assert preparations == []
+            assert loader.stats().resolutions == 0
+            assert prepared.commits == prepared.aborts == 0
+        finally:
+            proceed.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_async_terminal_watch_during_precommit_aborts_once(monkeypatch, read_fails):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+        prepared = _Prepared()
+        read_active = loader._read_active
+        reads = 0
+
+        async def held_read():
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                entered.set()
+                await proceed.wait()
+                if read_fails:
+                    raise RuntimeError("active read failed after watch rejection")
+            return await read_active()
+
+        monkeypatch.setattr(loader, "_read_active", held_read)
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await asyncio.wait_for(loader._watch_done.wait(), 2)
+            proceed.set()
+            with pytest.raises(kms_paramstore.PermissionDeniedError):
+                await asyncio.wait_for(task, 2)
+            assert prepared.commits == 0
+            assert prepared.aborts == 1
+        finally:
+            proceed.set()
+            loader.stop()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_async_terminal_watch_does_not_mask_abort_contract_failure(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+        class BrokenAbort(_Prepared):
+            def abort(self):
+                self.aborts += 1
+                raise RuntimeError("abort failed")
+
+        prepared = BrokenAbort()
+
+        async def prepare(cancel, _snapshot):
+            await _wait_for(lambda: bool(stub.calls))
+            stub.reject_watch(grpc.StatusCode.PERMISSION_DENIED)
+            await cancel.wait()
+            return prepared
+
+        with pytest.raises(ReleaseCommitError, match="abort"):
+            await asyncio.wait_for(loader.run(prepare), 2)
+        assert isinstance(loader._watch_error, kms_paramstore.PermissionDeniedError)
+        assert prepared.commits == 0
+        assert prepared.aborts == 1
+        assert loader.status().last_failure_category == "internal"
 
     asyncio.run(scenario())

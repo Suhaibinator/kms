@@ -176,6 +176,7 @@ describe("CloneEnvironmentModal", () => {
     await waitFor(() => expect(mocks.cloneEnvironment).toHaveBeenCalledTimes(1));
     expect(mocks.cloneEnvironment).toHaveBeenCalledWith({
       application: ready.application.name,
+      schema_version: ready.application.schema_version,
       source_env: "dev",
       target_env: "prod-eu",
       copy_values: true,

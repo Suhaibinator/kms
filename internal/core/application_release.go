@@ -45,6 +45,9 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.ApplicationReleaseCreateResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.release.create", domain.ResourceApplication, in.Namespace.App); err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
@@ -64,9 +67,14 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
+	app, err = s.selectArtifactApplicationTrack(ctx, app, in.SchemaVersion, artifact.SchemaSHA256)
+	if err != nil {
+		return domain.ApplicationReleaseCreateResult{}, err
+	}
 	if !app.ArchivedAt.IsZero() {
 		return domain.ApplicationReleaseCreateResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	ctx = withReleaseAuditTrack(ctx, applicationTrack(app, in.Namespace))
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: app.ReleaseName})
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
@@ -107,6 +115,9 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	if !app.ArchivedAt.IsZero() {
 		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	if app.Contract == nil {
+		app.Contract = applicationContractFromArtifact(artifact.Contract)
+	}
 	if len(app.Contract) == 0 || len(app.Contract) > maxReleaseEntries {
 		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application contract must contain between 1 and %d entries", maxReleaseEntries)
 	}
@@ -118,18 +129,15 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	if err != nil {
 		return applicationReleasePlan{}, err
 	}
-	if app.SchemaVersion == 0 {
-		return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
-	}
-	schema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
+	var schema domain.ConfigurationSchema
+	if app.SchemaVersion != 0 {
+		schema, err = rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+		if err != nil {
+			return applicationReleasePlan{}, err
 		}
-		return applicationReleasePlan{}, err
 	}
 	if schema.Digest != artifact.SchemaSHA256 {
-		return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
+		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
 	}
 	parameters := make(map[string]configstore.DefaultsParameter, len(artifact.Parameters))
 	for _, parameter := range artifact.Parameters {
@@ -138,7 +146,7 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		}
 		parameters[parameter.Alias] = parameter
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, namespace.NamespaceRef, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, namespace.NamespaceRef), false)
 	if err != nil {
 		return applicationReleasePlan{}, err
 	}
@@ -159,7 +167,7 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		if environment.Env == namespace.Env {
 			continue
 		}
-		active, activeErr := rs.GetActiveConfigurationRelease(ctx, environment.NamespaceRef, app.ReleaseName)
+		active, activeErr := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, environment.NamespaceRef))
 		if activeErr == nil {
 			otherActive[environment.Env] = active.Release
 		} else if !errors.Is(activeErr, domain.ErrNotFound) {
@@ -309,21 +317,15 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	return applicationReleasePlan{result: result, transaction: transaction}, nil
 }
 
-func applicationReleaseSchemaDriftError(ctx context.Context, store storage.ReleaseStore, app domain.Application, digest string) error {
-	if _, err := findConfigurationSchemaByDigest(ctx, store, app.Name, app.ReleaseName, digest); err != nil {
-		if errors.Is(err, domain.ErrFailedPrecondition) {
-			return domain.Errorf(domain.ErrFailedPrecondition, "generated schema is not registered for %s/%s; run schema upload, then defaults apply with --update-definition", app.Name, app.ReleaseName)
-		}
-		return err
-	}
-	return domain.Errorf(domain.ErrFailedPrecondition, "application schema differs from generated defaults; run defaults apply with --update-definition first")
-}
-
 func (s *Service) auditApplicationRelease(ctx context.Context, pr Principal, namespace domain.Namespace, result domain.ApplicationReleaseCreateResult, event, decision string) {
 	metadata := map[string]string{
-		"valid": fmt.Sprint(result.Valid), "executed": fmt.Sprint(result.Executed),
+		"schema_version": fmt.Sprint(result.SchemaVersion),
+		"valid":          fmt.Sprint(result.Valid), "executed": fmt.Sprint(result.Executed),
 		"created": fmt.Sprint(result.Created), "validation_count": fmt.Sprint(len(result.Validation)),
 		"missing_secret_count": fmt.Sprint(len(result.MissingSecrets)),
+	}
+	if result.Release != nil {
+		metadata["release_version"] = fmt.Sprint(result.Release.Version)
 	}
 	s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceApplication, domain.Ref{NS: namespace.NamespaceRef, Key: result.ReleaseName}, namespace.ID, 0, decision, metadata)
 }

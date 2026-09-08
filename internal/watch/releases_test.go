@@ -34,7 +34,7 @@ func createWatchRelease(t *testing.T, st *storage.SQLStore, ns domain.NamespaceR
 }
 func activateWatchRelease(t *testing.T, st *storage.SQLStore, ns domain.NamespaceRef, v uint64) domain.ActiveConfigurationRelease {
 	t.Helper()
-	a, changed, err := st.ActivateConfigurationRelease(context.Background(), ns, "runtime", v, nil)
+	a, changed, err := st.ActivateConfigurationRelease(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, v, nil)
 	if err != nil || !changed {
 		t.Fatalf("activate v%d changed=%v err=%v", v, changed, err)
 	}
@@ -233,6 +233,10 @@ func TestReleaseSubscriptionEmptyFilteredReplayReturnsActiveSnapshot(t *testing.
 	if !bl.IsSnapshot || len(bl.Events) != 1 || bl.Events[0].Release.Version != r1.Version || bl.Events[0].Revision != a1.ActivationRevision {
 		t.Fatalf("empty filtered replay fallback=%+v", bl)
 	}
+	current, err := st.CurrentRevision(ctx)
+	if err != nil || bl.Revision != current || bl.Revision <= a1.ActivationRevision {
+		t.Fatalf("snapshot lost global cursor: backlog=%+v current=%d err=%v", bl, current, err)
+	}
 }
 
 func TestReleaseSubscriptionSlowConsumerCoalescesLatest(t *testing.T) {
@@ -298,7 +302,7 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 	if row.ReleaseState != "" || row.LastAckedRevision != 0 || !row.LastHeartbeat.IsZero() {
 		t.Fatalf("registration fabricated progress: %+v", row)
 	}
-	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
+	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: reg.Name, SchemaVersion: reg.SchemaVersion, State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
 	for _, r := range hub.Subscribers() {
 		if r.ReleaseName != "" {
 			row = r
@@ -310,5 +314,121 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 	sub.Close()
 	if rows := hub.Subscribers(); len(rows) != 1 || rows[0].ReleaseName != "" {
 		t.Fatalf("closed release remains: %+v", rows)
+	}
+}
+
+func TestReleaseQueueRejectsForeignTrackBeforeCoalescing(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "live"}[ready], func(t *testing.T) {
+			ns := domain.NamespaceRef{Env: "prod", App: "app"}
+			sub := &ReleaseSubscription{reg: ReleaseRegistration{Namespace: ns, NamespaceID: 7, Name: "runtime", SchemaVersion: 1}, ready: ready, events: make(chan ReleaseEvent, 1)}
+			matching := domain.ChangeLogEntry{ResourceType: domain.ResourceConfigurationRelease, Ref: domain.Ref{NS: ns, Key: "runtime"}, NamespaceID: 7, SchemaVersion: 1, Version: 2, Revision: 10}
+			sub.offer(matching)
+			foreign := matching
+			foreign.SchemaVersion = 2
+			foreign.Revision = 11
+			sub.offer(foreign)
+			foreign = matching
+			foreign.NamespaceID = 8
+			foreign.Revision = 12
+			sub.offer(foreign)
+			if !ready {
+				sub.activate(ReleaseBacklog{})
+			}
+			select {
+			case event := <-sub.Events():
+				if event.SchemaVersion != 1 || event.NamespaceID != 7 || event.Revision != 10 {
+					t.Fatalf("foreign event superseded matching candidate: %+v", event)
+				}
+			default:
+				t.Fatal("matching candidate was lost")
+			}
+		})
+	}
+}
+
+func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
+	st, ns := releaseWatchStore(t)
+	ctx := context.Background()
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: ns.App, ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "inactive-schema", Metadata: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(st, nil, Options{})
+	hubCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = hub.Run(hubCtx) }()
+	<-hub.Started()
+	reg := releaseWatchRegistration(t, st, ns)
+	reg.SchemaVersion = schema.Version
+	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "unrelated"}, "1", "integer", "{}", "test"); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := hub.SubscribeRelease(ctx, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if len(sub.Backlog().Events) != 0 {
+		t.Fatal("inactive track fabricated a release")
+	}
+	current, err := st.CurrentRevision(ctx)
+	if err != nil || sub.Backlog().Revision != current {
+		t.Fatalf("inactive snapshot lost global cursor: backlog=%+v current=%d err=%v", sub.Backlog(), current, err)
+	}
+	select {
+	case <-sub.Done():
+		t.Fatal("inactive track closed")
+	default:
+	}
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: reg.Name, SchemaVersion: reg.SchemaVersion, Digest: "first-active", Metadata: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := st.ActivateConfigurationRelease(ctx, reg.Track(), release.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.Wake()
+	select {
+	case event := <-sub.Events():
+		if event.SchemaVersion != reg.SchemaVersion || event.Revision != active.ActivationRevision {
+			t.Fatalf("first activation: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("inactive stream did not receive its first activation")
+	}
+	reg.SchemaVersion++
+	if _, err := hub.SubscribeRelease(ctx, reg); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown track: %v", err)
+	}
+}
+
+// The active read can observe a commit newer than the captured global cursor.
+type releaseSnapshotRaceStore struct {
+	*storage.SQLStore
+	beforeActive func()
+}
+
+func (s *releaseSnapshotRaceStore) GetActiveConfigurationRelease(ctx context.Context, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
+	s.beforeActive()
+	return s.SQLStore.GetActiveConfigurationRelease(ctx, track)
+}
+func TestReleaseSnapshotIncludesActivationAfterCursorCapture(t *testing.T) {
+	st, ns := releaseWatchStore(t)
+	rel := createWatchRelease(t, st, ns, "first")
+	var active domain.ActiveConfigurationRelease
+	store := &releaseSnapshotRaceStore{SQLStore: st, beforeActive: func() {
+		active = activateWatchRelease(t, st, ns, rel.Version)
+	}}
+	hub := NewHub(store, nil, Options{})
+	sub, err := hub.SubscribeRelease(context.Background(), releaseWatchRegistration(t, st, ns))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	bl := sub.Backlog()
+	if len(bl.Events) != 1 || bl.Revision != active.ActivationRevision || bl.Events[0].Revision != active.ActivationRevision {
+		t.Fatalf("racing activation identity/cursor = %+v, want %+v", bl, active)
 	}
 }

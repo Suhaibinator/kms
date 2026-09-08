@@ -272,6 +272,7 @@ void [onlySeverity, fatalSeverity, DefaultMismatchError];
 export async function verifiesDefaults(client: KmsClient): Promise<string> {
   const wire: VerifyReleaseDefaultsResult = await client.verifyReleaseDefaults({
     namespace: "prod/api",
+    schemaVersion: 0n,
     entries: [{ alias: "runtime", contentType: "json", sha256: parameterHash("json", "{}") }],
   });
   const result: VerifyResult = await verifyDefaults(
@@ -280,7 +281,27 @@ export async function verifiesDefaults(client: KmsClient): Promise<string> {
     { namespace: "prod/api" },
   );
   const canonical: Uint8Array = canonicalParameterValue("json", "{}");
-  void [wire.passed(), canonical, RateLimitedError];
+  const schemaFree: VerifyResult = await verifyDefaults(
+    client,
+    { schemaSha256: "", contract: managedContract, groups: { runtime: "{}" } },
+    { namespace: "prod/api", schemaVersion: 0n },
+  );
+  void verifyDefaults(
+    client,
+    { schemaSha256: "", contract: [], groups: {} },
+    // @ts-expect-error numeric schema selectors use bigint, not number
+    { namespace: "prod/api", schemaVersion: 0 },
+  );
+  const wireSchema: bigint = wire.schemaVersion;
+  const managedSchema: bigint = result.schemaVersion;
+  void [
+    wire.passed(),
+    wireSchema,
+    managedSchema,
+    schemaFree.schemaVersion,
+    canonical,
+    RateLimitedError,
+  ];
   return result.passed()
     ? result.report()
     : result

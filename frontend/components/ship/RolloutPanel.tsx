@@ -13,6 +13,7 @@ import { sortForRollout } from "./model";
 export interface RolloutPanelProps {
   namespace: NamespaceRef;
   releaseName: string;
+  schemaVersion: number;
   /** The activation instances are expected to reach; counts are relative to it. */
   activationRevision: number;
   /** Follow the revision currently reported by the release feed. */
@@ -56,6 +57,7 @@ function stateLabel(instance: SubscriberInstance, atCurrent: boolean): string {
 export function RolloutPanel({
   namespace,
   releaseName,
+  schemaVersion,
   activationRevision,
   followCurrentActivation = false,
   enabled,
@@ -64,7 +66,7 @@ export function RolloutPanel({
   rollbackDisabled,
   refreshToken,
 }: RolloutPanelProps) {
-  const live = useReleaseSubscribers(namespace, releaseName, { enabled });
+  const live = useReleaseSubscribers(namespace, releaseName, { enabled, schemaVersion });
   const refresh = live.refresh;
   useEffect(() => {
     if (refreshToken) void refresh();

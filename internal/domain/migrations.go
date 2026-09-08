@@ -12,6 +12,7 @@ type ApplicationMigrationChange struct {
 	Version     uint64
 }
 type ApplicationReleaseMigrationInput struct {
+	SourceSchemaVersion              uint64
 	ExpectedSourceVersion            *uint64
 	ExpectedSourceActivationRevision *uint64
 	Namespace                        NamespaceRef

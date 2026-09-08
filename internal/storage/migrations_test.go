@@ -27,15 +27,24 @@ func storageMigrationFixture(t *testing.T) (*SQLStore, ApplicationMigrationTrans
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = st.ActivateConfigurationRelease(ctx, ns, "runtime", base.Version, nil); err != nil {
+	if _, _, err = st.ActivateConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, base.Version, nil); err != nil {
 		t.Fatal(err)
 	}
 	resources := []MigrationResource{{Kind: domain.ReleaseEntryParameter, Key: "config", Version: 1, Write: true}}
-	state, err := st.ApplicationMigrationSnapshot(ctx, ns, resources...)
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: "app", ReleaseName: "runtime", Schema: `{"type":"object","x-kms-contract":[{"alias":"renamed","kind":"parameter","content_type":"string"}]}`, Digest: "target-schema"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return st, ApplicationMigrationTransaction{Resources: resources, Namespace: ns, Snapshot: state.Digest, Contract: []domain.ApplicationContractField{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}, ExpectedActiveVersion: base.Version, Release: domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: "candidate", CreatedBy: "admin", Entries: []domain.ConfigurationReleaseEntry{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, Ref: r, Version: 2, ContentType: "string", Metadata: "{}", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("new")))}}}, Writes: []MigrationParameterWrite{{Alias: "renamed", Key: "config", Value: "new", ContentType: "string", Version: 2}}, Audit: domain.AuditEvent{EventType: "application.release.migrate", Decision: "allow"}}
+	target := domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: schema.Version}
+	state, err := st.ApplicationMigrationSnapshot(ctx, base.Track(), target, resources...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := st.GetActiveConfigurationRelease(ctx, base.Track())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, ApplicationMigrationTransaction{ExpectedSourceVersion: base.Version, ExpectedSourceActivationRevision: active.ActivationRevision, Resources: resources, Namespace: ns, Snapshot: state.Digest, Contract: []domain.ApplicationContractField{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}, ExpectedActiveVersion: 0, Release: domain.ConfigurationRelease{SchemaVersion: schema.Version, Namespace: ns, Name: "runtime", Digest: "candidate", CreatedBy: "admin", Entries: []domain.ConfigurationReleaseEntry{{Alias: "renamed", Kind: domain.ReleaseEntryParameter, Ref: r, Version: 2, ContentType: "string", Metadata: "{}", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("new")))}}}, Writes: []MigrationParameterWrite{{Alias: "renamed", Key: "config", Value: "new", ContentType: "string", Version: 2}}, Audit: domain.AuditEvent{EventType: "application.release.migrate", Decision: "allow"}}
 }
 func TestApplicationMigrationTransactionRollsBackEveryStage(t *testing.T) {
 	for _, table := range []string{"parameter_versions", "configuration_releases", "configuration_release_activations", "parameter.write", "configuration_release.create", "configuration_release.activate", "application.release.migrate"} {
@@ -65,7 +74,7 @@ func TestApplicationMigrationTransactionRollsBackEveryStage(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("definition changed on failed transaction")
 			}
-			active, err := st.GetActiveConfigurationRelease(ctx, in.Namespace, "runtime")
+			active, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime"})
 			if err != nil || active.Release.Version != 1 {
 				t.Fatalf("activation changed: %+v %v", active, err)
 			}
@@ -156,14 +165,14 @@ func TestApplicationMigrationPreservedParameterSnapshot(t *testing.T) {
 	ctx := context.Background()
 	st, in := storageMigrationFixture(t)
 	resources := []MigrationResource{{Kind: domain.ReleaseEntryParameter, Key: "config", Version: 1}}
-	before, err := st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	before, err := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}, in.Release.Track(), resources...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = st.PutParameter(ctx, ref("dev", "app", "config"), "unused", "string", "{}", "other"); err != nil {
 		t.Fatal(err)
 	}
-	after, err := st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	after, err := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}, in.Release.Track(), resources...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +182,7 @@ func TestApplicationMigrationPreservedParameterSnapshot(t *testing.T) {
 	if err := st.db.Model(&parameterVersionModel{}).Where("version_number = ?", 1).Update("metadata_json", `{"changed":true}`).Error; err != nil {
 		t.Fatal(err)
 	}
-	after, err = st.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	after, err = st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}, in.Release.Track(), resources...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,5 +192,70 @@ func TestApplicationMigrationPreservedParameterSnapshot(t *testing.T) {
 	in.Resources, in.Snapshot = resources, before.Digest
 	if _, err = st.ApplyApplicationMigration(ctx, in); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("changed pinned row accepted: %v", err)
+	}
+}
+
+func TestApplicationMigrationPreservesSourceAndApplicationDefault(t *testing.T) {
+	ctx := context.Background()
+	st, in := storageMigrationFixture(t)
+	source := domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}
+	before, err := st.GetActiveConfigurationRelease(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appBefore, err := st.GetApplication(ctx, in.Namespace.App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := st.ApplyApplicationMigration(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Release.Version != 1 || migrated.Release.SchemaVersion != in.Release.SchemaVersion || migrated.PreviousVersion != 0 {
+		t.Fatalf("target activation=%+v", migrated)
+	}
+	after, err := st.GetActiveConfigurationRelease(ctx, source)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("source changed: %+v err=%v", after, err)
+	}
+	appAfter, err := st.GetApplication(ctx, in.Namespace.App)
+	if err != nil || !reflect.DeepEqual(appBefore, appAfter) {
+		t.Fatalf("default definition changed: %+v err=%v", appAfter, err)
+	}
+}
+
+func TestApplicationMigrationRejectsEitherTrackChangingAfterPreview(t *testing.T) {
+	for _, which := range []string{"source", "target"} {
+		t.Run(which, func(t *testing.T) {
+			ctx := context.Background()
+			st, in := storageMigrationFixture(t)
+			if which == "source" {
+				original, err := st.GetConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Release.Name, SchemaVersion: in.SourceSchemaVersion}, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				next, err := st.CreateConfigurationRelease(ctx, original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := st.ActivateConfigurationRelease(ctx, next.Track(), next.Version, nil); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				target := in.Release
+				target.Entries[0].Version = 1
+				target.Entries[0].ParameterDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("old")))
+				other, err := st.CreateConfigurationRelease(ctx, target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := st.ActivateConfigurationRelease(ctx, other.Track(), other.Version, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.ApplyApplicationMigration(ctx, in); !errors.Is(err, domain.ErrAborted) {
+				t.Fatalf("stale %s accepted: %v", which, err)
+			}
+		})
 	}
 }

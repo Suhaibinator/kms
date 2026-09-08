@@ -285,19 +285,19 @@ func TestMetricsReleaseOutcomes(t *testing.T) {
 		return r
 	}
 	r1, r2 := create("1"), create("2")
-	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", r1.Version, nil); err != nil {
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: r1.SchemaVersion}, r1.Version, nil); err != nil {
 		t.Fatal(err)
 	}
 	expectCount(t, m, "release:"+ReleaseOutcomeActivated, 1)
 
 	// A stale expectation on activation is a CAS conflict.
 	stale := uint64(99)
-	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", r2.Version, &stale); !errors.Is(err, domain.ErrAborted) {
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: r2.SchemaVersion}, r2.Version, &stale); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("activate CAS err = %v, want ErrAborted", err)
 	}
 	expectCount(t, m, "release:"+ReleaseOutcomeCASConflict, 1)
 
-	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", r2.Version, nil); err != nil {
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: r2.SchemaVersion}, r2.Version, nil); err != nil {
 		t.Fatal(err)
 	}
 	expectCount(t, m, "release:"+ReleaseOutcomeActivated, 2)
@@ -305,11 +305,11 @@ func TestMetricsReleaseOutcomes(t *testing.T) {
 	// Rollback's own expectation check is a CAS conflict too, then a
 	// successful rollback is classified as rolled_back, not activated.
 	wrong := uint64(1)
-	if _, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", &wrong); !errors.Is(err, domain.ErrAborted) {
+	if _, err := svc.RollbackConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, &wrong); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("rollback CAS err = %v, want ErrAborted", err)
 	}
 	expectCount(t, m, "release:"+ReleaseOutcomeCASConflict, 2)
-	if _, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", nil); err != nil {
+	if _, err := svc.RollbackConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, nil); err != nil {
 		t.Fatal(err)
 	}
 	expectCount(t, m, "release:"+ReleaseOutcomeRolledBack, 1)

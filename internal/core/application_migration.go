@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"reflect"
 	"sort"
 	"strconv"
 
@@ -17,6 +16,8 @@ import (
 // from the active release to an explicit registered schema and full contract.
 func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, in domain.ApplicationReleaseMigrationInput) (domain.ApplicationReleaseMigrationResult, error) {
 	empty := domain.ApplicationReleaseMigrationResult{}
+	ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, SchemaVersion: in.SchemaVersion})
+	ctx = context.WithValue(ctx, releaseAuditSourceSchemaKey{}, in.SourceSchemaVersion)
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return empty, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
@@ -38,12 +39,21 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	base, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace)
+	app, err := as.GetApplication(ctx, in.Namespace.App)
 	if err != nil {
 		return empty, err
 	}
-	app, err := as.GetApplication(ctx, in.Namespace.App)
+	sourceTrack := domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SourceSchemaVersion}
+	targetTrack := domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SchemaVersion}
+	if sourceTrack == targetTrack {
+		return empty, domain.Errorf(domain.ErrInvalidArgument, "source and target schema tracks must differ")
+	}
+	base, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack)
 	if err != nil {
+		return empty, err
+	}
+	targetActive, err := rs.GetActiveConfigurationRelease(ctx, targetTrack)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return empty, err
 	}
 	if !app.ArchivedAt.IsZero() {
@@ -59,9 +69,14 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	if _, err = rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, in.SchemaVersion); err != nil {
+	targetSchema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, in.SchemaVersion)
+	if err != nil {
 		return empty, err
 	}
+	if targetSchema.Contract != nil && !contractsEqual(targetSchema.Contract, candidateApp.Contract) {
+		return empty, domain.Errorf(domain.ErrFailedPrecondition, "target contract does not match registered schema")
+	}
+	ctx = withReleaseAuditTrack(ctx, targetTrack)
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: app.ReleaseName})
 	if err != nil {
 		return empty, err
@@ -70,7 +85,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	if err != nil {
 		return empty, err
 	}
-	source, err := rs.GetActiveConfigurationRelease(ctx, in.Namespace, app.ReleaseName)
+	source, err := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: app.ReleaseName, SchemaVersion: in.SourceSchemaVersion})
 	if errors.Is(err, domain.ErrNotFound) {
 		return empty, domain.Errorf(domain.ErrFailedPrecondition, "an active release is required for migration")
 	}
@@ -145,7 +160,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		}
 		resources = append(resources, storage.MigrationResource{Kind: f.Kind, Key: key, Version: version, Write: c.Value != nil})
 	}
-	before, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	before, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack, resources...)
 	if err != nil {
 		return empty, err
 	}
@@ -157,7 +172,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		SourceVersion:            source.Release.Version,
 		SourceActivationRevision: source.ActivationRevision,
 		SchemaVersion:            in.SchemaVersion,
-		DefinitionChanged:        app.SchemaVersion != candidateApp.SchemaVersion || !reflect.DeepEqual(app.Contract, candidateApp.Contract),
+		DefinitionChanged:        false,
 		Entries:                  []domain.ApplicationReleasePlanEntry{},
 		Validation:               []domain.ReleaseValidationError{},
 		AffectedEnvironments:     []domain.ApplicationMigrationEnvironment{},
@@ -170,7 +185,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		if env.Env == in.Namespace.Env {
 			continue
 		}
-		a, e := rs.GetActiveConfigurationRelease(ctx, env.NamespaceRef, app.ReleaseName)
+		a, e := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: env.NamespaceRef, Name: app.ReleaseName, SchemaVersion: in.SchemaVersion})
 		if e != nil && !errors.Is(e, domain.ErrNotFound) {
 			return empty, e
 		}
@@ -296,7 +311,7 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 			return empty, err
 		}
 	}
-	after, err := ms.ApplicationMigrationSnapshot(ctx, in.Namespace, resources...)
+	after, err := ms.ApplicationMigrationSnapshot(ctx, sourceTrack, targetTrack, resources...)
 	if err != nil {
 		return empty, err
 	}
@@ -329,9 +344,10 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	audit := s.buildRefEventWithNamespaceID(pr, "application.release.migrate", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", map[string]string{
 		"operation":                  "schema_migration",
 		"schema_version":             strconv.FormatUint(in.SchemaVersion, 10),
+		"source_schema_version":      strconv.FormatUint(in.SourceSchemaVersion, 10),
 		"source_version":             strconv.FormatUint(source.Release.Version, 10),
 		"source_activation_revision": strconv.FormatUint(source.ActivationRevision, 10),
-		"previous_version":           strconv.FormatUint(source.Release.Version, 10),
+		"previous_version":           strconv.FormatUint(targetActive.Release.Version, 10),
 		"parameter_write_count":      strconv.Itoa(len(writes)),
 	})
 	resourceAudits := make([]domain.AuditEvent, 0, len(writes)+2)
@@ -339,13 +355,13 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 		resourceAudits = append(resourceAudits, s.buildRefEventWithNamespaceID(pr, "parameter.write", domain.ResourceParameter, domain.Ref{NS: in.Namespace, Key: w.Key}, namespace.ID, w.Version, "allow", nil))
 	}
 	resourceAudits = append(resourceAudits,
-		s.buildRefEventWithNamespaceID(pr, "configuration_release.create", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", nil),
-		s.buildRefEventWithNamespaceID(pr, "configuration_release.activate", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", map[string]string{"previous_version": strconv.FormatUint(source.Release.Version, 10)}),
+		s.buildRefEventWithNamespaceID(pr, "configuration_release.create", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", releaseAuditMetadata(in.SchemaVersion, 0, nil)),
+		s.buildRefEventWithNamespaceID(pr, "configuration_release.activate", domain.ResourceConfigurationRelease, releaseRef, namespace.ID, 0, "allow", releaseAuditMetadata(in.SchemaVersion, 0, map[string]string{"previous_version": strconv.FormatUint(targetActive.Release.Version, 10), "source_schema_version": strconv.FormatUint(in.SourceSchemaVersion, 10), "source_version": strconv.FormatUint(source.Release.Version, 10), "source_activation_revision": strconv.FormatUint(source.ActivationRevision, 10)})),
 	)
 	migrated, err := ms.ApplyApplicationMigration(ctx, storage.ApplicationMigrationTransaction{
 		Resources: resources, Namespace: in.Namespace, Snapshot: before.Digest,
 		Contract: candidateApp.Contract, Release: release, Writes: writes,
-		ExpectedActiveVersion: source.Release.Version, Audit: audit, ResourceAudits: resourceAudits,
+		SourceSchemaVersion: in.SourceSchemaVersion, ExpectedSourceVersion: source.Release.Version, ExpectedSourceActivationRevision: source.ActivationRevision, ExpectedActiveVersion: targetActive.Release.Version, Audit: audit, ResourceAudits: resourceAudits,
 	})
 	if err != nil {
 		return empty, err
@@ -354,6 +370,6 @@ func (s *Service) MigrateApplicationRelease(ctx context.Context, pr Principal, i
 	result.Release = &migrated.Release
 	result.Activation = &domain.ShipActivation{ActivationRevision: migrated.ActivationRevision, PreviousVersion: migrated.PreviousVersion, Changed: true}
 	s.getHub().Wake()
-	s.notifyReleaseSubscribers(in.Namespace, app.ReleaseName)
+	s.notifyReleaseSubscribers(release.Track())
 	return result, nil
 }

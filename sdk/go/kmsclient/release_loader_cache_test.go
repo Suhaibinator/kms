@@ -51,7 +51,7 @@ func TestReleaseLoaderSecretSnapshotIgnoresCallerCacheMutation(t *testing.T) {
 	}
 	primed.Value()[0] = 'X'
 
-	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}

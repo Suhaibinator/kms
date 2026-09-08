@@ -250,19 +250,19 @@ func (c *CLI) seedDevPolicy(ctx context.Context, svc *core.Service, admin core.P
 // dev/demo, so the release, schema, and rollout views have real content the
 // moment the console opens.
 func (c *CLI) seedDevRelease(ctx context.Context, svc *core.Service, admin core.Principal, devNS domain.NamespaceRef) error {
+	app, err := svc.GetApplication(ctx, admin, devDemoApp)
+	if err != nil {
+		return fmt.Errorf("reading demo application: %w", err)
+	}
+	track := domain.ReleaseTrack{Namespace: devNS, Name: devReleaseName, SchemaVersion: app.SchemaVersion}
 	// A store that already has an active release keeps it. Publishing a second
 	// one would pin a second schema version, which the application contract
 	// adopted from the first release then rejects.
-	switch _, err := svc.GetActiveConfigurationRelease(ctx, admin, devNS, devReleaseName); {
+	switch _, err := svc.GetActiveConfigurationRelease(ctx, admin, track); {
 	case err == nil:
 		return nil
 	case !errors.Is(err, domain.ErrNotFound):
 		return fmt.Errorf("checking the active configuration release: %w", err)
-	}
-
-	app, err := svc.GetApplication(ctx, admin, devDemoApp)
-	if err != nil {
-		return fmt.Errorf("reading demo application: %w", err)
 	}
 
 	release, err := svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
@@ -279,7 +279,7 @@ func (c *CLI) seedDevRelease(ctx context.Context, svc *core.Service, admin core.
 	if err != nil {
 		return fmt.Errorf("creating configuration release %s: %w", devReleaseName, err)
 	}
-	if _, _, err := svc.ActivateConfigurationRelease(ctx, admin, devNS, devReleaseName, release.Version, nil); err != nil {
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, admin, track, release.Version, nil); err != nil {
 		return fmt.Errorf("activating configuration release %s: %w", devReleaseName, err)
 	}
 	return nil

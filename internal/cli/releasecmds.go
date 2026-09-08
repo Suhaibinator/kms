@@ -102,7 +102,7 @@ func releaseEntryToJSON(entry *kmsv1.ConfigurationReleaseEntry) releaseEntryJSON
 type releaseDefinition struct {
 	Namespace     string                   `json:"namespace" yaml:"namespace"`
 	Name          string                   `json:"name" yaml:"name"`
-	SchemaVersion uint64                   `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
+	SchemaVersion *uint64                  `json:"schema_version" yaml:"schema_version"`
 	MetadataJSON  string                   `json:"metadata_json,omitempty" yaml:"metadata_json,omitempty"`
 	Entries       []releaseEntryDefinition `json:"entries" yaml:"entries"`
 }
@@ -118,10 +118,11 @@ type releaseEntryDefinition struct {
 // releaseCreateJSON reports a created release: the identity the caller asked
 // for plus the immutable version and digest the server assigned.
 type releaseCreateJSON struct {
-	Namespace namespaceRefJSON `json:"namespace"`
-	Name      string           `json:"name"`
-	Version   uint64           `json:"version"`
-	Digest    string           `json:"digest"`
+	Namespace     namespaceRefJSON `json:"namespace"`
+	Name          string           `json:"name"`
+	SchemaVersion uint64           `json:"schema_version"`
+	Version       uint64           `json:"version"`
+	Digest        string           `json:"digest"`
 }
 
 func (c *CLI) cmdReleaseCreate(args []string) int {
@@ -169,15 +170,16 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 	if resp.GetRelease() == nil {
 		return c.fail("release create: server returned an empty release")
 	}
-	line := fmt.Sprintf("Created %s/%s version %d (digest %s)",
-		definition.Namespace, definition.Name, resp.GetRelease().GetVersion(), resp.GetRelease().GetDigest())
+	line := fmt.Sprintf("Created %s/%s schema %d version %d (digest %s)",
+		definition.Namespace, definition.Name, resp.GetRelease().GetSchemaVersion(), resp.GetRelease().GetVersion(), resp.GetRelease().GetDigest())
 	if c.jsonOutput() {
 		c.info("%s", line)
 		return c.printJSON(releaseCreateJSON{
-			Namespace: namespaceRefValue(req.GetNamespace()),
-			Name:      definition.Name,
-			Version:   resp.GetRelease().GetVersion(),
-			Digest:    resp.GetRelease().GetDigest(),
+			Namespace:     namespaceRefValue(req.GetNamespace()),
+			Name:          definition.Name,
+			SchemaVersion: resp.GetRelease().GetSchemaVersion(),
+			Version:       resp.GetRelease().GetVersion(),
+			Digest:        resp.GetRelease().GetDigest(),
 		})
 	}
 	_, _ = fmt.Fprintln(c.Stdout, line)
@@ -216,6 +218,9 @@ func (c *CLI) readReleaseDefinition(path string) (releaseDefinition, error) {
 }
 
 func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseRequest, error) {
+	if definition.SchemaVersion == nil {
+		return nil, errors.New("schema_version is required (0 selects the schema-free track)")
+	}
 	ns, err := keyutil.ParseNamespace(definition.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("namespace: %w", err)
@@ -300,10 +305,15 @@ func releaseValidationErrorsJSON(validationErrors []*kmsv1.ReleaseValidationErro
 func (c *CLI) cmdReleaseValidate(args []string) int {
 	fs := c.newFlags("release validate")
 	cf := addConnFlags(c, fs)
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "required release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release validate ENV/APP NAME VERSION [flags]",
 		"Check that a release's resource pins still resolve and that pinned values satisfy its schema.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !schema.set {
+		return c.failUsage("release validate requires --schema-version")
 	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
@@ -317,7 +327,7 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationReleaseServiceClient(conn).ValidateRelease(cf.authCtx(ctx), &kmsv1.ValidateReleaseRequest{
-		Namespace: ns, Name: name, Version: version,
+		Namespace: ns, Name: name, Version: version, SchemaVersion: &schema.value,
 	})
 	if err != nil {
 		return c.failErr("release validate", err)
@@ -335,9 +345,10 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 		return exitError
 	}
 	if resp.GetValid() {
-		_, _ = fmt.Fprintf(c.Stdout, "Release %s/%s version %d is valid.\n", namespaceDisplay(ns), name, version)
+		_, _ = fmt.Fprintf(c.Stdout, "Release %s/%s schema %d version %d is valid.\n", namespaceDisplay(ns), name, schema.value, version)
 		return 0
 	}
+	_, _ = fmt.Fprintf(c.Stdout, "Release %s/%s schema %d version %d is invalid:\n", namespaceDisplay(ns), name, schema.value, version)
 	printReleaseValidationErrors(c.Stdout, resp.GetErrors())
 	return 1
 }
@@ -367,13 +378,14 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 // Activation state is deliberately absent: GetRelease does not report it, and
 // a "current": false that is never true would mislead; use release list.
 type releaseShowJSON struct {
-	Namespace namespaceRefJSON   `json:"namespace"`
-	Name      string             `json:"name"`
-	Version   uint64             `json:"version"`
-	Schema    *releaseSchemaRef  `json:"schema"`
-	Digest    string             `json:"digest"`
-	CreatedAt *string            `json:"created_at"`
-	Entries   []releaseEntryJSON `json:"entries"`
+	Namespace     namespaceRefJSON   `json:"namespace"`
+	Name          string             `json:"name"`
+	SchemaVersion uint64             `json:"schema_version"`
+	Version       uint64             `json:"version"`
+	Schema        *releaseSchemaRef  `json:"schema"`
+	Digest        string             `json:"digest"`
+	CreatedAt     *string            `json:"created_at"`
+	Entries       []releaseEntryJSON `json:"entries"`
 }
 
 // releaseSchemaRef names the schema a release was validated against; null in
@@ -385,10 +397,15 @@ type releaseSchemaRef struct {
 func (c *CLI) cmdReleaseShow(args []string) int {
 	fs := c.newFlags("release show")
 	cf := addConnFlags(c, fs)
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "required release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release show ENV/APP NAME VERSION [flags]",
 		"Print a release manifest's metadata and entries; secret values are never shown.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !schema.set {
+		return c.failUsage("release show requires --schema-version")
 	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
@@ -402,7 +419,7 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationReleaseServiceClient(conn).GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{
-		Namespace: ns, Name: name, Version: version,
+		Namespace: ns, Name: name, Version: version, SchemaVersion: &schema.value,
 	})
 	if err != nil {
 		return c.failErr("release show", err)
@@ -421,12 +438,9 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
 	if c.jsonOutput() {
 		document := releaseShowJSON{
-			Namespace: namespaceRefValue(release.GetNamespace()),
-			Name:      release.GetName(),
-			Version:   release.GetVersion(),
-			Digest:    release.GetDigest(),
-			CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
-			Entries:   make([]releaseEntryJSON, 0, len(entries)),
+			Namespace: namespaceRefValue(release.GetNamespace()), Name: release.GetName(),
+			SchemaVersion: release.GetSchemaVersion(), Version: release.GetVersion(), Digest: release.GetDigest(),
+			CreatedAt: jsonTime(release.GetCreatedAtUnixMs()), Entries: make([]releaseEntryJSON, 0, len(entries)),
 		}
 		if release.GetSchemaVersion() != 0 {
 			document.Schema = &releaseSchemaRef{Version: release.GetSchemaVersion()}
@@ -436,7 +450,7 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 		}
 		return c.printJSON(document)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "%s/%s version %d\n", namespaceDisplay(release.GetNamespace()), release.GetName(), release.GetVersion())
+	_, _ = fmt.Fprintf(c.Stdout, "%s/%s schema %d version %d\n", namespaceDisplay(release.GetNamespace()), release.GetName(), release.GetSchemaVersion(), release.GetVersion())
 	_, _ = fmt.Fprintf(c.Stdout, "Digest: %s\n", release.GetDigest())
 	if release.GetSchemaVersion() != 0 {
 		_, _ = fmt.Fprintf(c.Stdout, "Schema: %s/%s@%d\n", release.GetNamespace().GetApp(), release.GetName(), release.GetSchemaVersion())
@@ -455,19 +469,22 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 // releaseListItemJSON is one row of `release list`: every table column plus the
 // creation time, which the table has no room for.
 type releaseListItemJSON struct {
-	Name      string  `json:"name"`
-	Version   uint64  `json:"version"`
-	Current   bool    `json:"current"`
-	Previous  bool    `json:"previous"`
-	Revision  uint64  `json:"revision"`
-	Digest    string  `json:"digest"`
-	CreatedAt *string `json:"created_at"`
+	Name          string  `json:"name"`
+	SchemaVersion uint64  `json:"schema_version"`
+	Version       uint64  `json:"version"`
+	Current       bool    `json:"current"`
+	Previous      bool    `json:"previous"`
+	Revision      uint64  `json:"revision"`
+	Digest        string  `json:"digest"`
+	CreatedAt     *string `json:"created_at"`
 }
 
 func (c *CLI) cmdReleaseList(args []string) int {
 	fs := c.newFlags("release list")
 	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "filter by release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release list ENV/APP [NAME] [flags]",
 		"List immutable release versions and which one is active.", false)
 	if !c.parseFlags(fs, args) {
@@ -500,9 +517,13 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	items := []releaseListItemJSON{}
 	pageToken := ""
 	for {
-		resp, listErr := client.ListReleases(cf.authCtx(ctx), &kmsv1.ListReleasesRequest{
+		req := &kmsv1.ListReleasesRequest{
 			Namespace: ns, Name: name, PageSize: int32(*pageSize), PageToken: pageToken,
-		})
+		}
+		if schema.set {
+			req.SchemaVersion = &schema.value
+		}
+		resp, listErr := client.ListReleases(cf.authCtx(ctx), req)
 		if listErr != nil {
 			return c.failErr("release list", listErr)
 		}
@@ -510,18 +531,19 @@ func (c *CLI) cmdReleaseList(args []string) int {
 			release := summary.GetRelease()
 			if c.jsonOutput() {
 				items = append(items, releaseListItemJSON{
-					Name:      release.GetName(),
-					Version:   release.GetVersion(),
-					Current:   summary.GetCurrent(),
-					Previous:  summary.GetPrevious(),
-					Revision:  summary.GetActivationRevision(),
-					Digest:    release.GetDigest(),
-					CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
+					Name:          release.GetName(),
+					SchemaVersion: release.GetSchemaVersion(),
+					Version:       release.GetVersion(),
+					Current:       summary.GetCurrent(),
+					Previous:      summary.GetPrevious(),
+					Revision:      summary.GetActivationRevision(),
+					Digest:        release.GetDigest(),
+					CreatedAt:     jsonTime(release.GetCreatedAtUnixMs()),
 				})
 				continue
 			}
 			rows = append(rows, []string{
-				release.GetName(), strconv.FormatUint(release.GetVersion(), 10),
+				release.GetName(), strconv.FormatUint(release.GetSchemaVersion(), 10), strconv.FormatUint(release.GetVersion(), 10),
 				strconv.FormatBool(summary.GetCurrent()), strconv.FormatBool(summary.GetPrevious()),
 				strconv.FormatUint(summary.GetActivationRevision(), 10), release.GetDigest(),
 			})
@@ -536,14 +558,15 @@ func (c *CLI) cmdReleaseList(args []string) int {
 		// there is no token to hand back.
 		return c.printList(items, "")
 	}
-	c.printTable([]string{"NAME", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
+	c.printTable([]string{"NAME", "SCHEMA", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
 	return 0
 }
 
 // releaseVersionJSON identifies one side of a diff.
 type releaseVersionJSON struct {
-	Name    string `json:"name"`
-	Version uint64 `json:"version"`
+	Name          string `json:"name"`
+	SchemaVersion uint64 `json:"schema_version"`
+	Version       uint64 `json:"version"`
 }
 
 // releaseEntryChange is an alias present in both releases whose pin moved.
@@ -568,10 +591,15 @@ type releaseDiff struct {
 func (c *CLI) cmdReleaseDiff(args []string) int {
 	fs := c.newFlags("release diff")
 	cf := addConnFlags(c, fs)
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "required release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release diff ENV/APP NAME FROM_VERSION TO_VERSION [flags]",
 		"Compare two versions of a release by alias, pin, and parameter digest.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !schema.set {
+		return c.failUsage("release diff requires --schema-version")
 	}
 	pos := c.args()
 	if len(pos) != 4 {
@@ -597,11 +625,11 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	fromResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: fromVersion})
+	fromResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: fromVersion, SchemaVersion: &schema.value})
 	if err != nil {
 		return c.failErr(fmt.Sprintf("release diff: reading version %d", fromVersion), err)
 	}
-	toResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: toVersion})
+	toResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: toVersion, SchemaVersion: &schema.value})
 	if err != nil {
 		return c.failErr(fmt.Sprintf("release diff: reading version %d", toVersion), err)
 	}
@@ -638,8 +666,8 @@ func computeReleaseDiff(from, to *kmsv1.ConfigurationRelease) releaseDiff {
 	}
 	sort.Strings(ordered)
 	diff := releaseDiff{
-		From:    releaseVersionJSON{Name: from.GetName(), Version: from.GetVersion()},
-		To:      releaseVersionJSON{Name: to.GetName(), Version: to.GetVersion()},
+		From:    releaseVersionJSON{Name: from.GetName(), SchemaVersion: from.GetSchemaVersion(), Version: from.GetVersion()},
+		To:      releaseVersionJSON{Name: to.GetName(), SchemaVersion: to.GetSchemaVersion(), Version: to.GetVersion()},
 		Added:   []releaseEntryJSON{},
 		Removed: []releaseEntryJSON{},
 		Changed: []releaseEntryChange{},
@@ -665,6 +693,8 @@ func computeReleaseDiff(from, to *kmsv1.ConfigurationRelease) releaseDiff {
 // are unique across the three categories, so sorting the merged rows restores
 // the single ordering the diff has always printed.
 func writeReleaseDiff(w io.Writer, diff releaseDiff) {
+	_, _ = fmt.Fprintf(w, "Diff %s schema %d version %d -> %s schema %d version %d:\n",
+		diff.From.Name, diff.From.SchemaVersion, diff.From.Version, diff.To.Name, diff.To.SchemaVersion, diff.To.Version)
 	rows := make([][]string, 0, len(diff.Added)+len(diff.Removed)+len(diff.Changed))
 	var absent releaseEntryJSON
 	for _, entry := range diff.Added {
@@ -757,16 +787,18 @@ func (v *optionalUint64) Set(raw string) error {
 type releaseActivationJSON struct {
 	Namespace       namespaceRefJSON `json:"namespace"`
 	Name            string           `json:"name"`
+	SchemaVersion   uint64           `json:"schema_version"`
 	Version         uint64           `json:"version"`
 	PreviousVersion uint64           `json:"previous_version"`
 	Revision        uint64           `json:"revision"`
 	Changed         bool             `json:"changed"`
 }
 
-func releaseActivationOf(ns *kmsv1.NamespaceRef, name string, resp *kmsv1.ActivateReleaseResponse) releaseActivationJSON {
+func releaseActivationOf(ns *kmsv1.NamespaceRef, name string, schemaVersion uint64, resp *kmsv1.ActivateReleaseResponse) releaseActivationJSON {
 	return releaseActivationJSON{
 		Namespace:       namespaceRefValue(ns),
 		Name:            name,
+		SchemaVersion:   schemaVersion,
 		Version:         resp.GetCurrentVersion(),
 		PreviousVersion: resp.GetPreviousVersion(),
 		Revision:        resp.GetActivationRevision(),
@@ -778,17 +810,22 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 	fs := c.newFlags("release activate")
 	cf := addConnFlags(c, fs)
 	var expected optionalUint64
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "required release schema track (0 selects the schema-free track)")
 	fs.Var(&expected, "expected-current-version", "CAS guard: expected active `version` (0 means expect no active release)")
 	c.setUsage(fs, "release activate ENV/APP NAME VERSION [flags]",
 		"Atomically make a release version the active one.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
+	if !schema.set {
+		return c.failUsage("release activate requires --schema-version")
+	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
 		return 2
 	}
-	req := &kmsv1.ActivateReleaseRequest{Namespace: ns, Name: name, Version: version}
+	req := &kmsv1.ActivateReleaseRequest{Namespace: ns, Name: name, Version: version, SchemaVersion: &schema.value}
 	if expected.set {
 		req.ExpectedCurrentVersion = &expected.value
 	}
@@ -801,21 +838,21 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	if code := c.previewReleaseActivation(ctx, cf, client, ns, name, version); code != exitOK {
+	if code := c.previewReleaseActivation(ctx, cf, client, ns, name, schema.value, version); code != exitOK {
 		return code
 	}
-	if ok, code := c.confirmYesNo(fmt.Sprintf("activate release %s v%d in %s", name, version, namespaceDisplay(ns))); !ok {
+	if ok, code := c.confirmYesNo(fmt.Sprintf("activate release %s schema %d version %d in %s", name, schema.value, version, namespaceDisplay(ns))); !ok {
 		return code
 	}
 	resp, err := client.ActivateRelease(cf.authCtx(ctx), req)
 	if err != nil {
 		return c.failReleaseActivation("activate", err)
 	}
-	line := fmt.Sprintf("Active %s/%s version %d (previous %d, revision %d, changed=%t)",
-		namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetActivationRevision(), resp.GetChanged())
+	line := fmt.Sprintf("Active %s/%s schema %d version %d (previous %d, revision %d, changed=%t)",
+		namespaceDisplay(ns), name, schema.value, resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetActivationRevision(), resp.GetChanged())
 	if c.jsonOutput() {
 		c.info("%s", line)
-		return c.printJSON(releaseActivationOf(ns, name, resp))
+		return c.printJSON(releaseActivationOf(ns, name, schema.value, resp))
 	}
 	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
@@ -826,31 +863,31 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 // namespace has none yet. This is the thing the operator confirms against, so
 // it goes straight to stderr and --quiet never suppresses it. A namespace with
 // no active release answers NotFound, which is not an error here.
-func (c *CLI) previewReleaseActivation(ctx context.Context, cf *connFlags, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, version uint64) int {
-	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name})
+func (c *CLI) previewReleaseActivation(ctx context.Context, cf *connFlags, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, schemaVersion, version uint64) int {
+	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name, SchemaVersion: &schemaVersion})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			c.printNoActiveRelease(ns, name, version)
+			c.printNoActiveRelease(ns, name, schemaVersion, version)
 			return exitOK
 		}
 		return c.failErr("release activate: reading the active release", err)
 	}
 	if active.GetRelease() == nil {
-		c.printNoActiveRelease(ns, name, version)
+		c.printNoActiveRelease(ns, name, schemaVersion, version)
 		return exitOK
 	}
-	requested, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: name, Version: version})
+	requested, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: name, Version: version, SchemaVersion: &schemaVersion})
 	if err != nil {
 		return c.failErr(fmt.Sprintf("release activate: reading version %d", version), err)
 	}
-	_, _ = fmt.Fprintf(c.Stderr, "Activating %s v%d in %s over the active v%d:\n",
-		name, version, namespaceDisplay(ns), active.GetRelease().GetVersion())
+	_, _ = fmt.Fprintf(c.Stderr, "Activating %s schema %d version %d in %s over the active version %d:\n",
+		name, schemaVersion, version, namespaceDisplay(ns), active.GetRelease().GetVersion())
 	writeReleaseDiff(c.Stderr, computeReleaseDiff(active.GetRelease(), requested.GetRelease()))
 	return exitOK
 }
 
-func (c *CLI) printNoActiveRelease(ns *kmsv1.NamespaceRef, name string, version uint64) {
-	_, _ = fmt.Fprintf(c.Stderr, "No active release in %s; %s v%d will become the first.\n", namespaceDisplay(ns), name, version)
+func (c *CLI) printNoActiveRelease(ns *kmsv1.NamespaceRef, name string, schemaVersion, version uint64) {
+	_, _ = fmt.Fprintf(c.Stderr, "No active release in %s; %s schema %d version %d will become the first.\n", namespaceDisplay(ns), name, schemaVersion, version)
 }
 
 // failReleaseActivation reports a refused activation. A validation failure
@@ -870,10 +907,15 @@ func (c *CLI) failReleaseActivation(verb string, err error) int {
 func (c *CLI) cmdReleaseRollback(args []string) int {
 	fs := c.newFlags("release rollback")
 	cf := addConnFlags(c, fs)
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "required release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release rollback ENV/APP NAME [VERSION] [flags]",
 		"Reactivate the previous release version, or an explicit one.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !schema.set {
+		return c.failUsage("release rollback requires --schema-version")
 	}
 	pos := c.args()
 	if len(pos) < 2 || len(pos) > 3 {
@@ -893,7 +935,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name})
+	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name, SchemaVersion: &schema.value})
 	if err != nil {
 		return c.failErr("release rollback: reading active release", err)
 	}
@@ -911,21 +953,21 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	// once there is a target to roll back to. The prompt names the release and
 	// the version it will move to — a namespace usually holds several — and
 	// the typed resource stays ENV/APP, which is what the operator recognizes.
-	action := fmt.Sprintf("roll back release %s from v%d to v%d in", name, active.GetRelease().GetVersion(), target)
+	action := fmt.Sprintf("roll back release %s schema %d from version %d to version %d in", name, schema.value, active.GetRelease().GetVersion(), target)
 	if ok, code := c.confirmDestructive(action, namespaceDisplay(ns)); !ok {
 		return code
 	}
 	expected := active.GetRelease().GetVersion()
 	resp, err := client.ActivateRelease(cf.authCtx(ctx), &kmsv1.ActivateReleaseRequest{
-		Namespace: ns, Name: name, Version: target, ExpectedCurrentVersion: &expected,
+		Namespace: ns, Name: name, Version: target, ExpectedCurrentVersion: &expected, SchemaVersion: &schema.value,
 	})
 	if err != nil {
 		return c.failReleaseActivation("rollback", err)
 	}
-	line := fmt.Sprintf("Rolled back %s/%s to version %d (revision %d)", namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetActivationRevision())
+	line := fmt.Sprintf("Rolled back %s/%s schema %d to version %d (revision %d)", namespaceDisplay(ns), name, schema.value, resp.GetCurrentVersion(), resp.GetActivationRevision())
 	if c.jsonOutput() {
 		c.info("%s", line)
-		return c.printJSON(releaseActivationOf(ns, name, resp))
+		return c.printJSON(releaseActivationOf(ns, name, schema.value, resp))
 	}
 	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
@@ -935,8 +977,10 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	fs := c.newFlags("release subscribers")
 	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	var schema optionalUint64
+	fs.Var(&schema, "schema-version", "filter by release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release subscribers ENV/APP NAME [flags]",
-		"Show per-instance release lifecycle state and activation lag.", false)
+		"Show per-instance release lifecycle state and active release revision lag.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -960,9 +1004,13 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	currentRevision := uint64(0)
 	pageToken := ""
 	for {
-		resp, listErr := client.ListReleaseSubscribers(cf.authCtx(ctx), &kmsv1.ListReleaseSubscribersRequest{
+		req := &kmsv1.ListReleaseSubscribersRequest{
 			Namespace: ns, ReleaseName: pos[1], PageSize: int32(*pageSize), PageToken: pageToken,
-		})
+		}
+		if schema.set {
+			req.SchemaVersion = &schema.value
+		}
+		resp, listErr := client.ListReleaseSubscribers(cf.authCtx(ctx), req)
 		if listErr != nil {
 			return c.failErr("release subscribers", listErr)
 		}
@@ -973,41 +1021,92 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			break
 		}
 	}
+	currentRevisions := map[uint64]uint64{}
+	if schema.set {
+		currentRevisions[schema.value] = currentRevision
+	} else {
+		currentRevisions, err = releaseSubscriberTrackRevisions(cf.authCtx(ctx), kmsv1.NewConfigurationReleaseServiceClient(conn), ns, pos[1], instances)
+		if err != nil {
+			return c.failErr("release subscribers", err)
+		}
+	}
 	if c.jsonOutput() {
 		// Every page has been followed, so there is no token to hand back.
-		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevision), "")
+		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevisions), "")
 	}
-	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevision)
+	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevisions)
 	return 0
+}
+
+// releaseSubscriberTrackRevisions resolves each schema track represented in an
+// unfiltered subscriber listing. The listing's current_revision is zero when
+// it spans tracks, so using it for every row would hide real revision lag.
+func releaseSubscriberTrackRevisions(ctx context.Context, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus) (map[uint64]uint64, error) {
+	revisions := make(map[uint64]uint64)
+	for key := range instances {
+		if _, resolved := revisions[key.schemaVersion]; resolved {
+			continue
+		}
+		schemaVersion := key.schemaVersion
+		active, err := client.GetActiveRelease(ctx, &kmsv1.GetActiveReleaseRequest{
+			Namespace: ns, Name: name, SchemaVersion: &schemaVersion,
+		})
+		if status.Code(err) == codes.NotFound {
+			revisions[schemaVersion] = 0
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get active release for schema %d: %w", schemaVersion, err)
+		}
+		release := active.GetRelease()
+		if release == nil {
+			return nil, fmt.Errorf("get active release for schema %d: server returned an empty release", schemaVersion)
+		}
+		if !sameNamespace(release.GetNamespace(), ns) {
+			return nil, fmt.Errorf("get active release for schema %d: server returned a different namespace", schemaVersion)
+		}
+		if release.GetName() != name {
+			return nil, fmt.Errorf("get active release for schema %d: server returned release %q", schemaVersion, release.GetName())
+		}
+		if release.GetSchemaVersion() != schemaVersion {
+			return nil, fmt.Errorf("get active release for schema %d: server returned schema %d", schemaVersion, release.GetSchemaVersion())
+		}
+		revisions[schemaVersion] = active.GetActivationRevision()
+	}
+	return revisions, nil
 }
 
 type releaseSubscriberInstanceStatus struct {
 	identity, client, instance string
+	schemaVersion              uint64
 	connected                  bool
 	latestRevision             uint64
 	states                     map[string]*kmsv1.ReleaseSubscriberState
 }
 
 type releaseSubscriberInstanceKey struct {
-	identity string
-	client   string
-	instance string
+	identity      string
+	client        string
+	instance      string
+	schemaVersion uint64
 }
 
 func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, subscribers []*kmsv1.ReleaseSubscriberState) {
 	for _, subscriber := range subscribers {
 		key := releaseSubscriberInstanceKey{
-			identity: subscriber.GetIdentity(),
-			client:   subscriber.GetClientName(),
-			instance: subscriber.GetInstanceId(),
+			identity:      subscriber.GetIdentity(),
+			client:        subscriber.GetClientName(),
+			instance:      subscriber.GetInstanceId(),
+			schemaVersion: subscriber.GetSchemaVersion(),
 		}
 		instance := instances[key]
 		if instance == nil {
 			instance = &releaseSubscriberInstanceStatus{
-				identity: subscriber.GetIdentity(),
-				client:   subscriber.GetClientName(),
-				instance: subscriber.GetInstanceId(),
-				states:   make(map[string]*kmsv1.ReleaseSubscriberState),
+				identity:      subscriber.GetIdentity(),
+				client:        subscriber.GetClientName(),
+				instance:      subscriber.GetInstanceId(),
+				schemaVersion: subscriber.GetSchemaVersion(),
+				states:        make(map[string]*kmsv1.ReleaseSubscriberState),
 			}
 			instances[key] = instance
 		}
@@ -1031,13 +1130,17 @@ func sortedReleaseSubscriberKeys(instances map[releaseSubscriberInstanceKey]*rel
 		if keys[i].client != keys[j].client {
 			return keys[i].client < keys[j].client
 		}
+		if keys[i].schemaVersion != keys[j].schemaVersion {
+			return keys[i].schemaVersion < keys[j].schemaVersion
+		}
 		return keys[i].instance < keys[j].instance
 	})
 	return keys
 }
 
-// releaseSubscriberLag is how many activations an instance is behind the
-// namespace's current revision.
+// releaseSubscriberLag is the difference between the active release's global
+// revision for this schema track and the newest revision reported by the
+// instance. Global revisions can include changes outside this track.
 func releaseSubscriberLag(instance *releaseSubscriberInstanceStatus, currentRevision uint64) uint64 {
 	if currentRevision > instance.latestRevision {
 		return currentRevision - instance.latestRevision
@@ -1056,15 +1159,16 @@ type releaseSubscriberStateJSON struct {
 // releaseSubscriberJSON is one row of `release subscribers`. A state the
 // instance never reported is null, the JSON form of the table's "-".
 type releaseSubscriberJSON struct {
-	Identity  string                      `json:"identity"`
-	Client    string                      `json:"client"`
-	Instance  string                      `json:"instance"`
-	Received  *releaseSubscriberStateJSON `json:"received"`
-	Prepared  *releaseSubscriberStateJSON `json:"prepared"`
-	Applied   *releaseSubscriberStateJSON `json:"applied"`
-	Rejected  *releaseSubscriberStateJSON `json:"rejected"`
-	Lag       uint64                      `json:"lag"`
-	Connected bool                        `json:"connected"`
+	Identity      string                      `json:"identity"`
+	Client        string                      `json:"client"`
+	Instance      string                      `json:"instance"`
+	Received      *releaseSubscriberStateJSON `json:"received"`
+	Prepared      *releaseSubscriberStateJSON `json:"prepared"`
+	Applied       *releaseSubscriberStateJSON `json:"applied"`
+	Rejected      *releaseSubscriberStateJSON `json:"rejected"`
+	Lag           uint64                      `json:"lag"`
+	Connected     bool                        `json:"connected"`
+	SchemaVersion uint64                      `json:"schema_version"`
 }
 
 func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseSubscriberStateJSON {
@@ -1078,41 +1182,42 @@ func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseS
 	}
 }
 
-func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) []releaseSubscriberJSON {
+func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) []releaseSubscriberJSON {
 	items := make([]releaseSubscriberJSON, 0, len(instances))
 	for _, key := range sortedReleaseSubscriberKeys(instances) {
 		instance := instances[key]
 		items = append(items, releaseSubscriberJSON{
-			Identity:  instance.identity,
-			Client:    instance.client,
-			Instance:  instance.instance,
-			Received:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateReceived]),
-			Prepared:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStatePrepared]),
-			Applied:   releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateApplied]),
-			Rejected:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateRejected]),
-			Lag:       releaseSubscriberLag(instance, currentRevision),
-			Connected: instance.connected,
+			Identity:      instance.identity,
+			Client:        instance.client,
+			Instance:      instance.instance,
+			Received:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateReceived]),
+			Prepared:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStatePrepared]),
+			Applied:       releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateApplied]),
+			Rejected:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateRejected]),
+			Lag:           releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]),
+			Connected:     instance.connected,
+			SchemaVersion: instance.schemaVersion,
 		})
 	}
 	return items
 }
 
-func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) {
+func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) {
 	keys := sortedReleaseSubscriberKeys(instances)
 	rows := make([][]string, 0, len(keys))
 	for _, key := range keys {
 		instance := instances[key]
 		rows = append(rows, []string{
-			instance.identity, instance.client, instance.instance,
+			instance.identity, instance.client, instance.instance, strconv.FormatUint(instance.schemaVersion, 10),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateReceived]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateApplied]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateRejected]),
-			strconv.FormatUint(releaseSubscriberLag(instance, currentRevision), 10),
+			strconv.FormatUint(releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]), 10),
 			strconv.FormatBool(instance.connected),
 		})
 	}
-	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "LAG", "CONNECTED"}, rows)
+	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "REVISION LAG", "CONNECTED"}, rows)
 }
 
 func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {

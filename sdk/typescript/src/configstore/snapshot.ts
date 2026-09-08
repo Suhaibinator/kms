@@ -63,9 +63,9 @@ export class ReleaseIdentity {
 
   toString(): string {
     if (!this.namespace && !this.name) {
-      return `release@${this.version}#${this.activationRevision}`;
+      return `release@${this.version}#${this.activationRevision} schemaVersion=${this.schemaVersion}`;
     }
-    return `${this.namespace}/${this.name}@${this.version}#${this.activationRevision}`;
+    return `${this.namespace}/${this.name}@${this.version}#${this.activationRevision} schemaVersion=${this.schemaVersion}`;
   }
 
   toJSON(): Readonly<Record<string, string>> {

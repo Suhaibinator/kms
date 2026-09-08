@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ type ReleaseRegistration struct {
 	Namespace        domain.NamespaceRef
 	NamespaceID      int64
 	Name             string
+	SchemaVersion    uint64
 	ClientName       string
 	InstanceID       string
 	Identity         string
@@ -22,11 +24,13 @@ type ReleaseRegistration struct {
 }
 
 type ReleaseEvent struct {
-	Release   domain.ConfigurationRelease
-	Namespace domain.NamespaceRef
-	Name      string
-	Version   uint64
-	Revision  uint64
+	Release       domain.ConfigurationRelease
+	Namespace     domain.NamespaceRef
+	Name          string
+	SchemaVersion uint64
+	NamespaceID   int64
+	Version       uint64
+	Revision      uint64
 }
 
 type ReleaseBacklog struct {
@@ -60,7 +64,7 @@ type ReleaseSubscription struct {
 func (s *ReleaseSubscription) RecordAcknowledgement(a domain.ReleaseAcknowledgement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if a.ActivationRevision >= s.acknowledgement.ActivationRevision {
+	if a.Namespace == s.reg.Namespace && a.ReleaseName == s.reg.Name && a.SchemaVersion == s.reg.SchemaVersion && a.ActivationRevision >= s.acknowledgement.ActivationRevision {
 		s.acknowledgement = domain.ReleaseAcknowledgement{State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision}
 	}
 }
@@ -71,7 +75,7 @@ func (s *ReleaseSubscription) describe() domain.Subscriber {
 	return domain.Subscriber{
 		ClientName: s.reg.ClientName, InstanceID: s.reg.InstanceID, Identity: s.reg.Identity,
 		Namespaces: []domain.NamespaceRef{s.reg.Namespace}, RemoteAddr: s.reg.RemoteAddr, ConnectedAt: s.connectedAt,
-		ReleaseName: s.reg.Name, ReleaseState: s.acknowledgement.State,
+		ReleaseName: s.reg.Name, SchemaVersion: s.reg.SchemaVersion, ReleaseState: s.acknowledgement.State,
 		ReleaseVersion: s.acknowledgement.ReleaseVersion, ReleaseRevision: s.acknowledgement.ActivationRevision,
 	}
 }
@@ -87,14 +91,14 @@ func (s *ReleaseSubscription) Close() {
 	s.closeOnce.Do(func() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); close(s.done); s.hub.removeRelease(s.id) })
 }
 func (s *ReleaseSubscription) matches(e domain.ChangeLogEntry) bool {
-	return e.ResourceType == domain.ResourceConfigurationRelease && e.Ref.NS == s.reg.Namespace && e.Ref.Key == s.reg.Name &&
+	return e.ResourceType == domain.ResourceConfigurationRelease && e.Ref.NS == s.reg.Namespace && e.Ref.Key == s.reg.Name && e.SchemaVersion == s.reg.SchemaVersion &&
 		s.reg.NamespaceID > 0 && e.NamespaceID == s.reg.NamespaceID
 }
 
 func (s *ReleaseSubscription) offer(e domain.ChangeLogEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || e.Revision <= s.lastSent {
+	if s.closed || !s.matches(e) || e.Revision <= s.lastSent {
 		return
 	}
 	if !s.ready {
@@ -106,7 +110,7 @@ func (s *ReleaseSubscription) offer(e domain.ChangeLogEntry) {
 }
 
 func (s *ReleaseSubscription) deliverLocked(e domain.ChangeLogEntry) {
-	ev := ReleaseEvent{Namespace: e.Ref.NS, Name: e.Ref.Key, Version: e.Version, Revision: e.Revision}
+	ev := ReleaseEvent{Namespace: e.Ref.NS, Name: e.Ref.Key, Version: e.Version, Revision: e.Revision, SchemaVersion: e.SchemaVersion, NamespaceID: e.NamespaceID}
 	select {
 	case s.events <- ev:
 	default:
@@ -154,6 +158,11 @@ func (h *Hub) SubscribeRelease(ctx context.Context, reg ReleaseRegistration) (*R
 	if current.ID != reg.NamespaceID {
 		return nil, domain.Errorf(domain.ErrAborted, "namespace %s changed during subscribe; retry", reg.Namespace)
 	}
+	if reg.SchemaVersion != 0 {
+		if _, err := rs.GetConfigurationSchema(ctx, reg.Namespace.App, reg.Name, reg.SchemaVersion); err != nil {
+			return nil, err
+		}
+	}
 	sub := &ReleaseSubscription{hub: h, reg: reg, connectedAt: h.now(), events: make(chan ReleaseEvent, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	h.nextID++
@@ -196,7 +205,7 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 					break
 				}
 				cursor = e.Revision
-				if e.ResourceType != domain.ResourceConfigurationRelease || e.Ref.NS != reg.Namespace || e.Ref.Key != reg.Name {
+				if e.ResourceType != domain.ResourceConfigurationRelease || e.Ref.NS != reg.Namespace || e.Ref.Key != reg.Name || e.SchemaVersion != reg.SchemaVersion {
 					continue
 				}
 				if e.NamespaceID == 0 {
@@ -206,11 +215,15 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 				if e.NamespaceID != reg.NamespaceID {
 					continue
 				}
-				rel, err := rs.GetConfigurationRelease(ctx, reg.Namespace, reg.Name, e.Version)
+				rel, err := rs.GetConfigurationRelease(ctx, reg.Track(), e.Version)
+				if errors.Is(err, domain.ErrNotFound) {
+					canReplay = false
+					break
+				}
 				if err != nil {
 					return ReleaseBacklog{}, err
 				}
-				events = append(events, ReleaseEvent{Release: rel, Namespace: reg.Namespace, Name: reg.Name, Version: e.Version, Revision: e.Revision})
+				events = append(events, ReleaseEvent{Release: rel, Namespace: reg.Namespace, Name: reg.Name, Version: e.Version, Revision: e.Revision, SchemaVersion: e.SchemaVersion, NamespaceID: e.NamespaceID})
 			}
 			if !canReplay {
 				break
@@ -229,18 +242,28 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 			// unrelated resources; an empty filtered replay must not leave a
 			// reconnecting subscriber waiting indefinitely for another activation.
 			if len(events) == 0 {
-				return releaseSnapshotBacklog(ctx, rs, reg)
+				return releaseSnapshotBacklog(ctx, rs, reg, current)
 			}
 			return ReleaseBacklog{Events: events, Revision: current}, nil
 		}
 	}
-	return releaseSnapshotBacklog(ctx, rs, reg)
+	return releaseSnapshotBacklog(ctx, rs, reg, current)
 }
 
-func releaseSnapshotBacklog(ctx context.Context, rs storage.ReleaseStore, reg ReleaseRegistration) (ReleaseBacklog, error) {
-	active, err := rs.GetActiveConfigurationRelease(ctx, reg.Namespace, reg.Name)
+func releaseSnapshotBacklog(ctx context.Context, rs storage.ReleaseStore, reg ReleaseRegistration, current uint64) (ReleaseBacklog, error) {
+	active, err := rs.GetActiveConfigurationRelease(ctx, reg.Track())
+	if errors.Is(err, domain.ErrNotFound) {
+		return ReleaseBacklog{IsSnapshot: true, Revision: current}, nil
+	}
 	if err != nil {
 		return ReleaseBacklog{}, err
 	}
-	return ReleaseBacklog{IsSnapshot: true, Events: []ReleaseEvent{{Release: active.Release, Namespace: reg.Namespace, Name: reg.Name, Version: active.Release.Version, Revision: active.ActivationRevision}}, Revision: active.ActivationRevision}, nil
+	// The snapshot event retains the activation identity needed for ACKs. The
+	// stream cursor also includes unrelated changes already scanned. The active
+	// read may observe an activation committed after CurrentRevision was read.
+	return ReleaseBacklog{IsSnapshot: true, Events: []ReleaseEvent{{Release: active.Release, Namespace: reg.Namespace, Name: reg.Name, Version: active.Release.Version, Revision: active.ActivationRevision, SchemaVersion: reg.SchemaVersion, NamespaceID: reg.NamespaceID}}, Revision: max(current, active.ActivationRevision)}, nil
+}
+
+func (r ReleaseRegistration) Track() domain.ReleaseTrack {
+	return domain.ReleaseTrack{Namespace: r.Namespace, Name: r.Name, SchemaVersion: r.SchemaVersion}
 }

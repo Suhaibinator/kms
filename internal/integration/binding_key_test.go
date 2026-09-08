@@ -158,11 +158,11 @@ func TestUnbindCreatesNewVersionAndPreservesReleasePinnedSource(t *testing.T) {
 	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", ""); err != nil || string(got.Value) != "stable-value" {
 		t.Fatalf("new unbound read=%q err=%v", got.Value, err)
 	}
-	storedOld, err := h.svc.GetConfigurationRelease(ctx, h.admin, ref.NS, "runtime", oldRelease.Version)
+	storedOld, err := h.svc.GetConfigurationRelease(ctx, h.admin, oldRelease.Track(), oldRelease.Version)
 	if err != nil || storedOld.Digest != oldRelease.Digest || storedOld.Entries[0].Version != 1 {
 		t.Fatalf("old release changed: %+v err=%v", storedOld, err)
 	}
-	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", oldRelease.Version); err != nil || len(validation) != 0 {
+	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, oldRelease.Track(), oldRelease.Version); err != nil || len(validation) != 0 {
 		t.Fatalf("old release validation=%+v err=%v", validation, err)
 	}
 	newRelease, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
@@ -249,7 +249,7 @@ func TestPurgeUnboundVersionsBypassesReleasePinsAndPreservesBoundVersions(t *tes
 		t.Fatal(err)
 	}
 	zero := uint64(0)
-	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version, &zero); err != nil || !changed {
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, release.Track(), release.Version, &zero); err != nil || !changed {
 		t.Fatalf("activate release changed=%v err=%v", changed, err)
 	}
 	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, false); err != nil {
@@ -276,7 +276,7 @@ func TestPurgeUnboundVersionsBypassesReleasePinsAndPreservesBoundVersions(t *tes
 	if err != nil || info.Labels[domain.LabelCurrent] != 3 || info.Labels[domain.LabelPrevious] != 2 {
 		t.Fatalf("labels moved during purge: info=%+v err=%v", info, err)
 	}
-	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version); err != nil || len(validation) == 0 {
+	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, release.Track(), release.Version); err != nil || len(validation) == 0 {
 		t.Fatalf("purged release validation=%+v err=%v", validation, err)
 	}
 	created, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("new-v4")})
@@ -325,7 +325,7 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 		t.Fatalf("CreateConfigurationRelease: %v", err)
 	}
 	zero := uint64(0)
-	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", release.Version, &zero); err != nil || !changed {
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, release.Track(), release.Version, &zero); err != nil || !changed {
 		t.Fatalf("ActivateConfigurationRelease changed=%v err=%v", changed, err)
 	}
 	if _, err := h.svc.DestroySecretVersion(ctx, h.admin, ref, 2); !errors.Is(err, domain.ErrFailedPrecondition) {
@@ -415,19 +415,19 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 		}
 	}
 
-	storedRelease, err := h.svc.GetConfigurationRelease(ctx, h.admin, ns, "runtime", release.Version)
+	storedRelease, err := h.svc.GetConfigurationRelease(ctx, h.admin, release.Track(), release.Version)
 	if err != nil || storedRelease.Digest != release.Digest || len(storedRelease.Entries) != 1 || storedRelease.Entries[0].Version != 2 {
 		t.Fatalf("immutable release manifest changed after purge: %+v err=%v", storedRelease, err)
 	}
-	active, err := h.svc.GetActiveConfigurationRelease(ctx, h.admin, ns, "runtime")
+	active, err := h.svc.GetActiveConfigurationRelease(ctx, h.admin, release.Track())
 	if err != nil || active.Release.Version != release.Version {
 		t.Fatalf("active release label changed after purge: %+v err=%v", active, err)
 	}
-	validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", release.Version)
+	validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, release.Track(), release.Version)
 	if err != nil || !hasReleaseValidationError(validation, "api_key", domain.ReleaseValidationUnreadable) {
 		t.Fatalf("validation after purge = %+v err=%v", validation, err)
 	}
-	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, release.Track(), release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
 		t.Fatalf("activation of purged pin changed=%v err=%v, want validation failure", changed, err)
 	}
 

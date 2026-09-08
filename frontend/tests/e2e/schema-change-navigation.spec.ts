@@ -1,6 +1,54 @@
+import type { ApplicationOverview } from "@/lib/types";
 import { expect, test } from "@playwright/test";
 import ready from "../fixtures/backend/overview-ready.json";
 import { incidentState, mockConsole } from "./fakes/console-api";
+
+test("switches duplicate release versions by the schema URL identity", async ({ page }) => {
+  await mockConsole(page, incidentState());
+  const track1 = structuredClone(ready);
+  const track2 = structuredClone(ready);
+  for (const [version, overview] of [
+    [1, track1],
+    [2, track2],
+  ] as const) {
+    overview.application.schema_version = version;
+    overview.application.description = `schema track ${version}`;
+    for (const environment of overview.environments) {
+      if (environment.release.active) {
+        environment.release.active.version = 1;
+        environment.release.active.schema_version = version;
+      }
+    }
+  }
+  await page.route("**/api/v1/applications/overview?**", (route) => {
+    const version = Number(new URL(route.request().url()).searchParams.get("schema_version"));
+    return route.fulfill({ json: version === 2 ? track2 : track1 });
+  });
+  await page.route("**/api/v1/configuration-schemas?**", (route) =>
+    route.fulfill({
+      json: {
+        schemas: [1, 2].map((version) => ({
+          application: "gradethis",
+          release_name: "runtime",
+          version,
+          digest: `sha256:track${version}`,
+          schema_json: "{}",
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: version,
+        })),
+        next_page_token: "",
+      },
+    }),
+  );
+
+  await page.goto("/applications?app=gradethis&schema_version=1");
+  await expect(page.getByText("schema track 1")).toBeVisible();
+  await page.getByRole("combobox", { name: "Schema version" }).selectOption("2");
+  await expect(page).toHaveURL(/schema_version=2/);
+  await expect(page.getByText("schema track 2")).toBeVisible();
+  await expect(page.getByText("schema track 1")).toHaveCount(0);
+});
 
 test("finds changed fields and fixes a validation problem in a large upgrade", async ({
   page,
@@ -208,4 +256,70 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
     .locator("[data-modal-body]")
     .evaluate((el) => ({ client: el.clientWidth, scroll: el.scrollWidth }));
   expect(geometry.scroll).toBeLessThanOrEqual(geometry.client);
+});
+
+test("registry upgrades explicitly choose an active source before opening the destination", async ({
+  page,
+}) => {
+  await mockConsole(page, incidentState());
+  const source = structuredClone(ready);
+  source.application.schema_version = 1;
+  for (const environment of source.environments)
+    if (environment.release.active) environment.release.active.schema_version = 1;
+  const target = structuredClone(source) as unknown as ApplicationOverview;
+  target.application.schema_version = 2;
+  for (const environment of target.environments) environment.release.active = undefined;
+  await page.route("**/api/v1/applications/overview?**", (route) => {
+    const version = Number(new URL(route.request().url()).searchParams.get("schema_version"));
+    const selected = structuredClone(source);
+    selected.application.schema_version = version;
+    for (const environment of selected.environments)
+      if (environment.release.active) environment.release.active.schema_version = version;
+    return route.fulfill({ json: version < 2 ? selected : target });
+  });
+  await page.route("**/api/v1/configuration-schemas**", (route) =>
+    route.fulfill({
+      json: {
+        schemas: [2, 1].map((version) => ({
+          application: "gradethis",
+          release_name: "runtime",
+          version,
+          digest: `sha256:track${version}`,
+          schema_json: "{}",
+          contract: source.application.contract,
+          metadata_json: "{}",
+          created_by: "admin",
+          created_at_unix_ms: version,
+        })),
+        next_page_token: "",
+      },
+    }),
+  );
+  await page.goto("/releases?tab=schemas");
+  await page
+    .getByRole("row")
+    .filter({ hasText: "gradethis/runtime@2" })
+    .getByRole("button", { name: "View" })
+    .click();
+  await page.getByRole("link", { name: "Set up an upgrade" }).click();
+  await expect(page.getByRole("heading", { name: "Choose upgrade source" })).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Source track and environment" })
+    .selectOption(JSON.stringify([1, "dev"]));
+  await page.getByRole("button", { name: "Continue upgrade" }).click();
+  await expect(page).toHaveURL(/schema_version=1/);
+  await expect(page).toHaveURL(/migrate=2/);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("combobox", { name: "Target registered schema" })).toHaveValue("2");
+  await expect(dialog.getByRole("combobox", { name: "Destination environment" })).toHaveValue(
+    "dev",
+  );
+  await page.goto("/applications?app=gradethis&schema_version=0&env=dev&migrate=2");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose upgrade source" })).toHaveCount(0);
+  await expect(page).toHaveURL(/schema_version=0/);
+  await expect(
+    page.getByRole("dialog").getByRole("region", { name: "Upgrade scope" }),
+  ).toContainText("Use schema v0 as the source for schema v2");
 });

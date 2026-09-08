@@ -3,6 +3,7 @@ package kmsv1
 import (
 	"testing"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -35,7 +36,9 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		{"ConfigurationReleaseEntry", fields("alias", "kind", "ref", "version", "content_type", "metadata_json", "parameter_digest")},
 		{"ConfigurationRelease", fields("namespace", "name", "version", "schema_version", "entries", "digest", "metadata_json", "created_by", "created_at_unix_ms")},
 		{"CreateReleaseRequest", fields("namespace", "name", "schema_version", "entries", "metadata_json")},
-		{"ConfigurationSchema", fields("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name")},
+		{"ReleaseAcknowledgement", fields("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence")},
+		{"ReleaseAcknowledgementRejectedEvent", fields("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason")},
+		{"ConfigurationSchema", fields("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name", "contract", "contract_established")},
 		{"CreateSchemaRequest", fields("schema_json", "metadata_json", "application")},
 		{"GetSchemaRequest", fields("version", "application", "release_name")},
 		{"ListSchemasRequest", fields("page_size", "page_token", "application", "release_name")},
@@ -175,5 +178,38 @@ func TestRemovedSecretTokenFieldsAreReserved(t *testing.T) {
 		if descriptor.Fields().ByName(retired.name) != nil || descriptor.Fields().ByNumber(retired.number) != nil || !descriptor.ReservedNames().Has(retired.name) || !descriptor.ReservedRanges().Has(retired.number) {
 			t.Errorf("%s.%s (%d) must remain removed and reserved", retired.message, retired.name, retired.number)
 		}
+	}
+}
+
+// Missing schema selection and explicitly selecting schema zero must remain
+// distinguishable across a wire round trip, so legacy clients cannot silently
+// attach to a different schema track.
+func TestReleaseTrackSchemaSelectionPresence(t *testing.T) {
+	tests := []proto.Message{
+		&GetActiveReleaseRequest{SchemaVersion: proto.Uint64(0)},
+		&GetReleaseRequest{SchemaVersion: proto.Uint64(0)},
+		&ValidateReleaseRequest{SchemaVersion: proto.Uint64(0)},
+		&ActivateReleaseRequest{SchemaVersion: proto.Uint64(0)},
+		&ReleaseWatchRegistration{SchemaVersion: proto.Uint64(0)},
+	}
+	for _, message := range tests {
+		t.Run(string(message.ProtoReflect().Descriptor().Name()), func(t *testing.T) {
+			wire, err := proto.Marshal(message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := message.ProtoReflect().New().Interface()
+			if err := proto.Unmarshal(wire, decoded); err != nil {
+				t.Fatal(err)
+			}
+			field := decoded.ProtoReflect().Descriptor().Fields().ByName("schema_version")
+			if !decoded.ProtoReflect().Has(field) || decoded.ProtoReflect().Get(field).Uint() != 0 {
+				t.Fatal("explicit schema zero lost its presence in transport")
+			}
+			proto.Reset(decoded)
+			if decoded.ProtoReflect().Has(field) {
+				t.Fatal("absent selection has presence")
+			}
+		})
 	}
 }

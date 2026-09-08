@@ -49,8 +49,58 @@ func TestCandidateErrorClassifiesUnwrapsAndRedacts(t *testing.T) {
 
 func TestOptionsAndManagerFormattingRedactBindingKeys(t *testing.T) {
 	const canary = "configstore-binding-key-format-canary"
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	zero, positive := uint64(0), uint64(17)
+	for _, test := range []struct {
+		name          string
+		schemaVersion *uint64
+		schemaSHA256  string
+		wantSelector  string
+		wantJSON      string
+	}{
+		{name: "zero", schemaVersion: &zero, wantSelector: `schema_version=0 schema_sha256=""`, wantJSON: `{"release":"runtime","schema_version":0,"contract_entries":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "positive", schemaVersion: &positive, wantSelector: `schema_version=17 schema_sha256=""`, wantJSON: `{"release":"runtime","schema_version":17,"contract_entries":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "unset", wantSelector: `schema_version=<unset> schema_sha256=""`, wantJSON: `{"release":"runtime","contract_entries":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "digest", schemaSHA256: digest, wantSelector: `schema_version=<unset> schema_sha256="` + digest + `"`, wantJSON: `{"release":"runtime","schema_sha256":"` + digest + `","contract_entries":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := Options{
+				Release:       "runtime",
+				SchemaVersion: test.schemaVersion,
+				SchemaSHA256:  test.schemaSHA256,
+				BindingKeys:   map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
+				Callbacks:     Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) }},
+			}
+			want := `Options{release="runtime" ` + test.wantSelector + ` contract_entries=0 reconcile_interval=0s max_concurrent_fetches=0 instance_id=""}`
+			for format, rendered := range map[string]string{
+				"String":   options.String(),
+				"GoString": options.GoString(),
+				"%v":       fmt.Sprintf("%v", options),
+				"%+v":      fmt.Sprintf("%+v", options),
+				"%#v":      fmt.Sprintf("%#v", options),
+				"%s":       fmt.Sprintf("%s", options),
+			} {
+				if rendered != want {
+					t.Errorf("%s = %q, want %q", format, rendered, want)
+				}
+			}
+			if rendered := fmt.Sprintf("%q", options); rendered != fmt.Sprintf("%q", want) {
+				t.Errorf("%%q = %q, want quoted %q", rendered, want)
+			}
+			encoded, err := json.Marshal(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.wantJSON {
+				t.Errorf("JSON = %s, want %s", encoded, test.wantJSON)
+			}
+		})
+	}
+
 	options := Options{
-		Release: "runtime", BindingKeys: map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
+		Release: "runtime", SchemaVersion: &positive,
+		BindingKeys: map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
+		Callbacks:   Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) }},
 	}
 	manager := unitManager(options, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, nil
@@ -215,7 +265,7 @@ func TestDefaultMismatchReportNormalizesUnsafeCallerPath(t *testing.T) {
 
 func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	identity := ReleaseIdentityFromSnapshot(kmsclient.ReleaseSnapshot{})
-	if !identity.IsZero() || strings.Contains(identity.String(), "[REDACTED]") {
+	if !identity.IsZero() || identity.String() != "release@0#0 schema_version=0" || strings.Contains(identity.String(), "[REDACTED]") {
 		t.Fatalf("unexpected zero identity: %s", identity.String())
 	}
 	encoded, err := json.Marshal(identity)
@@ -224,6 +274,10 @@ func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "entries") || strings.Contains(string(encoded), "metadata") {
 		t.Fatalf("identity JSON contains candidate data: %s", encoded)
+	}
+	nonzero := ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8, schemaVersion: 17}
+	if got := fmt.Sprintf("%+v", nonzero); got != "prod/app/runtime@4#8 schema_version=17" {
+		t.Fatalf("nonzero identity = %q", got)
 	}
 }
 
@@ -241,7 +295,7 @@ func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
 	}
 	report := newCandidateRejectionReport(
 		RejectRestartRequired,
-		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8},
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8, schemaVersion: 17},
 		candidateErr.pathsCopy(),
 	)
 	paths := report.Paths()
@@ -263,6 +317,9 @@ func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
 		if strings.Contains(rendered, canary) || strings.Contains(rendered, "INJECTED") {
 			t.Fatalf("candidate rejection report leaked unsafe data: %q", rendered)
 		}
+	}
+	if !strings.Contains(report.String(), "schema_version=17") {
+		t.Fatalf("candidate rejection report omitted schema identity: %q", report.String())
 	}
 	if report.Category() != RejectRestartRequired || report.Release().Version() != 4 {
 		t.Fatalf("report identity/category = %s/%s", report.Category(), report.Release())

@@ -2,10 +2,41 @@ package kmsclient
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestReleaseFormattingIncludesSchemaIdentityWithoutValues(t *testing.T) {
+	const metadataCanary = "metadata-canary"
+	manifest := ReleaseManifest{
+		namespace: "prod/app", name: "runtime", version: 1, activationRevision: 2,
+		schemaVersion: 0, metadataJSON: metadataCanary,
+	}
+	for _, got := range []string{manifest.String(), fmt.Sprintf("%+v", manifest), fmt.Sprintf("%#v", manifest)} {
+		if !strings.Contains(got, "ReleaseManifest{prod/app/runtime") ||
+			!strings.Contains(got, "schema_version=0") || strings.Contains(got, metadataCanary) {
+			t.Fatalf("manifest formatting lost identity or exposed metadata: %q", got)
+		}
+	}
+
+	const secretCanary = "snapshot-secret-canary"
+	const parameterCanary = "snapshot-parameter-canary"
+	snapshot := ReleaseSnapshot{
+		namespace: "prod/app", name: "runtime", version: 3, activationRevision: 4,
+		schemaVersion: 17, metadataJSON: metadataCanary,
+		parameters: map[string]ReleaseParameter{"runtime": {value: parameterCanary}},
+		secrets:    map[string]Secret{"database": NewSecret([]byte(secretCanary))},
+	}
+	for _, got := range []string{snapshot.String(), fmt.Sprintf("%+v", snapshot), fmt.Sprintf("%#v", snapshot)} {
+		if !strings.Contains(got, "ReleaseSnapshot{prod/app/runtime") ||
+			!strings.Contains(got, "schema_version=17") ||
+			strings.Contains(got, metadataCanary) || strings.Contains(got, secretCanary) || strings.Contains(got, parameterCanary) {
+			t.Fatalf("snapshot formatting lost identity or exposed values: %q", got)
+		}
+	}
+}
 
 func TestReleaseSnapshotJSONPathsExcludeResolvedValues(t *testing.T) {
 	const secretCanary = "snapshot-secret-canary"

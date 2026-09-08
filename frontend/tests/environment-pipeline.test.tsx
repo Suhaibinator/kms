@@ -129,7 +129,7 @@ describe("EnvironmentPipeline", () => {
     const key = `${active.name}@${active.version}`;
     expect(within(prod).getByRole("link", { name: key })).toHaveAttribute(
       "href",
-      `/releases?app=${incident.application.name}&env=prod&name=${active.name}&release=${encodeURIComponent(key)}`,
+      `/releases?app=${incident.application.name}&env=prod&name=${active.name}&schema_version=${active.schema_version}&release=${encodeURIComponent(`${active.name}@${active.schema_version}:${active.version}`)}`,
     );
     expect(prod.querySelector(".ident-revision")).toHaveTextContent(
       `rev${active.activation_revision}`,
@@ -282,7 +282,7 @@ describe("EnvironmentPipeline", () => {
     );
     expect(within(menu).getByRole("menuitem", { name: "Releases" })).toHaveAttribute(
       "href",
-      `/releases?app=${app}&env=prod&name=${incident.application.release_name}`,
+      `/releases?app=${app}&env=prod&name=${incident.application.release_name}&schema_version=${incident.application.schema_version}`,
     );
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Connect SDK" }));
     expect(callbacks.onConnect).toHaveBeenCalledWith("prod");
@@ -373,13 +373,13 @@ describe("EnvironmentPipeline", () => {
     expect(within(column).queryByRole("link", { name: /other keys/ })).toBeNull();
   });
 
-  it("offers Edit contract when the contract has no aliases", () => {
+  it("offers Manage releases when the contract has no aliases", () => {
     const overview = clone(incident);
     env(overview, "dev").values = [];
     renderPipeline(overview);
     const column = screen.getByRole("region", { name: "dev environment" });
     expect(within(column).getByText("The contract has no aliases.")).toBeVisible();
-    fireEvent.click(within(column).getByRole("button", { name: "Edit contract" }));
+    fireEvent.click(within(column).getByRole("button", { name: "Manage releases" }));
     expect(callbacks.onEditContract).toHaveBeenCalledWith("dev");
   });
 
@@ -395,7 +395,7 @@ describe("EnvironmentPipeline", () => {
       `shipped ${formatRelative(active.created_at_unix_ms)} by ${active.created_by}`,
     );
     expect(meta).toHaveAttribute("title", formatUnixMs(active.created_at_unix_ms));
-    const latest = `${active.name}@${active.version + 3}`;
+    const latest = `${active.name}@${active.schema_version}:${active.version + 3}`;
     expect(
       within(column).getByRole("link", { name: `latest v${active.version + 3} not active` }),
     ).toHaveAttribute(
@@ -405,6 +405,7 @@ describe("EnvironmentPipeline", () => {
         env: "prod",
         name: active.name,
         release: latest,
+        schemaVersion: active.schema_version,
       }),
     );
     const dev = screen.getByRole("region", { name: "dev environment" });

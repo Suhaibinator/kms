@@ -51,6 +51,7 @@ CLASSIFIED = {
         "GetActiveRelease": "release-loader",
         "ListReleases": "release-tooling-out-of-scope",
         "WatchRelease": "release-loader",
+        "ResolveReleaseSchema": "release-loader",
     },
     "kms.v1.ConfigurationSchemaService": {
         "CreateSchema": "admin-out-of-scope",

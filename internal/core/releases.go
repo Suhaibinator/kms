@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
@@ -47,10 +48,11 @@ func (s *Service) auditProtectedReleaseReference(ctx context.Context, pr Princip
 	if !ok {
 		return
 	}
-	if _, err := rs.FindProtectedReleaseReference(ctx, ref, kind, version); err != nil {
+	protected, err := rs.FindProtectedReleaseReference(ctx, ref, kind, version)
+	if err != nil {
 		return
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.reference_blocked", kind, ref, namespaceID, version, "deny", map[string]string{"operation": operation})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.reference_blocked", kind, ref, namespaceID, version, "deny", releaseAuditMetadata(protected.SchemaVersion, 0, map[string]string{"operation": operation, "release_name": protected.ReleaseName, "release_version": strconv.FormatUint(protected.ReleaseVersion, 10)}))
 }
 
 func validateReleaseAddress(ns domain.NamespaceRef, name string) error {
@@ -72,6 +74,7 @@ type releaseCandidateValue struct {
 }
 
 func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, in domain.CreateConfigurationReleaseInput) (domain.ConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Name, SchemaVersion: in.SchemaVersion})
 	if err := validateReleaseAddress(in.Namespace, in.Name); err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
@@ -123,8 +126,8 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 // per-alias failures (missing, unreadable, denied, destroyed, oversized) are
 // reported as sanitized ReleaseValidationErrors instead; when any were
 // collected the contract check is skipped and the partially resolved candidate
-// is returned alongside them. collectErrors=true is the dry-run mode, so the
-// contract check also runs with adopt=false and nothing is ever written.
+// is returned alongside them. Candidate resolution never adopts a contract;
+// persistence establishes it atomically with the first release.
 // Structural input errors (bad alias, duplicate, unknown kind, invalid ref)
 // always abort.
 func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs storage.ReleaseStore, in domain.CreateConfigurationReleaseInput, collectErrors bool) (context.Context, domain.ConfigurationRelease, []domain.ReleaseValidationError, error) {
@@ -136,7 +139,10 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 	if len(validation) > 0 {
 		return ctx, release, validation, nil
 	}
-	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaVersion, entries, !collectErrors); err != nil {
+	// Candidate resolution must remain read only. The storage create transaction
+	// establishes an unadopted track contract together with the first release, so
+	// a failed create cannot leave an immutable contract behind on an empty track.
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaVersion, entries, false); err != nil {
 		return ctx, domain.ConfigurationRelease{}, nil, err
 	}
 	if in.SchemaVersion != 0 {
@@ -280,10 +286,15 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 	if !app.ArchivedAt.IsZero() {
 		return domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", appName)
 	}
-	if schemaVersion != app.SchemaVersion {
-		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires schema %s/%s@%d", appName, appName, app.ReleaseName, app.SchemaVersion)
+	rs, err := s.releaseStore()
+	if err != nil {
+		return err
 	}
-	if len(app.Contract) == 0 {
+	contract, err := rs.GetConfigurationSchemaContract(ctx, appName, releaseName, schemaVersion)
+	if err != nil {
+		return err
+	}
+	if contract == nil {
 		if !adopt {
 			return nil
 		}
@@ -295,11 +306,13 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 			}
 			fields = append(fields, field)
 		}
-		app, err = store.AdoptApplicationContract(ctx, appName, fields)
+		schema, err := rs.AdoptConfigurationSchemaContract(ctx, appName, releaseName, schemaVersion, fields)
 		if err != nil {
 			return err
 		}
+		contract = schema.Contract
 	}
+	app.Contract = contract
 	if len(entries) != len(app.Contract) {
 		return domain.Errorf(domain.ErrFailedPrecondition, "release does not match application %s contract", appName)
 	}
@@ -313,7 +326,9 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 	return nil
 }
 
-func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error) {
+func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
@@ -328,10 +343,12 @@ func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, ns 
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
-	return rs.GetConfigurationRelease(ctx, ns, name, version)
+	return rs.GetConfigurationRelease(ctx, track, version)
 }
 
-func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) (domain.ActiveConfigurationRelease, error) {
+func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ActiveConfigurationRelease{}, err
 	}
@@ -343,23 +360,11 @@ func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principa
 	if err != nil {
 		return domain.ActiveConfigurationRelease{}, err
 	}
-	return rs.GetActiveConfigurationRelease(ctx, ns, name)
+	return rs.GetActiveConfigurationRelease(ctx, track)
 }
 
-func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, page storage.ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
-	if err := keyutil.ValidateNamespace(ns); err != nil {
-		return nil, "", domain.Errorf(domain.ErrInvalidArgument, "%v", err)
-	}
-	if name != "" {
-		if err := keyutil.ValidateKey(name); err != nil {
-			return nil, "", domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
-		}
-	}
-	key := name
-	if key == "" {
-		key = "releases"
-	}
-	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseList, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: key})
+func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
+	ctx, err := s.authorizeReleaseList(ctx, pr, filter)
 	if err != nil {
 		return nil, "", err
 	}
@@ -367,10 +372,12 @@ func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, n
 	if err != nil {
 		return nil, "", err
 	}
-	return rs.ListConfigurationReleases(ctx, ns, name, page)
+	return rs.ListConfigurationReleases(ctx, filter, page)
 }
 
-func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, version uint64) ([]domain.ReleaseValidationError, error) {
+func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64) ([]domain.ReleaseValidationError, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return nil, err
 	}
@@ -385,7 +392,7 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return nil, err
 	}
-	validation, err := s.validateConfigurationRelease(ctx, pr, rs, ns, name, version, true)
+	validation, err := s.validateConfigurationRelease(ctx, pr, rs, track, version, true)
 	if err != nil {
 		return nil, err
 	}
@@ -401,12 +408,15 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 // release. Keeping this separate from the public validation operation lets
 // activation enforce the same checks without requiring a second, unrelated
 // configuration_release.validate permission.
-func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal, rs storage.ReleaseStore, ns domain.NamespaceRef, name string, version uint64, authorizeEntries bool) ([]domain.ReleaseValidationError, error) {
-	rel, err := rs.GetConfigurationRelease(ctx, ns, name, version)
+func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal, rs storage.ReleaseStore, track domain.ReleaseTrack, version uint64, authorizeEntries bool) ([]domain.ReleaseValidationError, error) {
+	rel, err := rs.GetConfigurationRelease(ctx, track, version)
 	if err != nil {
 		return nil, err
 	}
-	return s.validatePersistedReleaseEntries(ctx, pr, rs, ns, rel, authorizeEntries, true)
+	if rel.Track() != track {
+		return nil, domain.Errorf(domain.ErrFailedPrecondition, "release does not match requested schema track")
+	}
+	return s.validatePersistedReleaseEntries(ctx, pr, rs, track.Namespace, rel, authorizeEntries, true)
 }
 
 func persistedReleaseIntegrityViolations(home domain.NamespaceRef, rel domain.ConfigurationRelease) []domain.ReleaseValidationError {
@@ -563,7 +573,9 @@ func (s *Service) validateReleaseValues(ctx context.Context, pr Principal, rs st
 	return validation, nil
 }
 
-func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, version uint64, expectedCurrent *uint64) (domain.ActiveConfigurationRelease, bool, error) {
+func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64, expectedCurrent *uint64) (domain.ActiveConfigurationRelease, bool, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
@@ -578,7 +590,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
-	validation, err := s.validateConfigurationRelease(ctx, pr, rs, ns, name, version, false)
+	validation, err := s.validateConfigurationRelease(ctx, pr, rs, track, version, false)
 	if err != nil {
 		s.m().ReleaseOutcome(ReleaseOutcomeError)
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "error", nil)
@@ -589,7 +601,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "deny", map[string]string{"error_count": strconv.Itoa(len(validation)), "reason": "validation_failed"})
 		return domain.ActiveConfigurationRelease{}, false, domain.NewReleaseValidationFailedError(validation)
 	}
-	active, changed, err := rs.ActivateConfigurationRelease(ctx, ns, name, version, expectedCurrent)
+	active, changed, err := rs.ActivateConfigurationRelease(ctx, track, version, expectedCurrent)
 	if err != nil {
 		decision := "error"
 		event := "configuration_release.activate"
@@ -620,9 +632,9 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 			outcome = ReleaseOutcomeRolledBack
 		}
 		s.m().ReleaseOutcome(outcome)
-		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
+		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", releaseAuditMetadata(track.SchemaVersion, active.ActivationRevision, map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)}))
 		s.getHub().Wake()
-		s.notifyReleaseSubscribers(ns, name)
+		s.notifyReleaseSubscribers(track)
 	}
 	return active, changed, nil
 }
@@ -631,7 +643,9 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 // guarded by an optional expectation on the currently active version. It is
 // authorized like activation and audited by activation's event classification
 // (configuration_release.rollback).
-func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, expectedCurrent *uint64) (domain.RollbackResult, error) {
+func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, expectedCurrent *uint64) (domain.RollbackResult, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.RollbackResult{}, err
 	}
@@ -643,7 +657,7 @@ func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return domain.RollbackResult{}, err
 	}
-	active, err := rs.GetActiveConfigurationRelease(ctx, ns, name)
+	active, err := rs.GetActiveConfigurationRelease(ctx, track)
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.RollbackResult{}, domain.Errorf(domain.ErrFailedPrecondition, "release %s has no active version to roll back", name)
 	}
@@ -659,21 +673,23 @@ func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.cas_conflict", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, active.PreviousVersion, "deny", map[string]string{"reason": "rollback"})
 		return domain.RollbackResult{}, domain.Errorf(domain.ErrAborted, "release %s is at version %d, expected %d", name, current, *expectedCurrent)
 	}
-	next, changed, err := s.ActivateConfigurationRelease(ctx, pr, ns, name, active.PreviousVersion, &current)
+	next, changed, err := s.ActivateConfigurationRelease(ctx, pr, track, active.PreviousVersion, &current)
 	if err != nil {
 		return domain.RollbackResult{}, err
 	}
 	return domain.RollbackResult{Active: next, RolledBackFrom: current, Changed: changed}, nil
 }
 
-func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
-	_, err := s.AuthorizeReleaseWatchContext(ctx, pr, ns, name)
+func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, track domain.ReleaseTrack) error {
+	_, err := s.AuthorizeReleaseWatchContext(ctx, pr, track)
 	return err
 }
 
 // AuthorizeReleaseWatchContext returns the namespace-incarnation-bound context
 // that must be used for the initial release snapshot and connection lifecycle.
-func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) (context.Context, error) {
+func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal, track domain.ReleaseTrack) (context.Context, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
+	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return ctx, err
 	}
@@ -687,14 +703,16 @@ func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal
 	return bound, nil
 }
 
-func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
+func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, track domain.ReleaseTrack) error {
+	ctx = withReleaseAuditTrack(ctx, track)
 	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
 		return err
 	}
-	return s.AuthorizeReleaseWatch(ctx, pr, ns, name)
+	return s.AuthorizeReleaseWatch(ctx, pr, track)
 }
 
 func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Principal, ack domain.ReleaseAcknowledgement) error {
+	ctx = withReleaseAuditTrack(ctx, ack.Track())
 	if err := validateReleaseAddress(ack.Namespace, ack.ReleaseName); err != nil {
 		return err
 	}
@@ -743,36 +761,29 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err != nil {
 		return err
 	}
-	if _, err := rs.GetConfigurationRelease(ctx, ack.Namespace, ack.ReleaseName, ack.ReleaseVersion); err != nil {
-		return err
-	}
-	exists, err := rs.ConfigurationReleaseActivationExists(ctx, ack.Namespace, ack.ReleaseName, ack.ReleaseVersion, ack.ActivationRevision)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return domain.Errorf(domain.ErrFailedPrecondition, "acknowledgement does not match an authoritative release activation")
-	}
+	// Storage checks activation identity and stream ownership atomically with
+	// persistence, so retention or a disconnect cannot invalidate either proof
+	// between validation and the write.
 	if err := rs.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		return err
 	}
-	s.notifyReleaseSubscribers(ack.Namespace, ack.ReleaseName)
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)})
+	s.notifyReleaseSubscribers(ack.Track())
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", releaseAuditMetadata(ack.SchemaVersion, ack.ActivationRevision, map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)}))
 	return nil
 }
 
-func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, ns domain.NamespaceRef, name, clientName, instanceID, identity, connectionID string, connected bool) error {
+func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, track domain.ReleaseTrack, clientName, instanceID, identity, connectionID string, connected bool) error {
 	rs, err := s.releaseStore()
 	if err != nil {
 		return err
 	}
 	if err := rs.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
-		Namespace: ns, ReleaseName: name, ClientName: clientName, InstanceID: instanceID,
+		Namespace: track.Namespace, ReleaseName: track.Name, SchemaVersion: track.SchemaVersion, ClientName: clientName, InstanceID: instanceID,
 		Identity: identity, ConnectionID: connectionID, Connected: connected, ServerTimestamp: s.now(),
 	}); err != nil {
 		return err
 	}
-	s.notifyReleaseSubscribers(ns, name)
+	s.notifyReleaseSubscribers(track)
 	return nil
 }
 
@@ -786,7 +797,9 @@ func (s *Service) ResetReleaseSubscriberConnections(ctx context.Context) error {
 	return rs.ResetReleaseInstanceConnections(ctx, s.now())
 }
 
-func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, page storage.ListPage) ([]domain.ReleaseAcknowledgement, string, uint64, error) {
+func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ReleaseAcknowledgement, string, uint64, error) {
+	ctx = withReleaseAuditFilter(ctx, filter)
+	ns, name := filter.Namespace, filter.Name
 	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
 		return nil, "", 0, err
 	}
@@ -797,15 +810,15 @@ func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, ns d
 	if err != nil {
 		return nil, "", 0, err
 	}
-	rows, next, err := rs.ListReleaseAcknowledgements(ctx, ns, name, page)
+	rows, next, err := rs.ListReleaseAcknowledgements(ctx, filter, page)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	if name == "" {
+	if name == "" || filter.SchemaVersion == nil {
 		// A cross-release listing has no single meaningful active revision.
 		return rows, next, 0, nil
 	}
-	active, err := rs.GetActiveConfigurationRelease(ctx, ns, name)
+	active, err := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: ns, Name: name, SchemaVersion: *filter.SchemaVersion})
 	if errors.Is(err, domain.ErrNotFound) {
 		return rows, next, 0, nil
 	}
@@ -874,6 +887,21 @@ func normalizeConfigurationSchema(application, releaseName, schemaJSON, metadata
 	schemaJSON = string(compactSchema)
 	if _, err := compileSchema(schemaJSON); err != nil {
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid Draft 2020-12 JSON Schema")
+	}
+	var document map[string]jsontext.Value
+	if err := json.Unmarshal([]byte(schemaJSON), &document); err == nil {
+		if raw, ok := document["x-kms-contract"]; ok {
+			var fields []domain.ApplicationContractField
+			if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+				return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "x-kms-contract must be an array of contract fields")
+			}
+			if len(fields) > maxReleaseEntries {
+				return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "schema contract exceeds entry limit")
+			}
+			if _, err := normalizeApplication(domain.Application{Name: application, ReleaseName: releaseName, Contract: fields}); err != nil {
+				return domain.ConfigurationSchema{}, err
+			}
+		}
 	}
 	return domain.ConfigurationSchema{Application: application, ReleaseName: releaseName, Schema: schemaJSON, Digest: sha256Hex([]byte(schemaJSON)), Metadata: metadata}, nil
 }
@@ -1103,4 +1131,32 @@ func sanitizeDiagnostic(v string) string {
 	// persists only a fixed redaction marker; operators still have the bounded
 	// rejection category for diagnosis.
 	return "[redacted]"
+}
+
+// ResolveReleaseSchema pins a runtime's generated contract to one registered track.
+func (s *Service) ResolveReleaseSchema(ctx context.Context, pr Principal, ns domain.NamespaceRef, name, digest string) (uint64, error) {
+	if err := validateReleaseAddress(ns, name); err != nil {
+		return 0, err
+	}
+	if !isLowerHexSHA256(digest) {
+		return 0, domain.Errorf(domain.ErrInvalidArgument, "schema_sha256 must be a lowercase SHA-256 digest")
+	}
+	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseRead, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
+		return 0, err
+	}
+	rs, err := s.releaseStore()
+	if err != nil {
+		return 0, err
+	}
+	schema, err := rs.GetConfigurationSchemaByDigest(ctx, ns.App, name, digest)
+	if err != nil {
+		return 0, err
+	}
+	// The registry belongs to the application, so its lookup does not resolve
+	// the authorized namespace. Reject replacement before returning its track.
+	if _, err := s.store.GetNamespace(ctx, ns); err != nil {
+		return 0, err
+	}
+	return schema.Version, nil
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isKmsError, mapGrpcError } from "../errors.js";
 import {
   type ConfigurationRelease,
   ConfigurationRelease as ConfigurationReleaseMessage,
@@ -85,6 +86,7 @@ export interface ReleaseTransport {
   getActiveRelease(
     namespace: NamespaceRef,
     name: string,
+    schemaVersion: bigint,
     signal?: AbortSignal,
   ): Promise<GetActiveReleaseResponse>;
   fetchParameter(ref: ResourceRef, version: bigint, signal?: AbortSignal): Promise<Parameter>;
@@ -115,6 +117,8 @@ export interface ReleaseLoaderOptions {
   readonly namespace: NamespaceRef;
   readonly name: string;
   readonly clientName: string;
+  /** Exact schema track selected for the full loader lifetime, including 0. */
+  readonly schemaVersion: bigint;
   readonly instanceId?: string;
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
@@ -132,6 +136,7 @@ interface NormalizedOptions {
   readonly namespace: NamespaceRef;
   readonly name: string;
   readonly clientName: string;
+  readonly schemaVersion: bigint;
   readonly instanceId: string;
   readonly reconcileIntervalMs: number;
   readonly maxConcurrentFetches: number;
@@ -284,7 +289,6 @@ export class ReleaseLoader {
 
     try {
       const initial = await this.#getActive(runController.signal);
-      if (!initial.release) throw new Error("KMS active release response was empty");
       this.#lastSeenRevision = initial.activationRevision;
 
       let sequence = 0n;
@@ -384,6 +388,10 @@ export class ReleaseLoader {
 
       const offer = (incoming: Candidate): void => {
         if (runController.signal.aborted) return;
+        // A foreign-track event is a transport protocol violation. It must not
+        // supersede an in-flight matching candidate, trigger resource reads,
+        // or produce an acknowledgement on this track's stream.
+        if (!releaseMatchesTrack(incoming.release, this.#options)) return;
         if (latest) {
           if (incoming.revision < latest.revision) return;
           if (sameQueuedCandidate(incoming, latest)) {
@@ -403,9 +411,15 @@ export class ReleaseLoader {
         start(candidate);
       };
 
-      watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop);
+      watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop).catch(
+        (error: unknown) => {
+          finished.reject(error);
+        },
+      );
       reconcileTask = this.#reconcileLoop(runController.signal, offer);
-      offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
+      if (initial.release) {
+        offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
+      }
 
       await Promise.race([finished.promise, aborted(runController.signal)]);
     } finally {
@@ -533,11 +547,7 @@ export class ReleaseLoader {
     const { release } = candidate;
     const namespace = release.namespace;
     if (!namespace) throw new ResolutionError("resolution_failed");
-    if (
-      release.name !== this.#options.name ||
-      namespace.env !== this.#options.namespace.env ||
-      namespace.app !== this.#options.namespace.app
-    ) {
+    if (!releaseMatchesTrack(release, this.#options)) {
       throw new ResolutionError("version_mismatch");
     }
     try {
@@ -676,10 +686,15 @@ export class ReleaseLoader {
     const response = await this.#transport.getActiveRelease(
       { ...this.#options.namespace },
       this.#options.name,
+      this.#options.schemaVersion,
       signal,
     );
+    const release = response.release ? cloneRelease(response.release) : undefined;
+    if (release && !releaseMatchesTrack(release, this.#options)) {
+      throw new Error("KMS active release response belongs to a different release track");
+    }
     return {
-      release: response.release ? cloneRelease(response.release) : undefined,
+      release,
       activationRevision: response.activationRevision,
       previousVersion: response.previousVersion,
     };
@@ -701,6 +716,7 @@ export class ReleaseLoader {
           clientName: this.#options.clientName,
           instanceId: this.#options.instanceId,
           lastSeenRevision: this.#lastSeenRevision,
+          schemaVersion: this.#options.schemaVersion,
         };
         stream = await this.#transport.watchRelease(registration, signal);
         await this.#flushAcknowledgements(stream, true);
@@ -708,17 +724,36 @@ export class ReleaseLoader {
         await this.#scheduleAckFlush();
         for await (const event of stream) {
           if (signal.aborted) break;
-          receivedEvent = true;
-          if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
           const payload = event.event;
-          if (payload?.$case === "snapshot" && payload.value.release) {
-            offer(makeCandidate(payload.value.release, event.revision, "reconciliation", 0n));
-          } else if (payload?.$case === "activation" && payload.value.release) {
-            offer(makeCandidate(payload.value.release, event.revision, "activation", 0n));
+          if (payload?.$case === "acknowledgementRejected") {
+            receivedEvent = true;
+            this.#handleAcknowledgementRejected(payload.value);
+            continue;
+          }
+          if (payload?.$case === "heartbeat") {
+            receivedEvent = true;
+            if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
+            continue;
+          }
+          if (payload?.$case === "snapshot" || payload?.$case === "activation") {
+            const release = payload.value.release;
+            if (!release || !releaseMatchesTrack(release, this.#options)) continue;
+            receivedEvent = true;
+            if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
+            offer(
+              makeCandidate(
+                release,
+                event.revision,
+                payload.$case === "snapshot" ? "reconciliation" : "activation",
+                0n,
+              ),
+            );
           }
         }
-      } catch {
-        // Stream reliability is owned here; candidate failures are separate.
+      } catch (error) {
+        const terminal = terminalReleaseWatchError(error);
+        if (terminal) throw terminal;
+        // Transient stream reliability is owned here; candidate failures are separate.
       } finally {
         if (this.#currentStream === stream) this.#currentStream = undefined;
         await closeStream(stream);
@@ -771,6 +806,43 @@ export class ReleaseLoader {
     this.#stats.reconnects += 1n;
   }
 
+  #handleAcknowledgementRejected(event: {
+    namespace: NamespaceRef | undefined;
+    name: string;
+    schemaVersion: bigint;
+    version: bigint;
+    activationRevision: bigint;
+    clientName: string;
+    instanceId: string;
+    state: string;
+    sequence: bigint;
+    reason: string;
+  }): void {
+    if (
+      event.reason !== "activation_unavailable" ||
+      event.sequence === 0n ||
+      !isReleaseState(event.state) ||
+      !sameNamespace(event.namespace, this.#options.namespace) ||
+      event.name !== this.#options.name ||
+      event.schemaVersion !== this.#options.schemaVersion ||
+      event.clientName !== this.#options.clientName ||
+      event.instanceId !== this.#options.instanceId
+    ) {
+      return;
+    }
+    const retained = this.#pendingAcknowledgements.get(event.state);
+    if (
+      retained?.generation !== event.sequence ||
+      retained.acknowledgement.sequence !== event.sequence ||
+      retained.acknowledgement.version !== event.version ||
+      retained.acknowledgement.activationRevision !== event.activationRevision ||
+      retained.acknowledgement.state !== event.state
+    ) {
+      return;
+    }
+    this.#pendingAcknowledgements.delete(event.state);
+  }
+
   #ack(
     candidate: Candidate,
     state: ReleaseState,
@@ -778,6 +850,7 @@ export class ReleaseLoader {
     divergence: AckDivergence = NO_DIVERGENCE,
   ): bigint {
     this.#ackGeneration += 1n;
+    const sequence = this.#ackGeneration;
     const applied = state === "applied" && divergence.divergent;
     const acknowledgement: ReleaseAcknowledgement = {
       namespace: { ...this.#options.namespace },
@@ -792,17 +865,19 @@ export class ReleaseLoader {
       timestampUnixMs: BigInt(Math.trunc(this.#options.now())),
       appliedDivergent: applied,
       divergentFieldCount: applied ? divergence.fieldCount : 0,
+      schemaVersion: this.#options.schemaVersion,
+      sequence,
     };
     const current = this.#pendingAcknowledgements.get(state);
     if (!current || current.acknowledgement.activationRevision <= candidate.revision) {
       this.#pendingAcknowledgements.set(state, {
         acknowledgement,
-        generation: this.#ackGeneration,
+        generation: sequence,
         dirty: true,
       });
     }
     void this.#scheduleAckFlush().catch(() => undefined);
-    return this.#ackGeneration;
+    return sequence;
   }
 
   #scheduleAckFlush(): Promise<void> {
@@ -880,6 +955,27 @@ export class ReleaseLoader {
   }
 }
 
+function isReleaseState(state: string): state is ReleaseState {
+  return (
+    state === "received" || state === "prepared" || state === "applied" || state === "rejected"
+  );
+}
+
+function terminalReleaseWatchError(error: unknown): Error | undefined {
+  const mapped = mapGrpcError(error);
+  if (
+    mapped &&
+    (isKmsError(mapped, "not_found") ||
+      isKmsError(mapped, "invalid_argument") ||
+      isKmsError(mapped, "permission_denied") ||
+      isKmsError(mapped, "failed_precondition") ||
+      isKmsError(mapped, "unauthenticated"))
+  ) {
+    return mapped;
+  }
+  return undefined;
+}
+
 export async function runTypedRelease<T>(
   loader: ReleaseLoader,
   decode: (snapshot: ReleaseSnapshot) => T | Promise<T>,
@@ -913,6 +1009,7 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
   const clientName = options.clientName.trim();
   if (!clientName) throw new TypeError("release loader clientName is required");
   const instanceId = options.instanceId?.trim() || randomUUID();
+  assertUint64(options.schemaVersion, "release loader schemaVersion");
   const requestedReconcileIntervalMs = options.reconcileIntervalMs ?? 0;
   if (!Number.isFinite(requestedReconcileIntervalMs)) {
     throw new RangeError("reconcileIntervalMs must be finite");
@@ -932,6 +1029,7 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
     namespace: { env: options.namespace.env, app: options.namespace.app },
     name,
     clientName,
+    schemaVersion: options.schemaVersion,
     instanceId,
     reconcileIntervalMs,
     maxConcurrentFetches,
@@ -951,6 +1049,13 @@ function positiveFinite(value: number, name: string): number {
     throw new RangeError(`${name} must be positive`);
   }
   return value;
+}
+
+function assertUint64(value: unknown, name: string): asserts value is bigint {
+  if (typeof value !== "bigint") throw new TypeError(`${name} must be a bigint`);
+  if (value < 0n || value > (1n << 64n) - 1n) {
+    throw new RangeError(`${name} is outside the uint64 range`);
+  }
 }
 
 function metadataForEntry(entry: ConfigurationRelease["entries"][number]): ReleaseEntryMetadata {
@@ -1023,6 +1128,17 @@ function sameNamespace(left: NamespaceRef | undefined, right: NamespaceRef): boo
   return left !== undefined && left.env === right.env && left.app === right.app;
 }
 
+function releaseMatchesTrack(
+  release: ConfigurationRelease,
+  track: Pick<NormalizedOptions, "namespace" | "name" | "schemaVersion">,
+): boolean {
+  return (
+    sameNamespace(release.namespace, track.namespace) &&
+    release.name === track.name &&
+    release.schemaVersion === track.schemaVersion
+  );
+}
+
 function synchronousCallbackError(name: string, returned: unknown): Error | undefined {
   if (returned === undefined) return undefined;
   // A JavaScript consumer can evade the declaration contract. Attach a
@@ -1035,6 +1151,7 @@ function synchronousCallbackError(name: string, returned: unknown): Error | unde
 function sameQueuedCandidate(left: Candidate, right: Candidate): boolean {
   return (
     left.revision === right.revision &&
+    left.release.schemaVersion === right.release.schemaVersion &&
     left.release.version === right.release.version &&
     left.release.digest === right.release.digest
   );
@@ -1043,7 +1160,10 @@ function sameQueuedCandidate(left: Candidate, right: Candidate): boolean {
 function sameActiveCandidate(left: Candidate, right: Candidate): boolean {
   return (
     left.revision === right.revision &&
+    right.release.namespace !== undefined &&
+    sameNamespace(left.release.namespace, right.release.namespace) &&
     left.release.name === right.release.name &&
+    left.release.schemaVersion === right.release.schemaVersion &&
     left.release.version === right.release.version &&
     left.release.digest === right.release.digest
   );

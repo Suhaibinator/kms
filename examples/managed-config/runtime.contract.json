@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/examples/managed-config/config",
     "type": "Config"
   },
-  "schema_sha256": "0daaf8989c2cefa6c6e5031cc69e54617cf5e16588f8bf9c48892b37261f959b",
+  "schema_sha256": "a662c41453a3d3af7e251d29e39461512e7a3c0d63d316282731b330d39f2cf3",
   "groups": [
     {
       "alias": "runtime",

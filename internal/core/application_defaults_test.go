@@ -183,13 +183,13 @@ func TestApplicationDefaultsExplicitDefinitionUpdateRepinsMatchingSchema(t *test
 	}
 	artifact := consoleDefaultsArtifact(t, `{"host":"localhost"}`, "5")
 	readOnlyPreview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact})
-	if err != nil || !readOnlyPreview.DefinitionChanged {
+	if err != nil || readOnlyPreview.DefinitionChanged {
 		t.Fatalf("definition drift preview = %+v err=%v", readOnlyPreview, err)
 	}
 	if _, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
 		Namespace: ns, Artifact: artifact, Execute: true, PlanDigest: readOnlyPreview.PlanDigest,
-	}); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("definition drift execute without opt-in error = %v", err)
+	}); err != nil {
+		t.Fatalf("selected track defaults execution = %v", err)
 	}
 
 	preview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
@@ -331,5 +331,155 @@ func TestApplicationDefaultsParserDelegatesToSDK(t *testing.T) {
 	}
 	if _, err := parseDefaultsArtifact(withoutNewline); err != nil {
 		t.Fatalf("server parser diverged from SDK: %v", err)
+	}
+}
+
+type defaultsDefinitionRaceStore struct {
+	*storage.SQLStore
+	beforeApply func()
+}
+
+func (s *defaultsDefinitionRaceStore) ApplyDefaults(ctx context.Context, in storage.DefaultsApplyTransaction) ([]storage.DefaultsAppliedWrite, error) {
+	s.beforeApply()
+	return s.SQLStore.ApplyDefaults(ctx, in)
+}
+
+func TestDefaultsDefinitionUpdateRejectsConcurrentRepin(t *testing.T) {
+	for _, stage := range []string{"before_execute", "before_transaction", "aba"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newConsoleTestService(t)
+			admin := adminPrincipal()
+			app := seedConsoleApp(t, svc, admin, "dev")
+			intermediate, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"intermediate"}`, "{}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"target"}`, "{}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := configstore.ParseDefaultsArtifact(consoleDefaultsArtifact(t, `{"host":"changed"}`, "9"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact.SchemaSHA256 = target.Digest
+			raw, err := configstore.EncodeDefaultsArtifact(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := domain.DefaultsApplyInput{Namespace: domain.NamespaceRef{Env: "dev", App: app.Name}, Artifact: raw, Overwrite: true, UpdateDefinition: true}
+			preview, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := app.SchemaVersion
+			expected := intermediate.Version
+			race := func() {
+				app.SchemaVersion = intermediate.Version
+				if _, err := st.UpdateApplication(ctx, app); err != nil {
+					t.Fatal(err)
+				}
+				if stage == "aba" {
+					app.SchemaVersion = original
+					expected = original
+					if _, err := st.UpdateApplication(ctx, app); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if stage == "before_execute" {
+				race()
+			} else {
+				svc.store = &defaultsDefinitionRaceStore{SQLStore: st, beforeApply: race}
+			}
+			before, _ := st.CurrentRevision(ctx)
+			in.Execute = true
+			in.PlanDigest = preview.PlanDigest
+			if _, err := svc.ApplyApplicationDefaults(ctx, admin, in); !errors.Is(err, domain.ErrAborted) {
+				t.Fatalf("concurrent default repin was overwritten: %v", err)
+			}
+			persisted, err := st.GetApplication(ctx, app.Name)
+			if err != nil || persisted.SchemaVersion != expected {
+				t.Fatalf("racing definition lost: %+v %v", persisted, err)
+			}
+			after, _ := st.CurrentRevision(ctx)
+			if before != after {
+				t.Fatal("stale definition update wrote parameters")
+			}
+
+		})
+	}
+}
+
+func TestDefaultsExplicitSchemaFreeTrackNeverSelectsRegistryLatest(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no_registry", true: "registered_default"}[registered], func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newConsoleTestService(t)
+			admin := adminPrincipal()
+			app := domain.Application{Name: "schemafree", ReleaseName: "runtime"}
+			var err error
+			var schema domain.ConfigurationSchema
+			if registered {
+				app, schema, err = svc.CreateApplicationWithSchema(ctx, admin, app, `{"type":"object","x-kms-contract":[{"alias":"foreign","kind":"parameter","content_type":"integer"}]}`, "{}")
+			} else {
+				app, err = svc.CreateApplication(ctx, admin, app)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+			if _, err := svc.CreateNamespace(ctx, admin, ns, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			artifact := configstore.DefaultsArtifact{
+				Format: configstore.DefaultsArtifactFormat, Profile: "dev",
+				Contract:   []configstore.ContractEntry{{Alias: "setting", Kind: configstore.ContractKindParameter, ContentType: "string"}},
+				Parameters: []configstore.DefaultsParameter{{Alias: "setting", ContentType: "string", Value: "schema-free default"}},
+			}
+			zero := uint64(0)
+			claimed := artifact
+			claimed.SchemaSHA256 = strings.Repeat("a", 64)
+			if registered {
+				claimed.SchemaSHA256 = schema.Digest
+			}
+			bad, err := configstore.EncodeDefaultsArtifact(claimed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, SchemaVersion: &zero, Artifact: bad}); !errors.Is(err, domain.ErrFailedPrecondition) {
+				t.Fatalf("schema0 accepted claimed registry digest: %v", err)
+			}
+			raw, err := configstore.EncodeDefaultsArtifact(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := domain.DefaultsApplyInput{Namespace: ns, SchemaVersion: &zero, Artifact: raw}
+			preview, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil {
+				t.Fatalf("explicit schema0 preview: %v", err)
+			}
+			in.Execute = true
+			in.PlanDigest = preview.PlanDigest
+			applied, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil || !applied.Executed || applied.DefinitionUpdated {
+				t.Fatalf("explicit schema0 apply: %+v %v", applied, err)
+			}
+			contract, err := st.GetConfigurationSchemaContract(ctx, app.Name, app.ReleaseName, 0)
+			if err != nil || len(contract) != 1 || contract[0].Alias != "setting" {
+				t.Fatalf("schema0 contract: %+v %v", contract, err)
+			}
+			persisted, err := st.GetApplication(ctx, app.Name)
+			if err != nil || persisted.SchemaVersion != app.SchemaVersion {
+				t.Fatalf("schema0 override repinned default: %+v %v", persisted, err)
+			}
+			if registered {
+				contract, err := st.GetConfigurationSchemaContract(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+				if err != nil || len(contract) != 1 || contract[0].Alias != "foreign" {
+					t.Fatalf("schema0 altered registered contract: %+v %v", contract, err)
+				}
+			}
+		})
 	}
 }

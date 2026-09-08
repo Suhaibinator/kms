@@ -17,6 +17,7 @@ export const OVERVIEW_CHECK_MS = 30_000;
  */
 export interface OverviewSlot {
   name: string;
+  schemaVersion?: number;
   status: OverviewStatus;
   data: ApplicationOverview | null;
 }
@@ -89,9 +90,21 @@ export function releaseMovements(prev: ApplicationOverview, next: ApplicationOve
 
 const changedToastId = (name: string) => `overview-changed:${name}`;
 
+function slotMatchesRequest(
+  slot: OverviewSlot | null,
+  name: string,
+  schemaVersion: number | undefined,
+): slot is OverviewSlot {
+  return Boolean(
+    slot?.name === name &&
+      (slot.schemaVersion === schemaVersion ||
+        (schemaVersion !== undefined && slot.data?.application.schema_version === schemaVersion)),
+  );
+}
+
 export function useApplicationOverview(
   name: string,
-  { paused = false }: { paused?: boolean } = {},
+  { paused = false, schemaVersion }: { paused?: boolean; schemaVersion?: number } = {},
 ): {
   /** Only ever the slot for `name`; null before the first response. */
   slot: OverviewSlot | null;
@@ -109,7 +122,11 @@ export function useApplicationOverview(
   });
   // What the page is showing, written the moment it is set rather than on
   // render, so the background check never compares against a stale commit.
-  const shownRef = useRef<{ name: string; data: ApplicationOverview } | null>(null);
+  const shownRef = useRef<{
+    name: string;
+    schemaVersion?: number;
+    data: ApplicationOverview;
+  } | null>(null);
   const loadingRef = useRef(false);
   // Bumped when a reload starts; a check that began before it is discarded.
   const generationRef = useRef(0);
@@ -125,33 +142,39 @@ export function useApplicationOverview(
     loadingRef.current = true;
     setLoading(true);
     setSlot((current) =>
-      current?.name === name
-        ? { ...current, status: "loading" }
-        : { name, status: "loading", data: null },
+      slotMatchesRequest(current, name, schemaVersion)
+        ? { ...current, schemaVersion, status: "loading" }
+        : { name, schemaVersion, status: "loading", data: null },
     );
     try {
-      const data = await api.applicationOverview(name, undefined, { signal: run.signal });
+      const requestOptions = { signal: run.signal };
+      const data =
+        schemaVersion === undefined
+          ? await api.applicationOverview(name, undefined, requestOptions)
+          : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
       if (!run.current) return;
-      shownRef.current = { name, data };
-      setSlot({ name, status: "success", data });
+      shownRef.current = { name, schemaVersion, data };
+      setSlot({ name, schemaVersion, status: "success", data });
       setFreshness({ lastLoadedAt: Date.now(), staleReason: null });
       toast.dismiss(changedToastId(name));
     } catch (error) {
       if (!run.current || isAbortError(error)) return;
       if (error instanceof ApiError && error.status === 404) {
         shownRef.current = null;
-        setSlot({ name, status: "not-found", data: null });
+        setSlot({ name, schemaVersion, status: "not-found", data: null });
         return;
       }
       if (error instanceof ApiError && error.status === 403) {
         shownRef.current = null;
-        setSlot({ name, status: "forbidden", data: null });
+        setSlot({ name, schemaVersion, status: "forbidden", data: null });
         return;
       }
       setSlot((current) => ({
         name,
+        schemaVersion,
         status: "error",
-        data: current?.name === name ? current.data : null,
+        data:
+          current?.name === name && current.schemaVersion === schemaVersion ? current.data : null,
       }));
       setFreshness((current) => ({ ...current, staleReason: "failed" }));
       toast.error(error, "Failed to load application");
@@ -161,7 +184,7 @@ export function useApplicationOverview(
         setLoading(false);
       }
     }
-  }, [name, request, toast]);
+  }, [name, request, toast, schemaVersion]);
 
   useEffect(() => {
     if (name) void reload();
@@ -183,16 +206,19 @@ export function useApplicationOverview(
         document.hidden ||
         loadingRef.current ||
         controller ||
-        shown?.name !== name
+        shown?.name !== name ||
+        shown.schemaVersion !== schemaVersion
       ) {
         return;
       }
       const generation = generationRef.current;
       controller = new AbortController();
       try {
-        const latest = await api.applicationOverview(name, undefined, {
-          signal: controller.signal,
-        });
+        const requestOptions = { signal: controller.signal };
+        const latest =
+          schemaVersion === undefined
+            ? await api.applicationOverview(name, undefined, requestOptions)
+            : await api.applicationOverview(name, undefined, requestOptions, schemaVersion);
         // A reload that started meanwhile supersedes this comparison.
         if (disposed || generationRef.current !== generation || loadingRef.current) return;
         const moved = releaseMovements(shown.data, latest);
@@ -221,7 +247,12 @@ export function useApplicationOverview(
       controller?.abort();
       toast.dismiss(changedToastId(name));
     };
-  }, [name, reload, toast]);
+  }, [name, reload, toast, schemaVersion]);
 
-  return { slot: slot?.name === name ? slot : null, loading, reload, freshness };
+  return {
+    slot: slotMatchesRequest(slot, name, schemaVersion) ? slot : null,
+    loading,
+    reload,
+    freshness,
+  };
 }

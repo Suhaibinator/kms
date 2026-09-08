@@ -179,7 +179,7 @@ export function ApplicationList({
                   <td data-label="Schema" className="mono">
                     {app.schema_version
                       ? `${app.name}/${app.release_name}@${app.schema_version}`
-                      : "—"}
+                      : "v0 · schema-free"}
                   </td>
                   <td data-label="Contract">{app.contract.length} aliases</td>
                   <td data-label="Actions" className="navigable-row-chevron" aria-hidden="true">

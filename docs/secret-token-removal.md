@@ -7,18 +7,17 @@ Identity tokens and binding-key encryption are unchanged.
 
 ## Existing databases
 
-Back up the SQLite database and stop all processes using it before upgrading.
-On open, KMS upgrades the exact supported schema-version-1 database to version 2
-in a transaction. The upgrade removes `secrets.access_token_hash` and
-`secret_versions.has_access_token`, preserving secret values, ciphertext,
-versions, labels, binding state, and all other data. Fresh databases use version 2.
+Independent schema release tracks require a fresh database using baseline 3.
+Existing databases, including baselines 1 and 2, are rejected without being
+upgraded, converted, or deleted. The earlier token-removal upgrade from baseline
+1 to 2 is no longer supported by the current server.
 
-The upgrade requires every token hash to be null or empty and every token flag
-to be zero, including historical versions. If any token is in use, KMS refuses
-the upgrade without removing its protection or data. Read-only validation checks
-eligibility without performing the upgrade. Unsupported schemas are also rejected.
-An old KMS binary cannot open the upgraded database; restore the backup if a
-binary downgrade is required.
+Retain the existing database separately for rollback and audit. Provision a new
+database explicitly and repopulate it through the current resource APIs; do not
+copy old release rows into it. Deploy the updated server, SDKs, and regenerated
+configuration clients together. See
+[schema selection and deployment cutover](configuration-releases.md#schema-selection-and-deployment-cutover)
+for runtime selection requirements and database inspection limits.
 
 ## Applications and tooling
 

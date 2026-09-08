@@ -15,8 +15,14 @@ import (
 // never copied and are reported as needs_value. Each item fails
 // independently (boundedApplicationError), so a partial clone is inspectable.
 func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal, in domain.CloneEnvironmentInput) (domain.CloneEnvironmentResult, error) {
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: in.TargetEnv, App: in.Application}, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.environment_clone", domain.ResourceApplication, in.Application); err != nil {
 		return domain.CloneEnvironmentResult{}, err
+	}
+	if in.SchemaVersion == nil {
+		return domain.CloneEnvironmentResult{}, domain.Errorf(domain.ErrInvalidArgument, "clone requires an explicit schema_version (0 for schema-free)")
 	}
 	if err := keyutil.ValidateApp(in.Application); err != nil {
 		return domain.CloneEnvironmentResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
@@ -38,6 +44,10 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 		return domain.CloneEnvironmentResult{}, err
 	}
 	app, err := store.GetApplication(ctx, in.Application)
+	if err != nil {
+		return domain.CloneEnvironmentResult{}, err
+	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
@@ -67,7 +77,7 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, sourceNS, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, sourceNS), false)
 	if err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
@@ -84,7 +94,7 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 		if other.Env == sourceNS.Env {
 			continue
 		}
-		active, err := rs.GetActiveConfigurationRelease(ctx, other.NamespaceRef, app.ReleaseName)
+		active, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, other.NamespaceRef))
 		if err == nil {
 			otherActive[other.Env] = active.Release
 		} else if !errors.Is(err, domain.ErrNotFound) {
@@ -94,7 +104,9 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 
 	type cloneTarget struct{ alias, key, kind string }
 	targets := make([]cloneTarget, 0)
-	if len(app.Contract) > 0 {
+	// Only an unestablished contract allows the legacy copy-all fallback.
+	// An established empty contract owns no resources on this schema track.
+	if app.Contract != nil {
 		refs := resolveContractRefs(app, sourceNS.Env, sourceActive, facts.Latest, otherActive, rows)
 		for _, field := range app.Contract {
 			key := field.Alias
@@ -144,7 +156,8 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 		result.Items = append(result.Items, item)
 	}
 	s.auditRefWithNamespaceID(ctx, pr, "application.environment_clone", domain.ResourceApplication, domain.Ref{NS: targetNS, Key: app.Name}, target.ID, 0, "allow", map[string]string{
-		"source_env": sourceNS.Env, "target_env": targetNS.Env, "namespace_created": strconv.FormatBool(created),
+		"schema_version": strconv.FormatUint(app.SchemaVersion, 10),
+		"source_env":     sourceNS.Env, "target_env": targetNS.Env, "namespace_created": strconv.FormatBool(created),
 		"copied": strconv.Itoa(copied), "needs_value": strconv.Itoa(len(result.NeedsValue)),
 	})
 	return result, nil

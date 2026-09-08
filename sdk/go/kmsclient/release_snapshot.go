@@ -74,8 +74,8 @@ func (m ReleaseManifest) Entry(alias string) (ReleaseEntryMetadata, bool) {
 
 // String intentionally contains only release identity, never resolved values.
 func (m ReleaseManifest) String() string {
-	return fmt.Sprintf("ReleaseManifest{%s/%s version=%d revision=%d digest=%s entries=%d}",
-		m.namespace, m.name, m.version, m.activationRevision, m.digest, len(m.entries))
+	return fmt.Sprintf("ReleaseManifest{%s/%s version=%d revision=%d schema_version=%d digest=%s entries=%d}",
+		m.namespace, m.name, m.version, m.activationRevision, m.schemaVersion, m.digest, len(m.entries))
 }
 
 // GoString uses the same safe representation as String.
@@ -185,8 +185,8 @@ func cloneSecret(s Secret) Secret {
 
 // String intentionally contains only release identity, never resolved values.
 func (s ReleaseSnapshot) String() string {
-	return fmt.Sprintf("ReleaseSnapshot{%s/%s version=%d revision=%d digest=%s entries=%d}",
-		s.namespace, s.name, s.version, s.activationRevision, s.digest, len(s.entries))
+	return fmt.Sprintf("ReleaseSnapshot{%s/%s version=%d revision=%d schema_version=%d digest=%s entries=%d}",
+		s.namespace, s.name, s.version, s.activationRevision, s.schemaVersion, s.digest, len(s.entries))
 }
 
 // GoString uses the same redacted representation as String.

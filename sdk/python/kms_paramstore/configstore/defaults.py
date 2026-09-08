@@ -59,7 +59,9 @@ def encode_defaults_artifact(
     parameters: Mapping[str, str],
 ) -> str:
     _validate_profile(profile)
-    if _SHA256.fullmatch(schema_sha256) is None:
+    if not isinstance(schema_sha256, str) or (
+        schema_sha256 != "" and _SHA256.fullmatch(schema_sha256) is None
+    ):
         raise DefaultsArtifactError("schema SHA-256 is invalid")
     normalized = tuple(sorted(validate_contract(contract), key=lambda item: item.alias.encode()))
     expected = {entry.alias: entry for entry in normalized if entry.kind == "parameter"}
@@ -117,7 +119,9 @@ def parse_defaults_artifact(document: str | bytes) -> DefaultsArtifact:
     profile = root["profile"]
     digest = root["schema_sha256"]
     _validate_profile(profile)
-    if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+    if not isinstance(digest, str) or (
+        digest != "" and _SHA256.fullmatch(digest) is None
+    ):
         raise DefaultsArtifactError("schema SHA-256 is invalid")
     raw_contract, raw_parameters = root["contract"], root["parameters"]
     if not isinstance(raw_contract, list) or not isinstance(raw_parameters, list):

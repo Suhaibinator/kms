@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ func migrationFixture(t *testing.T) (*Service, *storage.SQLStore, domain.Applica
 	pr := adminPrincipal()
 	app := seedConsoleApp(t, svc, pr, "dev", "prod")
 	for _, env := range []string{"dev", "prod"} {
-		r, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: app.Name, Environment: env})
+		r, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{SchemaVersion: &app.SchemaVersion, Application: app.Name, Environment: env})
 		if err != nil || r.Status != domain.ShipStatusActivated {
 			t.Fatalf("seed ship: %+v %v", r, err)
 		}
@@ -27,7 +28,7 @@ func migrationFixture(t *testing.T) (*Service, *storage.SQLStore, domain.Applica
 	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, st, domain.ApplicationReleaseMigrationInput{Namespace: domain.NamespaceRef{Env: "dev", App: app.Name}, SchemaVersion: schema.Version, Contract: []domain.ApplicationContractField{{Alias: "db", Kind: domain.ReleaseEntryParameter, ContentType: "json"}, {Alias: "db_password", Kind: domain.ReleaseEntrySecret}, {Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, ContentType: "integer"}}, Changes: []domain.ApplicationMigrationChange{{Alias: "db", FromAlias: "database"}, {Alias: "rate_limits", Value: new("12")}}}
+	return svc, st, domain.ApplicationReleaseMigrationInput{SourceSchemaVersion: app.SchemaVersion, Namespace: domain.NamespaceRef{Env: "dev", App: app.Name}, SchemaVersion: schema.Version, Contract: []domain.ApplicationContractField{{Alias: "db", Kind: domain.ReleaseEntryParameter, ContentType: "json"}, {Alias: "db_password", Kind: domain.ReleaseEntrySecret}, {Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, ContentType: "integer"}}, Changes: []domain.ApplicationMigrationChange{{Alias: "db", FromAlias: "database"}, {Alias: "rate_limits", Value: new("12")}}}
 }
 func TestApplicationMigrationAtomicAndExactPins(t *testing.T) {
 	ctx := context.Background()
@@ -41,7 +42,7 @@ func TestApplicationMigrationAtomicAndExactPins(t *testing.T) {
 	if _, err := svc.PutSecret(ctx, pr, PutSecretInput{Ref: domain.Ref{NS: in.Namespace, Key: "db_password"}, Value: []byte("rotated secret"), ContentType: "text/plain"}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := st.ApplicationMigrationSnapshot(ctx, in.Namespace)
+	before, err := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,10 +50,10 @@ func TestApplicationMigrationAtomicAndExactPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !preview.Valid || preview.Executed || !preview.DefinitionChanged || preview.PlanDigest == "" || len(preview.AffectedEnvironments) != 1 {
+	if !preview.Valid || preview.Executed || preview.DefinitionChanged || preview.PlanDigest == "" || len(preview.AffectedEnvironments) != 1 {
 		t.Fatalf("preview: %+v", preview)
 	}
-	after, _ := st.ApplicationMigrationSnapshot(ctx, in.Namespace)
+	after, _ := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SchemaVersion})
 	if before.Digest != after.Digest {
 		t.Fatal("preview mutated state")
 	}
@@ -69,14 +70,14 @@ func TestApplicationMigrationAtomicAndExactPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Executed || got.Release == nil || got.Release.Version != 2 || got.Activation == nil || got.Activation.PreviousVersion != 1 {
+	if !got.Executed || got.Release == nil || got.Release.Version != 1 || got.Activation == nil || got.Activation.PreviousVersion != 0 {
 		t.Fatalf("apply: %+v", got)
 	}
 	app, _ := st.GetApplication(ctx, in.Namespace.App)
-	if app.SchemaVersion != in.SchemaVersion || app.Contract[0].Alias != "db" {
+	if app.SchemaVersion != in.SourceSchemaVersion || app.Contract[0].Alias != "database" {
 		t.Fatalf("definition: %+v", app)
 	}
-	prod, err := st.GetActiveConfigurationRelease(ctx, domain.NamespaceRef{Env: "prod", App: in.Namespace.App}, "runtime")
+	prod, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: "prod", App: in.Namespace.App}, Name: "runtime", SchemaVersion: in.SourceSchemaVersion})
 	if err != nil || prod.Release.Version != 1 || prod.Release.SchemaVersion == in.SchemaVersion {
 		t.Fatalf("other environment changed: %+v %v", prod, err)
 	}
@@ -129,11 +130,11 @@ func TestApplicationMigrationInvalidAndStaleNeverMutate(t *testing.T) {
 			case "resource_drift":
 				_, _, err = svc.PutParameter(ctx, pr, domain.Ref{NS: in.Namespace, Key: "rate_limits"}, "15", "integer", "{}")
 			case "activation_aba":
-				other, e := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: in.Namespace.App, Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}})
+				other, e := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{SchemaVersion: &in.SourceSchemaVersion, Application: in.Namespace.App, Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}})
 				if e != nil {
 					t.Fatal(e)
 				}
-				_, _, err = svc.ActivateConfigurationRelease(ctx, pr, in.Namespace, "runtime", 1, &other.Release.Version)
+				_, _, err = svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, 1, &other.Release.Version)
 			case "definition_drift":
 				app, _ := st.GetApplication(ctx, in.Namespace.App)
 				app.Description = "changed"
@@ -142,7 +143,7 @@ func TestApplicationMigrationInvalidAndStaleNeverMutate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before, _ := st.ApplicationMigrationSnapshot(ctx, in.Namespace)
+			before, _ := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SchemaVersion})
 			in.Execute = true
 			in.PlanDigest = preview.PlanDigest
 			result, err := svc.MigrateApplicationRelease(ctx, pr, in)
@@ -153,7 +154,7 @@ func TestApplicationMigrationInvalidAndStaleNeverMutate(t *testing.T) {
 			} else if !errors.Is(err, domain.ErrAborted) {
 				t.Fatalf("stale apply: %+v %v", result, err)
 			}
-			after, _ := st.ApplicationMigrationSnapshot(ctx, in.Namespace)
+			after, _ := st.ApplicationMigrationSnapshot(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SchemaVersion})
 			if before.Digest != after.Digest {
 				t.Fatal("failed migration changed state")
 			}
@@ -184,12 +185,12 @@ type migrationInterleavingStore struct {
 	failApply      bool
 }
 
-func (st *migrationInterleavingStore) ApplicationMigrationSnapshot(ctx context.Context, ns domain.NamespaceRef, resources ...storage.MigrationResource) (storage.MigrationSnapshot, error) {
+func (st *migrationInterleavingStore) ApplicationMigrationSnapshot(ctx context.Context, source, target domain.ReleaseTrack, resources ...storage.MigrationResource) (storage.MigrationSnapshot, error) {
 	st.snapshotCalls++
 	if st.beforeSnapshot != nil {
 		st.beforeSnapshot(st.snapshotCalls)
 	}
-	return st.SQLStore.ApplicationMigrationSnapshot(ctx, ns, resources...)
+	return st.SQLStore.ApplicationMigrationSnapshot(ctx, source, target, resources...)
 }
 func (st *migrationInterleavingStore) ApplyApplicationMigration(ctx context.Context, in storage.ApplicationMigrationTransaction) (domain.ActiveConfigurationRelease, error) {
 	if st.beforeApply != nil {
@@ -229,7 +230,7 @@ func TestApplicationMigrationFinalTransactionCASAndNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			notifications, cancel := svc.SubscribeReleaseSubscribers(in.Namespace, "runtime")
+			notifications, cancel := svc.SubscribeReleaseSubscribers(domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SchemaVersion})
 			defer cancel()
 			wrapped := &migrationInterleavingStore{SQLStore: st}
 			if scenario == "resource" {
@@ -264,7 +265,7 @@ func TestApplicationMigrationFinalTransactionCASAndNotification(t *testing.T) {
 					t.Fatal("failed migration notified subscribers")
 				default:
 				}
-				a, _ := st.GetActiveConfigurationRelease(ctx, in.Namespace, "runtime")
+				a, _ := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion})
 				if a.Release.Version != 1 {
 					t.Fatal("failed migration activated")
 				}
@@ -307,7 +308,7 @@ func TestApplicationMigrationExpectedSource(t *testing.T) {
 	ctx := context.Background()
 	svc, st, in := migrationFixture(t)
 	pr := adminPrincipal()
-	source, err := st.GetActiveConfigurationRelease(ctx, in.Namespace, "runtime")
+	source, err := st.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,14 +320,14 @@ func TestApplicationMigrationExpectedSource(t *testing.T) {
 	if _, err = svc.MigrateApplicationRelease(ctx, pr, in); err != nil {
 		t.Fatal(err)
 	}
-	other, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: in.Namespace.App, Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}})
+	other, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{SchemaVersion: &in.SourceSchemaVersion, Application: in.Namespace.App, Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.MigrateApplicationRelease(ctx, pr, in); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("changed source: %v", err)
 	}
-	if _, _, err = svc.ActivateConfigurationRelease(ctx, pr, in.Namespace, "runtime", source.Release.Version, &other.Release.Version); err != nil {
+	if _, _, err = svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: in.Namespace, Name: "runtime", SchemaVersion: in.SourceSchemaVersion}, source.Release.Version, &other.Release.Version); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.MigrateApplicationRelease(ctx, pr, in); !errors.Is(err, domain.ErrAborted) {
@@ -422,14 +423,22 @@ func TestApplicationMigrationCorrelatedResourceAudits(t *testing.T) {
 		if err := json.Unmarshal([]byte(event.Metadata), &meta); err != nil {
 			t.Fatal(err)
 		}
-		if event.EventType == "application.release.migrate" && (meta["schema_version"] != "2" || meta["source_version"] != "1" || meta["source_activation_revision"] == "" || meta["previous_version"] != "1" || meta["parameter_write_count"] != "1") {
+		if event.EventType == "application.release.migrate" && (meta["schema_version"] != "2" || meta["source_version"] != "1" || meta["source_activation_revision"] == "" || meta["previous_version"] != "0" || meta["parameter_write_count"] != "1") {
 			t.Fatalf("missing migration metadata: %+v", meta)
 		}
-		if event.EventType == "configuration_release.activate" && meta["previous_version"] != "1" {
+		if event.EventType == "configuration_release.activate" && meta["previous_version"] != "0" {
 			t.Fatalf("missing activation metadata: %+v", meta)
 		}
+		if event.ResourceType == domain.ResourceConfigurationRelease && meta["schema_version"] != "2" {
+			t.Fatalf("missing destination schema: %+v", event)
+		}
+		if event.EventType == "configuration_release.activate" || event.EventType == "application.release.migrate" {
+			if meta["activation_revision"] != fmt.Sprint(result.Activation.ActivationRevision) || meta["source_schema_version"] != "1" {
+				t.Fatalf("missing activation identity: %+v", event)
+			}
+		}
 		for key := range meta {
-			if key != "operation" && key != "schema_version" && key != "source_version" && key != "source_activation_revision" && key != "previous_version" && key != "parameter_write_count" {
+			if key != "activation_revision" && key != "source_schema_version" && key != "operation" && key != "schema_version" && key != "source_version" && key != "source_activation_revision" && key != "previous_version" && key != "parameter_write_count" {
 				t.Fatalf("unexpected potentially sensitive metadata: %s", key)
 			}
 		}

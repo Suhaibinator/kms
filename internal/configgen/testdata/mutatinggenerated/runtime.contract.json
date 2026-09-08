@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/mutating",
     "type": "Config"
   },
-  "schema_sha256": "95e30071e4dfde584cdb41e43d8659ab36523b8dee1ae8ad3b5614eeca36a850",
+  "schema_sha256": "ac5a5fc80b07e1d1f5bbbe385513af6f77b188f8c2d0ecb1707d1f2aecbae66c",
   "groups": [
     {
       "alias": "runtime",

@@ -118,6 +118,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
       updateDefinition: false,
@@ -147,6 +148,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenLastCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: true,
       updateDefinition: false,
@@ -155,15 +157,10 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenCalledTimes(2);
   });
 
-  it("resets opt-ins on artifact replacement so execution matches the preview", async () => {
+  it("resets overwrite on artifact replacement so execution matches the preview", async () => {
     mocks.importDefaults.mockResolvedValue(response());
     const { onImported } = renderModal();
     await uploadArtifact();
-    fireEvent.click(screen.getByRole("checkbox", { name: /Update application definition/ }));
-    await screen.findByLabelText("Defaults import preview");
-    expect(mocks.importDefaults).toHaveBeenLastCalledWith(
-      expect.objectContaining({ updateDefinition: true }),
-    );
     fireEvent.click(screen.getByRole("checkbox", { name: /Overwrite differing/ }));
     await screen.findByLabelText("Defaults import preview");
     const replacement = new File(["replacement artifact"], "replacement.json", {
@@ -173,10 +170,6 @@ describe("ImportDefaultsModal", () => {
       target: { files: [replacement] },
     });
     await screen.findByLabelText("Defaults import preview");
-    expect(screen.getByRole("checkbox", { name: /Update application definition/ })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
     expect(screen.getByRole("checkbox", { name: /Overwrite differing/ })).toHaveAttribute(
       "aria-checked",
       "false",
@@ -262,6 +255,7 @@ describe("ImportDefaultsModal", () => {
     expect(mocks.importDefaults).toHaveBeenLastCalledWith({
       env: "dev",
       app: "gradethis",
+      schemaVersion: 0,
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
       updateDefinition: false,
@@ -276,22 +270,12 @@ describe("ImportDefaultsModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("requires a fresh opt-in preview before updating the application definition", async () => {
-    mocks.importDefaults
-      .mockResolvedValueOnce(response("unchanged", { definition_changed: true }))
-      .mockResolvedValueOnce(response("unchanged", { definition_changed: true }));
+  it("blocks artifacts that change the selected track definition", async () => {
+    mocks.importDefaults.mockResolvedValueOnce(response("unchanged", { definition_changed: true }));
     renderModal();
     await uploadArtifact();
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /Update application definition/ }));
-
-    await waitFor(() => expect(mocks.importDefaults).toHaveBeenCalledTimes(2));
-    expect(mocks.importDefaults).toHaveBeenLastCalledWith({
-      env: "dev",
-      app: "gradethis",
-      artifact: expect.any(ArrayBuffer),
-      overwrite: false,
-      updateDefinition: true,
-    });
+    expect(screen.queryByRole("checkbox", { name: /Update application definition/ })).toBeNull();
+    expect(screen.getByText(/matches the selected schema track/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Import defaults" })).toBeDisabled();
   });
 });

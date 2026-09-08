@@ -194,7 +194,7 @@ a token.
   ([Clone an environment](#clone-an-environment)).
 - `POST /api/v1/releases/rollback` → `RollbackResponse`
   ([Rollback](#rollback)).
-- `GET /api/v1/release-subscribers/stream?env=&app=&name=` →
+- `GET /api/v1/release-subscribers/stream?env=&app=&name=&schema_version=` →
   `text/event-stream` ([Subscriber stream](#subscriber-stream)).
 
 #### ApplicationOverview
@@ -416,12 +416,16 @@ object — secrets never appear in a schema (see
 
 `POST /api/v1/applications/ship` performs the console's "Quick change" as one
 request: write new parameter versions, create a release whose entries pin
-them, and activate it with a compare-and-swap guard.
+them, and activate it with a compare-and-swap guard. The required
+`schema_version` selects the exact track and its persisted contract; use `0`
+for schema-free. Omitted or `null` selectors return `invalid_argument` (400),
+including dry runs, before any resource, release, or activation changes.
 
 ```json
 {
   "application": "gradethis",
   "environment": "prod",
+  "schema_version": 1,
   "changes": [
     { "alias": "rate_limits", "value": "20", "content_type": "integer" },
     { "alias": "database", "version": 3 },
@@ -557,10 +561,13 @@ recorded as well.
 `POST /api/v1/applications/{application}/schema-migration` is an admin-only
 preview/apply operation for one existing environment with an active release.
 It uses a registered schema in the application's release lineage.
+`source_schema_version` is required, including an explicit `0` when upgrading
+from a schema-free track; `schema_version` identifies the registered destination.
 
 ```json
 {
   "environment": "dev",
+  "source_schema_version": 1,
   "schema_version": 2,
   "contract": [
     {"alias": "database", "kind": "parameter", "content_type": "json"},
@@ -598,8 +605,9 @@ return resource values. Read parameter values through the existing authorized
 exact-version parameter endpoint when building an editor.
 
 Apply resubmits the same candidate with `execute: true` and the preview's
-`plan_digest`. A valid apply atomically writes parameter changes, updates the
-application definition, creates the release, moves current/previous, and records
+`plan_digest`. A valid apply atomically writes parameter changes, establishes
+the destination schema's immutable contract, creates its release, moves that
+track's current/previous labels, and records
 the migration event plus standard `parameter.write`,
 `configuration_release.create`, and `configuration_release.activate` audit
 events in the same transaction. The events retain the request ID, source IP,
@@ -612,19 +620,22 @@ validation errors and no writes. A missing apply digest returns HTTP 400
 preview. Following an uncertain response, read active state
 before retrying.
 
-The schema pin and contract are application-wide. Other environments keep their
-active releases, but old-definition releases cannot be validated/reactivated
-under the normal current-contract checks. Migrate each remaining environment
-separately. This endpoint neither registers schemas nor creates secrets.
+The source track keeps its activation and remains fully manageable. Other
+environments and schema tracks keep their active releases and contracts.
+Migrate each remaining environment separately. This endpoint neither
+registers schemas nor creates secrets.
 
 #### Clone an environment
 
 `POST /api/v1/applications/environments/clone` creates an additional
-environment for an application, optionally seeded from an existing one:
+environment for an application, optionally seeded from an existing one.
+The required `schema_version` selects the source track and its persisted
+contract; use `0` for schema-free. Omitted or `null` selectors return
+`invalid_argument` (400) before creating a namespace or copying resources:
 
 ```json
 { "application": "gradethis", "source_env": "dev", "target_env": "prod",
-  "copy_values": true, "auth_methods": ["mtls"], "description": "Production" }
+  "schema_version": 1, "copy_values": true, "auth_methods": ["mtls"], "description": "Production" }
 ```
 
 →
@@ -650,9 +661,10 @@ must exist (404). The target namespace is created when missing, with the
 source's `allowed_auth_methods` unless `auth_methods` is given; an existing
 target namespace is attached (`namespace_created: false`), not an error. The
 item list is the application contract resolved to keys with the alias → key
-rule in the source environment, or — when the contract is empty — every
-parameter and secret present in the source, keyed by its own name. Per item,
-`action` is decided in this order:
+rule in the selected source track. Only a track whose contract has never
+been established falls back to every parameter and secret present in the
+source, keyed by its own name. An established empty contract copies no
+resources. Per item, `action` is decided in this order:
 
 - `exists` — the key already exists in the target (whatever its kind) and is
   **left untouched**; clone never overwrites;
@@ -681,7 +693,7 @@ parameter-write events.
 version. It requires `configuration-release:activate`, like activate.
 
 ```json
-{ "env": "prod", "app": "gradethis", "name": "runtime", "expected_current_version": 13 }
+{ "env": "prod", "app": "gradethis", "name": "runtime", "schema_version": 1, "expected_current_version": 13 }
 ```
 
 →
@@ -713,7 +725,7 @@ version use `POST /api/v1/releases/activate`.
 
 #### Subscriber stream
 
-`GET /api/v1/release-subscribers/stream?env=&app=&name=` pushes the
+`GET /api/v1/release-subscribers/stream?env=&app=&name=&schema_version=` pushes the
 per-instance lifecycle state of one release name as **server-sent events**
 (`Content-Type: text/event-stream; charset=utf-8`, `Cache-Control:
 no-store`, `X-Accel-Buffering: no`). It is the live transport behind the
@@ -1286,6 +1298,14 @@ rules (a deny still wins).
 
 ### Configuration releases and schemas
 
+Release identities include `schema_version`: each schema has independent
+numbering, current/previous labels, history, and subscribers. Exact reads,
+validation, activation, rollback, and subscriber streams require an explicit
+selector; `0` selects the schema-free track. List endpoints accept an optional
+`schema_version` filter; omission lists all tracks. A known schema without an
+active release returns `not_found` from active lookup without choosing another
+schema.
+
 - `POST /api/v1/releases` creates, but does not activate, an immutable release:
   ```json
   { "namespace": { "env": "prod", "app": "gradethis" },
@@ -1299,17 +1319,30 @@ rules (a deny still wins).
   ```
   → `201 {"release": ConfigurationRelease}`. Labels are resolved to exact
   versions before the returned release is persisted.
-- `GET /api/v1/releases?env=&app=&name=&page_size=&page_token=` →
+- `GET /api/v1/releases?env=&app=&name=&schema_version=&page_size=&page_token=` →
   `{"releases":[{"release":ConfigurationRelease,"current":true,
   "previous":false,"activation_revision":42}],"next_page_token":""}`.
-  `name` is optional; the namespace is required.
-- `GET /api/v1/releases/get?env=&app=&name=&version=` →
+  `name` and `schema_version` are optional; the namespace is required.
+- `GET /api/v1/releases/schema-versions?env=&app=&name=&page_size=&page_token=` →
+  `{ "schema_versions": [3, 2, 1], "next_page_token": "..." }`. Discovers
+  registered numeric schema versions, including tracks with no releases or
+  activation yet. Uses the same `configuration-release:list` permission,
+  namespace binding, and allowed authentication methods as listing releases;
+  it does not require schema-admin access. `env` and `app` are required. An
+  optional `name` filters the release lineage; omitting it lists the application's
+  registered lineages without selecting the application's default. Results use
+  registry order (newest version first within each lineage) and cursor pagination.
+  Schema-free version `0` is implicit and excluded; an application with no
+  registered schemas or an unknown release name returns an empty array. No schema
+  documents, contracts, digests, or metadata are exposed. The full configuration
+  schema registry endpoints remain admin-only.
+- `GET /api/v1/releases/get?env=&app=&name=&version=&schema_version=` →
   `{"release": ConfigurationRelease}`.
-- `GET /api/v1/releases/active?env=&app=&name=` →
+- `GET /api/v1/releases/active?env=&app=&name=&schema_version=` →
   `{"release":ConfigurationRelease,"activation_revision":42,
   "previous_version":13}`.
 - `POST /api/v1/releases/validate` with
-  `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime","version":14}`
+  `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime","schema_version":1,"version":14}`
   → `{"valid":false,"errors":[{"alias":"rate_limits",
   "code":"schema_violation","schema_pointer":"/properties/rate_limits/type",
   "message":"Use a value of type integer."}]}`. Error messages
@@ -1317,7 +1350,7 @@ rules (a deny still wins).
   bounds. They are sanitized and never include submitted configuration values.
 - `POST /api/v1/releases/activate` with
   `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime",
-  "version":14,"expected_current_version":13}` →
+  "schema_version":1,"version":14,"expected_current_version":13}` →
   `{"release":ConfigurationRelease,"activation_revision":42,
   "previous_version":13,"changed":true}`. Omit `expected_current_version` for
   no CAS guard; an explicit `0` requires that no release is active. A conflict
@@ -1341,8 +1374,8 @@ rules (a deny still wins).
   "metadata_json","created_by","created_at_unix_ms"}}`.
 - `GET /api/v1/configuration-schemas?application=&release_name=&page_size=&page_token=` →
   `{"schemas":[...],"next_page_token":""}`. Coordinate filters are optional.
-- `GET /api/v1/release-subscribers?env=&app=&name=&page_size=&page_token=` →
-  `{"subscribers":[{"namespace","release_name","client_name","instance_id",
+- `GET /api/v1/release-subscribers?env=&app=&name=&schema_version=&page_size=&page_token=` →
+  `{"subscribers":[{"namespace","release_name","schema_version","client_name","instance_id",
   "identity","state","release_version","activation_revision",
   "rejection_category","diagnostic","client_timestamp_unix_ms",
   "server_timestamp_unix_ms","connected","applied_divergent",
@@ -1354,18 +1387,19 @@ rules (a deny still wins).
 - `POST /api/v1/releases/rollback` re-activates the `previous` version with
   the same CAS and validation-failure semantics as activate; see
   [Rollback](#rollback) under Console aggregates.
-- `GET /api/v1/release-subscribers/stream?env=&app=&name=` is the
+- `GET /api/v1/release-subscribers/stream?env=&app=&name=&schema_version=` is the
   server-sent-events form of the subscriber list; see
   [Subscriber stream](#subscriber-stream).
 
-Release subscriber rows are per process instance and lifecycle state. Group
-rows by `(identity, client_name, instance_id)` to show
+Release subscriber rows are per track, process instance and lifecycle state. Group
+rows by `(namespace, release_name, schema_version, identity, client_name, instance_id)` to show
 received/prepared/applied/rejected together without combining different
 authenticated identities that reuse the same client and instance names. A
 connected instance with no lifecycle acknowledgement yet is
 represented by a row whose `state` is empty. `current_revision` is the active
-revision for the requested release name, so lag is release-specific rather
-than namespace-global.
+revision for the selected track. An aggregate list without a schema selector
+returns `current_revision: 0`; compare each row against its own track's active
+release when computing progress.
 
 Release watch and acknowledgement traffic is gRPC-only. See
 [`configuration-releases.md`](configuration-releases.md#grpc-contract) for the

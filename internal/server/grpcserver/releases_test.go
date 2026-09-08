@@ -99,32 +99,64 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		t.Fatalf("duplicate schema code = %s err=%v, want AlreadyExists", status.Code(err), err)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	if _, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
+		Namespace: pNS("prod", "app"), Name: "runtime",
+		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create missing schema code = %s err=%v, want InvalidArgument", status.Code(err), err)
+	}
+	for name, call := range map[string]func() error{
+		"get": func() error {
+			_, e := releases.GetRelease(adminCtx(), &kmsv1.GetReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+		"active": func() error {
+			_, e := releases.GetActiveRelease(adminCtx(), &kmsv1.GetActiveReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime"})
+			return e
+		},
+		"activate": func() error {
+			_, e := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+		"validate": func() error {
+			_, e := releases.ValidateRelease(adminCtx(), &kmsv1.ValidateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
+			return e
+		},
+	} {
+		if err := call(); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("%s missing schema: %v", name, err)
+		}
+	}
+	resolved, err := releases.ResolveReleaseSchema(adminCtx(), &kmsv1.ResolveReleaseSchemaRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaSha256: pinnedSchema.Digest})
+	if err != nil || resolved.GetSchemaVersion() != pinnedSchema.Version {
+		t.Fatalf("resolve schema: %+v %v", resolved, err)
+	}
+	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: &pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created.GetRelease().GetVersion() != 1 || created.GetRelease().GetDigest() == "" {
 		t.Fatalf("created=%+v", created.GetRelease())
 	}
-	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: new(uint64(0))})
+	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: new(uint64(0))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !active.GetChanged() || active.GetActivationRevision() == 0 {
 		t.Fatalf("active=%+v", active)
 	}
-	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: &pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: new(uint64(0))}); status.Code(err) != codes.Aborted {
+	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: new(uint64(0))}); status.Code(err) != codes.Aborted {
 		t.Fatalf("stale CAS code=%s err=%v, want Aborted", status.Code(err), err)
 	}
 	stream, err := releases.WatchRelease(adminCtx())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	event, err := stream.Recv()
@@ -143,7 +175,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if subscriber.GetReleaseName() != "runtime" || subscriber.GetClientName() != "api" || subscriber.GetInstanceId() != "replica-1" || subscriber.GetReleaseState() != "" || subscriber.GetLastAckedRevision() != 0 || subscriber.GetConnectedAtUnixMs() == 0 {
 		t.Fatalf("new release subscriber = %+v", subscriber)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{SchemaVersion: pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -189,7 +221,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := duplicate.Recv(); err != nil {
@@ -337,14 +369,23 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{
+	if _, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
+		Namespace: pNS("prod", "app"), Name: "runtime",
+		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create missing schema code = %s err=%v, want InvalidArgument", status.Code(err), err)
+	}
+	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: new(uint64), Entries: []*kmsv1.ReleaseEntrySelector{
 		{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"},
 		{Alias: "greeting", Kind: "parameter", Ref: pRef("prod", "app", "greeting"), Label: "current"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion()})
+	if created.GetRelease().GetVersion() != 1 || created.GetRelease().GetSchemaVersion() != 0 {
+		t.Fatalf("explicit schema zero release = %+v, want schema 0 version 1", created.GetRelease())
+	}
+	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +394,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := strings.Repeat("f", 64)
-	req := &kmsv1.VerifyReleaseDefaultsRequest{
+	req := &kmsv1.VerifyReleaseDefaultsRequest{SchemaVersion: new(uint64(0)),
 		Namespace: pNS("prod", "app"), Profile: "dev",
 		Entries: []*kmsv1.VerifyEntry{
 			{Alias: "settings", ContentType: "json", Sha256: canonical},
@@ -367,7 +408,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatalf("client verify code = %s err=%v, want PermissionDenied", status.Code(err), err)
 	}
 	// Malformed hashes are InvalidArgument.
-	bad := &kmsv1.VerifyReleaseDefaultsRequest{Namespace: pNS("prod", "app"), Entries: []*kmsv1.VerifyEntry{{Alias: "settings", ContentType: "json", Sha256: strings.ToUpper(canonical)}}}
+	bad := &kmsv1.VerifyReleaseDefaultsRequest{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Entries: []*kmsv1.VerifyEntry{{Alias: "settings", ContentType: "json", Sha256: strings.ToUpper(canonical)}}}
 	if _, err := releases.VerifyReleaseDefaults(adminCtx(), bad); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("uppercase hash code = %s err=%v, want InvalidArgument", status.Code(err), err)
 	}
@@ -379,8 +420,8 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if resp.GetName() != "runtime" || resp.GetVersion() != created.GetRelease().GetVersion() || resp.GetActivationRevision() != active.GetActivationRevision() {
 		t.Fatalf("verify identity = %+v", resp)
 	}
-	if resp.GetSchemaMatches() {
-		t.Fatal("no schema digest was supplied; schema_matches must be false")
+	if !resp.GetSchemaMatches() || resp.GetSchemaVersion() != 0 {
+		t.Fatal("explicit schema-free track must match")
 	}
 	verdicts := map[string]string{}
 	for _, e := range resp.GetEntries() {
@@ -411,7 +452,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stream.Recv(); err != nil {

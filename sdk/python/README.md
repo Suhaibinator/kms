@@ -219,6 +219,7 @@ from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
 
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
+    schema_version=3,
     binding_keys={"openai_api_key": os.environ["OPENAI_KMS_BINDING_KEY"]},
     validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
@@ -228,6 +229,12 @@ def prepare(cancel, snapshot):
 
 loader.run(prepare)  # blocks; call loader.stop() from another thread to stop
 ```
+
+Every loader is pinned to one schema track. Pass `schema_version` (including
+`0` for an explicitly schema-free release), or pass `schema_sha256` to resolve
+a registered schema once and retain the resulting numeric track across
+reconnects and later `run` calls. Generated managed configuration bindings
+pass their schema digest automatically.
 
 For each exact secret pin, the loader validates live metadata and resolves a
 key from `binding_keys` only when the version is bound. Missing binding keys

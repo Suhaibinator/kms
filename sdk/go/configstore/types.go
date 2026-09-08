@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,8 +57,13 @@ type Callbacks struct {
 
 // Options configures a managed configuration manager.
 type Options struct {
-	Release  string
-	Contract []ContractEntry
+	Release string
+	// SchemaVersion selects an exact schema track. Schema version zero is
+	// valid. Exactly one of SchemaVersion and SchemaSHA256 must be set.
+	SchemaVersion *uint64
+	// SchemaSHA256 selects a schema track by generated schema digest.
+	SchemaSHA256 string
+	Contract     []ContractEntry
 	Callbacks
 	// BindingKeys is an internal alias-keyed credential map assembled by
 	// generated stores from declaration-only Secret.BindKey fields.
@@ -68,16 +74,20 @@ type Options struct {
 }
 
 type optionsJSON struct {
-	Release              string `json:"release"`
-	ContractEntries      int    `json:"contract_entries"`
-	ReconcileInterval    string `json:"reconcile_interval"`
-	MaxConcurrentFetches int    `json:"max_concurrent_fetches"`
-	InstanceID           string `json:"instance_id,omitempty"`
+	Release              string  `json:"release"`
+	SchemaVersion        *uint64 `json:"schema_version,omitempty"`
+	SchemaSHA256         string  `json:"schema_sha256,omitempty"`
+	ContractEntries      int     `json:"contract_entries"`
+	ReconcileInterval    string  `json:"reconcile_interval"`
+	MaxConcurrentFetches int     `json:"max_concurrent_fetches"`
+	InstanceID           string  `json:"instance_id,omitempty"`
 }
 
 func (o Options) safeProjection() optionsJSON {
 	return optionsJSON{
 		Release:              o.Release,
+		SchemaVersion:        o.SchemaVersion,
+		SchemaSHA256:         o.SchemaSHA256,
 		ContractEntries:      len(o.Contract),
 		ReconcileInterval:    o.ReconcileInterval.String(),
 		MaxConcurrentFetches: o.MaxConcurrentFetches,
@@ -87,8 +97,12 @@ func (o Options) safeProjection() optionsJSON {
 
 // String omits callbacks, providers, and credential containers.
 func (o Options) String() string {
-	return fmt.Sprintf("Options{release=%q contract_entries=%d reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
-		o.Release, len(o.Contract), o.ReconcileInterval, o.MaxConcurrentFetches, o.InstanceID)
+	schemaVersion := "<unset>"
+	if o.SchemaVersion != nil {
+		schemaVersion = strconv.FormatUint(*o.SchemaVersion, 10)
+	}
+	return fmt.Sprintf("Options{release=%q schema_version=%s schema_sha256=%q contract_entries=%d reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		o.Release, schemaVersion, o.SchemaSHA256, len(o.Contract), o.ReconcileInterval, o.MaxConcurrentFetches, o.InstanceID)
 }
 
 func (o Options) GoString() string { return o.String() }
@@ -627,9 +641,9 @@ func (r ReleaseIdentity) IsZero() bool {
 
 func (r ReleaseIdentity) String() string {
 	if r.namespace == "" && r.name == "" {
-		return fmt.Sprintf("release@%d#%d", r.version, r.activationRevision)
+		return fmt.Sprintf("release@%d#%d schema_version=%d", r.version, r.activationRevision, r.schemaVersion)
 	}
-	return fmt.Sprintf("%s/%s@%d#%d", r.namespace, r.name, r.version, r.activationRevision)
+	return fmt.Sprintf("%s/%s@%d#%d schema_version=%d", r.namespace, r.name, r.version, r.activationRevision, r.schemaVersion)
 }
 
 func (r ReleaseIdentity) MarshalJSON() ([]byte, error) {

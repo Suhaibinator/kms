@@ -23,6 +23,8 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	cf := addConnFlags(c, fs)
 	artifactPath := fs.String("artifact", "", "generated defaults artifact `file` ('-' for stdin)")
 	releaseName := fs.String("release", "", "release `name` (default: the application's release name)")
+	var schemaVersion optionalUint64
+	fs.Var(&schemaVersion, "schema-version", "explicit release schema track (0 selects the schema-free track)")
 	c.setUsage(fs, "release verify-defaults ENV/APP --artifact FILE|- [flags]",
 		"Compare a generated defaults artifact with the active release by hash alone; no parameter value leaves the process.", false)
 	if !c.parseFlags(fs, args) {
@@ -47,7 +49,13 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	if err != nil {
 		return c.fail("invalid defaults artifact: %v", err)
 	}
-	req, err := verifyDefaultsRequest(ns, *releaseName, artifact)
+	if schemaVersion.set && artifact.SchemaSHA256 != "" {
+		return c.releaseUsageError("release verify-defaults --schema-version is mutually exclusive with the artifact schema digest")
+	}
+	if !schemaVersion.set && artifact.SchemaSHA256 == "" {
+		return c.releaseUsageError("release verify-defaults requires --schema-version when the artifact has no schema digest")
+	}
+	req, err := verifyDefaultsRequest(ns, *releaseName, artifact, schemaVersion)
 	if err != nil {
 		return c.fail("release verify-defaults: %v", err)
 	}
@@ -66,7 +74,7 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	if err != nil {
 		return c.fail("release verify-defaults: %v", err)
 	}
-	checkSchema := artifact.SchemaSHA256 != ""
+	checkSchema := artifact.SchemaSHA256 != "" || schemaVersion.set
 	clean := verifyDefaultsClean(checkSchema, resp)
 	if c.jsonOutput() {
 		if code := c.printJSON(verifyDefaultsJSONOf(checkSchema, clean, resp)); code != exitOK {
@@ -91,7 +99,13 @@ func (c *CLI) releaseUsageError(format string, args ...any) int {
 // parameter is hashed with the shared canonical rule (sorted-key compact JSON
 // for the json content type, exact bytes otherwise) so the digest matches what
 // the server computes for the pinned value.
-func verifyDefaultsRequest(ns *kmsv1.NamespaceRef, releaseName string, artifact configstore.DefaultsArtifact) (*kmsv1.VerifyReleaseDefaultsRequest, error) {
+func verifyDefaultsRequest(ns *kmsv1.NamespaceRef, releaseName string, artifact configstore.DefaultsArtifact, schemaVersion optionalUint64) (*kmsv1.VerifyReleaseDefaultsRequest, error) {
+	if schemaVersion.set && artifact.SchemaSHA256 != "" {
+		return nil, fmt.Errorf("schema version and schema digest are mutually exclusive")
+	}
+	if !schemaVersion.set && artifact.SchemaSHA256 == "" {
+		return nil, fmt.Errorf("a schema version or schema digest is required")
+	}
 	entries := make([]*kmsv1.VerifyEntry, 0, len(artifact.Parameters))
 	for _, parameter := range artifact.Parameters {
 		sum, err := configstore.ParameterHash(parameter.ContentType, []byte(parameter.Value))
@@ -100,10 +114,14 @@ func verifyDefaultsRequest(ns *kmsv1.NamespaceRef, releaseName string, artifact 
 		}
 		entries = append(entries, &kmsv1.VerifyEntry{Alias: parameter.Alias, ContentType: parameter.ContentType, Sha256: sum})
 	}
-	return &kmsv1.VerifyReleaseDefaultsRequest{
+	request := &kmsv1.VerifyReleaseDefaultsRequest{
 		Namespace: ns, Name: releaseName, Profile: artifact.Profile,
 		SchemaSha256: artifact.SchemaSHA256, Entries: entries,
-	}, nil
+	}
+	if schemaVersion.set {
+		request.SchemaVersion = &schemaVersion.value
+	}
+	return request, nil
 }
 
 // verifyDefaultsSchemaText is the schema verdict both renderers print: an
@@ -142,6 +160,7 @@ type releaseVerifyDefaultsJSON struct {
 	Name               string                   `json:"name"`
 	Version            uint64                   `json:"version"`
 	ActivationRevision uint64                   `json:"activation_revision"`
+	SchemaVersion      uint64                   `json:"schema_version"`
 	Schema             string                   `json:"schema"`
 	Clean              bool                     `json:"clean"`
 	Entries            []releaseVerifyEntryJSON `json:"entries"`
@@ -157,6 +176,7 @@ func verifyDefaultsJSONOf(checkSchema, clean bool, resp *kmsv1.VerifyReleaseDefa
 		Name:               resp.GetName(),
 		Version:            resp.GetVersion(),
 		ActivationRevision: resp.GetActivationRevision(),
+		SchemaVersion:      resp.GetSchemaVersion(),
 		Schema:             verifyDefaultsSchemaText(checkSchema, resp),
 		Clean:              clean,
 		Entries:            entries,
@@ -178,10 +198,10 @@ func (c *CLI) printVerifyDefaults(checkSchema bool, resp *kmsv1.VerifyReleaseDef
 		rows = append(rows, []string{entry.GetAlias(), entry.GetVerdict()})
 	}
 	c.printTable([]string{"ALIAS", "VERDICT"}, rows)
-	_, _ = fmt.Fprintf(c.Stdout, "Release %s version %d (revision %d): %d match, %d differs, %d missing_in_release, %d unknown_alias, %d secret_alias, %d unsupported_content_type, %d unverified; schema %s\n",
+	_, _ = fmt.Fprintf(c.Stdout, "Release %s version %d (revision %d): %d match, %d differs, %d missing_in_release, %d unknown_alias, %d secret_alias, %d unsupported_content_type, %d unverified; schema %s (version %d)\n",
 		resp.GetName(), resp.GetVersion(), resp.GetActivationRevision(),
 		resp.GetMatchCount(), resp.GetDiffersCount(), resp.GetMissingInReleaseCount(), resp.GetUnknownAliasCount(),
-		resp.GetSecretAliasCount(), resp.GetUnsupportedContentTypeCount(), resp.GetUnverifiedCount(), verifyDefaultsSchemaText(checkSchema, resp))
+		resp.GetSecretAliasCount(), resp.GetUnsupportedContentTypeCount(), resp.GetUnverifiedCount(), verifyDefaultsSchemaText(checkSchema, resp), resp.GetSchemaVersion())
 }
 
 // verifyDefaultsClean reports whether every requested alias matched and, when

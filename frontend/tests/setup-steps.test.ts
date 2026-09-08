@@ -99,7 +99,7 @@ describe("deriveSetupSteps", () => {
     const steps = byId(deriveSetupSteps({ applicationCount: 1, namespaceCount: 0, overview }));
     expect(steps.contract).toMatchObject({
       state: "current",
-      action: { label: "Edit contract", action: { kind: "edit-definition" } },
+      action: { label: "Manage releases", action: { kind: "manage-contract" } },
     });
     expect(steps.contract?.detail).toContain("1 alignment finding");
     expect(steps.environment?.state).toBe("todo");

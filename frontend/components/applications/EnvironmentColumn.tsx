@@ -30,7 +30,7 @@ export interface EnvironmentCallbacks {
   onConnect: (env: string) => void;
   onImportDefaults?: (env: string) => void;
   onMigrateSchema?: (env: string) => void;
-  /** The empty-contract row's "Edit contract"; the contract is edited at the application. */
+  /** Open the selected track's releases to establish a contract on first adoption. */
   onEditContract?: (env: string) => void;
   /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
   onFix: (action: FixAction, finding: Finding) => void;
@@ -112,7 +112,12 @@ export function EnvironmentColumn({
             {
               key: "releases",
               label: "Releases",
-              href: links.releases({ app: ns.app, env: ns.env, name: application.release_name }),
+              href: links.releases({
+                app: ns.app,
+                env: ns.env,
+                name: application.release_name,
+                schemaVersion: application.schema_version,
+              }),
             },
             { key: "connect", label: "Connect SDK", onSelect: () => callbacks.onConnect(ns.env) },
             ...(callbacks.onImportDefaults

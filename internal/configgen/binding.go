@@ -294,6 +294,7 @@ func (r *bindingRenderer) renderStart() {
 	r.line("\tstore := &Store{defaults: sanitizedDefaults}")
 	r.line("\tmanager, err := configstore.Start(ctx, client, configstore.Options{")
 	r.line("\t\tRelease: options.Release,")
+	r.line("\t\tSchemaSHA256: generatedSchemaSHA256,")
 	r.line("\t\tContract: generatedContract,")
 	r.line("\t\tCallbacks: options.Callbacks,")
 	r.line("\t\tBindingKeys: bindingKeys,")

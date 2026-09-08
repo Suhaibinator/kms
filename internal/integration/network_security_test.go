@@ -342,7 +342,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
 	created, err := releases.CreateRelease(rootCtx, &kmsv1.CreateReleaseRequest{
-		Namespace: networkNS("prod", "release-identity"), Name: "runtime",
+		Namespace: networkNS("prod", "release-identity"), Name: "runtime", SchemaVersion: new(uint64),
 		Entries: []*kmsv1.ReleaseEntrySelector{{
 			Alias: "workers", Kind: domain.ReleaseEntryParameter,
 			Ref: networkRef("prod", "release-identity", "workers"), Label: domain.LabelCurrent,
@@ -351,7 +351,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create release: %v", err)
 	}
-	active, err := releases.ActivateRelease(rootCtx, &kmsv1.ActivateReleaseRequest{
+	active, err := releases.ActivateRelease(rootCtx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(0),
 		Namespace: networkNS("prod", "release-identity"), Name: "runtime", Version: created.GetRelease().GetVersion(),
 	})
 	if err != nil || !active.GetChanged() {
@@ -390,7 +390,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 			t.Fatalf("open release watch for %s: %v", identity, err)
 		}
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{
-			Register: &kmsv1.ReleaseWatchRegistration{
+			Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: integrationSchemaVersion(0),
 				Namespace: networkNS("prod", "release-identity"), Name: "runtime",
 				ClientName: "shared-client", InstanceId: "shared-instance",
 			},

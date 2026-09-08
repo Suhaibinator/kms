@@ -130,7 +130,8 @@ def test_async_defaults_transport_wrappers():
         client._release_stub = SimpleNamespace(VerifyReleaseDefaults=verify)
         client._admin_stub = SimpleNamespace(ApplyApplicationDefaults=apply)
         verified = await client.verify_release_defaults(
-            namespace=NS, entries=[{"alias": "settings", "content_type": "json", "sha256": digest}]
+            namespace=NS, schema_version=0,
+            entries=[{"alias": "settings", "content_type": "json", "sha256": digest}]
         )
         assert verified.passed
 
@@ -143,6 +144,7 @@ def test_async_defaults_transport_wrappers():
         with pytest.raises(RateLimitedError):
             await client.verify_release_defaults(
                 namespace=NS,
+                schema_version=0,
                 entries=[{"alias": "settings", "content_type": "json", "sha256": digest}],
             )
         preview = await client.apply_application_defaults(namespace=NS, artifact="{}")

@@ -33,6 +33,10 @@ def test_generation_is_deterministic_and_contract_matches_other_sdks(tmp_path: P
     assert first.schema_sha256 in first.contract
     assert "GeneratedConfigStore" in first.binding
     assert '"minimum": 1' in first.schema and '"maximum": 65535' in first.schema
+    assert json.loads(first.schema)["x-kms-contract"] == [
+        {"alias": "password", "kind": "secret", "content_type": ""},
+        {"alias": "runtime", "kind": "parameter", "content_type": "json"},
+    ]
     assert "generator-binding-key-canary" not in first.binding + first.schema + first.contract
 
     binding, schema, contract = tmp_path / "generated.py", tmp_path / "schema.json", tmp_path / "contract.json"
@@ -102,6 +106,7 @@ def test_generated_start_and_verify_surfaces(monkeypatch) -> None:
 
     response = type("Response", (), {
         "release_name": "runtime", "release_version": 1, "activation_revision": 2,
+        "schema_version": 2,
         "schema_matches": True,
         "entries": (type("Verdict", (), {"alias": "runtime", "verdict": "match"})(),),
         "unverified_count": 0,
@@ -112,7 +117,9 @@ def test_generated_start_and_verify_surfaces(monkeypatch) -> None:
     class AsyncClient:
         async def verify_release_defaults(self, **kwargs):
             return response
-    assert store.verify_defaults(Client(), namespace="dev/app").passed
+    result = store.verify_defaults(Client(), namespace="dev/app")
+    assert result.passed
+    assert result.schema_version == 2
     assert asyncio.run(store.verify_defaults_async(AsyncClient(), namespace="dev/app")).passed
 
 

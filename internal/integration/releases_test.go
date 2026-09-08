@@ -60,7 +60,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("CreateConfigurationRelease v1: %v", err)
 	}
 	assertReleasePins(t, releaseV1, parameterV1, secretV1.Version, secretV1Plaintext)
-	validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV1.Version)
+	validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, releaseV1.Track(), releaseV1.Version)
 	if err != nil {
 		t.Fatalf("ValidateConfigurationRelease v1: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("CreateConfigurationRelease v2: %v", err)
 	}
 	assertReleasePins(t, releaseV2, parameterInvalid, secretV2.Version, secretV2Plaintext)
-	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version)
+	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, releaseV2.Track(), releaseV2.Version)
 	if err != nil {
 		t.Fatalf("ValidateConfigurationRelease v2: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConfigurationRelease v3: %v", err)
 	}
-	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version)
+	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, releaseV3.Track(), releaseV3.Version)
 	if err != nil || len(validation) != 0 {
 		t.Fatalf("ValidateConfigurationRelease v3 errors=%+v err=%v", validation, err)
 	}
@@ -135,7 +135,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("CurrentRevision before activation: %v", err)
 	}
 	zero := uint64(0)
-	activeV1, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV1.Version, &zero)
+	activeV1, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, releaseV1.Track(), releaseV1.Version, &zero)
 	if err != nil || !changed {
 		t.Fatalf("ActivateConfigurationRelease v1 changed=%v err=%v", changed, err)
 	}
@@ -145,7 +145,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 
 	// A stale compare-and-swap must neither move current nor consume a global
 	// changelog revision.
-	if _, _, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version, &zero); !errors.Is(err, domain.ErrAborted) {
+	if _, _, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, releaseV3.Track(), releaseV3.Version, &zero); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale CAS activation err = %v, want ErrAborted", err)
 	}
 	afterConflict, err := h.store.CurrentRevision(ctx)
@@ -157,7 +157,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	}
 
 	expectV1 := releaseV1.Version
-	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version, &expectV1); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, releaseV2.Track(), releaseV2.Version, &expectV1); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
 		t.Fatalf("schema-invalid activation changed=%v err=%v, want validation failure", changed, err)
 	}
 	afterValidationFailure, err := h.store.CurrentRevision(ctx)
@@ -168,14 +168,14 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("validation failure advanced revision from %d to %d", activeV1.ActivationRevision, afterValidationFailure)
 	}
 
-	activeV2, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version, &expectV1)
+	activeV2, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, releaseV3.Track(), releaseV3.Version, &expectV1)
 	if err != nil || !changed {
 		t.Fatalf("ActivateConfigurationRelease v3 changed=%v err=%v", changed, err)
 	}
 	if activeV2.PreviousVersion != releaseV1.Version {
 		t.Fatalf("active v3 previous = %d, want %d", activeV2.PreviousVersion, releaseV1.Version)
 	}
-	rolledBack, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV1.Version, nil)
+	rolledBack, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, releaseV1.Track(), releaseV1.Version, nil)
 	if err != nil || !changed {
 		t.Fatalf("rollback to v1 changed=%v err=%v", changed, err)
 	}

@@ -82,6 +82,13 @@ _STATES = RELEASE_STATES
 _REJECTION_CATEGORIES = frozenset(RELEASE_REJECTION_CATEGORIES)
 _DIAGNOSTIC_LIMIT = 128
 _MAX_DIVERGENT_FIELD_COUNT = 65_535
+_TERMINAL_WATCH_CODES = frozenset({
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNAUTHENTICATED,
+})
 
 
 def _validate_release_timing(name: str, value: Optional[float]) -> None:
@@ -177,7 +184,8 @@ class ReleaseManifest:
             "ReleaseManifest("
             f"namespace={self.namespace!r}, name={self.name!r}, "
             f"version={self.version}, activation_revision={self.activation_revision}, "
-            f"digest={self.digest!r}, entries={len(self.entries)})"
+            f"schema_version={self.schema_version}, digest={self.digest!r}, "
+            f"entries={len(self.entries)})"
         )
 
     __str__ = __repr__
@@ -209,7 +217,8 @@ class ReleaseSnapshot:
             "ReleaseSnapshot("
             f"namespace={self.namespace!r}, name={self.name!r}, "
             f"version={self.version}, activation_revision={self.activation_revision}, "
-            f"digest={self.digest!r}, entries={len(self.entries)}, "
+            f"schema_version={self.schema_version}, digest={self.digest!r}, "
+            f"entries={len(self.entries)}, "
             f"parameters={len(self.parameters)}, secrets={len(self.secrets)} [REDACTED])"
         )
 
@@ -280,6 +289,8 @@ class ReleaseLoaderConfig:
 
     name: str
     namespace: "Optional[str | NamespaceRef]" = None
+    schema_version: Optional[int] = None
+    schema_sha256: str = ""
     reconcile_interval: float = 60.0
     binding_keys: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}), repr=False, compare=False
@@ -293,6 +304,21 @@ class ReleaseLoaderConfig:
     request_timeout: Optional[float] = None
 
     def __post_init__(self) -> None:
+        if (self.schema_version is None) == (not self.schema_sha256):
+            raise errors.ConfigError(
+                "exactly one of release schema_version or schema_sha256 is required"
+            )
+        if self.schema_version is not None and (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or not 0 <= self.schema_version < 2**64
+        ):
+            raise errors.ConfigError("release schema_version must be a uint64 integer")
+        if self.schema_sha256 and (
+            not _valid_sha256_hex(self.schema_sha256)
+            or self.schema_sha256 != self.schema_sha256.lower()
+        ):
+            raise errors.ConfigError("release schema_sha256 must be lowercase 64-character hex")
         object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
@@ -316,6 +342,25 @@ class _CandidateFailure(Exception):
         super().__init__(category)
         self.category = category if category in _REJECTION_CATEGORIES else "internal"
         self.diagnostic = diagnostic[:_DIAGNOSTIC_LIMIT]
+
+
+class _EmptyActiveReleaseError(ReleaseLoaderError):
+    pass
+
+
+def _release_matches_track(
+    release: kms_pb2.ConfigurationRelease,
+    namespace: NamespaceRef,
+    name: str,
+    schema_version: int,
+) -> bool:
+    """Return whether a release belongs to the loader's exact selected track."""
+    return (
+        release.namespace.env == namespace.env
+        and release.namespace.app == namespace.app
+        and release.name == name
+        and release.schema_version == schema_version
+    )
 
 
 class ReleaseLoader:
@@ -349,6 +394,7 @@ class ReleaseLoader:
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
+        self._schema_version = config.schema_version
 
         self._run_lock = threading.Lock()
         self._running = False
@@ -366,6 +412,7 @@ class ReleaseLoader:
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
         self._retry_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
+        self._watch_error: Optional[BaseException] = None
 
         self._ack_cond = threading.Condition()
         self._ack_sequence = 0
@@ -442,7 +489,8 @@ class ReleaseLoader:
         """Apply the initial release, then block and hot reload until stopped.
 
         ``prepare`` receives a cancellation event that is set when a newer
-        activation supersedes its candidate. It must return an object whose
+        activation supersedes its candidate, the loader stops, or the watch is
+        permanently rejected. It must return an object whose
         ``commit`` is infallible and whose ``abort`` releases uncommitted work.
         """
         if not callable(prepare):
@@ -459,6 +507,7 @@ class ReleaseLoader:
             self._active_identity = None
             self._latest_identity = None
             self._retry_identity = None
+            self._watch_error = None
             self._graceful_watch_stop = threading.Event()
             self._watch_done = threading.Event()
             self._relay_done = threading.Event()
@@ -468,8 +517,23 @@ class ReleaseLoader:
             max_workers=self._config.max_concurrent_fetches,
             thread_name_prefix="kms-release-resolve",
         )
+        initial: Optional[_Candidate] = None
         try:
-            initial = self._read_active()
+            self._ensure_schema_version()
+            try:
+                initial = self._read_active()
+            except errors.NotFoundError:
+                # A known schema track may exist before its first activation.
+                # Subscribe immediately and let watch/reconciliation deliver it.
+                pass
+        except _EmptyActiveReleaseError:
+            with self._run_lock:
+                self._running = False
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+            raise ReleaseStartupError(
+                "active configuration release response was empty"
+            ) from None
         except Exception:
             with self._run_lock:
                 self._running = False
@@ -478,14 +542,8 @@ class ReleaseLoader:
             raise ReleaseStartupError(
                 "unable to read the initial active configuration release"
             ) from None
-        if not initial.release.name:  # type: ignore[attr-defined]
-            with self._run_lock:
-                self._running = False
-            self._executor.shutdown(wait=True, cancel_futures=True)
-            self._executor = None
-            raise ReleaseStartupError("active configuration release response was empty")
         with self._candidate_cond:
-            self._last_seen_revision = initial.revision
+            self._last_seen_revision = initial.revision if initial is not None else 0
         self._watch_thread = threading.Thread(
             target=self._watch_loop, name="kms-release-watch", daemon=True
         )
@@ -506,13 +564,17 @@ class ReleaseLoader:
             self._relay_thread.start()
 
         applied_once = False
+        contract_failed = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
         try:
-            self._offer_candidate(initial, source="reconciliation")
+            if initial is not None:
+                self._offer_candidate(initial, source="reconciliation")
 
             while not self._stop_event.is_set():
+                self._raise_watch_error()
                 wait_for = min(0.25, max(0.0, next_reconcile - time.monotonic()))
                 candidate = self._take_candidate(wait_for)
+                self._raise_watch_error()
                 if candidate is not None:
                     outcome, category, acknowledgement_generation = self._process_candidate(
                         candidate, prepare
@@ -540,12 +602,23 @@ class ReleaseLoader:
                     try:
                         reconciled = self._read_active()
                         self._offer_candidate(reconciled, source="reconciliation")
+                    except errors.NotFoundError:
+                        # The selected track is still inactive. Keep the watch
+                        # alive and continue periodic reconciliation.
+                        continue
                     except Exception:
-                        if not applied_once:
+                        # An inactive track has already entered normal watching.
+                        # Reconciliation failures must not abort that wait before
+                        # its first activation. Terminal watch errors still surface
+                        # through _raise_watch_error above.
+                        if not applied_once and initial is not None:
                             raise ReleaseStartupError(
                                 "unable to reconcile the initial active configuration release"
                             ) from None
                         self._set_transport_failure("active_check_failed")
+        except ReleaseCommitError:
+            contract_failed = True
+            raise
         finally:
             self.stop()
             self._relay_done.set()
@@ -556,33 +629,76 @@ class ReleaseLoader:
             if self._executor is not None:
                 self._executor.shutdown(wait=True, cancel_futures=True)
             with self._run_lock:
+                # Capture this run's failure before a new run may reset it.
+                watch_error = self._watch_error
                 if self._run_generation == run_generation:
                     self._running = False
+            # A terminal watch failure outranks cancellation/preparation errors,
+            # but commit/abort violations must retain their safety diagnostics.
+            if watch_error is not None and not contract_failed:
+                raise watch_error
 
     # --- candidate lifecycle ---------------------------------------------
 
-    def _read_active(self) -> _Candidate:
+    def _ensure_schema_version(self) -> None:
+        if self._schema_version is not None:
+            return
         try:
-            response = self._stub.GetActiveRelease(
-                kms_pb2.GetActiveReleaseRequest(
-                    namespace=to_proto_namespace(self._namespace), name=self._config.name
+            response = self._stub.ResolveReleaseSchema(
+                kms_pb2.ResolveReleaseSchemaRequest(
+                    namespace=to_proto_namespace(self._namespace),
+                    name=self._config.name,
+                    schema_sha256=self._config.schema_sha256,
                 ),
                 metadata=self._client._auth_metadata(),
                 timeout=self._client._call_timeout(self._config.request_timeout),
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
+        if response.schema_version == 0:
+            raise ReleaseLoaderError("release schema digest resolved to schema version 0")
+        self._schema_version = response.schema_version
+
+    def _require_schema_version(self) -> int:
+        if self._schema_version is None:
+            raise ReleaseLoaderError("release schema has not been resolved")
+        return self._schema_version
+
+    def _read_active(self) -> _Candidate:
+        try:
+            response = self._stub.GetActiveRelease(
+                kms_pb2.GetActiveReleaseRequest(
+                    namespace=to_proto_namespace(self._namespace), name=self._config.name,
+                    schema_version=self._require_schema_version(),
+                ),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        if not response.HasField("release") or not response.release.name:
+            raise _EmptyActiveReleaseError(
+                "active configuration release response was empty"
+            )
+        schema_version = self._require_schema_version()
+        if response.release.schema_version != schema_version:
+            raise ReleaseLoaderError("active release response has the wrong schema version")
+        if not _release_matches_track(
+            response.release, self._namespace, self._config.name, schema_version
+        ):
+            raise ReleaseLoaderError("active release response has the wrong release track")
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
-        if not candidate.release.name:  # type: ignore[attr-defined]
+        if not _release_matches_track(
+            candidate.release,
+            self._namespace,
+            self._config.name,
+            self._require_schema_version(),
+        ):
             return
         accepted = False
         with self._candidate_cond:
-            if candidate.revision and candidate.revision < self._last_seen_revision:
-                return
-            if candidate.revision > self._last_seen_revision:
-                self._last_seen_revision = candidate.revision
             if self._latest_identity is not None:
                 if candidate.revision < self._latest_identity[0]:
                     return
@@ -620,7 +736,11 @@ class ReleaseLoader:
     def _take_candidate(self, timeout: float) -> Optional[_Candidate]:
         deadline = time.monotonic() + timeout
         with self._candidate_cond:
-            while self._pending_candidate is None and not self._stop_event.is_set():
+            while (
+                self._pending_candidate is None
+                and not self._stop_event.is_set()
+                and self._watch_error is None
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
@@ -629,6 +749,12 @@ class ReleaseLoader:
             self._pending_candidate = None
             return candidate
 
+    def _raise_watch_error(self) -> None:
+        with self._candidate_cond:
+            error = self._watch_error
+        if error is not None:
+            raise error
+
     def _process_candidate(
         self,
         candidate: _Candidate,
@@ -636,6 +762,8 @@ class ReleaseLoader:
     ) -> Tuple[str, str, int]:
         cancel = threading.Event()
         with self._candidate_cond:
+            # Install the cancellation event atomically with the fatal check.
+            self._raise_watch_error()
             self._active_cancel = cancel
             self._active_identity = candidate.identity
         self._set_observed(candidate)
@@ -682,15 +810,23 @@ class ReleaseLoader:
                 self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
 
-            try:
-                returned: object = getattr(prepared, "commit")()
-                if returned is not None:
-                    raise TypeError("PreparedRelease.commit must return None")
-            except BaseException:
-                self._set_failure("internal")
-                raise ReleaseCommitError(
-                    "PreparedRelease.commit raised; applied state is unknown"
-                ) from None
+            # Serialize the final fence and synchronous commit with watch failure
+            # recording, so a known terminal failure cannot race into a commit.
+            with self._candidate_cond:
+                commit_cancelled = cancel.is_set()
+                if not commit_cancelled:
+                    try:
+                        returned: object = getattr(prepared, "commit")()
+                        if returned is not None:
+                            raise TypeError("PreparedRelease.commit must return None")
+                    except BaseException:
+                        self._set_failure("internal")
+                        raise ReleaseCommitError(
+                            "PreparedRelease.commit raised; applied state is unknown"
+                        ) from None
+            if commit_cancelled:
+                self._abort_or_fail(candidate, prepared)
+                raise _CandidateFailure("superseded")
 
             with self._state_lock:
                 self._status = replace(
@@ -707,6 +843,7 @@ class ReleaseLoader:
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return "applied", "", 0
         except _CandidateFailure as exc:
+            self._raise_watch_error()
             acknowledgement_generation = self._reject(
                 candidate, exc.category, exc.diagnostic
             )
@@ -738,6 +875,7 @@ class ReleaseLoader:
             or release.name != self._config.name
             or release.namespace.env != self._namespace.env
             or release.namespace.app != self._namespace.app
+            or release.schema_version != self._require_schema_version()
         ):
             raise _CandidateFailure("version_mismatch", "release identity mismatch")
         try:
@@ -934,6 +1072,9 @@ class ReleaseLoader:
                     # Receiving any server event proves connectivity and resets the
                     # next delay to the base window.
                     attempt = 0
+                with self._candidate_cond:
+                    if self._watch_error is not None:
+                        return
                 if self._stop_event.is_set() or self._graceful_watch_stop.is_set():
                     return
                 cap = min(
@@ -956,16 +1097,56 @@ class ReleaseLoader:
             for event in call:
                 if self._stop_event.is_set():
                     return received_event
-                received_event = True
                 kind = event.WhichOneof("event")
                 if kind == "snapshot":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.snapshot.release), event.revision)
-                    )
+                    if event.snapshot.HasField("release") and _release_matches_track(
+                        event.snapshot.release,
+                        self._namespace,
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        with self._candidate_cond:
+                            self._last_seen_revision = max(
+                                self._last_seen_revision, event.revision
+                            )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.snapshot.release), event.revision)
+                        )
+                        received_event = True
                 elif kind == "activation":
-                    self._offer_candidate(
-                        _Candidate(_clone_release(event.activation.release), event.revision)
+                    if event.activation.HasField("release") and _release_matches_track(
+                        event.activation.release,
+                        self._namespace,
+                        self._config.name,
+                        self._require_schema_version(),
+                    ):
+                        with self._candidate_cond:
+                            self._last_seen_revision = max(
+                                self._last_seen_revision, event.revision
+                            )
+                        self._offer_candidate(
+                            _Candidate(_clone_release(event.activation.release), event.revision)
+                        )
+                        received_event = True
+                elif kind == "heartbeat":
+                    with self._candidate_cond:
+                        self._last_seen_revision = max(
+                            self._last_seen_revision, event.revision
+                        )
+                    received_event = True
+                elif kind == "acknowledgement_rejected":
+                    received_event = (
+                        self._discard_rejected_ack(event.acknowledgement_rejected)
+                        or received_event
                     )
+        except grpc.RpcError as exc:
+            if exc.code() in _TERMINAL_WATCH_CODES:
+                with self._candidate_cond:
+                    self._watch_error = errors.map_grpc_error(exc)
+                    if self._active_cancel is not None:
+                        self._active_cancel.set()
+                    self._candidate_cond.notify_all()
+            return received_event
         except Exception:
             return received_event
         finally:
@@ -973,6 +1154,35 @@ class ReleaseLoader:
                 if self._watch_call is call:
                     self._watch_call = None
         return received_event
+
+    def _discard_rejected_ack(
+        self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
+    ) -> bool:
+        if (
+            rejection.reason != "activation_unavailable"
+            or rejection.namespace.env != self._namespace.env
+            or rejection.namespace.app != self._namespace.app
+            or rejection.name != self._config.name
+            or rejection.schema_version != self._require_schema_version()
+            or rejection.client_name != self._client_name
+            or rejection.instance_id != self._instance_id
+        ):
+            return False
+        with self._ack_cond:
+            current = self._ack_latest.get(rejection.state)
+            if current is None:
+                return True
+            generation, acknowledgement = current
+            if (
+                generation == rejection.sequence
+                and acknowledgement.sequence == rejection.sequence
+                and acknowledgement.version == rejection.version
+                and acknowledgement.activation_revision == rejection.activation_revision
+                and acknowledgement.state == rejection.state
+            ):
+                del self._ack_latest[rejection.state]
+                self._ack_cond.notify_all()
+        return True
 
     def _watch_requests(self):
         with self._candidate_cond:
@@ -984,6 +1194,7 @@ class ReleaseLoader:
                 client_name=self._client_name,
                 instance_id=self._instance_id,
                 last_seen_revision=last_seen,
+                schema_version=self._require_schema_version(),
             )
         )
 
@@ -1068,12 +1279,14 @@ class ReleaseLoader:
             timestamp_unix_ms=_now_ms(),
             applied_divergent=state == "applied" and divergence[0],
             divergent_field_count=divergence[1] if state == "applied" and divergence[0] else 0,
+            schema_version=self._require_schema_version(),
         )
         with self._ack_cond:
             current = self._ack_latest.get(state)
             if current is None or current[1].activation_revision <= candidate.revision:
                 self._ack_sequence += 1
                 generation = self._ack_sequence
+                acknowledgement.sequence = generation
                 self._ack_latest[state] = (generation, acknowledgement)
                 self._ack_cond.notify_all()
                 accepted = True

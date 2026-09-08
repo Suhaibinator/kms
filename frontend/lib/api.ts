@@ -482,9 +482,13 @@ export const api = {
     name: string,
     envs?: string[],
     request?: ApiRequestOptions,
+    schemaVersion?: number,
   ): Promise<ApplicationOverview> {
     const env = envs && envs.length > 0 ? envs.join(",") : undefined;
-    return apiFetch(`/applications/overview${qs({ name, env })}`, request);
+    return apiFetch(
+      `/applications/overview${qs({ name, env, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   // The rows-free fleet form: every application with per-environment status.
   fleetOverview(request?: ApiRequestOptions): Promise<FleetOverview> {
@@ -526,11 +530,13 @@ export const api = {
     updateDefinition?: boolean;
     execute?: boolean;
     planDigest?: string;
+    schemaVersion?: number;
   }): Promise<DefaultsApplyResponse> {
     return apiFetch(
       `/applications/defaults${qs({
         env: req.env,
         app: req.app,
+        schema_version: req.schemaVersion,
         overwrite: req.overwrite ? "true" : undefined,
         update_definition: req.updateDefinition ? "true" : undefined,
         execute: req.execute ? "true" : undefined,
@@ -925,15 +931,27 @@ export const api = {
   },
 
   // --- Configuration releases ---
+  releaseSchemaVersions(
+    ns: NamespaceRef,
+    name?: string,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<{ schema_versions: number[]; next_page_token: string }> {
+    return apiFetch(
+      `/releases/schema-versions${qs({ env: ns.env, app: ns.app, name, page_size: 100, page_token: pageToken })}`,
+      request,
+    );
+  },
   listReleases(
     ns: NamespaceRef,
     name?: string,
     pageSize?: number,
     pageToken?: string,
     request?: ApiRequestOptions,
+    schemaVersion?: number,
   ): Promise<{ releases: ReleaseSummary[]; next_page_token: string }> {
     return apiFetch(
-      `/releases${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`,
+      `/releases${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion, page_size: pageSize, page_token: pageToken })}`,
       request,
     );
   },
@@ -944,40 +962,56 @@ export const api = {
     ns: NamespaceRef,
     name: string,
     version: number,
+    schemaVersion: number,
     request?: ApiRequestOptions,
   ): Promise<{ release: ConfigurationRelease }> {
-    return apiFetch(`/releases/get${qs({ env: ns.env, app: ns.app, name, version })}`, request);
+    return apiFetch(
+      `/releases/get${qs({ env: ns.env, app: ns.app, name, version, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   getActiveRelease(
     ns: NamespaceRef,
     name: string,
+    schemaVersion: number,
     request?: ApiRequestOptions,
   ): Promise<{
     release: ConfigurationRelease;
     activation_revision: number;
     previous_version: number;
   }> {
-    return apiFetch(`/releases/active${qs({ env: ns.env, app: ns.app, name })}`, request);
+    return apiFetch(
+      `/releases/active${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion })}`,
+      request,
+    );
   },
   validateRelease(
     ns: NamespaceRef,
     name: string,
     version: number,
+    schemaVersion: number,
   ): Promise<ValidateReleaseResponse> {
     return apiFetch("/releases/validate", {
       method: "POST",
-      body: { namespace: ns, name, version },
+      body: { namespace: ns, name, version, schema_version: schemaVersion },
     });
   },
   activateRelease(
     ns: NamespaceRef,
     name: string,
     version: number,
+    schemaVersion: number,
     expected?: number,
   ): Promise<ActivateReleaseResponse> {
     return apiFetch("/releases/activate", {
       method: "POST",
-      body: { namespace: ns, name, version, expected_current_version: expected },
+      body: {
+        namespace: ns,
+        name,
+        version,
+        schema_version: schemaVersion,
+        expected_current_version: expected,
+      },
     });
   },
   // Re-activates the previous version of `name`. A 409 means the active
@@ -992,9 +1026,10 @@ export const api = {
     pageSize?: number,
     pageToken?: string,
     request?: ApiRequestOptions,
+    schemaVersion?: number,
   ): Promise<ReleaseSubscribersPage> {
     return apiFetch(
-      `/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`,
+      `/release-subscribers${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion, page_size: pageSize, page_token: pageToken })}`,
       request,
     );
   },
@@ -1005,10 +1040,15 @@ export const api = {
   subscriberStream(
     ns: NamespaceRef,
     name: string,
-    opts: { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
+    schemaVersionOrOpts:
+      | number
+      | { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
+    maybeOpts?: { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
   ): Promise<void> {
+    const schemaVersion = typeof schemaVersionOrOpts === "number" ? schemaVersionOrOpts : 0;
+    const opts = typeof schemaVersionOrOpts === "number" ? maybeOpts! : schemaVersionOrOpts;
     return openSubscriberStream(
-      `/release-subscribers/stream${qs({ env: ns.env, app: ns.app, name })}`,
+      `/release-subscribers/stream${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion })}`,
       opts,
     );
   },

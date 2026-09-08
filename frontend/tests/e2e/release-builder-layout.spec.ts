@@ -141,9 +141,10 @@ test("a stacked release entry has one gap between every field", async ({ page })
   // The unlabelled cells carry a --label-offset that lines them up with the
   // labelled fields' controls while the entry is a row. Stacked there is no
   // label beside them, and the offset used to survive as a 33px hole.
-  const gaps = await dialog.evaluate(() => {
-    const entry = document.querySelector(".release-builder-entry") as HTMLElement;
-    const boxes = [...entry.children].map((child) => child.getBoundingClientRect());
+  const entry = dialog.locator(".release-builder-entry").first();
+  await expect(entry).toBeVisible();
+  const gaps = await entry.evaluate((element) => {
+    const boxes = [...element.children].map((child) => child.getBoundingClientRect());
     return boxes.slice(1).map((box, index) => Number((box.top - boxes[index].bottom).toFixed(2)));
   });
   expect(gaps.length).toBeGreaterThan(3);

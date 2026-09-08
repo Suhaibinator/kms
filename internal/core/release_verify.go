@@ -82,11 +82,14 @@ func (s *Service) SetVerifyDefaultsLimits(l VerifyDefaultsLimits) {
 // echoes a stored value, digest, or hash; secret aliases are answered
 // structurally (secret_alias) without touching secret storage; comparisons
 // are constant-time; every identity (admins included) is subject to a
-// request budget and a mismatch budget; and the audit record carries counts
-// only, never aliases, hashes, or the informational profile label.
+// request budget and a mismatch budget; and the audit record carries track identity and
+// counts only, never aliases, hashes, or the informational profile label.
 func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in domain.VerifyReleaseDefaultsInput) (domain.VerifyReleaseDefaultsResult, error) {
 	if err := validateVerifyDefaultsInput(in); err != nil {
 		return domain.VerifyReleaseDefaultsResult{}, err
+	}
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.ReleaseName, SchemaVersion: *in.SchemaVersion})
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseVerifyDefaults, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.ReleaseName})
 	if err != nil {
@@ -95,7 +98,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	limits := s.verifyLimits.Load()
 	identity := pr.Identity.Name
 	auditRef := domain.Ref{NS: in.Namespace, Key: in.ReleaseName}
-	counts := verifyAuditCounts{entryCount: len(in.Entries), schemaMatches: false}
+	counts := verifyAuditCounts{schemaVersion: in.SchemaVersion, entryCount: len(in.Entries), schemaMatches: false}
 	if !limits.requests.Allow(identity) {
 		s.m().RateLimited(LimiterVerifyDefaultsRequests)
 		counts.limited = true
@@ -126,7 +129,28 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
 	}
 	auditRef.Key = releaseName
-	active, err := rs.GetActiveConfigurationRelease(ctx, in.Namespace, releaseName)
+	var schema domain.ConfigurationSchema
+	if in.SchemaVersion != nil {
+		schema.Version = *in.SchemaVersion
+		if schema.Version != 0 {
+			schema, err = rs.GetConfigurationSchema(ctx, app.Name, releaseName, schema.Version)
+		}
+	} else {
+		schema, err = rs.GetConfigurationSchemaByDigest(ctx, app.Name, releaseName, in.SchemaSHA256)
+	}
+	if err != nil {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
+		return domain.VerifyReleaseDefaultsResult{}, err
+	}
+	counts.schemaVersion = &schema.Version
+	ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: releaseName, SchemaVersion: schema.Version})
+	app.Contract, err = rs.GetConfigurationSchemaContract(ctx, app.Name, releaseName, schema.Version)
+	if err != nil {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
+		return domain.VerifyReleaseDefaultsResult{}, err
+	}
+	track := domain.ReleaseTrack{Namespace: in.Namespace, Name: releaseName, SchemaVersion: schema.Version}
+	active, err := rs.GetActiveConfigurationRelease(ctx, track)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "error", counts)
@@ -138,7 +162,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	// storage validation enforce this invariant, but verify it again here so a
 	// corrupt row or alternate ReleaseStore implementation cannot turn this
 	// endpoint into a cross-namespace comparison oracle.
-	if release.Namespace != in.Namespace {
+	if release.Track() != track {
 		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"active release violates namespace ownership invariants")
@@ -151,26 +175,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		}
 	}
 
-	// Schema check against the application-pinned version (falling back to the
-	// release's own pin when the application has none). The generator's
-	// schema_sha256 is sha256(jsontext.Value(schema).Compact()), exactly the
-	// registry digest.
-	schemaMatches := false
-	if in.SchemaSHA256 != "" {
-		schemaVersion := app.SchemaVersion
-		if schemaVersion == 0 {
-			schemaVersion = release.SchemaVersion
-		}
-		if schemaVersion != 0 {
-			schema, err := rs.GetConfigurationSchema(ctx, app.Name, releaseName, schemaVersion)
-			if err != nil && !errors.Is(err, domain.ErrNotFound) {
-				return domain.VerifyReleaseDefaultsResult{}, err
-			}
-			if err == nil {
-				schemaMatches = subtle.ConstantTimeCompare([]byte(schema.Digest), []byte(in.SchemaSHA256)) == 1
-			}
-		}
-	}
+	schemaMatches := in.SchemaVersion != nil || schema.Digest == in.SchemaSHA256
 
 	releaseEntries := make(map[string]domain.ConfigurationReleaseEntry, len(release.Entries))
 	for _, entry := range release.Entries {
@@ -240,6 +245,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "allow", counts)
 	return domain.VerifyReleaseDefaultsResult{
 		ReleaseName:        release.Name,
+		SchemaVersion:      release.SchemaVersion,
 		ReleaseVersion:     release.Version,
 		ActivationRevision: active.ActivationRevision,
 		SchemaMatches:      schemaMatches,
@@ -297,6 +303,9 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefa
 }
 
 func validateVerifyDefaultsInput(in domain.VerifyReleaseDefaultsInput) error {
+	if (in.SchemaVersion != nil) == (in.SchemaSHA256 != "") {
+		return domain.Errorf(domain.ErrInvalidArgument, "exactly one of schema_version and schema_sha256 is required")
+	}
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
@@ -352,6 +361,7 @@ func isLowerHexSHA256(v string) bool {
 // verifyAuditCounts is the only material the verification audit record
 // carries: counts, the schema outcome, and whether a budget refused the call.
 type verifyAuditCounts struct {
+	schemaVersion *uint64
 	entryCount    int
 	summary       domain.VerifyDefaultsSummary
 	schemaMatches bool
@@ -370,6 +380,9 @@ func (s *Service) auditVerifyDefaults(ctx context.Context, pr Principal, ref dom
 		"unverified_count":    strconv.Itoa(c.summary.Unverified),
 		"schema_matches":      strconv.FormatBool(c.schemaMatches),
 		"limited":             strconv.FormatBool(c.limited),
+	}
+	if c.schemaVersion != nil {
+		meta = releaseAuditMetadata(*c.schemaVersion, 0, meta)
 	}
 	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.verify_defaults", domain.ResourceConfigurationRelease, ref, namespaceID, version, decision, meta)
 }

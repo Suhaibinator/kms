@@ -105,6 +105,28 @@ describe("defaults artifact", () => {
     ).toThrow(/must not be empty/u);
   });
 
+  it("round-trips an explicitly schema-free artifact while requiring the digest field", () => {
+    const document = encodeDefaultsArtifact({
+      profile: "manual",
+      schemaSHA256: "",
+      contract: [{ alias: "runtime", kind: "parameter", contentType: "json" }],
+      parameters: { runtime: "{}" },
+    });
+    expect(JSON.parse(document)).toMatchObject({ schema_sha256: "" });
+    expect(parseDefaultsArtifact(document).schemaSHA256).toBe("");
+
+    const missing = JSON.parse(document) as Record<string, unknown>;
+    delete missing.schema_sha256;
+    expect(() => parseDefaultsArtifact(JSON.stringify(missing))).toThrow(/missing/u);
+    for (const malformed of ["0", "A".repeat(64), "0".repeat(63), "0".repeat(65)]) {
+      expect(() =>
+        parseDefaultsArtifact(
+          JSON.stringify({ ...JSON.parse(document), schema_sha256: malformed }),
+        ),
+      ).toThrow(/SHA-256/u);
+    }
+  });
+
   it("enforces canonical profile, content types, digest, aliases, and UTF-8", () => {
     const input = {
       profile: "test",

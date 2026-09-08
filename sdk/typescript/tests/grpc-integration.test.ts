@@ -222,7 +222,7 @@ describe("protocol-faithful gRPC integration", () => {
         "stream-two",
       ]);
 
-      const loader = await client.createReleaseLoader({ name: "runtime" });
+      const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
       let committed = false;
       loaderRun = loader.run((snapshot) => {
         expect(snapshot.parameter("settings")?.value()).toBe("initial");

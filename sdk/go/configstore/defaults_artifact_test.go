@@ -291,3 +291,22 @@ func BenchmarkParseDefaultsArtifact(b *testing.B) {
 		}
 	}
 }
+
+func TestDefaultsArtifactSchemaFreeDigestRoundTrip(t *testing.T) {
+	artifact := DefaultsArtifact{Format: DefaultsArtifactFormat, Profile: "dev", Contract: []ContractEntry{{Alias: "setting", Kind: ContractKindParameter, ContentType: "string"}}, Parameters: []DefaultsParameter{{Alias: "setting", ContentType: "string", Value: "default"}}}
+	raw, err := EncodeDefaultsArtifact(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseDefaultsArtifact(raw)
+	if err != nil || parsed.SchemaSHA256 != "" {
+		t.Fatalf("schema-free round trip: %+v %v", parsed, err)
+	}
+	if !strings.Contains(string(raw), `"schema_sha256":""`) {
+		t.Fatalf("empty digest field omitted: %s", raw)
+	}
+	missing := strings.Replace(string(raw), `"schema_sha256":"",`, "", 1)
+	if _, err := ParseDefaultsArtifact([]byte(missing)); err == nil {
+		t.Fatal("missing schema_sha256 field accepted")
+	}
+}

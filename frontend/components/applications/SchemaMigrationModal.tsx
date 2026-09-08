@@ -7,7 +7,7 @@ import { Badge, Button, Checkbox, Field, Input, Loading } from "@/components/ui"
 import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
-import { deriveContractFromSchema } from "@/lib/contract-derive";
+import { contractsMatch, schemaUpgradeContract } from "@/lib/contract-derive";
 import { type PreparedUpgradeValue, prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
 import { structuredSchemaDifferences } from "@/lib/schema-diff";
 import { aliasSchema } from "@/lib/schema-form";
@@ -115,6 +115,13 @@ export function SchemaMigrationModal({
   const initializedDraft = useRef("");
   const loadGeneration = useRef(0);
   const sourceIdentity = useRef<{ version: number; activationRevision: number } | null>(null);
+  useEffect(
+    () => () => {
+      loadGeneration.current += 1;
+      artifactGeneration.current += 1;
+    },
+    [],
+  );
 
   const activeEnvironments = useMemo(
     () => environments.filter((item) => item.release.active),
@@ -127,6 +134,8 @@ export function SchemaMigrationModal({
       schema.version > sourceSchemaVersion && schema.version >= application.schema_version,
   );
   const selectedSchema = newerSchemas.find((item) => item.version === schemaVersion);
+  const establishedContract = selectedSchema?.contract !== undefined;
+  const emptyDestination = establishedContract && selectedSchema.contract?.length === 0;
   const production = selectedEnvironment?.production === true;
   const currentSchema = schemas.find((schema) => schema.version === sourceSchemaVersion);
   const schemaChanges = useMemo(
@@ -240,8 +249,14 @@ export function SchemaMigrationModal({
       initializedDraft.current = "";
       return;
     }
-    if (sessionKey.current === application.name) return;
-    sessionKey.current = application.name;
+    const session = JSON.stringify([
+      application.name,
+      application.schema_version,
+      initialEnvironment,
+      initialSchemaVersion,
+    ]);
+    if (sessionKey.current === session) return;
+    sessionKey.current = session;
     const generation = ++loadGeneration.current;
     initializedDraft.current = "";
     const initial = activeEnvironments.some((item) => item.namespace.env === initialEnvironment)
@@ -322,7 +337,7 @@ export function SchemaMigrationModal({
 
   useEffect(() => {
     if (!open || !selectedEnvironment?.release.active || !selectedSchema) return;
-    const draftKey = `${environment}:${schemaVersion}:${source}:${fileName}`;
+    const draftKey = `${application.name}:${application.schema_version}:${environment}:${schemaVersion}:${source}:${fileName}`;
     if (initializedDraft.current === draftKey) return;
     initializedDraft.current = draftKey;
     sourceIdentity.current = {
@@ -333,11 +348,17 @@ export function SchemaMigrationModal({
     setSourceEntries(entries);
     if (source === "artifact" && (!defaults || defaults.schema_sha256 !== selectedSchema.digest))
       return;
-    const derived = deriveContractFromSchema(selectedSchema.schema_json, application.contract);
+    const derived = schemaUpgradeContract(selectedSchema, application.contract);
     setDerivationNotes(source === "artifact" ? [] : derived.notes);
-    const suggested = source === "artifact" && defaults ? defaults.contract : derived.contract;
+    const suggested = establishedContract
+      ? derived.contract
+      : source === "artifact" && defaults
+        ? defaults.contract
+        : derived.contract;
     const mapped: DraftField[] = suggested.map((field) => {
-      const entry = entries.find((candidate) => candidate.alias === field.alias);
+      const entry = entries.find(
+        (candidate) => candidate.alias === field.alias && candidate.kind === field.kind,
+      );
       const imported =
         source === "artifact"
           ? defaults?.parameters.find((p) => p.alias === field.alias)
@@ -353,6 +374,8 @@ export function SchemaMigrationModal({
         value: imported?.value ?? (field.kind === "parameter" && !entry ? "" : undefined),
       };
     });
+    setPreview(null);
+    setConfirmation("");
     setFields(mapped);
     setValuesOpened(false);
     setEditorRevisions({});
@@ -367,12 +390,15 @@ export function SchemaMigrationModal({
     open,
     environment,
     application.contract,
+    application.name,
+    application.schema_version,
     selectedEnvironment,
     selectedSchema,
     source,
     defaults,
     fileName,
     schemaVersion,
+    establishedContract,
   ]);
 
   useEffect(() => {
@@ -387,6 +413,7 @@ export function SchemaMigrationModal({
         !field.version
       )
         continue;
+      const generation = loadGeneration.current;
       const id = field.id;
       const requestedKey = field.key;
       const requestedVersion = field.version;
@@ -398,6 +425,7 @@ export function SchemaMigrationModal({
       void api
         .getParameter({ env: environment, app: application.name, key: field.key }, field.version)
         .then(({ parameter }) => {
+          if (generation !== loadGeneration.current) return;
           setFields((current) =>
             current.map((item) =>
               item.id === id &&
@@ -417,6 +445,7 @@ export function SchemaMigrationModal({
           );
         })
         .catch((error) => {
+          if (generation !== loadGeneration.current) return;
           setFields((current) =>
             current.map((item) =>
               item.id === id && item.key === requestedKey && item.version === requestedVersion
@@ -470,6 +499,7 @@ export function SchemaMigrationModal({
     return {
       environment,
       schema_version: schemaVersion,
+      source_schema_version: sourceSchemaVersion,
       contract: fields.map(({ alias, kind, content_type }) => ({
         alias: alias.trim(),
         kind,
@@ -509,9 +539,11 @@ export function SchemaMigrationModal({
 
   async function apply() {
     if (!preview) return;
+    const generation = loadGeneration.current;
     setApplying(true);
     try {
       const result = await api.migrateApplicationSchema(application.name, request(true));
+      if (generation !== loadGeneration.current) return;
       if (!result.executed) {
         setPreview(result);
         toast.error(new Error("The migration was not executed."), "Could not apply migration");
@@ -521,6 +553,7 @@ export function SchemaMigrationModal({
       setStep(4);
       onApplied(result);
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
       if (isConflict(error)) {
         setPreview(null);
         setSourceConflict(true);
@@ -537,7 +570,7 @@ export function SchemaMigrationModal({
         onApplied({ ...preview, executed: false });
       } else toast.error(error, "Could not apply migration");
     } finally {
-      setApplying(false);
+      if (generation === loadGeneration.current) setApplying(false);
     }
   }
 
@@ -549,6 +582,7 @@ export function SchemaMigrationModal({
       const active = await api.getActiveRelease(
         { env: environment, app: application.name },
         application.release_name,
+        sourceSchemaVersion,
       );
       if (generation !== loadGeneration.current || requestedEnvironment !== environment) return;
       sourceIdentity.current = {
@@ -809,6 +843,14 @@ export function SchemaMigrationModal({
                     try {
                       if (file.size > 4 * 1024 * 1024) throw new Error("Artifact exceeds 4 MiB.");
                       const parsed = parseUpgradeDefaults(await file.text(), selectedSchema.digest);
+                      if (
+                        selectedSchema.contract !== undefined &&
+                        !contractsMatch(parsed.contract, selectedSchema.contract)
+                      ) {
+                        throw new Error(
+                          "The artifact contract does not match the selected schema contract.",
+                        );
+                      }
                       if (generation === artifactGeneration.current) {
                         initializedDraft.current = "";
                         setDefaults(parsed);
@@ -850,8 +892,8 @@ export function SchemaMigrationModal({
           />
           <section className="info-panel text-sm stack" aria-label="Upgrade scope">
             <p>
-              <strong>Application change:</strong> {application.name}’s shared schema pin and
-              contract change from v{application.schema_version} to v{schemaVersion || "…"}.
+              <strong>Schema tracks:</strong> Use schema v{sourceSchemaVersion} as the source for
+              schema v{schemaVersion || "…"}. Each track keeps its own immutable contract.
             </p>
             <p>
               <strong>Environment change:</strong> A new release is created and activated in{" "}
@@ -862,9 +904,8 @@ export function SchemaMigrationModal({
               . References for retained secret aliases are preserved.
             </p>
             <p>
-              Other environments keep their active releases. Their next ship must match the shared
-              definition; older-schema releases may no longer be eligible for activation or
-              rollback.
+              The source track and other environments keep their active releases and remain
+              available for shipping, activation, and rollback.
             </p>
             <p>
               Validation failure leaves the definition, stored values, and active release unchanged.
@@ -938,9 +979,16 @@ export function SchemaMigrationModal({
       {step === 1 ? (
         <div className="stack">
           <div className="info-panel">
-            Every target field is explicit. Rename an alias to carry its active pin; remove a row to
-            remove it. New rows require a value or an exact existing resource pin.
+            {establishedContract
+              ? "The destination contract is immutable. Choose a source alias to carry an existing pin, or supply a new value or exact resource version."
+              : "Every target field is explicit. Rename an alias to carry its active pin; remove a row to remove it. New rows require a value or an exact existing resource pin."}
           </div>
+          {emptyDestination ? (
+            <p role="status">
+              This destination has an established empty contract. Releases require at least one
+              entry, so this schema cannot be activated.
+            </p>
+          ) : null}
           {derivationNotes.length ? (
             <div className="warning-panel" role="note">
               <AlertTriangle size={17} />
@@ -971,6 +1019,7 @@ export function SchemaMigrationModal({
               <Field label="Alias">
                 <Input
                   aria-label="Alias"
+                  disabled={establishedContract}
                   value={field.alias}
                   onChange={(event) => update(field.id, { alias: event.target.value })}
                 />
@@ -1009,6 +1058,7 @@ export function SchemaMigrationModal({
                 <select
                   className="native-select"
                   aria-label="Kind"
+                  disabled={establishedContract}
                   value={field.kind}
                   onChange={(event) => {
                     const kind = event.target.value as "parameter" | "secret";
@@ -1043,7 +1093,7 @@ export function SchemaMigrationModal({
                   className="native-select"
                   aria-label="Content type"
                   value={field.content_type ?? ""}
-                  disabled={field.kind === "secret"}
+                  disabled={establishedContract || field.kind === "secret"}
                   onChange={(event) => update(field.id, { content_type: event.target.value })}
                 >
                   <option value="">—</option>
@@ -1057,6 +1107,7 @@ export function SchemaMigrationModal({
                 variant="ghost"
                 size="icon"
                 aria-label={`Remove ${field.alias}`}
+                disabled={establishedContract}
                 onClick={() => {
                   setPreview(null);
                   setFields((current) => current.filter((item) => item.id !== field.id));
@@ -1069,6 +1120,7 @@ export function SchemaMigrationModal({
           <Button
             type="button"
             variant="outline"
+            disabled={establishedContract}
             onClick={() =>
               setFields((current) => [
                 ...current,
@@ -1410,6 +1462,7 @@ export function SchemaMigrationModal({
           </div>
           {preview.activation ? (
             <RolloutPanel
+              schemaVersion={preview.schema_version}
               namespace={{ env: environment, app: application.name }}
               releaseName={preview.release_name}
               activationRevision={preview.activation.activation_revision}

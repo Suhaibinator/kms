@@ -79,15 +79,15 @@ func TestActivateConfigurationReleaseNotifiesOnlyMatchingStreams(t *testing.T) {
 	server.SetParameterVersion("prod/app", "settings", `{"enabled":true}`, "json", 1)
 
 	matching := &ReleaseSubscription{
-		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/app"), Name: "runtime"},
+		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/app"), Name: "runtime", SchemaVersion: new(uint64)},
 		send:         make(chan *kmsv1.WatchReleaseEvent, 1),
 	}
 	otherName := &ReleaseSubscription{
-		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/app"), Name: "other"},
+		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/app"), Name: "other", SchemaVersion: new(uint64)},
 		send:         make(chan *kmsv1.WatchReleaseEvent, 1),
 	}
 	otherNamespace := &ReleaseSubscription{
-		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/other"), Name: "runtime"},
+		Registration: &kmsv1.ReleaseWatchRegistration{Namespace: nsProto("prod/other"), Name: "runtime", SchemaVersion: new(uint64)},
 		send:         make(chan *kmsv1.WatchReleaseEvent, 1),
 	}
 	server.releaseSubs = []*ReleaseSubscription{matching, otherName, otherNamespace}

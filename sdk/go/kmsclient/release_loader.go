@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,6 +54,13 @@ type ValidateReleaseManifestFunc func(context.Context, ReleaseManifest) error
 type ReleaseLoaderConfig struct {
 	// Name is the release name within the client's home namespace.
 	Name string
+	// SchemaVersion selects an exact numeric schema track. Schema version zero
+	// is valid. Exactly one of SchemaVersion and SchemaSHA256 must be set.
+	SchemaVersion *uint64
+	// SchemaSHA256 selects a schema track by its canonical schema digest. The
+	// digest is resolved once and the resulting numeric track is pinned for the
+	// lifetime of the loader, including later Run calls.
+	SchemaSHA256 string
 	// ReconcileInterval controls fresh GetActiveRelease safety checks. It
 	// defaults to one minute.
 	ReconcileInterval time.Duration
@@ -72,15 +80,19 @@ type ReleaseLoaderConfig struct {
 }
 
 type releaseLoaderConfigJSON struct {
-	Name                 string `json:"name"`
-	ReconcileInterval    string `json:"reconcile_interval"`
-	MaxConcurrentFetches int    `json:"max_concurrent_fetches"`
-	InstanceID           string `json:"instance_id,omitempty"`
+	Name                 string  `json:"name"`
+	SchemaVersion        *uint64 `json:"schema_version,omitempty"`
+	SchemaSHA256         string  `json:"schema_sha256,omitempty"`
+	ReconcileInterval    string  `json:"reconcile_interval"`
+	MaxConcurrentFetches int     `json:"max_concurrent_fetches"`
+	InstanceID           string  `json:"instance_id,omitempty"`
 }
 
 func (c ReleaseLoaderConfig) safeProjection() releaseLoaderConfigJSON {
 	return releaseLoaderConfigJSON{
 		Name:                 c.Name,
+		SchemaVersion:        c.SchemaVersion,
+		SchemaSHA256:         c.SchemaSHA256,
 		ReconcileInterval:    c.ReconcileInterval.String(),
 		MaxConcurrentFetches: c.MaxConcurrentFetches,
 		InstanceID:           c.InstanceID,
@@ -89,8 +101,12 @@ func (c ReleaseLoaderConfig) safeProjection() releaseLoaderConfigJSON {
 
 // String omits all credential containers and callbacks.
 func (c ReleaseLoaderConfig) String() string {
-	return fmt.Sprintf("ReleaseLoaderConfig{name=%q reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
-		c.Name, c.ReconcileInterval, c.MaxConcurrentFetches, c.InstanceID)
+	schemaVersion := "<unset>"
+	if c.SchemaVersion != nil {
+		schemaVersion = strconv.FormatUint(*c.SchemaVersion, 10)
+	}
+	return fmt.Sprintf("ReleaseLoaderConfig{name=%q schema_version=%s schema_sha256=%q reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		c.Name, schemaVersion, c.SchemaSHA256, c.ReconcileInterval, c.MaxConcurrentFetches, c.InstanceID)
 }
 
 func (c ReleaseLoaderConfig) GoString() string { return c.String() }
@@ -149,6 +165,10 @@ type ReleaseLoader struct {
 	statusMu sync.RWMutex
 	status   ReleaseLoaderStatus
 	stats    ReleaseLoaderStats
+
+	trackMu            sync.Mutex
+	trackSchemaVersion uint64
+	trackResolved      bool
 }
 
 // String exposes only non-sensitive loader identity and lifecycle state.
@@ -196,8 +216,19 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 		return nil, errors.New("kmsclient: release loader requires a client")
 	}
 	cfg.Name = strings.TrimSpace(cfg.Name)
+	cfg.SchemaSHA256 = strings.TrimSpace(cfg.SchemaSHA256)
 	if cfg.Name == "" {
 		return nil, errors.New("kmsclient: release loader Name is required")
+	}
+	if (cfg.SchemaVersion == nil) == (cfg.SchemaSHA256 == "") {
+		return nil, errors.New("kmsclient: release loader requires exactly one of SchemaVersion or SchemaSHA256")
+	}
+	if cfg.SchemaSHA256 != "" && !validCanonicalSHA256Hex(cfg.SchemaSHA256) {
+		return nil, errors.New("kmsclient: release loader SchemaSHA256 must be a lowercase SHA-256 digest")
+	}
+	if cfg.SchemaVersion != nil {
+		version := *cfg.SchemaVersion
+		cfg.SchemaVersion = &version
 	}
 	if cfg.ReconcileInterval <= 0 {
 		cfg.ReconcileInterval = defaultReleaseReconcileInterval
@@ -217,7 +248,7 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 			return nil, fmt.Errorf("kmsclient: generate release loader instance ID: %w", err)
 		}
 	}
-	return &ReleaseLoader{
+	loader := &ReleaseLoader{
 		client:        client,
 		cfg:           cfg,
 		instanceID:    instanceID,
@@ -226,7 +257,37 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 		dirtyAck:      make(map[string]bool),
 		ackSignal:     make(chan struct{}, 1),
 		stats:         ReleaseLoaderStats{Rejected: make(map[string]uint64)},
-	}, nil
+	}
+	if cfg.SchemaVersion != nil {
+		loader.trackSchemaVersion = *cfg.SchemaVersion
+		loader.trackResolved = true
+	}
+	return loader, nil
+}
+
+func (l *ReleaseLoader) resolveTrack(ctx context.Context, ns namespaceRef) (uint64, error) {
+	l.trackMu.Lock()
+	defer l.trackMu.Unlock()
+	if l.trackResolved {
+		return l.trackSchemaVersion, nil
+	}
+	cctx, cancel := l.client.callCtx(ctx)
+	defer cancel()
+	response, err := l.client.releases.ResolveReleaseSchema(cctx, &kmsv1.ResolveReleaseSchemaRequest{
+		Namespace: ns.proto(), Name: l.cfg.Name, SchemaSha256: l.cfg.SchemaSHA256,
+	})
+	if err != nil {
+		return 0, mapError(err)
+	}
+	if response == nil {
+		return 0, errors.New("kmsclient: resolve release schema returned an empty response")
+	}
+	if response.GetSchemaVersion() == 0 {
+		return 0, errors.New("kmsclient: resolve release schema returned schema version zero")
+	}
+	l.trackSchemaVersion = response.GetSchemaVersion()
+	l.trackResolved = true
+	return l.trackSchemaVersion, nil
 }
 
 func newReleaseInstanceID() (string, error) {
@@ -316,23 +377,33 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	if !bound {
 		return ErrNoNamespace
 	}
+	if _, err := l.resolveTrack(ctx, ns); err != nil {
+		return fmt.Errorf("kmsclient: resolve release schema track: %w", err)
+	}
 
 	initial, err := l.getActive(ctx, ns)
-	if err != nil {
+	haveInitial := err == nil
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("kmsclient: load initial active release: %w", err)
 	}
-	if initial.release == nil {
-		return errors.New("kmsclient: active release response was empty")
+	if haveInitial {
+		l.lastSeen.Store(initial.revision)
 	}
-	l.lastSeen.Store(initial.revision)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	events := make(chan releaseCandidate, 1)
 	gracefulWatchStop := make(chan struct{})
 	watchDone := make(chan struct{})
+	watchFatal := make(chan error, 1)
 	go func() {
 		defer close(watchDone)
-		l.watchLoop(runCtx, ns, events, gracefulWatchStop)
+		if watchErr := l.watchLoop(runCtx, ns, events, gracefulWatchStop); watchErr != nil {
+			watchFatal <- watchErr
+			// The run loop may be blocked in a reconciliation read. Cancel
+			// preparation and that read as soon as the watch rejects the
+			// subscription, rather than waiting for the loop to receive the error.
+			cancelRun()
+		}
 	}()
 	defer func() {
 		cancelRun()
@@ -361,6 +432,11 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	}
 
 	queue := func(candidate releaseCandidate) {
+		// A malformed or stale server response from another track must not cancel
+		// or supersede work for the loader's pinned track.
+		if !releaseHasAddress(candidate.release, ns, l.cfg.Name, l.trackSchemaVersion) {
+			return
+		}
 		if !shouldQueueReleaseCandidate(candidate, latestCandidate, haveLatestCandidate, retryLatestCandidate) {
 			return
 		}
@@ -381,7 +457,9 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 		start(candidate)
 	}
 
-	queue(initial)
+	if haveInitial {
+		queue(initial)
+	}
 	ticker := time.NewTicker(l.cfg.ReconcileInterval)
 	defer ticker.Stop()
 
@@ -396,6 +474,8 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 			return ctx.Err()
 		case candidate := <-events:
 			queue(candidate)
+		case watchErr := <-watchFatal:
+			return fmt.Errorf("kmsclient: release watch failed: %w", watchErr)
 		case result := <-results:
 			inFlight = false
 			activeCancel = nil
@@ -474,6 +554,7 @@ func shouldQueueReleaseCandidate(candidate, latest releaseCandidate, haveLatest,
 func sameQueuedCandidate(a, b releaseCandidate) bool {
 	return a.release != nil && b.release != nil &&
 		a.revision == b.revision &&
+		a.release.GetSchemaVersion() == b.release.GetSchemaVersion() &&
 		a.release.GetVersion() == b.release.GetVersion() &&
 		a.release.GetDigest() == b.release.GetDigest()
 }
@@ -596,7 +677,11 @@ func sameActiveCandidate(want, got releaseCandidate) bool {
 		return false
 	}
 	return want.revision == got.revision &&
+		want.release.GetNamespace() != nil && got.release.GetNamespace() != nil &&
+		want.release.GetNamespace().GetEnv() == got.release.GetNamespace().GetEnv() &&
+		want.release.GetNamespace().GetApp() == got.release.GetNamespace().GetApp() &&
 		want.release.GetName() == got.release.GetName() &&
+		want.release.GetSchemaVersion() == got.release.GetSchemaVersion() &&
 		want.release.GetVersion() == got.release.GetVersion() &&
 		want.release.GetDigest() == got.release.GetDigest()
 }
@@ -669,7 +754,7 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 	if release == nil || release.GetNamespace() == nil {
 		return ReleaseSnapshot{}, ReleaseRejectResolutionFailed, errors.New("empty release")
 	}
-	if release.GetName() != l.cfg.Name || release.GetNamespace().GetEnv() != ns.env || release.GetNamespace().GetApp() != ns.app {
+	if !releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
 		return ReleaseSnapshot{}, ReleaseRejectVersionMismatch, errors.New("release identity mismatch")
 	}
 	calculatedDigest, err := deterministicReleaseDigest(release)
@@ -953,14 +1038,23 @@ func sameResourceRef(a, b *kmsv1.ResourceRef) bool {
 	return refFromProto(a) == refFromProto(b)
 }
 
+func releaseHasAddress(release *kmsv1.ConfigurationRelease, ns namespaceRef, name string, schemaVersion uint64) bool {
+	return release != nil && release.GetNamespace() != nil &&
+		release.GetNamespace().GetEnv() == ns.env && release.GetNamespace().GetApp() == ns.app &&
+		release.GetName() == name && release.GetSchemaVersion() == schemaVersion
+}
+
 func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (releaseCandidate, error) {
 	cctx, cancel := l.client.callCtx(ctx)
 	defer cancel()
 	resp, err := l.client.releases.GetActiveRelease(cctx, &kmsv1.GetActiveReleaseRequest{
-		Namespace: ns.proto(), Name: l.cfg.Name,
+		Namespace: ns.proto(), Name: l.cfg.Name, SchemaVersion: proto.Uint64(l.trackSchemaVersion),
 	})
 	if err != nil {
 		return releaseCandidate{}, mapError(err)
+	}
+	if !releaseHasAddress(resp.GetRelease(), ns, l.cfg.Name, l.trackSchemaVersion) {
+		return releaseCandidate{}, errors.New("kmsclient: active release response identity mismatch")
 	}
 	return releaseCandidate{release: resp.GetRelease(), revision: resp.GetActivationRevision()}, nil
 }
@@ -978,21 +1072,24 @@ func waitForReleaseWatchStop(ctx context.Context, cancel context.CancelFunc, don
 	<-done
 }
 
-func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) {
+func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) error {
 	attempt := 0
 	stopping := false
 	for ctx.Err() == nil {
 		receivedEvent, stopped, err := l.watchSession(ctx, ns, events, gracefulStop)
 		if stopped {
-			return
+			return nil
 		}
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		if stopping {
 			// The one immediate graceful-shutdown reconnect failed. There is
 			// no live stream on which the queued acknowledgement can be sent.
-			return
+			return nil
+		}
+		if terminalReleaseWatchError(err) {
+			return mapError(err)
 		}
 		if receivedEvent {
 			attempt = 0
@@ -1005,13 +1102,21 @@ func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events c
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return nil
 		case <-gracefulStop:
 			timer.Stop()
 			stopping = true
 		case <-timer.C:
 		}
 	}
+	return nil
+}
+
+func terminalReleaseWatchError(err error) bool {
+	mapped := mapError(err)
+	return errors.Is(mapped, ErrInvalidArgument) || errors.Is(mapped, ErrNotFound) ||
+		errors.Is(mapped, ErrPermissionDenied) || errors.Is(mapped, ErrUnauthenticated) ||
+		errors.Is(mapped, ErrFailedPrecondition)
 }
 
 func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) (bool, bool, error) {
@@ -1026,6 +1131,7 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 			ClientName:       l.client.clientName,
 			InstanceId:       l.instanceID,
 			LastSeenRevision: l.lastSeen.Load(),
+			SchemaVersion:    proto.Uint64(l.trackSchemaVersion),
 		},
 	}}); err != nil {
 		return false, false, err
@@ -1093,19 +1199,37 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 			}
 			event := item.event
 			if event != nil {
-				receivedEvent = true
-				l.advanceLastSeen(event.GetRevision())
-				var release *kmsv1.ConfigurationRelease
-				source := releaseCandidateSourceActivation
 				switch payload := event.GetEvent().(type) {
 				case *kmsv1.WatchReleaseEvent_Snapshot:
-					release = payload.Snapshot.GetRelease()
-					source = releaseCandidateSourceReconciliation
+					release := payload.Snapshot.GetRelease()
+					if releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+						offerLatestCandidate(events, releaseCandidate{
+							release: release, revision: event.GetRevision(), source: releaseCandidateSourceReconciliation,
+						})
+					}
 				case *kmsv1.WatchReleaseEvent_Activation:
-					release = payload.Activation.GetRelease()
-				}
-				if release != nil {
-					offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision(), source: source})
+					release := payload.Activation.GetRelease()
+					if releaseHasAddress(release, ns, l.cfg.Name, l.trackSchemaVersion) {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+						offerLatestCandidate(events, releaseCandidate{
+							release: release, revision: event.GetRevision(), source: releaseCandidateSourceActivation,
+						})
+					}
+				case *kmsv1.WatchReleaseEvent_Heartbeat:
+					if payload.Heartbeat != nil {
+						receivedEvent = true
+						l.advanceLastSeen(event.GetRevision())
+					}
+				case *kmsv1.WatchReleaseEvent_AcknowledgementRejected:
+					if l.handleAcknowledgementRejected(ns, payload.AcknowledgementRejected) {
+						receivedEvent = true
+					}
+					// Rejection events describe retained client state, not a
+					// release cursor. In particular, their envelope revision must
+					// never suppress a later activation.
 				}
 			}
 			go func() {
@@ -1188,6 +1312,7 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 		State:              state,
 		RejectionCategory:  rejectionCategory,
 		TimestampUnixMs:    time.Now().UnixMilli(),
+		SchemaVersion:      l.trackSchemaVersion,
 		// Diagnostic is intentionally empty: arbitrary application errors may
 		// contain secret plaintext and therefore are never forwarded implicitly.
 	}
@@ -1197,8 +1322,13 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 	}
 	l.ackMu.Lock()
 	if current := l.pendingAck[state]; current == nil || current.GetActivationRevision() <= candidate.revision {
+		nextSequence := l.ackGeneration[state] + 1
+		if nextSequence == 0 {
+			nextSequence = 1
+		}
+		ack.Sequence = nextSequence
 		l.pendingAck[state] = ack
-		l.ackGeneration[state]++
+		l.ackGeneration[state] = nextSequence
 		l.dirtyAck[state] = true
 	}
 	l.ackMu.Unlock()
@@ -1206,6 +1336,27 @@ func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCand
 	case l.ackSignal <- struct{}{}:
 	default:
 	}
+}
+
+func (l *ReleaseLoader) handleAcknowledgementRejected(ns namespaceRef, rejected *kmsv1.ReleaseAcknowledgementRejectedEvent) bool {
+	if rejected == nil || rejected.GetReason() != "activation_unavailable" || rejected.GetNamespace() == nil ||
+		rejected.GetNamespace().GetEnv() != ns.env || rejected.GetNamespace().GetApp() != ns.app ||
+		rejected.GetName() != l.cfg.Name || rejected.GetSchemaVersion() != l.trackSchemaVersion ||
+		rejected.GetClientName() != l.client.clientName || rejected.GetInstanceId() != l.instanceID ||
+		rejected.GetSequence() == 0 {
+		return false
+	}
+	l.ackMu.Lock()
+	defer l.ackMu.Unlock()
+	ack := l.pendingAck[rejected.GetState()]
+	if ack == nil || ack.GetSequence() != rejected.GetSequence() ||
+		ack.GetVersion() != rejected.GetVersion() || ack.GetActivationRevision() != rejected.GetActivationRevision() ||
+		ack.GetState() != rejected.GetState() {
+		return true
+	}
+	delete(l.pendingAck, rejected.GetState())
+	delete(l.dirtyAck, rejected.GetState())
+	return true
 }
 
 func (l *ReleaseLoader) sendPendingAcks(stream kmsv1.ConfigurationReleaseService_WatchReleaseClient, replay bool) error {

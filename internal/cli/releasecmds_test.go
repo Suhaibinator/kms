@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -72,9 +75,86 @@ entries:
 	}
 }
 
+func TestReleaseCreateRequiresManifestSchemaSelectorBeforeDial(t *testing.T) {
+	for _, tc := range []struct {
+		name, extension, selector string
+	}{
+		{name: "yaml omitted", extension: ".yaml"},
+		{name: "yaml null", extension: ".yaml", selector: "schema_version: null\n"},
+		{name: "json omitted", extension: ".json"},
+		{name: "json null", extension: ".json", selector: `"schema_version":null,`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "release"+tc.extension)
+			var manifest string
+			if tc.extension == ".json" {
+				manifest = `{"namespace":"prod/app","name":"runtime",` + tc.selector + `"entries":[{"alias":"settings","kind":"parameter","key":"settings","version":1}]}`
+			} else {
+				manifest = "namespace: prod/app\nname: runtime\n" + tc.selector + "entries:\n  - alias: settings\n    kind: parameter\n    key: settings\n    version: 1\n"
+			}
+			if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cli := newTestCLI()
+			dialed := false
+			cli.dialOverride = func(*connFlags) (*grpc.ClientConn, error) {
+				dialed = true
+				return nil, errors.New("unexpected dial")
+			}
+			if code := cli.cmdReleaseCreate([]string{path}); code != exitError {
+				t.Fatalf("exit code = %d, stderr = %q", code, cli.stderr())
+			}
+			if dialed {
+				t.Fatal("invalid manifest dialed the server")
+			}
+			if !strings.Contains(cli.stderr(), "schema_version is required") {
+				t.Fatalf("stderr = %q", cli.stderr())
+			}
+		})
+	}
+}
+
+func TestReadReleaseDefinitionPreservesExplicitSchemaSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest string
+		want           uint64
+	}{
+		{name: "yaml zero", manifest: "schema_version: 0\n", want: 0},
+		{name: "yaml positive", manifest: "schema_version: 7\n", want: 7},
+		{name: "json zero", manifest: `"schema_version":0,`, want: 0},
+		{name: "json positive", manifest: `"schema_version":7,`, want: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "release")
+			var manifest string
+			if strings.HasPrefix(tc.name, "json") {
+				manifest = `{"namespace":"prod/app","name":"runtime",` + tc.manifest + `"entries":[{"alias":"settings","kind":"parameter","key":"settings","version":1}]}`
+			} else {
+				manifest = "namespace: prod/app\nname: runtime\n" + tc.manifest + "entries:\n  - alias: settings\n    kind: parameter\n    key: settings\n    version: 1\n"
+			}
+			if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			definition, err := (&CLI{}).readReleaseDefinition(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := releaseCreateRequest(definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if req.SchemaVersion == nil || req.GetSchemaVersion() != tc.want {
+				t.Fatalf("schema selector = %v, want explicit %d", req.SchemaVersion, tc.want)
+			}
+		})
+	}
+}
+
 func TestReleaseCreateRequestRejectsAmbiguousAndDuplicateEntries(t *testing.T) {
+	schemaVersion := uint64(1)
 	_, err := releaseCreateRequest(releaseDefinition{
-		Namespace: "prod/app", Name: "runtime",
+		Namespace: "prod/app", Name: "runtime", SchemaVersion: &schemaVersion,
 		Entries: []releaseEntryDefinition{
 			{Alias: "x", Kind: "parameter", Key: "a", Version: 1, Label: "current"},
 		},
@@ -83,7 +163,7 @@ func TestReleaseCreateRequestRejectsAmbiguousAndDuplicateEntries(t *testing.T) {
 		t.Fatalf("ambiguous selector error = %v", err)
 	}
 	_, err = releaseCreateRequest(releaseDefinition{
-		Namespace: "prod/app", Name: "runtime",
+		Namespace: "prod/app", Name: "runtime", SchemaVersion: &schemaVersion,
 		Entries: []releaseEntryDefinition{
 			{Alias: "x", Kind: "parameter", Key: "a", Version: 1},
 			{Alias: "x", Kind: "secret", Key: "b", Version: 2},
@@ -141,7 +221,7 @@ func TestOptionalExpectedCurrentVersionTracksPresenceOfZero(t *testing.T) {
 	}
 }
 
-func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t *testing.T) {
+func TestReleaseSubscriberPresentationSeparatesSchemaTracksSharingIdentityAndInstance(t *testing.T) {
 	instances := map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus{}
 	mergeReleaseSubscriberStates(instances, []*kmsv1.ReleaseSubscriberState{
 		{
@@ -151,15 +231,17 @@ func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t
 			State:              "received",
 			ReleaseVersion:     1,
 			ActivationRevision: 1,
+			SchemaVersion:      1,
 		},
 		{
-			Identity:           "identity-b",
+			Identity:           "identity-a",
 			ClientName:         "shared-client",
 			InstanceId:         "same-instance",
 			State:              "applied",
 			ReleaseVersion:     2,
 			ActivationRevision: 2,
 			Connected:          true,
+			SchemaVersion:      2,
 		},
 	})
 	if len(instances) != 2 {
@@ -167,19 +249,197 @@ func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t
 	}
 
 	var output bytes.Buffer
-	writeReleaseSubscriberInstances(&output, instances, 2)
+	writeReleaseSubscriberInstances(&output, instances, map[uint64]uint64{1: 2, 2: 2})
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
 	if len(lines) != 3 {
 		t.Fatalf("output rows = %d, want header plus 2 identities:\n%s", len(lines), output.String())
 	}
-	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|RECEIVED|PREPARED|APPLIED|REJECTED|LAG|CONNECTED" {
+	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|SCHEMA|RECEIVED|PREPARED|APPLIED|REJECTED|REVISION|LAG|CONNECTED" {
 		t.Fatalf("header = %q", got)
 	}
-	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|v1/r1|-|-|-|1|false" {
+	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|1|v1/r1|-|-|-|1|false" {
 		t.Fatalf("identity-a row = %q", got)
 	}
-	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-b|shared-client|same-instance|-|-|v2/r2|-|0|true" {
-		t.Fatalf("identity-b row = %q", got)
+	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-a|shared-client|same-instance|2|-|-|v2/r2|-|0|true" {
+		t.Fatalf("schema-2 row = %q", got)
+	}
+}
+
+type releaseSubscriberAdminStub struct {
+	kmsv1.UnimplementedAdminServiceServer
+	response *kmsv1.ListReleaseSubscribersResponse
+	err      error
+	calls    []*kmsv1.ListReleaseSubscribersRequest
+}
+
+func (s *releaseSubscriberAdminStub) ListReleaseSubscribers(_ context.Context, req *kmsv1.ListReleaseSubscribersRequest) (*kmsv1.ListReleaseSubscribersResponse, error) {
+	s.calls = append(s.calls, proto.Clone(req).(*kmsv1.ListReleaseSubscribersRequest))
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
+}
+
+type releaseSubscriberActiveStub struct {
+	kmsv1.UnimplementedConfigurationReleaseServiceServer
+	revisions map[uint64]uint64
+	errors    map[uint64]error
+	releases  map[uint64]*kmsv1.ConfigurationRelease
+	calls     []uint64
+}
+
+func (s *releaseSubscriberActiveStub) GetActiveRelease(_ context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
+	schemaVersion := req.GetSchemaVersion()
+	s.calls = append(s.calls, schemaVersion)
+	if err := s.errors[schemaVersion]; err != nil {
+		return nil, err
+	}
+	revision, ok := s.revisions[schemaVersion]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "track has no active release")
+	}
+	release := s.releases[schemaVersion]
+	if release == nil {
+		release = &kmsv1.ConfigurationRelease{Namespace: req.GetNamespace(), Name: req.GetName(), SchemaVersion: schemaVersion}
+	}
+	return &kmsv1.GetActiveReleaseResponse{
+		Release:            release,
+		ActivationRevision: revision,
+	}, nil
+}
+
+func TestReleaseSubscribersUnfilteredUsesEachTrackActiveRevision(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		// Unfiltered listings intentionally cannot report one track's revision.
+		CurrentRevision: 0,
+		Subscribers: []*kmsv1.ReleaseSubscriberState{
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 0, State: domain.ReleaseStateApplied, ActivationRevision: 4},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1, State: domain.ReleaseStateReceived, ActivationRevision: 9},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1, State: domain.ReleaseStateApplied, ActivationRevision: 10},
+			{Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 2, State: domain.ReleaseStateApplied, ActivationRevision: 30},
+		},
+	}}
+	active := &releaseSubscriberActiveStub{revisions: map[uint64]uint64{1: 20, 2: 35}, errors: map[uint64]error{}}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+		kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitOK {
+		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+	var page struct {
+		Items []releaseSubscriberJSON `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(c.stdout()), &page); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, c.stdout())
+	}
+	if len(page.Items) != 3 {
+		t.Fatalf("items=%d, want three schema-distinct instances: %+v", len(page.Items), page.Items)
+	}
+	wantLag := map[uint64]uint64{0: 0, 1: 10, 2: 5}
+	for _, item := range page.Items {
+		if item.Identity != "client" || item.Client != "worker" || item.Instance != "same" {
+			t.Fatalf("duplicate client identity was altered: %+v", item)
+		}
+		if item.Lag != wantLag[item.SchemaVersion] {
+			t.Fatalf("schema %d lag=%d, want %d", item.SchemaVersion, item.Lag, wantLag[item.SchemaVersion])
+		}
+	}
+	counts := map[uint64]int{}
+	for _, schemaVersion := range active.calls {
+		counts[schemaVersion]++
+	}
+	if len(active.calls) != 3 || counts[0] != 1 || counts[1] != 1 || counts[2] != 1 {
+		t.Fatalf("active lookups=%v, want one exact lookup per represented track", active.calls)
+	}
+}
+
+func TestReleaseSubscribersFilteredUsesListRevisionWithoutExtraRead(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		CurrentRevision: 20,
+		Subscribers: []*kmsv1.ReleaseSubscriberState{{
+			Identity: "client", ClientName: "worker", InstanceId: "same", SchemaVersion: 1,
+			State: domain.ReleaseStateApplied, ActivationRevision: 10,
+		}},
+	}}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--schema-version", "1", "--output", "json", "--insecure"}); code != exitOK {
+		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+	if len(admin.calls) != 1 || admin.calls[0].SchemaVersion == nil || admin.calls[0].GetSchemaVersion() != 1 {
+		t.Fatalf("subscriber request schema selector=%+v", admin.calls)
+	}
+	if !strings.Contains(c.stdout(), `"lag": 10`) && !strings.Contains(c.stdout(), `"lag":10`) {
+		t.Fatalf("output does not use filtered track revision: %s", c.stdout())
+	}
+}
+
+func TestReleaseSubscribersFailsBeforeOutputWhenTrackRevisionCannotBeRead(t *testing.T) {
+	admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+		Subscribers: []*kmsv1.ReleaseSubscriberState{{Identity: "client", ClientName: "worker", InstanceId: "one", SchemaVersion: 7, State: domain.ReleaseStateApplied}},
+	}}
+	active := &releaseSubscriberActiveStub{
+		revisions: map[uint64]uint64{},
+		errors:    map[uint64]error{7: status.Error(codes.PermissionDenied, "cannot read release")},
+	}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+		kmsv1.RegisterAdminServiceServer(server, admin)
+		kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+	})
+	if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitPermissionDenied {
+		t.Fatalf("exit=%d, want %d; stderr=%s", code, exitPermissionDenied, c.stderr())
+	}
+	if c.stdout() != "" {
+		t.Fatalf("stdout=%q, want no misleading partial output", c.stdout())
+	}
+}
+
+func TestReleaseSubscribersRejectsForeignActiveReleaseIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		release *kmsv1.ConfigurationRelease
+		want    string
+	}{
+		{
+			name:    "namespace",
+			release: &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: "other", App: "app"}, Name: "runtime", SchemaVersion: 7},
+			want:    "different namespace",
+		},
+		{
+			name:    "release name",
+			release: &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: "dev", App: "app"}, Name: "other", SchemaVersion: 7},
+			want:    `server returned release "other"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+				Subscribers: []*kmsv1.ReleaseSubscriberState{{Identity: "client", ClientName: "worker", InstanceId: "one", SchemaVersion: 7, State: domain.ReleaseStateApplied}},
+			}}
+			active := &releaseSubscriberActiveStub{
+				revisions: map[uint64]uint64{7: 20},
+				errors:    map[uint64]error{},
+				releases:  map[uint64]*kmsv1.ConfigurationRelease{7: tc.release},
+			}
+			c := newTestCLI()
+			c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+				kmsv1.RegisterAdminServiceServer(server, admin)
+				kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+			})
+			if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitError {
+				t.Fatalf("exit=%d, want %d; stderr=%s", code, exitError, c.stderr())
+			}
+			if !strings.Contains(c.stderr(), tc.want) {
+				t.Fatalf("stderr=%q, want %q", c.stderr(), tc.want)
+			}
+			if c.stdout() != "" {
+				t.Fatalf("stdout=%q, want no misleading output", c.stdout())
+			}
+		})
 	}
 }
 
@@ -252,9 +512,26 @@ func writeVerifyArtifact(t *testing.T) string {
 	return path
 }
 
+func writeSchemaFreeVerifyArtifact(t *testing.T) string {
+	t.Helper()
+	raw, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev",
+		Contract:   []configstore.ContractEntry{{Alias: "greeting", Kind: configstore.ContractKindParameter, ContentType: "string"}},
+		Parameters: []configstore.DefaultsParameter{{Alias: "greeting", ContentType: "string", Value: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "schema-free-defaults.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestReleaseVerifyDefaultsHashesLocallyAndReportsVerdicts(t *testing.T) {
 	stub := &verifyReleaseStub{response: &kmsv1.VerifyReleaseDefaultsResponse{
-		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: true,
+		Name: "runtime", Version: 3, ActivationRevision: 42, SchemaMatches: true, SchemaVersion: 7,
 		Entries:    []*kmsv1.VerifyEntryVerdict{{Alias: "greeting", Verdict: "match"}, {Alias: "settings", Verdict: "match"}},
 		MatchCount: 2, UnverifiedCount: 1,
 	}}
@@ -296,10 +573,58 @@ func TestReleaseVerifyDefaultsHashesLocallyAndReportsVerdicts(t *testing.T) {
 		}
 	}
 	out := c.stdout()
-	for _, want := range []string{"ALIAS", "VERDICT", "greeting  match", "settings  match", "Release runtime version 3 (revision 42): 2 match, 0 differs", "1 unverified", "schema match"} {
+	for _, want := range []string{"ALIAS", "VERDICT", "greeting  match", "settings  match", "Release runtime version 3 (revision 42): 2 match, 0 differs", "1 unverified", "schema match (version 7)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestVerifyDefaultsRequestSchemaSelectors(t *testing.T) {
+	ns := &kmsv1.NamespaceRef{Env: "prod", App: "app"}
+	artifact := configstore.DefaultsArtifact{Profile: "dev"}
+	if _, err := verifyDefaultsRequest(ns, "runtime", artifact, optionalUint64{}); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("missing selector error = %v", err)
+	}
+	explicitZero := optionalUint64{set: true, value: 0}
+	request, err := verifyDefaultsRequest(ns, "runtime", artifact, explicitZero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.SchemaVersion == nil || request.GetSchemaVersion() != 0 || request.GetSchemaSha256() != "" {
+		t.Fatalf("explicit-zero request = %+v", request)
+	}
+	artifact.SchemaSHA256 = verifyTestSchemaSHA
+	if _, err := verifyDefaultsRequest(ns, "runtime", artifact, explicitZero); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("dual selector error = %v", err)
+	}
+}
+
+func TestReleaseVerifyDefaultsExplicitSchemaZero(t *testing.T) {
+	stub := &verifyReleaseStub{response: &kmsv1.VerifyReleaseDefaultsResponse{
+		Name: "runtime", Version: 1, SchemaVersion: 0, SchemaMatches: true,
+		Entries: []*kmsv1.VerifyEntryVerdict{{Alias: "greeting", Verdict: "match"}}, MatchCount: 1,
+	}}
+	run := func(args ...string) (int, *testCLI) {
+		c := newTestCLI()
+		c.dialOverride = startStubGRPC(t, func(server *grpc.Server) { kmsv1.RegisterConfigurationReleaseServiceServer(server, stub) })
+		return c.Run(append([]string{"release", "verify-defaults"}, args...)), c
+	}
+	artifact := writeSchemaFreeVerifyArtifact(t)
+	if code, c := run("prod/app", "--artifact", artifact, "--insecure"); code != exitUsage || !strings.Contains(c.stderr(), "requires --schema-version") {
+		t.Fatalf("missing selector = exit %d stderr %q", code, c.stderr())
+	}
+	code, c := run("prod/app", "--artifact", artifact, "--schema-version", "0", "--insecure")
+	if code != exitOK {
+		t.Fatalf("explicit schema zero = exit %d stderr %q", code, c.stderr())
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.calls) != 1 || stub.calls[0].SchemaVersion == nil || stub.calls[0].GetSchemaVersion() != 0 || stub.calls[0].GetSchemaSha256() != "" {
+		t.Fatalf("verify calls = %+v", stub.calls)
+	}
+	if !strings.Contains(c.stdout(), "schema match (version 0)") {
+		t.Fatalf("stdout = %q", c.stdout())
 	}
 }
 
@@ -337,11 +662,12 @@ func TestReleaseVerifyDefaultsExitCodes(t *testing.T) {
 	t.Run("usage errors", func(t *testing.T) {
 		stub := &verifyReleaseStub{}
 		for _, args := range [][]string{
-			{"prod/gradethis"},                                    // no --artifact
-			{"--artifact", artifact},                              // no namespace
-			{"not-a-namespace", "--artifact", artifact},           // bad namespace
-			{"prod/gradethis", "extra", "--artifact", artifact},   // too many positionals
-			{"prod/gradethis", "--artifact", artifact, "--bogus"}, // unknown flag
+			{"prod/gradethis"},                                                  // no --artifact
+			{"--artifact", artifact},                                            // no namespace
+			{"not-a-namespace", "--artifact", artifact},                         // bad namespace
+			{"prod/gradethis", "extra", "--artifact", artifact},                 // too many positionals
+			{"prod/gradethis", "--artifact", artifact, "--bogus"},               // unknown flag
+			{"prod/gradethis", "--artifact", artifact, "--schema-version", "0"}, // embedded digest conflicts
 		} {
 			code, _ := run(t, stub, args...)
 			if code != 2 {

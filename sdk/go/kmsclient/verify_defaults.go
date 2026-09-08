@@ -38,10 +38,13 @@ type VerifyReleaseDefaultsOptions struct {
 	Release string
 	// Profile is an informational label carried with the request.
 	Profile string
-	// SchemaSHA256 is the generated contract's schema digest; empty skips the
-	// schema check and leaves SchemaMatches false.
+	// SchemaSHA256 selects the generated contract's schema track. Exactly one
+	// of SchemaSHA256 and SchemaVersion must be supplied.
 	SchemaSHA256 string
-	Entries      []VerifyDefaultsEntry
+	// SchemaVersion selects an exact numeric track instead of resolving
+	// SchemaSHA256. A non-nil pointer to zero explicitly selects schema 0.
+	SchemaVersion *uint64
+	Entries       []VerifyDefaultsEntry
 }
 
 // VerifyDefaultsVerdict is the server's bounded verdict for one alias.
@@ -56,6 +59,7 @@ type VerifyReleaseDefaultsResult struct {
 	ReleaseVersion     uint64
 	ActivationRevision uint64
 	SchemaMatches      bool
+	SchemaVersion      uint64
 	Entries            []VerifyDefaultsVerdict
 	MatchCount         int
 	DiffersCount       int
@@ -110,17 +114,21 @@ func (c *Client) VerifyReleaseDefaults(
 		}
 		entries = append(entries, &kmsv1.VerifyEntry{Alias: alias, ContentType: entry.ContentType, Sha256: entry.SHA256})
 	}
+	if (options.SchemaSHA256 == "") == (options.SchemaVersion == nil) {
+		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify requires exactly one of schema sha256 and schema version")
+	}
 	if options.SchemaSHA256 != "" && !validLowerHex64(options.SchemaSHA256) {
 		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: invalid schema sha256")
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.releases.VerifyReleaseDefaults(cctx, &kmsv1.VerifyReleaseDefaultsRequest{
-		Namespace:    namespace.proto(),
-		Name:         options.Release,
-		Profile:      options.Profile,
-		SchemaSha256: options.SchemaSHA256,
-		Entries:      entries,
+		Namespace:     namespace.proto(),
+		Name:          options.Release,
+		Profile:       options.Profile,
+		SchemaSha256:  options.SchemaSHA256,
+		SchemaVersion: options.SchemaVersion,
+		Entries:       entries,
 	})
 	if err != nil {
 		return VerifyReleaseDefaultsResult{}, mapError(err)
@@ -133,6 +141,7 @@ func (c *Client) VerifyReleaseDefaults(
 		ReleaseVersion:     response.GetVersion(),
 		ActivationRevision: response.GetActivationRevision(),
 		SchemaMatches:      response.GetSchemaMatches(),
+		SchemaVersion:      response.GetSchemaVersion(),
 		Entries:            make([]VerifyDefaultsVerdict, 0, len(response.GetEntries())),
 		MatchCount:         int(response.GetMatchCount()),
 		DiffersCount:       int(response.GetDiffersCount()),

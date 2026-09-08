@@ -73,7 +73,12 @@ describe("TypeScript config generator", () => {
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
     expect(schema).toMatchObject({ type: "object", additionalProperties: false });
     expect(schema.required).toEqual(["database", "runtime"]);
-    expect(first.schema).not.toContain("database_password");
+    expect(schema["x-kms-contract"]).toEqual([
+      { alias: "database", kind: "parameter", content_type: "json" },
+      { alias: "database_password", kind: "secret", content_type: "" },
+      { alias: "runtime", kind: "parameter", content_type: "json" },
+    ]);
+    expect((schema.properties as Record<string, unknown>).database_password).toBeUndefined();
     // uint64 bounds must not be rounded through JavaScript number.
     expect(first.schema).toContain("18446744073709551615");
 
@@ -90,9 +95,11 @@ describe("TypeScript config generator", () => {
     expect(first.binding).not.toContain('from "../../../src/configgen/index.js"');
     expect(first.binding).toContain("restartRequiredFields");
     expect(first.binding).toContain("sameSecretIdentity");
-    expect(first.binding).toContain('Omit<ManagedConfigOptions, "contract" | "bindingKeys">');
     expect(first.binding).toContain(
-      "{ ...options, bindingKeys: this.#bindingKeys, contract: generatedContract }",
+      'Omit<ManagedConfigOptions, "contract" | "bindingKeys" | "schemaVersion" | "schemaSHA256">',
+    );
+    expect(first.binding).toContain(
+      "{ ...options, schemaSHA256, bindingKeys: this.#bindingKeys, contract: generatedContract }",
     );
     expect(first.binding).toContain("Object.create(null) as Record<string, string>");
     expect(first.binding).toContain("bytes.fill(0)");

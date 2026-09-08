@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OVERVIEW_CHECK_MS,
@@ -134,6 +134,64 @@ describe("useApplicationOverview", () => {
       await result.current.reload();
     });
     expect(result.current.freshness.staleReason).toBeNull();
+  });
+
+  it("hides the previous track immediately while a schema switch is slow or fails", async () => {
+    mocks.applicationOverview.mockResolvedValueOnce(ready);
+    let rejectSwitch!: (reason: unknown) => void;
+    const slowFailure = new Promise<ApplicationOverview>((_, reject) => {
+      rejectSwitch = reject;
+    });
+    mocks.applicationOverview.mockReturnValueOnce(slowFailure);
+    const { result, rerender } = renderHook(
+      ({ schemaVersion }) => useApplicationOverview("gradethis", { schemaVersion }),
+      { initialProps: { schemaVersion: 1 } },
+    );
+    await waitFor(() => expect(result.current.slot?.status).toBe("success"));
+    rerender({ schemaVersion: 2 });
+    expect(result.current.slot?.data).toBeNull();
+    await act(async () => rejectSwitch(new Error("offline")));
+    expect(result.current.slot?.status).toBe("error");
+    expect(result.current.slot?.data).toBeNull();
+  });
+
+  it("keeps the returned track mounted while its resolved schema is canonicalized", async () => {
+    let resolveCanonical!: (value: ApplicationOverview) => void;
+    mocks.applicationOverview.mockResolvedValueOnce(ready).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCanonical = resolve;
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ schemaVersion }: { schemaVersion?: number }) =>
+        useApplicationOverview("gradethis", { schemaVersion }),
+      { initialProps: { schemaVersion: undefined as number | undefined } },
+    );
+    await waitFor(() => expect(result.current.slot?.data).toEqual(ready));
+
+    rerender({ schemaVersion: ready.application.schema_version });
+    expect(result.current.slot?.data).toEqual(ready);
+    expect(result.current.slot?.status).toBe("loading");
+
+    await act(async () => resolveCanonical(ready));
+    expect(result.current.slot?.status).toBe("success");
+  });
+
+  it("does not replace mounted controls while canonicalizing the same resolved track", async () => {
+    mocks.applicationOverview
+      .mockResolvedValueOnce(ready)
+      .mockReturnValueOnce(new Promise(() => undefined));
+    function Probe({ schemaVersion }: { schemaVersion?: number }) {
+      const { slot } = useApplicationOverview("gradethis", { schemaVersion });
+      return slot?.data ? <input aria-label="track control" defaultValue="draft" /> : null;
+    }
+    const view = render(<Probe />);
+    const control = await screen.findByRole("textbox", { name: "track control" });
+    control.setAttribute("data-local-state", "preserved");
+
+    view.rerender(<Probe schemaVersion={ready.application.schema_version} />);
+    expect(screen.getByRole("textbox", { name: "track control" })).toBe(control);
+    expect(control).toHaveAttribute("data-local-state", "preserved");
   });
 
   it("announces a release activated elsewhere with a Reload action instead of swapping the data", async () => {

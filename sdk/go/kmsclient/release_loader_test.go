@@ -16,6 +16,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -43,6 +44,9 @@ type releaseLoaderServer struct {
 	metadataFetches        int
 	metadataVersion        uint64
 	secretFetches          int
+	resolveSchemaVersion   uint64
+	resolveSchemaCalls     int
+	watchErr               error
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
 	watchKills  chan struct{}
@@ -140,12 +144,79 @@ func TestReleaseLoaderExactMetadataRequestAvoidsFullHistoryMessageLimit(t *testi
 		Ref: testResource("password"), ContentType: "text/plain", Versions: versions,
 	}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate); err != nil || category != "" {
 		t.Fatalf("bounded exact metadata resolution category=%q error=%v", category, err)
+	}
+}
+
+func TestReleaseLoaderRequiresExactlyOneSchemaSelector(t *testing.T) {
+	client := newReleaseTestClient(t, newReleaseLoaderServer())
+	zero := uint64(0)
+	for name, cfg := range map[string]ReleaseLoaderConfig{
+		"missing": {Name: "runtime"},
+		"both":    {Name: "runtime", SchemaVersion: &zero, SchemaSHA256: strings.Repeat("a", 64)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewReleaseLoader(client, cfg); err == nil || !strings.Contains(err.Error(), "exactly one") {
+				t.Fatalf("NewReleaseLoader() error = %v, want selector error", err)
+			}
+		})
+	}
+	if _, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: &zero}); err != nil {
+		t.Fatalf("explicit schema zero rejected: %v", err)
+	}
+}
+
+func TestReleaseLoaderResolvesDigestOnceAndPinsNumericTrackAcrossRuns(t *testing.T) {
+	server := newReleaseLoaderServer()
+	server.resolveSchemaVersion = 3
+	release := testRelease(1, `{"enabled":true}`)
+	release.SchemaVersion = 3
+	release.Digest, _ = deterministicReleaseDigest(release)
+	server.setActive(release, 8)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaSHA256: strings.Repeat("a", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		committed := make(chan struct{})
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+				return &testPreparedRelease{done: committed}, nil
+			})
+		}()
+		select {
+		case registration := <-server.watchRegs:
+			if registration.SchemaVersion == nil || registration.GetSchemaVersion() != 3 {
+				t.Fatalf("run %d registration schema = %v", run, registration.SchemaVersion)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for registration")
+		}
+		select {
+		case <-committed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for commit")
+		}
+		cancel()
+		if err := <-errCh; err != context.Canceled {
+			t.Fatalf("run %d error = %v", run, err)
+		}
+	}
+	server.mu.Lock()
+	resolveCalls := server.resolveSchemaCalls
+	server.mu.Unlock()
+	if resolveCalls != 1 {
+		t.Fatalf("ResolveReleaseSchema calls = %d, want 1", resolveCalls)
 	}
 }
 
@@ -158,12 +229,28 @@ func (s *releaseLoaderServer) GetActiveRelease(_ context.Context, _ *kmsv1.GetAc
 	return s.active, nil
 }
 
+func (s *releaseLoaderServer) ResolveReleaseSchema(_ context.Context, req *kmsv1.ResolveReleaseSchemaRequest) (*kmsv1.ResolveReleaseSchemaResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveSchemaCalls++
+	if req.GetSchemaSha256() == "" {
+		return nil, status.Error(3, "digest required")
+	}
+	return &kmsv1.ResolveReleaseSchemaResponse{SchemaVersion: s.resolveSchemaVersion}, nil
+}
+
 func (s *releaseLoaderServer) WatchRelease(stream kmsv1.ConfigurationReleaseService_WatchReleaseServer) error {
 	first, err := stream.Recv()
 	if err != nil {
 		return err
 	}
 	s.watchRegs <- first.GetRegister()
+	s.mu.Lock()
+	watchErr := s.watchErr
+	s.mu.Unlock()
+	if watchErr != nil {
+		return watchErr
+	}
 	recvErr := make(chan error, 1)
 	go func() {
 		// Record each acknowledgement before the next Recv so a following EOF
@@ -437,6 +524,17 @@ func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) 
 	}
 }
 
+func TestSameActiveCandidateRejectsForeignNamespace(t *testing.T) {
+	want := releaseCandidate{release: testRelease(7, `{"enabled":true}`), revision: 42}
+	got := releaseCandidate{release: proto.Clone(want.release).(*kmsv1.ConfigurationRelease), revision: 42}
+	got.release.Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+	// A malformed active lookup can copy the expected version, revision, and
+	// digest. Its contradictory address must still fence the precommit check.
+	if sameActiveCandidate(want, got) {
+		t.Fatal("foreign namespace satisfied the precommit active comparison")
+	}
+}
+
 func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server := newReleaseLoaderServer()
 	release := testRelease(7, `{"enabled":true}`)
@@ -445,7 +543,7 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("very-secret"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -556,7 +654,7 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 	client := newReleaseTestClient(t, server)
 	bindingKeys := map[string]BindingKey{"password": NewBindingKey("binding-key"), "unused": NewBindingKey("never-sent")}
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 
 		BindingKeys: bindingKeys,
 	})
@@ -585,10 +683,58 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 
 func TestReleaseLoaderConfigurationAndLoaderFormattingRedactBindingKeys(t *testing.T) {
 	const canary = "binding-key-format-canary"
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	zero, positive := uint64(0), uint64(23)
+	for _, test := range []struct {
+		name          string
+		schemaVersion *uint64
+		schemaSHA256  string
+		wantSelector  string
+		wantJSON      string
+	}{
+		{name: "zero", schemaVersion: &zero, wantSelector: `schema_version=0 schema_sha256=""`, wantJSON: `{"name":"runtime","schema_version":0,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "positive", schemaVersion: &positive, wantSelector: `schema_version=23 schema_sha256=""`, wantJSON: `{"name":"runtime","schema_version":23,"reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "unset", wantSelector: `schema_version=<unset> schema_sha256=""`, wantJSON: `{"name":"runtime","reconcile_interval":"0s","max_concurrent_fetches":0}`},
+		{name: "digest", schemaSHA256: digest, wantSelector: `schema_version=<unset> schema_sha256="` + digest + `"`, wantJSON: `{"name":"runtime","schema_sha256":"` + digest + `","reconcile_interval":"0s","max_concurrent_fetches":0}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := ReleaseLoaderConfig{
+				Name:             "runtime",
+				SchemaVersion:    test.schemaVersion,
+				SchemaSHA256:     test.schemaSHA256,
+				BindingKeys:      map[string]BindingKey{"password": NewBindingKey(canary)},
+				ValidateManifest: func(context.Context, ReleaseManifest) error { panic(canary) },
+			}
+			want := `ReleaseLoaderConfig{name="runtime" ` + test.wantSelector + ` reconcile_interval=0s max_concurrent_fetches=0 instance_id=""}`
+			for format, rendered := range map[string]string{
+				"String":   cfg.String(),
+				"GoString": cfg.GoString(),
+				"%v":       fmt.Sprintf("%v", cfg),
+				"%+v":      fmt.Sprintf("%+v", cfg),
+				"%#v":      fmt.Sprintf("%#v", cfg),
+				"%s":       fmt.Sprintf("%s", cfg),
+			} {
+				if rendered != want {
+					t.Errorf("%s = %q, want %q", format, rendered, want)
+				}
+			}
+			if rendered := fmt.Sprintf("%q", cfg); rendered != fmt.Sprintf("%q", want) {
+				t.Errorf("%%q = %q, want quoted %q", rendered, want)
+			}
+			encoded, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.wantJSON {
+				t.Errorf("JSON = %s, want %s", encoded, test.wantJSON)
+			}
+		})
+	}
+
 	server, _ := newExactProtectionResolution(t, false)
 	client := newReleaseTestClient(t, server)
 	cfg := ReleaseLoaderConfig{
-		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
+		Name: "runtime", SchemaVersion: &positive, BindingKeys: map[string]BindingKey{"password": NewBindingKey(canary)},
 
 		ValidateManifest: func(context.Context, ReleaseManifest) error { return nil },
 	}
@@ -635,7 +781,7 @@ func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
 			if test.bindingKey != "" {
 				keys["password"] = NewBindingKey(test.bindingKey)
 			}
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", BindingKeys: keys})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64), BindingKeys: keys})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -665,7 +811,7 @@ func TestReleaseLoaderRequiresExactContentTypeEvenForEmptyPin(t *testing.T) {
 			candidate.release.Entries[test.entry].ContentType = ""
 			candidate.release.Digest, _ = deterministicReleaseDigest(candidate.release)
 			client := newReleaseTestClient(t, server)
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -697,7 +843,7 @@ func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *test
 			var providerCalls atomic.Int32
 			client := newReleaseTestClient(t, server)
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-				Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
+				Name: "runtime", SchemaVersion: new(uint64), BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -724,7 +870,7 @@ func TestReleaseLoaderRejectsForeignEntryBeforeAnyCallback(t *testing.T) {
 	var validatorCalls, providerCalls atomic.Int32
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime", BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
+		Name: "runtime", SchemaVersion: new(uint64), BindingKeys: map[string]BindingKey{"password": NewBindingKey("binding-key")},
 		ValidateManifest: func(context.Context, ReleaseManifest) error { validatorCalls.Add(1); return nil },
 	})
 	if err != nil {
@@ -768,7 +914,7 @@ func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *tes
 	}
 
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -822,6 +968,452 @@ func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *tes
 	}
 }
 
+func TestReleaseLoaderStartsInactiveTrackAndAppliesFirstActivation(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(1, `{"enabled":true}`)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	applied := make(chan ReleaseSnapshot, 1)
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(_ context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
+			applied <- snapshot
+			return &testPreparedRelease{done: make(chan struct{})}, nil
+		})
+	}()
+	select {
+	case registration := <-server.watchRegs:
+		if registration.SchemaVersion == nil || registration.GetSchemaVersion() != 0 || registration.GetLastSeenRevision() != 0 {
+			t.Fatalf("registration = %+v, want inactive schema-zero track", registration)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("inactive release track did not register a watch")
+	}
+	server.setActive(release, 1)
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Event:    &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: release}},
+		Revision: 1,
+	}
+	select {
+	case snapshot := <-applied:
+		if snapshot.Version() != 1 || snapshot.SchemaVersion() != 0 {
+			t.Fatalf("snapshot identity = version %d schema %d", snapshot.Version(), snapshot.SchemaVersion())
+		}
+	case err := <-runErr:
+		t.Fatalf("Run returned before first activation: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first activation was not applied")
+	}
+	cancel()
+	if err := <-runErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run cancellation error = %v", err)
+	}
+}
+
+func TestReleaseLoaderDropsForeignAndMalformedWatchEventsBeforeCursorAndQueue(t *testing.T) {
+	tests := []struct {
+		name  string
+		event func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent
+	}{
+		{
+			name: "foreign schema snapshot",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.SchemaVersion = 1
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign environment activation",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Namespace.Env = "staging"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign application snapshot",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Namespace.App = "other"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "foreign release name activation",
+			event: func(release *kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				release.Name = "other"
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: release},
+				}}
+			},
+		},
+		{
+			name: "snapshot without release",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Snapshot{
+					Snapshot: &kmsv1.ReleaseSnapshotEvent{},
+				}}
+			},
+		},
+		{
+			name: "activation without release",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{},
+				}}
+			},
+		},
+		{
+			name: "empty event envelope",
+			event: func(*kmsv1.ConfigurationRelease) *kmsv1.WatchReleaseEvent {
+				return &kmsv1.WatchReleaseEvent{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			valid := testRelease(1, `{"enabled":true}`)
+			server.parameters["settings"] = &kmsv1.Parameter{
+				Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 1,
+			}
+			server.secrets["password"] = &kmsv1.GetSecretResponse{
+				Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain",
+			}
+			loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{
+				Name: "runtime", SchemaVersion: new(uint64),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var prepares atomic.Int32
+			committed := make(chan struct{})
+			runErr := make(chan error, 1)
+			go func() {
+				runErr <- loader.Run(ctx, func(_ context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
+					prepares.Add(1)
+					if snapshot.Version() != 1 || snapshot.SchemaVersion() != 0 {
+						t.Errorf("snapshot identity = version %d schema %d", snapshot.Version(), snapshot.SchemaVersion())
+					}
+					return &testPreparedRelease{done: committed}, nil
+				})
+			}()
+
+			select {
+			case registration := <-server.watchRegs:
+				if registration.GetLastSeenRevision() != 0 {
+					t.Fatalf("initial cursor = %d, want 0", registration.GetLastSeenRevision())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("release watch did not register")
+			}
+
+			invalid := tt.event(proto.Clone(valid).(*kmsv1.ConfigurationRelease))
+			invalid.Revision = 100
+			server.watchEvents <- invalid
+			server.watchEvents <- &kmsv1.WatchReleaseEvent{
+				Revision: 1,
+				Event:    &kmsv1.WatchReleaseEvent_Heartbeat{Heartbeat: &kmsv1.Heartbeat{}},
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for loader.lastSeen.Load() != 1 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if got := loader.lastSeen.Load(); got != 1 {
+				t.Fatalf("cursor after malformed revision 100 and heartbeat 1 = %d, want 1", got)
+			}
+			if got := prepares.Load(); got != 0 {
+				t.Fatalf("prepare calls before selected activation = %d, want 0", got)
+			}
+
+			server.watchKills <- struct{}{}
+			select {
+			case registration := <-server.watchRegs:
+				if registration.GetLastSeenRevision() != 1 {
+					t.Fatalf("reconnect cursor = %d, want heartbeat revision 1", registration.GetLastSeenRevision())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("release watch did not reconnect")
+			}
+
+			server.setActive(valid, 2)
+			server.watchEvents <- &kmsv1.WatchReleaseEvent{
+				Revision: 2,
+				Event: &kmsv1.WatchReleaseEvent_Activation{
+					Activation: &kmsv1.ReleaseActivationEvent{Release: valid},
+				},
+			}
+			select {
+			case <-committed:
+			case err := <-runErr:
+				t.Fatalf("Run returned before selected activation committed: %v", err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("selected lower-revision activation did not commit")
+			}
+			if got := loader.lastSeen.Load(); got != 2 {
+				t.Fatalf("cursor after selected activation = %d, want 2", got)
+			}
+			cancel()
+			if err := <-runErr; !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run cancellation error = %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderPrecommitRejectsContradictoryActiveNamespace(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(7, `{"enabled":true}`)
+	server.setActive(release, 42)
+	server.parameters["settings"] = &kmsv1.Parameter{
+		Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7,
+	}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{
+		Ref: testResource("password"), Version: 7, Value: []byte("secret"), ContentType: "text/plain",
+	}
+	loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{
+		Name: "runtime", SchemaVersion: new(uint64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	prepared := &testPreparedRelease{done: make(chan struct{})}
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			contradictory := proto.Clone(release).(*kmsv1.ConfigurationRelease)
+			contradictory.Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+			server.setActive(contradictory, 42)
+			return prepared, nil
+		})
+	}()
+
+	select {
+	case err := <-runErr:
+		if err == nil || !strings.Contains(err.Error(), ReleaseRejectActiveCheck) {
+			t.Fatalf("Run error = %v, want %s", err, ReleaseRejectActiveCheck)
+		}
+	case <-ctx.Done():
+		t.Fatal("loader did not reject contradictory precommit active identity")
+	}
+	if prepared.commits.Load() != 0 || prepared.aborts.Load() != 1 {
+		t.Fatalf("commit/abort = %d/%d, want 0/1", prepared.commits.Load(), prepared.aborts.Load())
+	}
+	var sawRejected, sawApplied bool
+	for {
+		select {
+		case ack := <-server.acks:
+			sawRejected = sawRejected || ack.GetState() == ReleaseStateRejected
+			sawApplied = sawApplied || ack.GetState() == ReleaseStateApplied
+		default:
+			if !sawRejected || sawApplied {
+				t.Fatalf("acknowledgements: rejected=%t applied=%t", sawRejected, sawApplied)
+			}
+			return
+		}
+	}
+}
+
+func TestReleaseLoaderSurfacesPermanentWatchRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		code codes.Code
+		want error
+	}{
+		{name: "unknown numeric track", code: codes.NotFound, want: ErrNotFound},
+		{name: "permission denied", code: codes.PermissionDenied, want: ErrPermissionDenied},
+		{name: "invalid registration", code: codes.InvalidArgument, want: ErrInvalidArgument},
+		{name: "unauthenticated", code: codes.Unauthenticated, want: ErrUnauthenticated},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			server.watchErr = status.Error(test.code, test.name)
+			loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+				t.Fatal("permanently rejected watch prepared a release")
+				return nil, nil
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Run error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderAcknowledgementRejectionMatchesExactGeneration(t *testing.T) {
+	client := &Client{clientName: "worker"}
+	loader := &ReleaseLoader{
+		client: client, cfg: ReleaseLoaderConfig{Name: "runtime"}, instanceID: "instance-1",
+		pendingAck: make(map[string]*kmsv1.ReleaseAcknowledgement), ackGeneration: make(map[string]uint64),
+		dirtyAck: make(map[string]bool), ackSignal: make(chan struct{}, 1),
+	}
+	ns := namespaceRef{env: "prod", app: "app"}
+	first := releaseCandidate{release: testRelease(1, `{"version":1}`), revision: 11}
+	second := releaseCandidate{release: testRelease(2, `{"version":2}`), revision: 12}
+	loader.ack(ns, first, ReleaseStateApplied, "")
+	firstAck := proto.Clone(loader.pendingAck[ReleaseStateApplied]).(*kmsv1.ReleaseAcknowledgement)
+	loader.ack(ns, second, ReleaseStateApplied, "")
+	secondAck := proto.Clone(loader.pendingAck[ReleaseStateApplied]).(*kmsv1.ReleaseAcknowledgement)
+	if firstAck.GetSequence() == 0 || secondAck.GetSequence() <= firstAck.GetSequence() {
+		t.Fatalf("ack sequences = %d, %d", firstAck.GetSequence(), secondAck.GetSequence())
+	}
+
+	rejection := rejectionForAcknowledgement(firstAck)
+	loader.handleAcknowledgementRejected(ns, rejection)
+	if got := loader.pendingAck[ReleaseStateApplied]; got == nil || got.GetSequence() != secondAck.GetSequence() {
+		t.Fatalf("delayed rejection removed newer acknowledgement: %+v", got)
+	}
+
+	forged := []*kmsv1.ReleaseAcknowledgementRejectedEvent{
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+		rejectionForAcknowledgement(secondAck),
+	}
+	forged[0].Namespace = &kmsv1.NamespaceRef{Env: "prod", App: "other"}
+	forged[1].InstanceId = "other-instance"
+	forged[2].SchemaVersion++
+	forged[3].Reason = "other_reason"
+	for _, event := range forged {
+		loader.handleAcknowledgementRejected(ns, event)
+		if loader.pendingAck[ReleaseStateApplied] == nil {
+			t.Fatal("forged rejection removed retained acknowledgement")
+		}
+	}
+	loader.handleAcknowledgementRejected(ns, rejectionForAcknowledgement(secondAck))
+	if loader.pendingAck[ReleaseStateApplied] != nil {
+		t.Fatal("exact rejection did not remove retained acknowledgement")
+	}
+	if loader.ackGeneration[ReleaseStateApplied] != secondAck.GetSequence() {
+		t.Fatal("rejection reset the per-state sequence generation")
+	}
+}
+
+func rejectionForAcknowledgement(ack *kmsv1.ReleaseAcknowledgement) *kmsv1.ReleaseAcknowledgementRejectedEvent {
+	return &kmsv1.ReleaseAcknowledgementRejectedEvent{
+		Namespace: ack.GetNamespace(), Name: ack.GetName(), SchemaVersion: ack.GetSchemaVersion(),
+		Version: ack.GetVersion(), ActivationRevision: ack.GetActivationRevision(),
+		ClientName: ack.GetClientName(), InstanceId: ack.GetInstanceId(), State: ack.GetState(),
+		Sequence: ack.GetSequence(), Reason: "activation_unavailable",
+	}
+}
+
+func TestReleaseLoaderRejectionDoesNotAdvanceCursorAndLaterActivationReplaysAck(t *testing.T) {
+	server := newReleaseLoaderServer()
+	first := testRelease(1, `{"version":1}`)
+	server.setActive(first, 1)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"version":1}`, ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret"), ContentType: "text/plain"}
+	loader, err := NewReleaseLoader(newReleaseTestClient(t, server), ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var prepares atomic.Int32
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			prepares.Add(1)
+			return &testPreparedRelease{done: make(chan struct{})}, nil
+		})
+	}()
+	<-server.watchRegs
+	firstApplied := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if firstApplied.GetSequence() == 0 {
+		t.Fatal("applied acknowledgement had zero sequence")
+	}
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Revision: ^uint64(0),
+		Event: &kmsv1.WatchReleaseEvent_AcknowledgementRejected{
+			AcknowledgementRejected: rejectionForAcknowledgement(firstApplied),
+		},
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		loader.ackMu.Lock()
+		pending := loader.pendingAck[ReleaseStateApplied]
+		loader.ackMu.Unlock()
+		if pending == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("acknowledgement rejection was not handled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := loader.lastSeen.Load(); got != 1 {
+		t.Fatalf("last seen revision = %d after rejection, want 1", got)
+	}
+	if got := prepares.Load(); got != 1 {
+		t.Fatalf("prepare calls = %d after rejection, want 1", got)
+	}
+
+	second := testRelease(2, `{"version":2}`)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"version":2}`, ContentType: "json", Version: 2}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-2"), ContentType: "text/plain"}
+	server.setActive(second, 2)
+	server.watchEvents <- &kmsv1.WatchReleaseEvent{
+		Revision: 2, Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: second}},
+	}
+	secondApplied := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if secondApplied.GetVersion() != 2 || secondApplied.GetSequence() <= firstApplied.GetSequence() {
+		t.Fatalf("second applied acknowledgement = %+v", secondApplied)
+	}
+	server.watchKills <- struct{}{}
+	select {
+	case registration := <-server.watchRegs:
+		if registration.GetLastSeenRevision() != 2 {
+			t.Fatalf("reconnect cursor = %d, want 2", registration.GetLastSeenRevision())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("watch did not reconnect")
+	}
+	replayed := waitReleaseAckState(t, server, ReleaseStateApplied)
+	if replayed.GetSequence() != secondApplied.GetSequence() || replayed.GetVersion() != 2 {
+		t.Fatalf("replayed acknowledgement = %+v, want sequence %d", replayed, secondApplied.GetSequence())
+	}
+	cancel()
+	if err := <-runErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run cancellation error = %v", err)
+	}
+}
+
+func waitReleaseAckState(t *testing.T, server *releaseLoaderServer, state string) *kmsv1.ReleaseAcknowledgement {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ack := <-server.acks:
+			if ack.GetState() == state {
+				return ack
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s acknowledgement", state)
+		}
+	}
+}
+
 func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure(t *testing.T) {
 	server := newReleaseLoaderServer()
 	client := newReleaseTestClient(t, server)
@@ -830,7 +1422,7 @@ func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure
 		ConfigurationReleaseServiceClient: client.releases,
 		attempts:                          attempts,
 	}
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -843,7 +1435,9 @@ func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure
 	gracefulStop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		loader.watchLoop(ctx, ns, make(chan releaseCandidate, 1), gracefulStop)
+		if err := loader.watchLoop(ctx, ns, make(chan releaseCandidate, 1), gracefulStop); err != nil {
+			t.Errorf("graceful watch shutdown: %v", err)
+		}
 		close(done)
 	}()
 
@@ -967,7 +1561,7 @@ func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) 
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name:              "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 		ReconcileInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
@@ -1091,8 +1685,9 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 
 	client := newReleaseTestClient(t, server)
 	var validated atomic.Bool
+	schemaVersion := uint64(3)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: &schemaVersion,
 		ValidateManifest: func(ctx context.Context, manifest ReleaseManifest) error {
 			if ctx == nil {
 				t.Error("manifest validator context is nil")
@@ -1165,7 +1760,7 @@ func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 	client := newReleaseTestClient(t, server)
 	var validatorCalled atomic.Bool
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 		ValidateManifest: func(context.Context, ReleaseManifest) error {
 			validatorCalled.Store(true)
 			return nil
@@ -1200,7 +1795,7 @@ func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause
 	}
 	var prepareCalled atomic.Bool
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 		ValidateManifest: func(context.Context, ReleaseManifest) error {
 			return classified
 		},
@@ -1267,7 +1862,7 @@ func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
 			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 10, Value: []byte("secret"), ContentType: "text/plain"}
 			client := newReleaseTestClient(t, server)
 			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-				Name: "runtime",
+				Name: "runtime", SchemaVersion: new(uint64),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1301,7 +1896,7 @@ func TestReleaseLoaderAbortsSupersededPreparedCandidateExactlyOnce(t *testing.T)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1364,7 +1959,7 @@ func TestReleaseLoaderBoundsNonCooperativePreparationAndKeepsLatest(t *testing.T
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1451,7 +2046,7 @@ func TestReleaseLoaderFailsStartupOnDigestMismatch(t *testing.T) {
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "tampered", ContentType: "json", Version: 3}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 3, Value: []byte("secret"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1474,7 +2069,7 @@ func TestReleaseLoaderFailsStartupOnReleaseProjectionDigestMismatch(t *testing.T
 	release.Digest = strings.Repeat("0", 64)
 	server.setActive(release, 9)
 	client := newReleaseTestClient(t, server)
-	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1514,7 +2109,7 @@ func TestReleaseLoaderRejectsReturnedResourceReferenceMismatch(t *testing.T) {
 			server.parameters["settings"] = &kmsv1.Parameter{Ref: parameterRef, Value: "settings-value", ContentType: "json", Version: 4}
 			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: secretRef, Version: 4, Value: []byte("secret"), ContentType: "text/plain"}
 			client := newReleaseTestClient(t, server)
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1571,7 +2166,7 @@ func TestReleaseLoaderRejectsUnauthoritativeSecretReadResponse(t *testing.T) {
 				Versions: []*kmsv1.SecretVersionInfo{{Version: 4, State: "enabled"}},
 			}
 			client := newReleaseTestClient(t, server)
-			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SchemaVersion: new(uint64)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1635,7 +2230,7 @@ func newDivergenceTestLoader(t *testing.T, version uint64, revision uint64) (*re
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: version, Value: []byte("secret"), ContentType: "text/plain"}
 	client := newReleaseTestClient(t, server)
 	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
-		Name: "runtime",
+		Name: "runtime", SchemaVersion: new(uint64),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -75,6 +75,7 @@ test("application parameter cells open a workspace and retain real detail links"
   const state = incidentState();
   await mockConsole(page, state);
   await page.goto("/applications?app=gradethis&tab=matrix");
+  await expect(page).toHaveURL(/schema_version=1/);
   const link = page.getByRole("link", { name: "Open rate_limits in prod" }).first();
   await expect(link).toBeVisible();
   const href = await link.getAttribute("href");

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import datetime as dt
 import asyncio
+import logging
 from typing import Annotated
 
 import pytest
@@ -22,7 +23,10 @@ from kms_paramstore.configstore import (
     ContractEntry,
     validate_manifest,
     ConfigSnapshot,
+    DefaultMismatchReport,
     Duration,
+    ReleaseIdentity,
+    logging_callbacks,
     start_async_managed_config,
     start_managed_config,
 )
@@ -59,6 +63,27 @@ def test_spec_and_contract_follow_annotated_model() -> None:
         ("db_password", "secret", ""), ("features", "parameter", "json"),
         ("runtime", "parameter", "json"),
     ]
+
+
+@pytest.mark.parametrize("schema_version", [0, 17])
+def test_managed_release_identity_reports_and_logs_include_schema(
+    schema_version: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    identity = ReleaseIdentity(
+        namespace="prod/app",
+        name="runtime",
+        version=4,
+        activation_revision=8,
+        schema_version=schema_version,
+    )
+    expected = f"prod/app/runtime@4#8 schema_version={schema_version}"
+    assert str(identity) == expected
+
+    report = DefaultMismatchReport("startup", identity, (), "error")
+    assert expected in str(report)
+    with caplog.at_level(logging.ERROR, logger="kms_paramstore.configstore"):
+        logging_callbacks().on_default_mismatch(report)
+    assert getattr(caplog.records[-1], "release") == expected
 
 
 def test_prepare_is_atomic_strict_and_defensive() -> None:
@@ -488,7 +513,7 @@ def test_cancelled_async_start_stops_loader_and_releases_binding_claim(monkeypat
         binding = ConfigBinding(RuntimeConfig, {})
         task = asyncio.create_task(start_async_managed_config(
             object(), release="runtime", binding=binding,
-            callbacks=Callbacks(lambda _report: None),
+            callbacks=Callbacks(lambda _report: None), schema_version=0,
         ))
         await running.wait()
         task.cancel()

@@ -5,6 +5,20 @@ import { PageHeader } from "@/components/ui";
 import { crumbs } from "@/lib/crumbs";
 
 describe("crumbs", () => {
+  it.each([0, 1, 2])(
+    "preserves schema v%i through release and environment breadcrumb returns",
+    (schemaVersion) => {
+      const trail = crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 1, schemaVersion);
+      expect(trail[1].href).toBe(`/applications?app=gradethis&schema_version=${schemaVersion}`);
+      expect(trail[2].href).toBe(
+        `/applications?app=gradethis&schema_version=${schemaVersion}&env=prod`,
+      );
+      expect(crumbs.environment({ env: "prod", app: "gradethis" }, schemaVersion)[1].href).toBe(
+        trail[1].href,
+      );
+    },
+  );
+
   it("builds the full trail for each level", () => {
     expect(crumbs.application("gradethis")).toEqual([
       { label: "Applications", href: "/applications" },
@@ -27,11 +41,11 @@ describe("crumbs", () => {
         href: "/secrets/detail?env=dev&app=gradethis&key=db_password",
       },
     ]);
-    expect(crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 12).slice(3)).toEqual([
-      { label: "Releases", href: "/releases?app=gradethis&env=prod&name=runtime" },
+    expect(crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 12, 2).slice(3)).toEqual([
+      { label: "Releases", href: "/releases?app=gradethis&env=prod&name=runtime&schema_version=2" },
       {
-        ident: { kind: "release", value: "runtime@12" },
-        href: "/releases?app=gradethis&env=prod&name=runtime&release=runtime%4012",
+        ident: { kind: "release", value: "runtime@2:12" },
+        href: "/releases?app=gradethis&env=prod&name=runtime&schema_version=2&release=runtime%402%3A12",
       },
     ]);
   });

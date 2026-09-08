@@ -1,3 +1,4 @@
+import { useSchemaRegistry } from "@/lib/useSchemaRegistry";
 import {
   Archive,
   ArchiveRestore,
@@ -36,7 +37,6 @@ import {
   type ResourceRef,
   SECRET_ALREADY_EXISTS_MESSAGE,
 } from "@/lib/api";
-import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
 import { valueFor, valueForKey } from "@/lib/overview";
@@ -44,7 +44,6 @@ import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
-  ConfigurationSchema,
   Finding,
   HealthResponse,
   ReleaseEntryKind,
@@ -84,6 +83,7 @@ export interface ApplicationHomeProps {
   rollback: string | null;
   /** `?migrate=<schema version>` opens schema migration from the registry. */
   migrate?: string | null;
+  schemaVersion?: number;
 }
 
 interface ShipTarget {
@@ -188,6 +188,7 @@ export function ApplicationHome({
   tab,
   rollback,
   migrate,
+  schemaVersion = overview.application.schema_version,
 }: ApplicationHomeProps) {
   const toast = useToast();
   const router = useRouter();
@@ -223,7 +224,7 @@ export function ApplicationHome({
   const [cloneSeed, setCloneSeed] = useState<CloneSeed | null>(null);
   const [cloneOpen, setCloneOpen] = useState(false);
   const cloneRefresh = useRef<Promise<void> | null>(null);
-  const [definition, setDefinition] = useState<{ prefill: ContractEntry[] | null } | null>(null);
+  const [definitionOpen, setDefinitionOpen] = useState(false);
   const [deriveOpen, setDeriveOpen] = useState(false);
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -232,31 +233,9 @@ export function ApplicationHome({
   const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
   const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
-  const [latestSchema, setLatestSchema] = useState<ConfigurationSchema | null>(null);
-  const {
-    name: schemaApplication,
-    release_name: schemaRelease,
-    schema_version: pinnedSchema,
-  } = overview.application;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Clear registry data when its application or release identity changes.
-  useEffect(() => {
-    setLatestSchema(null);
-  }, [schemaApplication, schemaRelease]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: A changed schema pin invalidates the registry lookup after an upgrade.
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .listSchemas(schemaApplication, schemaRelease)
-      .then((page) => {
-        if (!cancelled) setLatestSchema(page.schemas[0] ?? null);
-      })
-      .catch(() => {
-        /* Upgrade dialog reports schema-loading failures. */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [schemaApplication, schemaRelease, pinnedSchema]);
+  const registry = useSchemaRegistry(overview.application.name, overview.application.release_name);
+  const schemas = registry.schemas ?? [];
+  const latestSchema = schemas[0] ?? null;
 
   const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
   const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
@@ -347,6 +326,7 @@ export function ApplicationHome({
                 env: environment,
                 name: release.name,
                 release: releaseKey(release),
+                schemaVersion,
               }),
             ),
         },
@@ -410,10 +390,25 @@ export function ApplicationHome({
     setParameterTarget({ env: environment, app: application.name, key });
   }
 
+  function manageContract(environment = defaultShipEnv) {
+    if (!environment) {
+      setEnvironmentOpen(true);
+      return;
+    }
+    void router.push(
+      links.releases({
+        app: application.name,
+        env: environment,
+        name: application.release_name,
+        schemaVersion,
+      }),
+    );
+  }
+
   function onSetupAction(action: SetupAction) {
     switch (action.kind) {
-      case "edit-definition":
-        setDefinition({ prefill: null });
+      case "manage-contract":
+        manageContract();
         break;
       case "register-schema":
         setDeriveOpen(true);
@@ -455,7 +450,7 @@ export function ApplicationHome({
         setEnvironmentOpen(true);
         break;
       case "edit_contract":
-        setDefinition({ prefill: null });
+        manageContract(scopeEnv);
         break;
       case "pin_schema":
         setDeriveOpen(true);
@@ -484,7 +479,8 @@ export function ApplicationHome({
             app: application.name,
             env: scopeEnv,
             name: application.release_name,
-            release: active ? `${active.name}@${active.version}` : undefined,
+            release: active ? releaseKey(active) : undefined,
+            schemaVersion,
           }),
         );
         break;
@@ -520,6 +516,7 @@ export function ApplicationHome({
           value={application.name}
           tooltip={false}
           href={links.application(application.name, {
+            schemaVersion,
             env: target.env,
             tab: tab === "matrix" ? "matrix" : undefined,
           })}
@@ -571,7 +568,7 @@ export function ApplicationHome({
           Edit definition
         </>
       ),
-      onSelect: () => setDefinition({ prefill: null }),
+      onSelect: () => setDefinitionOpen(true),
     },
     environmentItem(
       "connect-sdk",
@@ -613,7 +610,7 @@ export function ApplicationHome({
   return (
     <div className="application-home">
       <PageHeader
-        breadcrumbs={crumbs.application(application.name)}
+        breadcrumbs={crumbs.application(application.name, schemaVersion)}
         title={
           <span className="row-wrap">
             <Ident kind="app" value={application.name} tooltip={false} />
@@ -625,6 +622,37 @@ export function ApplicationHome({
         subtitle={application.description || "Application configuration across environments."}
         actions={
           <>
+            <label className="row-wrap" htmlFor="application-schema-track">
+              <span className="muted">Schema</span>
+              <select
+                id="application-schema-track"
+                aria-label="Schema version"
+                value={schemaVersion}
+                onChange={(event) => {
+                  setDefinitionOpen(false);
+                  setDeriveOpen(false);
+                  setDefaultsEnv(null);
+                  setShipTarget(null);
+                  setRollbackEnv(null);
+                  setMigrationEnv(null);
+                  void replaceQuery({
+                    schema_version: event.target.value,
+                    ship: "",
+                    rollback: "",
+                    migrate: migrate ?? "",
+                  });
+                }}
+              >
+                {schemas.map((schema) => (
+                  <option key={schema.version} value={schema.version}>
+                    v{schema.version}
+                  </option>
+                ))}
+                {!schemas.some((schema) => schema.version === 0) ? (
+                  <option value={0}>v0 · schema-free</option>
+                ) : null}
+              </select>
+            </label>
             {freshness ? (
               <TransportBadge
                 transport="poll"
@@ -687,7 +715,7 @@ export function ApplicationHome({
       )}
       <DefinitionCard
         overview={overview}
-        onEdit={(prefill) => setDefinition({ prefill: prefill ?? null })}
+        onManageReleases={() => manageContract()}
         onDeriveSchema={() => setDeriveOpen(true)}
         latestSchemaVersion={latestSchema?.version}
         onUpgrade={
@@ -752,7 +780,7 @@ export function ApplicationHome({
                 onConnect: setConnectEnv,
                 onImportDefaults: setDefaultsEnv,
                 onMigrateSchema: setMigrationEnv,
-                onEditContract: () => setDefinition({ prefill: null }),
+                onEditContract: manageContract,
                 onFix,
               }}
             />
@@ -793,6 +821,7 @@ export function ApplicationHome({
             </div>
             <ConfigurationMatrix
               app={application.name}
+              schemaVersion={schemaVersion}
               environments={environments.map((environment) => ({
                 env: environment.namespace.env,
                 production: environment.production,
@@ -857,6 +886,7 @@ export function ApplicationHome({
           <ConnectSdkPanel
             namespace={{ env: connectEnv, app: application.name }}
             releaseName={application.release_name}
+            schemaVersion={schemaVersion}
             aliases={aliases}
             health={health}
             allowedAuthMethods={
@@ -920,14 +950,11 @@ export function ApplicationHome({
         }}
       />
       <ApplicationDefinitionModal
-        open={!archived && definition !== null}
+        open={!archived && definitionOpen}
         application={application}
-        schemaJson={overview.schema_json}
-        environments={environments}
-        prefillContract={definition?.prefill ?? null}
-        onClose={() => setDefinition(null)}
+        onClose={() => setDefinitionOpen(false)}
         onSaved={() => {
-          setDefinition(null);
+          setDefinitionOpen(false);
           void reload();
         }}
       />
@@ -937,6 +964,7 @@ export function ApplicationHome({
         existingSchemaJson={overview.schema_json}
         onClose={() => setDeriveOpen(false)}
         onPinned={() => {
+          registry.reload();
           setDeriveOpen(false);
           void reload();
         }}
@@ -1000,6 +1028,7 @@ export function ApplicationHome({
       />
       <ImportDefaultsModal
         application={application.name}
+        schemaVersion={schemaVersion}
         environment={defaultsEnv ?? ""}
         production={
           environments.find((candidate) => candidate.namespace.env === defaultsEnv)?.production ??

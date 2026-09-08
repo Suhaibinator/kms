@@ -41,8 +41,14 @@ type shipValueChange struct {
 // (4xx); every evaluated outcome is a ShipResult whose Status says what
 // happened. Dry runs validate the candidate in memory and write nothing.
 func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in domain.ShipInput) (domain.ShipResult, error) {
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: in.Environment, App: in.Application}, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.ship", domain.ResourceApplication, in.Application); err != nil {
 		return domain.ShipResult{}, err
+	}
+	if in.SchemaVersion == nil {
+		return domain.ShipResult{}, domain.Errorf(domain.ErrInvalidArgument, "ship requires an explicit schema_version (0 for schema-free)")
 	}
 	if err := keyutil.ValidateApp(in.Application); err != nil {
 		return domain.ShipResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
@@ -59,6 +65,10 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		return domain.ShipResult{}, err
 	}
 	app, err := store.GetApplication(ctx, in.Application)
+	if err != nil {
+		return domain.ShipResult{}, err
+	}
+	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
@@ -84,7 +94,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 			return domain.ShipResult{}, err
 		}
 	}
-	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, ns, app.ReleaseName, false)
+	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns), false)
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
@@ -112,7 +122,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		if other.Env == ns.Env {
 			continue
 		}
-		active, err := rs.GetActiveConfigurationRelease(ctx, other.NamespaceRef, app.ReleaseName)
+		active, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, other.NamespaceRef))
 		if err == nil {
 			otherActive[other.Env] = active.Release
 		} else if !errors.Is(err, domain.ErrNotFound) {
@@ -186,7 +196,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	sort.Strings(aliases)
 	auditMeta := func(extra map[string]string) map[string]string {
-		meta := map[string]string{"environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
+		meta := map[string]string{"schema_version": strconv.FormatUint(app.SchemaVersion, 10), "environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
 		maps.Copy(meta, extra)
 		return meta
 	}
@@ -223,7 +233,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		return domain.ShipResult{}, err
 	}
 	result.Release = &release
-	active, changed, err := s.ActivateConfigurationRelease(ctx, pr, ns, app.ReleaseName, release.Version, &activeVersion)
+	active, changed, err := s.ActivateConfigurationRelease(ctx, pr, applicationTrack(app, ns), release.Version, &activeVersion)
 	if err != nil {
 		var validationFailed *domain.ReleaseValidationFailedError
 		switch {
@@ -235,7 +245,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		case errors.Is(err, domain.ErrAborted):
 			result.Status = domain.ShipStatusConflict
 			shipErr := &domain.ShipError{Code: "aborted", Message: "the active release changed while shipping; the new release was created but not activated"}
-			if current, err := rs.GetActiveConfigurationRelease(ctx, ns, app.ReleaseName); err == nil {
+			if current, err := rs.GetActiveConfigurationRelease(ctx, applicationTrack(app, ns)); err == nil {
 				shipErr.CurrentVersion = current.Release.Version
 			}
 			result.Error = shipErr
@@ -248,7 +258,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	result.Status = domain.ShipStatusActivated
 	result.Activation = &domain.ShipActivation{ActivationRevision: active.ActivationRevision, PreviousVersion: active.PreviousVersion, Changed: changed}
-	audit("allow", map[string]string{"activated": "true", "release_version": strconv.FormatUint(release.Version, 10)})
+	audit("allow", map[string]string{"activated": "true", "release_version": strconv.FormatUint(release.Version, 10), "activation_revision": strconv.FormatUint(active.ActivationRevision, 10)})
 	return result, nil
 }
 

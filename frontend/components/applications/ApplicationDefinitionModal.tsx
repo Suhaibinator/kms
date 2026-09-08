@@ -1,59 +1,20 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Field, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
-import type { ContractEntry } from "@/lib/contract-derive";
-import type { Application, ConfigurationReleaseEntry, EnvironmentOverview } from "@/lib/types";
-import { validateContract } from "@/lib/validation";
-import { ContractEditor } from "./ContractEditor";
+import type { Application } from "@/lib/types";
 
-/** The shape a release must match: alias, kind and (for parameters) content type. */
-function shapeOf(entries: ReadonlyArray<ContractEntry | ConfigurationReleaseEntry>): string {
-  return entries
-    .map(
-      (entry) =>
-        `${entry.alias}|${entry.kind}|${entry.kind === "parameter" ? (entry.content_type ?? "") : ""}`,
-    )
-    .sort()
-    .join("\n");
-}
-
-/** Environments whose active release no longer matches `contract`. */
-export function divergingEnvironments(
-  contract: readonly ContractEntry[],
-  environments: readonly EnvironmentOverview[],
-): EnvironmentOverview[] {
-  const shape = shapeOf(contract);
-  return environments.filter(
-    (environment) =>
-      environment.release.active && shapeOf(environment.release.active.entries) !== shape,
-  );
-}
-
-/**
- * Edit the mutable description and structured contract. The application and
- * release names are immutable ownership coordinates, and schema repinning is
- * performed by the previewed defaults workflow. Warns when the contract differs from an active release's shape,
- * because the next ship must match the contract and that release no longer
- * will.
- */
+/** Edit application metadata without changing any immutable schema-track contract. */
 export function ApplicationDefinitionModal({
   open,
   application,
-  schemaJson,
-  environments,
-  prefillContract,
   onClose,
   onSaved,
 }: {
   open: boolean;
   application: Application;
-  schemaJson?: string | null;
-  environments: EnvironmentOverview[];
-  /** A derived contract to start from instead of the application's own. */
-  prefillContract?: ContractEntry[] | null;
   onClose: () => void;
   onSaved: (application: Application) => void;
 }) {
@@ -61,37 +22,30 @@ export function ApplicationDefinitionModal({
   const formId = useId();
   const descriptionRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState("");
-  const [contract, setContract] = useState<ContractEntry[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setDescription(application.description);
-    setContract((prefillContract ?? application.contract).map((entry) => ({ ...entry })));
     setSaving(false);
-  }, [open, application, prefillContract]);
+  }, [open, application]);
 
-  const contractProblem = validateContract(contract);
-  const blocking = contractProblem;
-  const diverging = useMemo(
-    () => divergingEnvironments(contract, environments),
-    [contract, environments],
-  );
-  const dirty =
-    description !== application.description ||
-    JSON.stringify(contract) !== JSON.stringify(application.contract);
+  const dirty = description !== application.description;
 
   async function submit() {
     if (saving) return;
-    if (blocking) return;
     setSaving(true);
     try {
+      // The overview may project a URL-selected schema track. Read the stored
+      // definition before saving metadata so browsing another track cannot
+      // silently repin the application's mutation default.
+      const { application: stored } = await api.getApplication(application.name);
       const { application: updated } = await api.updateApplication({
         name: application.name,
         description,
-        release_name: application.release_name,
-        schema_version: application.schema_version,
-        contract,
+        release_name: stored.release_name,
+        schema_version: stored.schema_version,
+        contract: stored.contract,
       });
       toast.success("Definition updated");
       onSaved(updated);
@@ -146,31 +100,29 @@ export function ApplicationDefinitionModal({
           />
         </Field>
         <div className="info-panel mb-4 text-sm">
-          Schema pin:{" "}
-          {application.schema_version ? (
-            <span className="mono">
-              {application.name}/{application.release_name}@{application.schema_version}
-            </span>
-          ) : (
-            "not pinned"
-          )}
-          . Apply defaults with definition updates to change this pin.
+          Selected schema track: v{application.schema_version}
+          {application.schema_version === 0 ? " · schema-free" : ""}. Saving the description
+          preserves the application's stored default track and every contract.
         </div>
-        <Field label="Contract" hint="Aliases the application reads; secrets have no content type.">
-          <ContractEditor value={contract} onChange={setContract} schemaJson={schemaJson} />
+        <Field label="Contract" hint="This selected track's contract is read-only.">
+          {application.contract.length ? (
+            <ul className="text-sm">
+              {application.contract.map((entry) => (
+                <li key={entry.alias}>
+                  <span className="mono">{entry.alias}</span> · {entry.kind}
+                  {entry.content_type ? `/${entry.content_type}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="faint text-sm">No aliases</p>
+          )}
         </Field>
-        {diverging.length > 0 ? (
-          <div className="warn-panel text-sm" role="status">
-            <strong>Differs from the active release</strong> in{" "}
-            {diverging
-              .map((environment) => {
-                const active = environment.release.active;
-                return `${environment.namespace.env} (${active?.name}@${active?.version})`;
-              })
-              .join(", ")}
-            . New releases must match this contract; ship one there after saving.
-          </div>
-        ) : null}
+        <p className="faint text-sm">
+          A track adopts its contract on its first release, defaults import, or schema upgrade.
+          Established contracts are immutable. Use Manage releases to create a first release, or
+          upgrade to a new schema track to change an established contract.
+        </p>
       </form>
     </Modal>
   );

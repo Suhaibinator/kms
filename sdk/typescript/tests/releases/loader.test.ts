@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { KmsError } from "../../src/errors.js";
 import {
   ConfigurationRelease,
   type ConfigurationReleaseEntry,
@@ -104,6 +105,7 @@ class FakeTransport implements ReleaseTransport {
   getActiveRelease(
     requestedNamespace: NamespaceRef,
     name: string,
+    _schemaVersion: bigint,
     signal?: AbortSignal,
   ): Promise<GetActiveReleaseResponse> {
     this.calls.push("active");
@@ -163,6 +165,88 @@ describe("ReleaseLoader", () => {
     expect(releaseReconnectBackoff(30, () => 0)).toBe(10);
   });
 
+  it.each([
+    ["not_found", "unknown schema track"],
+    ["permission_denied", "watch is forbidden"],
+    ["failed_precondition", "application is archived"],
+  ] as const)("surfaces terminal inactive-track watch %s", async (code, message) => {
+    const transport = new FakeTransport(makeRelease(1n, []));
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    transport.watchReleaseHook = () => Promise.reject(new KmsError(code, message));
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 99n,
+      random: () => 0,
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      code,
+      message,
+    });
+    expect(loader.status().reconnects).toBe(0n);
+  });
+
+  it("retries a transient inactive-track watch failure", async () => {
+    const transport = new FakeTransport(makeRelease(1n, []));
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    let attempts = 0;
+    transport.watchReleaseHook = async (_registration, signal) => {
+      attempts += 1;
+      if (attempts === 1) throw new KmsError("unavailable", "try again");
+      const stream = new FakeWatchStream(signal);
+      transport.stream = stream;
+      return stream;
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 1n,
+      random: () => 0,
+    });
+    const controller = new AbortController();
+    const run = loader.run(() => invalidPrepared(), controller.signal);
+
+    await waitFor(() => attempts === 2);
+    expect(loader.status().reconnects).toBe(1n);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects every contradictory active-release address before startup state changes", async () => {
+    const selected = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const foreignReleases = [
+      copyRelease(selected, { namespace: { env: "staging", app: "api" } }),
+      copyRelease(selected, { namespace: { env: "prod", app: "worker" } }),
+      copyRelease(selected, { name: "other" }),
+      copyRelease(selected, { schemaVersion: 7n }),
+      copyRelease(selected, { namespace: undefined }),
+    ];
+
+    for (const foreign of foreignReleases) {
+      const transport = new FakeTransport(foreign, 99n);
+      let preparations = 0;
+      const loader = ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+        schemaVersion: 0n,
+      });
+
+      await expect(
+        loader.run(() => {
+          preparations += 1;
+          return invalidPrepared();
+        }),
+      ).rejects.toThrow(/different release track/u);
+      expect(preparations).toBe(0);
+      expect(transport.stream).toBeUndefined();
+      expect(loader.stats().candidates).toBe(0n);
+    }
+  });
+
   it("validates the manifest, resolves exact versions, redacts, commits, and acknowledges", async () => {
     const policy = '{"minLength":14}';
     const release = makeRelease(3n, [
@@ -189,6 +273,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       instanceId: "stable-instance",
 
       bindingKeys: { database: "local-binding-key" },
@@ -227,6 +312,7 @@ describe("ReleaseLoader", () => {
     expect(transport.registration).toMatchObject({
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       instanceId: "stable-instance",
       lastSeenRevision: 22n,
     });
@@ -239,6 +325,253 @@ describe("ReleaseLoader", () => {
       appliedRevision: 22n,
     });
     expect(loader.stats().applied).toBe(1n);
+  });
+
+  it("drops malformed and foreign-track envelopes before cursor or candidate state", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => loader.status().state === "applied");
+
+    const foreignReleases = [
+      copyRelease(release, { version: 10n, schemaVersion: 7n }),
+      copyRelease(release, { version: 11n, namespace: { env: "staging", app: "api" } }),
+      copyRelease(release, { version: 12n, namespace: { env: "prod", app: "worker" } }),
+      copyRelease(release, { version: 13n, name: "other" }),
+    ];
+    streams[0]?.push(activationEvent(foreignReleases[0] as ConfigurationRelease, 100n));
+    streams[0]?.push(snapshotEvent(foreignReleases[1] as ConfigurationRelease, 101n));
+    streams[0]?.push(activationEvent(foreignReleases[2] as ConfigurationRelease, 102n));
+    streams[0]?.push(snapshotEvent(foreignReleases[3] as ConfigurationRelease, 103n));
+    streams[0]?.push({
+      event: { $case: "snapshot", value: { release: undefined } },
+      revision: 104n,
+    });
+    streams[0]?.push({
+      event: { $case: "activation", value: { release: undefined } },
+      revision: 105n,
+    });
+    streams[0]?.push({ event: undefined, revision: 106n });
+    streams[0]?.push({
+      event: { $case: "futureEvent", value: {} },
+      revision: 107n,
+    } as unknown as WatchReleaseEvent);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(loader.stats().candidates).toBe(1n);
+    expect(transport.calls.filter((call) => call.startsWith("parameter:"))).toHaveLength(1);
+    expect(
+      acknowledgements(streams[0]).every((acknowledgement) => acknowledgement.version === 1n),
+    ).toBe(true);
+
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(registrations[1]?.lastSeenRevision).toBe(1n);
+
+    const selected = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    transport.active = { release: selected, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[1]?.push(activationEvent(selected, 2n));
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    expect(loader.stats().candidates).toBe(2n);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("advances the replay cursor only for monotonic heartbeats and matching candidates", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      random: () => 0,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => loader.status().state === "applied");
+
+    streams[0]?.push(heartbeatEvent(100n));
+    streams[0]?.push(heartbeatEvent(90n));
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(registrations[1]?.lastSeenRevision).toBe(100n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[1]?.push(activationEvent(second, 2n));
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    streams[1]?.close();
+    await waitFor(() => streams.length === 3);
+    expect(registrations[2]?.lastSeenRevision).toBe(100n);
+
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("retries the selected candidate after a newer global heartbeat", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    let secondAttempts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      reconcileIntervalMs: 50,
+    });
+    const run = loader.run((snapshot) => {
+      if (snapshot.version === 2n) {
+        secondAttempts += 1;
+        if (secondAttempts === 1) throw new ClassifiedReleaseError("prepare_failed", "retry");
+      }
+      return { commit() {}, abort() {} };
+    }, controller.signal);
+    await waitFor(() => loader.status().appliedVersion === 1n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    transport.stream?.push(activationEvent(second, 2n));
+    await waitFor(() => loader.status().lastFailureCategory === "prepare_failed");
+    transport.stream?.push(heartbeatEvent(100n));
+
+    await waitFor(() => loader.status().appliedVersion === 2n);
+    expect(secondAttempts).toBe(2);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("retains exact acknowledgement generations across replay and rejection races", async () => {
+    const first = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const second = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const third = makeRelease(3n, [parameterEntry("value", "value", 3n, "three")]);
+    const transport = new FakeTransport(first);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    const registrations: ReleaseWatchRegistration[] = [];
+    transport.watchReleaseHook = async (registration, signal) => {
+      registrations.push(registration);
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+      instanceId: "stable-instance",
+      random: () => 0,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+
+    await waitFor(() => appliedAcknowledgement(streams[0])?.version === 1n);
+    const firstApplied = appliedAcknowledgement(streams[0]);
+    if (!firstApplied) throw new Error("first applied acknowledgement was not sent");
+    expect(firstApplied?.sequence).toBeGreaterThan(0n);
+
+    transport.active = { release: second, activationRevision: 2n, previousVersion: 1n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    streams[0]?.push(activationEvent(second, 2n));
+    await waitFor(() =>
+      acknowledgements(streams[0]).some((ack) => ack.state === "applied" && ack.version === 2n),
+    );
+    const secondApplied = acknowledgements(streams[0]).find(
+      (acknowledgement) => acknowledgement.state === "applied" && acknowledgement.version === 2n,
+    );
+    if (!secondApplied) throw new Error("second applied acknowledgement was not sent");
+    expect(secondApplied?.sequence).toBeGreaterThan(firstApplied?.sequence ?? 0n);
+
+    streams[0]?.push(acknowledgementRejectedEvent(secondApplied, 999n, { clientName: "foreign" }));
+    streams[0]?.close();
+    await waitFor(() => streams.length === 2);
+    expect(appliedAcknowledgement(streams[1])).toMatchObject({
+      version: 2n,
+      sequence: secondApplied?.sequence,
+    });
+    expect(registrations[1]?.lastSeenRevision).toBe(2n);
+
+    streams[1]?.push(acknowledgementRejectedEvent(firstApplied, 1_000n));
+    streams[1]?.close();
+    await waitFor(() => streams.length === 3);
+    expect(appliedAcknowledgement(streams[2])).toMatchObject({
+      version: 2n,
+      sequence: secondApplied?.sequence,
+    });
+    expect(registrations[2]?.lastSeenRevision).toBe(2n);
+
+    const sentBeforeRejection = streams[2]?.sent.length;
+    streams[2]?.push(acknowledgementRejectedEvent(secondApplied, 1_001n));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(streams[2]?.sent).toHaveLength(sentBeforeRejection ?? 0);
+    expect(loader.status()).toMatchObject({ state: "applied", appliedVersion: 2n });
+    streams[2]?.close();
+    await waitFor(() => streams.length === 4);
+    expect(appliedAcknowledgement(streams[3])).toBeUndefined();
+    expect(registrations[3]?.lastSeenRevision).toBe(2n);
+
+    transport.active = { release: third, activationRevision: 3n, previousVersion: 2n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 3n, "three"));
+    streams[3]?.push(activationEvent(third, 3n));
+    await waitFor(() => appliedAcknowledgement(streams[3])?.version === 3n);
+    expect(loader.status()).toMatchObject({ state: "applied", appliedVersion: 3n });
+
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("keeps watching a known track with no active release", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.active = { release: undefined, activationRevision: 0n, previousVersion: 0n };
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+    const run = loader.run(() => ({ commit() {}, abort() {} }), controller.signal);
+    await waitFor(() => transport.stream !== undefined);
+    transport.active = { release, activationRevision: 1n, previousVersion: 0n };
+    transport.stream?.push(activationEvent(release, 1n));
+    await waitFor(() => loader.status().state === "applied");
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("rejects missing exact-version credentials before fetching plaintext", async () => {
@@ -256,6 +589,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -275,6 +609,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -294,6 +629,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: { database: "wrong-key" },
     });
 
@@ -326,6 +662,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         now: () => 100,
       });
 
@@ -345,6 +682,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: { database: "must-not-use" },
     });
 
@@ -374,6 +712,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
       });
 
       await expect(
@@ -405,6 +744,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       bindingKeys: source,
     });
     source.database = "mutated-key";
@@ -437,6 +777,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
@@ -457,6 +798,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const run = loader.run(
@@ -494,6 +836,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
       });
       const secondRun = secondLoader.run(
         () => ({
@@ -520,6 +863,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
 
       validateManifest: () => {
         throw new ClassifiedReleaseError("config_contract_mismatch", "sensitive validation detail");
@@ -551,6 +895,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       acknowledgementTimeoutMs: 500,
     });
     let settled = false;
@@ -586,6 +931,7 @@ describe("ReleaseLoader", () => {
     transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
     const streams: FakeWatchStream[] = [];
     let rejectedAttempts = 0;
+    let firstRejectedSequence = 0n;
     transport.watchReleaseHook = async (_registration, signal) => {
       const stream = new FakeWatchStream(signal, (request) => {
         if (
@@ -593,7 +939,10 @@ describe("ReleaseLoader", () => {
           request.request.value.state === "rejected"
         ) {
           rejectedAttempts += 1;
-          if (rejectedAttempts === 1) throw new Error("injected acknowledgement failure");
+          if (rejectedAttempts === 1) {
+            firstRejectedSequence = request.request.value.sequence;
+            throw new Error("injected acknowledgement failure");
+          }
         }
       });
       streams.push(stream);
@@ -604,6 +953,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       acknowledgementTimeoutMs: 500,
       random: () => 0,
     });
@@ -620,6 +970,8 @@ describe("ReleaseLoader", () => {
       rejectionCategory: "prepare_failed",
       diagnostic: "",
     });
+    expect(firstRejectedSequence).toBeGreaterThan(0n);
+    expect(rejectedAcknowledgement(streams[1])?.sequence).toBe(firstRejectedSequence);
   });
 
   it("defaults nonpositive release reconciliation intervals like the Go SDK", () => {
@@ -630,6 +982,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         reconcileIntervalMs: 0,
       }),
     ).not.toThrow();
@@ -638,6 +991,7 @@ describe("ReleaseLoader", () => {
         namespace,
         name: "runtime",
         clientName: "unit-test",
+        schemaVersion: 0n,
         reconcileIntervalMs: -1,
       }),
     ).not.toThrow();
@@ -661,6 +1015,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const run = loader.run(async (snapshot) => {
@@ -716,6 +1071,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const firstController = new AbortController();
     const firstPrepareStarted = deferred<void>();
@@ -808,6 +1164,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run((snapshot) => {
       if (snapshot.version === 2n) {
@@ -854,6 +1211,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run(() => {
       preparations += 1;
@@ -907,6 +1265,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const error = await loader
@@ -943,6 +1302,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const sensitiveFailure = "sensitive async commit failure";
 
@@ -986,6 +1346,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = loader.run(
       () => ({
@@ -1004,6 +1365,51 @@ describe("ReleaseLoader", () => {
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect({ commits, aborts }).toEqual({ commits: 0, aborts: 1 });
     expect(loader.status().appliedVersion).toBe(0n);
+  });
+
+  it("aborts precommit when the active response copies identity under a foreign namespace", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const contradictory = ConfigurationRelease.create({
+      ...release,
+      namespace: { env: "staging", app: "api" },
+      digest: release.digest,
+    });
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let activeCalls = 0;
+    transport.getActiveReleaseHook = () => {
+      activeCalls += 1;
+      return Promise.resolve(
+        activeCalls === 1
+          ? transport.active
+          : { release: contradictory, activationRevision: 1n, previousVersion: 0n },
+      );
+    };
+    let commits = 0;
+    let aborts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      schemaVersion: 0n,
+    });
+
+    await expect(
+      loader.run(() => ({
+        commit: () => {
+          commits += 1;
+        },
+        abort: () => {
+          aborts += 1;
+        },
+      })),
+    ).rejects.toMatchObject({ category: "active_check_failed" });
+    expect({ commits, aborts }).toEqual({ commits: 0, aborts: 1 });
+    expect(loader.status()).toMatchObject({
+      appliedVersion: 0n,
+      lastFailureCategory: "active_check_failed",
+    });
+    expect(acknowledgementStates(transport.stream)).not.toContain("applied");
   });
 
   it("surfaces an abort contract violation as a redacted fatal error", async () => {
@@ -1026,6 +1432,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
 
     const error = await loader
@@ -1067,6 +1474,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const sensitiveFailure = "sensitive async abort failure";
 
@@ -1098,6 +1506,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
     });
     const run = runTypedRelease(
       loader,
@@ -1150,6 +1559,7 @@ describe("ReleaseLoader", () => {
       namespace,
       name: "runtime",
       clientName: "unit-test",
+      schemaVersion: 0n,
       maxConcurrentFetches: 3,
     });
     const run = loader.run(
@@ -1174,12 +1584,22 @@ function makeRelease(version: bigint, entries: ConfigurationReleaseEntry[]): Con
     namespace,
     name: "runtime",
     version,
-    schemaVersion: 0n,
     entries,
     metadataJson: "{}",
   });
   release.digest = deterministicReleaseDigest(release);
   return release;
+}
+
+function copyRelease(
+  release: ConfigurationRelease,
+  overrides: Partial<
+    Pick<ConfigurationRelease, "namespace" | "name" | "schemaVersion" | "version">
+  >,
+): ConfigurationRelease {
+  const copy = ConfigurationRelease.create({ ...release, ...overrides });
+  copy.digest = copy.namespace ? deterministicReleaseDigest(copy) : release.digest;
+  return copy;
 }
 
 function parameterEntry(
@@ -1290,6 +1710,46 @@ function activationEvent(release: ConfigurationRelease, revision: bigint): Watch
   };
 }
 
+function snapshotEvent(release: ConfigurationRelease, revision: bigint): WatchReleaseEvent {
+  return {
+    event: { $case: "snapshot", value: { release } },
+    revision,
+  };
+}
+
+function heartbeatEvent(revision: bigint): WatchReleaseEvent {
+  return {
+    event: { $case: "heartbeat", value: { serverTimeUnixMs: 1n } },
+    revision,
+  };
+}
+
+function acknowledgementRejectedEvent(
+  acknowledgement: NonNullable<ReturnType<typeof appliedAcknowledgement>>,
+  revision: bigint,
+  overrides: Partial<NonNullable<WatchReleaseEvent["event"]>["value"]> = {},
+): WatchReleaseEvent {
+  return {
+    event: {
+      $case: "acknowledgementRejected",
+      value: {
+        namespace: acknowledgement.namespace,
+        name: acknowledgement.name,
+        schemaVersion: acknowledgement.schemaVersion,
+        version: acknowledgement.version,
+        activationRevision: acknowledgement.activationRevision,
+        clientName: acknowledgement.clientName,
+        instanceId: acknowledgement.instanceId,
+        state: acknowledgement.state,
+        sequence: acknowledgement.sequence,
+        reason: "activation_unavailable",
+        ...overrides,
+      },
+    },
+    revision,
+  };
+}
+
 function pathOf(ref: ResourceRef): string {
   if (!ref.namespace) return "";
   return `/${ref.namespace.env}/${ref.namespace.app}/${ref.key}`;
@@ -1307,6 +1767,10 @@ function acknowledgementStates(stream: FakeWatchStream | undefined): string[] {
 
 function rejectedAcknowledgement(stream: FakeWatchStream | undefined) {
   return acknowledgements(stream).find((acknowledgement) => acknowledgement.state === "rejected");
+}
+
+function appliedAcknowledgement(stream: FakeWatchStream | undefined) {
+  return acknowledgements(stream).find((acknowledgement) => acknowledgement.state === "applied");
 }
 
 function invalidPrepared() {

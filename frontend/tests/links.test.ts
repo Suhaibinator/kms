@@ -132,3 +132,54 @@ describe("links", () => {
     expect(links.releases({ release: "run time@1" })).toBe("/releases?release=run%20time%401");
   });
 });
+
+it("release audit links retain the exact recorded track and release even for old or unknown registrations", () => {
+  const base = {
+    resource_type: "configuration_release",
+    resource_env: "prod",
+    resource_app: "billing",
+    resource_key: "runtime",
+    resource_version: 1,
+  };
+  for (const schemaVersion of [0, 1, 2, 999]) {
+    const url = new URL(
+      links.auditResource({
+        ...base,
+        metadata_json: JSON.stringify({ schema_version: String(schemaVersion) }),
+      })!,
+      "https://kms.example",
+    );
+    expect(url.searchParams.get("schema_version")).toBe(String(schemaVersion));
+    expect(url.searchParams.get("release")).toBe(`runtime@${schemaVersion}:1`);
+  }
+});
+
+it("release audits with unknown identity never invent a schema or ambiguous workspace selection", () => {
+  const base = {
+    resource_type: "configuration_release",
+    resource_env: "prod",
+    resource_app: "billing",
+    resource_key: "runtime",
+    resource_version: 1,
+  };
+  for (const metadata_json of [
+    undefined,
+    "",
+    "{",
+    "null",
+    "[]",
+    "{}",
+    ...[null, 0, 1, "", "-1", "1.5", "1e2", "9007199254740992"].map((schema_version) =>
+      JSON.stringify({ schema_version }),
+    ),
+  ]) {
+    expect(links.auditResource({ ...base, metadata_json })).toBe(
+      "/releases?app=billing&env=prod&name=runtime",
+    );
+  }
+  for (const resource_version of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(
+      links.auditResource({ ...base, resource_version, metadata_json: '{"schema_version":"0"}' }),
+    ).toBe("/releases?app=billing&env=prod&name=runtime&schema_version=0");
+  }
+});
