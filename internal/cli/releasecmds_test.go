@@ -284,6 +284,7 @@ type releaseSubscriberActiveStub struct {
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
 	revisions map[uint64]uint64
 	errors    map[uint64]error
+	releases  map[uint64]*kmsv1.ConfigurationRelease
 	calls     []uint64
 }
 
@@ -297,8 +298,12 @@ func (s *releaseSubscriberActiveStub) GetActiveRelease(_ context.Context, req *k
 	if !ok {
 		return nil, status.Error(codes.NotFound, "track has no active release")
 	}
+	release := s.releases[schemaVersion]
+	if release == nil {
+		release = &kmsv1.ConfigurationRelease{Namespace: req.GetNamespace(), Name: req.GetName(), SchemaVersion: schemaVersion}
+	}
 	return &kmsv1.GetActiveReleaseResponse{
-		Release:            &kmsv1.ConfigurationRelease{Namespace: req.GetNamespace(), Name: req.GetName(), SchemaVersion: schemaVersion},
+		Release:            release,
 		ActivationRevision: revision,
 	}, nil
 }
@@ -391,6 +396,50 @@ func TestReleaseSubscribersFailsBeforeOutputWhenTrackRevisionCannotBeRead(t *tes
 	}
 	if c.stdout() != "" {
 		t.Fatalf("stdout=%q, want no misleading partial output", c.stdout())
+	}
+}
+
+func TestReleaseSubscribersRejectsForeignActiveReleaseIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		release *kmsv1.ConfigurationRelease
+		want    string
+	}{
+		{
+			name:    "namespace",
+			release: &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: "other", App: "app"}, Name: "runtime", SchemaVersion: 7},
+			want:    "different namespace",
+		},
+		{
+			name:    "release name",
+			release: &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: "dev", App: "app"}, Name: "other", SchemaVersion: 7},
+			want:    `server returned release "other"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := &releaseSubscriberAdminStub{response: &kmsv1.ListReleaseSubscribersResponse{
+				Subscribers: []*kmsv1.ReleaseSubscriberState{{Identity: "client", ClientName: "worker", InstanceId: "one", SchemaVersion: 7, State: domain.ReleaseStateApplied}},
+			}}
+			active := &releaseSubscriberActiveStub{
+				revisions: map[uint64]uint64{7: 20},
+				errors:    map[uint64]error{},
+				releases:  map[uint64]*kmsv1.ConfigurationRelease{7: tc.release},
+			}
+			c := newTestCLI()
+			c.dialOverride = startStubGRPC(t, func(server *grpc.Server) {
+				kmsv1.RegisterAdminServiceServer(server, admin)
+				kmsv1.RegisterConfigurationReleaseServiceServer(server, active)
+			})
+			if code := c.Run([]string{"release", "subscribers", "dev/app", "runtime", "--output", "json", "--insecure"}); code != exitError {
+				t.Fatalf("exit=%d, want %d; stderr=%s", code, exitError, c.stderr())
+			}
+			if !strings.Contains(c.stderr(), tc.want) {
+				t.Fatalf("stderr=%q, want %q", c.stderr(), tc.want)
+			}
+			if c.stdout() != "" {
+				t.Fatalf("stdout=%q, want no misleading output", c.stdout())
+			}
+		})
 	}
 }
 

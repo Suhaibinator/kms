@@ -1058,11 +1058,18 @@ func releaseSubscriberTrackRevisions(ctx context.Context, client kmsv1.Configura
 		if err != nil {
 			return nil, fmt.Errorf("get active release for schema %d: %w", schemaVersion, err)
 		}
-		if active.GetRelease() == nil {
+		release := active.GetRelease()
+		if release == nil {
 			return nil, fmt.Errorf("get active release for schema %d: server returned an empty release", schemaVersion)
 		}
-		if active.GetRelease().GetSchemaVersion() != schemaVersion {
-			return nil, fmt.Errorf("get active release for schema %d: server returned schema %d", schemaVersion, active.GetRelease().GetSchemaVersion())
+		if !sameNamespace(release.GetNamespace(), ns) {
+			return nil, fmt.Errorf("get active release for schema %d: server returned a different namespace", schemaVersion)
+		}
+		if release.GetName() != name {
+			return nil, fmt.Errorf("get active release for schema %d: server returned release %q", schemaVersion, release.GetName())
+		}
+		if release.GetSchemaVersion() != schemaVersion {
+			return nil, fmt.Errorf("get active release for schema %d: server returned schema %d", schemaVersion, release.GetSchemaVersion())
 		}
 		revisions[schemaVersion] = active.GetActivationRevision()
 	}
