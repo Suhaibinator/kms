@@ -390,12 +390,15 @@ func (m *Manager) Status() Status {
 	observed := m.observed
 	if loaderStatus.ObservedVersion != observed.version || loaderStatus.ObservedRevision != observed.activationRevision {
 		// Prefetch contract and resolution failures do not produce a resolved
-		// snapshot. Preserve the safe version/revision observed by ReleaseLoader
-		// while leaving unavailable schema/digest fields empty.
+		// snapshot. Preserve the selected track from the last trusted manifest
+		// with the safe version/revision observed by ReleaseLoader, while leaving
+		// the unavailable candidate digest empty.
 		observed = ReleaseIdentity{
+			namespace:          observed.namespace,
 			name:               m.options.Release,
 			version:            loaderStatus.ObservedVersion,
 			activationRevision: loaderStatus.ObservedRevision,
+			schemaVersion:      observed.schemaVersion,
 		}
 	}
 	status := Status{

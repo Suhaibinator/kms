@@ -201,9 +201,11 @@ export class ManagedConfigManager {
       observed.activationRevision !== loaderStatus.observedRevision
     ) {
       observed = new ReleaseIdentity({
+        namespace: observed.namespace,
         name: this.#options.name,
         version: loaderStatus.observedVersion,
         activationRevision: loaderStatus.observedRevision,
+        schemaVersion: observed.schemaVersion,
       });
     }
     return Object.freeze({

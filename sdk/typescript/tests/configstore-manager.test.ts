@@ -119,6 +119,51 @@ describe("ManagedConfigManager", () => {
     await realClient.close();
   });
 
+  it.each([0n, 7n])(
+    "preserves selected schema %s while a newer activation is queued",
+    async (schemaVersion) => {
+      const transport = new FakeReleaseTransport(
+        makeRelease(1n, '{"hot":1,"restart":"a"}', schemaVersion),
+        1n,
+      );
+      const controller = new AbortController();
+      const secondPreparing = deferred<void>();
+      const releaseSecond = deferred<void>();
+      const manager = await startManagedConfig(
+        managedClient(transport),
+        { ...options(() => undefined), schemaVersion },
+        async (snapshot) => {
+          if (snapshot.version === 2n) {
+            secondPreparing.resolve();
+            await releaseSecond.promise;
+          }
+          return { publish: () => undefined };
+        },
+        controller.signal,
+      );
+      await waitFor(() => transport.registration !== undefined);
+
+      transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}', schemaVersion), 2n);
+      await secondPreparing.promise;
+      transport.activate(makeRelease(3n, '{"hot":3,"restart":"a"}', schemaVersion), 3n);
+      await waitFor(() => manager.status().observed.version === 3n);
+
+      expect(manager.status().observed).toMatchObject({
+        namespace: "prod/api",
+        name: "runtime",
+        version: 3n,
+        activationRevision: 3n,
+        schemaVersion,
+        digest: "",
+      });
+
+      releaseSecond.resolve();
+      await waitFor(() => manager.status().applied.version === 3n);
+      controller.abort();
+      await manager.wait();
+    },
+  );
+
   it("applies and reports startup drift, notifies onApplied, and acknowledges divergence", async () => {
     const release = makeRelease(1n, '{"hot":2,"restart":"a"}');
     const transport = new FakeReleaseTransport(release, 1n);
@@ -492,7 +537,7 @@ function managedClient(transport: FakeReleaseTransport) {
             app: selectedNamespace?.[1] ?? namespace.app,
           },
           clientName: options.clientName ?? "configstore-test",
-          schemaVersion: 0n,
+          schemaVersion: options.schemaVersion ?? 0n,
         }),
       );
     },
@@ -617,12 +662,12 @@ class FakeReleaseTransport implements ReleaseTransport {
   }
 }
 
-function makeRelease(version: bigint, value: string): ConfigurationRelease {
+function makeRelease(version: bigint, value: string, schemaVersion = 0n): ConfigurationRelease {
   const release = ConfigurationRelease.create({
     namespace,
     name: "runtime",
     version,
-    schemaVersion: 0n,
+    schemaVersion,
     entries: [parameterEntry("settings", "settings", version, value)],
     metadataJson: "{}",
   });
@@ -666,4 +711,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     if (Date.now() >= deadline) throw new Error("condition was not met before timeout");
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
+}
+
+function deferred<T = void>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }

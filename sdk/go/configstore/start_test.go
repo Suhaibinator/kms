@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,5 +141,114 @@ func TestStartAppliesStartupMismatchAndAcknowledgesDivergence(t *testing.T) {
 	cancel()
 	if err := manager.Wait(); err != nil {
 		t.Fatalf("Wait() = %v", err)
+	}
+}
+
+func TestStatusPreservesSelectedTrackWhileNewerActivationIsQueued(t *testing.T) {
+	for _, schemaVersion := range []uint64{0, 7} {
+		t.Run(fmt.Sprintf("schema_%d", schemaVersion), func(t *testing.T) {
+			server, err := kmsclienttest.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for version := uint64(1); version <= 3; version++ {
+				server.SetParameterVersion("prod/app", "groups/runtime", fmt.Sprintf(`{"version":%d}`, version), "json", version)
+			}
+			setRelease := func(version uint64) {
+				t.Helper()
+				_, setErr := server.SetActiveRelease(kmsclienttest.ReleaseSpec{
+					Namespace:     "prod/app",
+					Name:          "runtime",
+					Version:       version,
+					SchemaVersion: schemaVersion,
+					Entries: []kmsclienttest.ReleaseEntrySpec{{
+						Alias: "settings", Kind: "parameter", Path: "groups/runtime", Version: version,
+					}},
+				}, version)
+				if setErr != nil {
+					t.Fatal(setErr)
+				}
+			}
+			setRelease(1)
+			client, err := kmsclient.NewClient(kmsclient.Config{
+				Namespace: "prod/app", ClientName: "configstore-status-test", DialOptions: server.DialOptions(),
+			})
+			if err != nil {
+				server.Close()
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = client.Close()
+				server.Close()
+			})
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			secondPreparing := make(chan struct{})
+			releaseSecond := make(chan struct{})
+			manager, err := Start(ctx, client, Options{
+				Release: "runtime", SchemaVersion: &schemaVersion,
+				Contract:  []ContractEntry{{Alias: "settings", Kind: ContractKindParameter, ContentType: "json"}},
+				Callbacks: Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) {}},
+			}, func(_ context.Context, snapshot kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+				if snapshot.Version() == 2 {
+					close(secondPreparing)
+					<-releaseSecond // Deliberately hold after supersession to keep release 3 queued.
+				}
+				return PreparedCandidate{Publish: func() {}}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := server.WaitForReleaseSubscribe(2 * time.Second); err != nil {
+				t.Fatal(err)
+			}
+
+			activate := func(version uint64) {
+				t.Helper()
+				_, activateErr := server.ActivateConfigurationRelease(kmsclienttest.ReleaseSpec{
+					Namespace:     "prod/app",
+					Name:          "runtime",
+					Version:       version,
+					SchemaVersion: schemaVersion,
+					Entries: []kmsclienttest.ReleaseEntrySpec{{
+						Alias: "settings", Kind: "parameter", Path: "groups/runtime", Version: version,
+					}},
+				}, version)
+				if activateErr != nil {
+					t.Fatal(activateErr)
+				}
+			}
+			activate(2)
+			select {
+			case <-secondPreparing:
+			case <-time.After(2 * time.Second):
+				t.Fatal("release 2 did not reach prepare")
+			}
+			activate(3)
+			deadline := time.Now().Add(2 * time.Second)
+			for manager.Status().Observed.Version() != 3 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			observed := manager.Status().Observed
+			if observed.Namespace() != "prod/app" || observed.Name() != "runtime" ||
+				observed.Version() != 3 || observed.ActivationRevision() != 3 ||
+				observed.SchemaVersion() != schemaVersion || observed.Digest() != "" {
+				t.Fatalf("queued observed identity = %+v", observed)
+			}
+
+			close(releaseSecond)
+			deadline = time.Now().Add(2 * time.Second)
+			for manager.Status().Applied.Version() != 3 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if got := manager.Status().Applied.Version(); got != 3 {
+				t.Fatalf("applied version = %d, want 3", got)
+			}
+			cancel()
+			if err := manager.Wait(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
