@@ -242,23 +242,26 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 			// unrelated resources; an empty filtered replay must not leave a
 			// reconnecting subscriber waiting indefinitely for another activation.
 			if len(events) == 0 {
-				return releaseSnapshotBacklog(ctx, rs, reg)
+				return releaseSnapshotBacklog(ctx, rs, reg, current)
 			}
 			return ReleaseBacklog{Events: events, Revision: current}, nil
 		}
 	}
-	return releaseSnapshotBacklog(ctx, rs, reg)
+	return releaseSnapshotBacklog(ctx, rs, reg, current)
 }
 
-func releaseSnapshotBacklog(ctx context.Context, rs storage.ReleaseStore, reg ReleaseRegistration) (ReleaseBacklog, error) {
+func releaseSnapshotBacklog(ctx context.Context, rs storage.ReleaseStore, reg ReleaseRegistration, current uint64) (ReleaseBacklog, error) {
 	active, err := rs.GetActiveConfigurationRelease(ctx, reg.Track())
 	if errors.Is(err, domain.ErrNotFound) {
-		return ReleaseBacklog{IsSnapshot: true}, nil
+		return ReleaseBacklog{IsSnapshot: true, Revision: current}, nil
 	}
 	if err != nil {
 		return ReleaseBacklog{}, err
 	}
-	return ReleaseBacklog{IsSnapshot: true, Events: []ReleaseEvent{{Release: active.Release, Namespace: reg.Namespace, Name: reg.Name, Version: active.Release.Version, Revision: active.ActivationRevision, SchemaVersion: reg.SchemaVersion, NamespaceID: reg.NamespaceID}}, Revision: active.ActivationRevision}, nil
+	// The snapshot event retains the activation identity needed for ACKs. The
+	// stream cursor also includes unrelated changes already scanned. The active
+	// read may observe an activation committed after CurrentRevision was read.
+	return ReleaseBacklog{IsSnapshot: true, Events: []ReleaseEvent{{Release: active.Release, Namespace: reg.Namespace, Name: reg.Name, Version: active.Release.Version, Revision: active.ActivationRevision, SchemaVersion: reg.SchemaVersion, NamespaceID: reg.NamespaceID}}, Revision: max(current, active.ActivationRevision)}, nil
 }
 
 func (r ReleaseRegistration) Track() domain.ReleaseTrack {

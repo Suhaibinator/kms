@@ -233,6 +233,10 @@ func TestReleaseSubscriptionEmptyFilteredReplayReturnsActiveSnapshot(t *testing.
 	if !bl.IsSnapshot || len(bl.Events) != 1 || bl.Events[0].Release.Version != r1.Version || bl.Events[0].Revision != a1.ActivationRevision {
 		t.Fatalf("empty filtered replay fallback=%+v", bl)
 	}
+	current, err := st.CurrentRevision(ctx)
+	if err != nil || bl.Revision != current || bl.Revision <= a1.ActivationRevision {
+		t.Fatalf("snapshot lost global cursor: backlog=%+v current=%d err=%v", bl, current, err)
+	}
 }
 
 func TestReleaseSubscriptionSlowConsumerCoalescesLatest(t *testing.T) {
@@ -357,6 +361,9 @@ func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
 	<-hub.Started()
 	reg := releaseWatchRegistration(t, st, ns)
 	reg.SchemaVersion = schema.Version
+	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "unrelated"}, "1", "integer", "{}", "test"); err != nil {
+		t.Fatal(err)
+	}
 	sub, err := hub.SubscribeRelease(ctx, reg)
 	if err != nil {
 		t.Fatal(err)
@@ -364,6 +371,10 @@ func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
 	defer sub.Close()
 	if len(sub.Backlog().Events) != 0 {
 		t.Fatal("inactive track fabricated a release")
+	}
+	current, err := st.CurrentRevision(ctx)
+	if err != nil || sub.Backlog().Revision != current {
+		t.Fatalf("inactive snapshot lost global cursor: backlog=%+v current=%d err=%v", sub.Backlog(), current, err)
 	}
 	select {
 	case <-sub.Done():
@@ -390,5 +401,34 @@ func TestReleaseWatchKnownInactiveTrackWaits(t *testing.T) {
 	reg.SchemaVersion++
 	if _, err := hub.SubscribeRelease(ctx, reg); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("unknown track: %v", err)
+	}
+}
+
+// The active read can observe a commit newer than the captured global cursor.
+type releaseSnapshotRaceStore struct {
+	*storage.SQLStore
+	beforeActive func()
+}
+
+func (s *releaseSnapshotRaceStore) GetActiveConfigurationRelease(ctx context.Context, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
+	s.beforeActive()
+	return s.SQLStore.GetActiveConfigurationRelease(ctx, track)
+}
+func TestReleaseSnapshotIncludesActivationAfterCursorCapture(t *testing.T) {
+	st, ns := releaseWatchStore(t)
+	rel := createWatchRelease(t, st, ns, "first")
+	var active domain.ActiveConfigurationRelease
+	store := &releaseSnapshotRaceStore{SQLStore: st, beforeActive: func() {
+		active = activateWatchRelease(t, st, ns, rel.Version)
+	}}
+	hub := NewHub(store, nil, Options{})
+	sub, err := hub.SubscribeRelease(context.Background(), releaseWatchRegistration(t, st, ns))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	bl := sub.Backlog()
+	if len(bl.Events) != 1 || bl.Revision != active.ActivationRevision || bl.Events[0].Revision != active.ActivationRevision {
+		t.Fatalf("racing activation identity/cursor = %+v, want %+v", bl, active)
 	}
 }
