@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SchemaMigrationModal } from "@/components/applications/SchemaMigrationModal";
 import { ApiError } from "@/lib/api";
@@ -822,5 +822,88 @@ describe("SchemaMigrationModal regressions", () => {
         .closest("details"),
     ).not.toHaveAttribute("open");
     expect(within(dialog).getByLabelText("rate_limits value")).toHaveValue("301");
+  });
+  it("uses an adopted destination contract and carries a renamed secret pin separately", async () => {
+    const target = registeredSchema(overview.application.schema_version + 1);
+    target.contract = [{ alias: "new_token", kind: "secret", content_type: "" }];
+    mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachContract(dialog);
+    const aliases = within(dialog).getAllByLabelText("Alias");
+    expect(aliases).toHaveLength(1);
+    expect(aliases[0]).toHaveValue("new_token");
+    expect(aliases[0]).toBeDisabled();
+    const secret = dev.release.active!.entries.find((entry) => entry.kind === "secret")!;
+    fireEvent.change(within(dialog).getByLabelText("Source alias"), {
+      target: { value: secret.alias },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Preview migration/ }));
+    await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
+    expect(mocks.migrateApplicationSchema.mock.calls[0][1]).toMatchObject({
+      contract: [{ alias: "new_token", kind: "secret" }],
+      changes: [{ alias: "new_token", from_alias: secret.alias }],
+      source_schema_version: dev.release.active!.schema_version,
+      schema_version: target.version,
+    });
+  });
+
+  it("does not populate an established empty destination with source fields", async () => {
+    const target = { ...registeredSchema(overview.application.schema_version + 1), contract: [] };
+    mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachContract(dialog);
+    expect(within(dialog).queryAllByLabelText("Alias")).toHaveLength(0);
+    expect(within(dialog).getByText(/established empty contract/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: /Edit values/ })).toBeDisabled();
+    expect(mocks.migrateApplicationSchema).not.toHaveBeenCalled();
+  });
+
+  it("keeps the adopted parameter content type even when its schema suggests another type", async () => {
+    const target = registeredSchema(overview.application.schema_version + 1, {
+      count: { type: "integer" },
+    });
+    target.contract = [{ alias: "count", kind: "parameter", content_type: "json" }];
+    mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachContract(dialog);
+    expect(within(dialog).getByLabelText("Content type")).toHaveValue("json");
+    expect(within(dialog).getByLabelText("Content type")).toBeDisabled();
+    expect(within(dialog).getAllByLabelText("Alias")).toHaveLength(1);
+  });
+  it("discards an in-flight preview when the explicit source track changes", async () => {
+    let resolvePreview!: (value: SchemaMigrationResponse) => void;
+    mocks.migrateApplicationSchema.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      }),
+    );
+    const props = modalProps();
+    const view = render(<SchemaMigrationModal {...props} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    const previewButton = within(dialog).getByRole("button", { name: /Preview migration/ });
+    await waitFor(() => expect(previewButton).toBeEnabled());
+    fireEvent.click(previewButton);
+    await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
+    view.rerender(
+      <SchemaMigrationModal
+        {...props}
+        application={{ ...props.application, schema_version: 0 }}
+        environments={props.environments.map((item) => ({
+          ...item,
+          release: {
+            ...item.release,
+            active: item.release.active ? { ...item.release.active, schema_version: 0 } : undefined,
+          },
+        }))}
+      />,
+    );
+    await act(async () => resolvePreview(migrationResult()));
+    expect(within(dialog).queryByText("Backend validation passed.")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Review contract/ })).toBeVisible();
   });
 });

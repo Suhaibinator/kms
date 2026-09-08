@@ -87,9 +87,10 @@ describe("type mapping", () => {
 });
 
 describe("deriveContractFromSchema", () => {
-  it("derives one parameter per top-level property", () => {
+  it("uses the generated annotation including secret aliases", () => {
     const { contract: derived, notes } = deriveContractFromSchema(schemaFile);
     expect(derived).toEqual([
+      { alias: "api_key", kind: "secret" },
       { alias: "runtime", kind: "parameter", content_type: "json" },
       { alias: "server", kind: "parameter", content_type: "json" },
     ]);

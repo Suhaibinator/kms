@@ -619,6 +619,8 @@ export interface ValidateReleaseResponse {
 }
 
 export interface ConfigurationSchema {
+  /** Omitted until first adoption; an empty array is an established empty contract. */
+  contract?: ApplicationContractField[];
   application: string;
   release_name: string;
   version: number;

@@ -6,7 +6,7 @@
 // Only parameter aliases enter the validated object (internal/core/releases.go);
 // secrets never appear in a schema, so every function here skips them.
 
-import type { ApplicationContractField } from "@/lib/types";
+import type { ApplicationContractField, ConfigurationSchema } from "@/lib/types";
 import { type ParameterContentType, validateContract } from "@/lib/validation";
 
 export type ContractEntry = ApplicationContractField;
@@ -211,6 +211,30 @@ export interface DerivedContract {
   notes: string[];
 }
 
+export function schemaUpgradeContract(
+  schema: ConfigurationSchema,
+  existing: readonly ContractEntry[],
+): DerivedContract {
+  if (schema.contract !== undefined) {
+    return { contract: schema.contract.map((field) => ({ ...field })), notes: [] };
+  }
+  return deriveContractFromSchema(schema.schema_json, existing);
+}
+
+export function contractsMatch(a: readonly ContractEntry[], b: readonly ContractEntry[]): boolean {
+  const shape = (fields: readonly ContractEntry[]) =>
+    JSON.stringify(
+      fields
+        .map((field) => [
+          field.alias,
+          field.kind,
+          field.kind === "parameter" ? field.content_type : "",
+        ])
+        .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+    );
+  return shape(a) === shape(b);
+}
+
 /**
  * Builds a contract from a schema's top-level properties. Existing secret
  * entries are kept (they are never in the schema) and an existing parameter's
@@ -225,6 +249,19 @@ export function deriveContractFromSchema(
   const parsed = parseSchema(schemaJson);
   if (!parsed.ok) {
     return { contract: [...existing], notes: [parsed.detail] };
+  }
+  if ("x-kms-contract" in parsed.schema.root) {
+    try {
+      return {
+        contract: parseContractFile(JSON.stringify(parsed.schema.root["x-kms-contract"])).contract,
+        notes: [],
+      };
+    } catch (error) {
+      return {
+        contract: [],
+        notes: [error instanceof Error ? error.message : "Invalid schema contract annotation."],
+      };
+    }
   }
   const { properties, required } = parsed.schema;
   const existingByAlias = new Map(existing.map((entry) => [entry.alias, entry]));

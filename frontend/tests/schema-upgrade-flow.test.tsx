@@ -116,7 +116,7 @@ describe("Schema upgrade defaults source", () => {
       screen.getByRole("button", { name: `Upgrade schema & ship to ${environment.namespace.env}` }),
     ).toBeEnabled();
     expect(screen.getByRole("region", { name: "Upgrade scope" })).toHaveTextContent(
-      "Application change:",
+      "Schema tracks:",
     );
   });
   it("blocks an artifact that belongs to another schema", async () => {
@@ -151,6 +151,42 @@ describe("Schema upgrade defaults source", () => {
       },
     });
     await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: /Review contract/ })).toBeDisabled();
+    expect(mocks.migrateApplicationSchema).not.toHaveBeenCalled();
+  });
+  it("rejects a matching-digest artifact whose contract differs from the adopted destination", async () => {
+    mocks.listSchemas.mockResolvedValue({
+      schemas: [{ ...schema, contract: [{ alias: "new_token", kind: "secret" }] }],
+      next_page_token: "",
+    });
+    render(
+      <SchemaMigrationModal
+        application={overview.application}
+        environments={overview.environments}
+        initialEnvironment={environment.namespace.env}
+        initialSchemaVersion={schema.version}
+        open
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />,
+    );
+    await screen.findByLabelText("Starting values");
+    fireEvent.change(screen.getByLabelText("Starting values"), { target: { value: "artifact" } });
+    const file = new File(
+      [
+        JSON.stringify({
+          format: "kms-config-defaults/v1",
+          profile: "dev",
+          schema_sha256: schema.digest,
+          contract: [{ alias: "old_token", kind: "secret" }],
+          parameters: [],
+        }),
+      ],
+      "defaults.json",
+      { type: "application/json" },
+    );
+    fireEvent.change(screen.getByLabelText("Defaults artifact"), { target: { files: [file] } });
+    await screen.findByText("The artifact contract does not match the selected schema contract.");
     expect(screen.getByRole("button", { name: /Review contract/ })).toBeDisabled();
     expect(mocks.migrateApplicationSchema).not.toHaveBeenCalled();
   });
