@@ -1323,6 +1323,19 @@ schema.
   `{"releases":[{"release":ConfigurationRelease,"current":true,
   "previous":false,"activation_revision":42}],"next_page_token":""}`.
   `name` and `schema_version` are optional; the namespace is required.
+- `GET /api/v1/releases/schema-versions?env=&app=&name=&page_size=&page_token=` →
+  `{ "schema_versions": [3, 2, 1], "next_page_token": "..." }`. Discovers
+  registered numeric schema versions, including tracks with no releases or
+  activation yet. Uses the same `configuration-release:list` permission,
+  namespace binding, and allowed authentication methods as listing releases;
+  it does not require schema-admin access. `env` and `app` are required. An
+  optional `name` filters the release lineage; omitting it lists the application's
+  registered lineages without selecting the application's default. Results use
+  registry order (newest version first within each lineage) and cursor pagination.
+  Schema-free version `0` is implicit and excluded; an application with no
+  registered schemas or an unknown release name returns an empty array. No schema
+  documents, contracts, digests, or metadata are exposed. The full configuration
+  schema registry endpoints remain admin-only.
 - `GET /api/v1/releases/get?env=&app=&name=&version=&schema_version=` →
   `{"release": ConfigurationRelease}`.
 - `GET /api/v1/releases/active?env=&app=&name=&schema_version=` →

@@ -364,21 +364,7 @@ func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principa
 }
 
 func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
-	ctx = withReleaseAuditFilter(ctx, filter)
-	ns, name := filter.Namespace, filter.Name
-	if err := keyutil.ValidateNamespace(ns); err != nil {
-		return nil, "", domain.Errorf(domain.ErrInvalidArgument, "%v", err)
-	}
-	if name != "" {
-		if err := keyutil.ValidateKey(name); err != nil {
-			return nil, "", domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
-		}
-	}
-	key := name
-	if key == "" {
-		key = "releases"
-	}
-	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseList, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: key})
+	ctx, err := s.authorizeReleaseList(ctx, pr, filter)
 	if err != nil {
 		return nil, "", err
 	}

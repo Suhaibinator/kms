@@ -84,6 +84,16 @@ func (s *server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out, "next_page_token": next})
 }
 
+// Discovery shares release-list authorization, not the admin schema registry.
+func (s *server) handleListReleaseSchemaVersions(w http.ResponseWriter, r *http.Request) {
+	versions, next, err := s.svc.ListReleaseSchemaVersions(r.Context(), principalFrom(r.Context()), nsRefFromQuery(r), r.URL.Query().Get("name"), listPage(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schema_versions": versions, "next_page_token": next})
+}
+
 func (s *server) handleValidateRelease(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Namespace     namespaceRefDTO `json:"namespace"`
