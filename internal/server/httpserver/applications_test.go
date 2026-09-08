@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -540,5 +541,56 @@ func TestApplicationManagementHTTPExplicitSchemaZero(t *testing.T) {
 	}
 	if _, err := e.svc.GetActiveConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: app.ReleaseName, SchemaVersion: newer.Version}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("schema-free management activated newer schema: %v", err)
+	}
+}
+
+func TestApplicationPatchPreservesOmittedContract(t *testing.T) {
+	for _, schemaVersion := range []uint64{0, 1} {
+		t.Run(fmt.Sprint(schemaVersion), func(t *testing.T) {
+			e := newReleaseTestEnv(t)
+			contract := []map[string]any{{"alias": "amount", "kind": "parameter", "content_type": "integer"}}
+			create := map[string]any{"name": "payments", "release_name": "runtime", "contract": contract}
+			if schemaVersion != 0 {
+				create["schema"] = map[string]any{"schema_json": `{"type":"object"}`}
+			}
+			mustStatus(t, e.admin(http.MethodPost, "/api/v1/applications", create), http.StatusCreated)
+			before, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, explicitNull := range []bool{false, true} {
+				patch := map[string]any{"name": "payments", "release_name": "runtime", "schema_version": schemaVersion, "description": "updated"}
+				if explicitNull {
+					patch["contract"] = nil
+				}
+				response := e.admin(http.MethodPatch, "/api/v1/applications", patch)
+				mustStatus(t, response, http.StatusOK)
+				updated, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if updated.Description != "updated" || !reflect.DeepEqual(updated.Contract, before.Contract) {
+					t.Fatalf("omitted contract changed definition (null=%t): %+v", explicitNull, updated)
+				}
+				if got := decodeBody(t, response)["application"].(map[string]any)["contract"].([]any); len(got) != 1 {
+					t.Fatalf("PATCH response contract = %v", got)
+				}
+			}
+			// Omission preserves the definition; explicitly clearing or replacing an
+			// established contract still fails atomically, including descriptive edits.
+			for _, replacement := range []any{[]any{}, []map[string]any{{"alias": "other", "kind": "parameter", "content_type": "integer"}}} {
+				response := e.admin(http.MethodPatch, "/api/v1/applications", map[string]any{
+					"name": "payments", "release_name": "runtime", "schema_version": schemaVersion,
+					"description": "must not persist", "contract": replacement,
+				})
+				if errCode(t, response) != "failed_precondition" {
+					t.Fatalf("replacement status %d: %s", response.Code, response.Body.String())
+				}
+				updated, err := e.svc.GetApplication(context.Background(), consoleAdmin(), "payments")
+				if err != nil || updated.Description != "updated" || !reflect.DeepEqual(updated.Contract, before.Contract) {
+					t.Fatalf("rejected replacement altered application: %+v err=%v", updated, err)
+				}
+			}
+		})
 	}
 }

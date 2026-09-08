@@ -149,6 +149,12 @@ func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domai
 	if app.SchemaVersion != current.SchemaVersion {
 		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by defaults apply --update-definition")
 	}
+	// An omitted contract updates descriptive fields without replacing the
+	// selected schema's established definition. An explicit empty slice still
+	// goes through immutable-contract validation below.
+	if app.Contract == nil {
+		app.Contract = current.Contract
+	}
 	// The first release can establish a track contract after the application
 	// was created without one. Preserve it when updating that empty definition's
 	// descriptive fields, instead of attempting to replace it with an empty list.
