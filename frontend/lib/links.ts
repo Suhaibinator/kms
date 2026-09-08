@@ -1,3 +1,9 @@
+import {
+  type AuditResource,
+  auditReleaseSchemaVersion,
+  auditReleaseVersion,
+} from "./audit-release";
+
 // The console's internal URLs, built in one place so every page links to the
 // same shape. Param order and encoding are load-bearing: tests assert the
 // emitted strings verbatim.
@@ -76,12 +82,7 @@ export const links = {
    * namespace, …). A namespace-only resource goes to the application page
    * focused on that environment; unknown shapes return null and render as text.
    */
-  auditResource: (event: {
-    resource_type?: string;
-    resource_env?: string;
-    resource_app?: string;
-    resource_key?: string;
-  }): string | null => {
+  auditResource: (event: AuditResource): string | null => {
     const env = event.resource_env ?? "";
     const app = event.resource_app ?? "";
     const key = event.resource_key ?? "";
@@ -90,7 +91,20 @@ export const links = {
     if (key) {
       if (type === "secret") return links.secretDetail({ env, app, key });
       if (type === "parameter") return links.parameterDetail({ env, app, key });
-      if (type === "configuration_release") return links.releases({ app, env, name: key });
+      if (type === "configuration_release") {
+        const schemaVersion = auditReleaseSchemaVersion(event);
+        const version = auditReleaseVersion(event);
+        return links.releases({
+          app,
+          env,
+          name: key,
+          schemaVersion,
+          release:
+            schemaVersion !== undefined && version !== undefined
+              ? `${key}@${schemaVersion}:${version}`
+              : undefined,
+        });
+      }
       return null;
     }
     return links.application(app, { env });

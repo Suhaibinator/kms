@@ -601,7 +601,8 @@ function AuditLog({
                             ) : (
                               resource
                             )}
-                            {e.resource_version > 0 ? (
+                            {e.resource_type !== "configuration_release" &&
+                            e.resource_version > 0 ? (
                               <span className="faint"> · v{e.resource_version}</span>
                             ) : null}
                           </span>
