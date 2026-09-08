@@ -126,8 +126,10 @@ export function useApplicationOverview(
     loadingRef.current = true;
     setLoading(true);
     setSlot((current) =>
-      current?.name === name && current.schemaVersion === schemaVersion
-        ? { ...current, status: "loading" }
+      current?.name === name &&
+      (current.schemaVersion === schemaVersion ||
+        (schemaVersion !== undefined && current.data?.application.schema_version === schemaVersion))
+        ? { ...current, schemaVersion, status: "loading" }
         : { name, schemaVersion, status: "loading", data: null },
     );
     try {

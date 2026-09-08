@@ -526,9 +526,9 @@ describe("ReleasesPage", () => {
       app: "payments",
       env: "prod",
       name: "runtime",
-      release: "runtime@1",
+      release: "runtime@1:1",
       section: "compare",
-      compare: "runtime@3",
+      compare: "runtime@1:3",
     };
     const releaseV3 = { ...releaseV2, version: 3 };
     mocks.listReleases.mockResolvedValue({
@@ -549,9 +549,9 @@ describe("ReleasesPage", () => {
       within(workspace)
         .getAllByRole("columnheader")
         .map((cell) => cell.textContent),
-    ).toEqual(["Alias", "runtime@3", "runtime@1"]);
+    ).toEqual(["Alias", "runtime@1:3", "runtime@1:1"]);
     // The inverse reactivation link works on the same mounted route too.
-    mocks.query = { ...mocks.query, release: "runtime@3", compare: "runtime@1" };
+    mocks.query = { ...mocks.query, release: "runtime@1:3", compare: "runtime@1:1" };
     rerender(<ReleasesPage />);
     workspace = await screen.findByRole("dialog", { name: "Release runtime@3" });
     expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
@@ -578,7 +578,7 @@ describe("ReleasesPage", () => {
     const workspace = await screen.findByRole("dialog", { name: "Release runtime@1" });
     await waitFor(() =>
       expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
-        "runtime@3",
+        "runtime@1:3",
       ),
     );
     expect(mocks.getRelease).toHaveBeenCalledWith(
@@ -1150,7 +1150,7 @@ describe("ReleasesPage", () => {
   });
 
   it("opens a ?release= deep link that is not in the loaded page by fetching it", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1:1", schema_version: "1" };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",
@@ -1164,7 +1164,7 @@ describe("ReleasesPage", () => {
 
     render(<ReleasesPage />);
     const dialog = await screen.findByRole("dialog", { name: "Release runtime@1" });
-    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1, 0);
+    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1, 1);
     expect(within(dialog).getByText("previous")).toBeVisible();
 
     // Closing writes the parameter back out of the URL.
@@ -1175,7 +1175,7 @@ describe("ReleasesPage", () => {
     expect(mocks.replace).toHaveBeenLastCalledWith(
       {
         pathname: "/releases",
-        query: { app: "payments", env: "prod", name: "runtime" },
+        query: { app: "payments", env: "prod", name: "runtime", schema_version: "1" },
       },
       undefined,
       { shallow: true, scroll: false },
@@ -1201,7 +1201,7 @@ describe("ReleasesPage", () => {
   });
 
   it("keeps a loaded selection open when an older off-page deep link fails", async () => {
-    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1:1", schema_version: "1" };
     mocks.listReleases.mockResolvedValue({
       releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
       next_page_token: "",
@@ -1214,17 +1214,17 @@ describe("ReleasesPage", () => {
     );
     const { rerender } = render(<ReleasesPage />);
     await waitFor(() =>
-      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1, 0),
+      expect(mocks.getRelease).toHaveBeenCalledWith(releaseV1.namespace, "runtime", 1, 1),
     );
 
-    mocks.query = { ...mocks.query, release: "runtime@2" };
+    mocks.query = { ...mocks.query, release: "runtime@1:2" };
     rerender(<ReleasesPage />);
     expect(await screen.findByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
     await act(async () => rejectLink(new Error("late failure")));
 
     expect(screen.getByRole("dialog", { name: "Release runtime@2" })).toBeVisible();
     expect(mocks.replace).not.toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@2" }) }),
+      expect.objectContaining({ query: expect.not.objectContaining({ release: "runtime@1:2" }) }),
       undefined,
       expect.anything(),
     );

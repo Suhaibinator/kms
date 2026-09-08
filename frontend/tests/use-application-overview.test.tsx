@@ -155,6 +155,26 @@ describe("useApplicationOverview", () => {
     expect(result.current.slot?.data).toBeNull();
   });
 
+  it("keeps the returned track mounted while its resolved schema is canonicalized", async () => {
+    let resolveCanonical!: (value: ApplicationOverview) => void;
+    mocks.applicationOverview
+      .mockResolvedValueOnce(ready)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveCanonical = resolve; }));
+    const { result, rerender } = renderHook(
+      ({ schemaVersion }: { schemaVersion?: number }) =>
+        useApplicationOverview("gradethis", { schemaVersion }),
+      { initialProps: { schemaVersion: undefined as number | undefined } },
+    );
+    await waitFor(() => expect(result.current.slot?.data).toEqual(ready));
+
+    rerender({ schemaVersion: ready.application.schema_version });
+    expect(result.current.slot?.data).toEqual(ready);
+    expect(result.current.slot?.status).toBe("loading");
+
+    await act(async () => resolveCanonical(ready));
+    expect(result.current.slot?.status).toBe("success");
+  });
+
   it("announces a release activated elsewhere with a Reload action instead of swapping the data", async () => {
     mocks.applicationOverview.mockResolvedValue(ready);
     const { result } = renderHook(() => useApplicationOverview("gradethis"));

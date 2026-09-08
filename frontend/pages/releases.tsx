@@ -513,18 +513,32 @@ export default function ReleasesPage() {
       release.version === wantedComparison.version &&
       (wantedComparison.schema_version === undefined || release.schema_version === wantedComparison.schema_version),
   );
-  const loadedComparison = matchingComparisons.length === 1;
-  const resolvedCompareKey = loadedComparison
+  const linkedComparisonMatches = Boolean(
+    wantedComparison && linkedComparison &&
+    linkedComparison.release.name === wantedComparison.name &&
+    linkedComparison.release.version === wantedComparison.version &&
+    (wantedComparison.schema_version === undefined ||
+      linkedComparison.release.schema_version === wantedComparison.schema_version),
+  );
+  const loadedComparison = matchingComparisons.length === 1 || linkedComparisonMatches;
+  const resolvedCompareKey = matchingComparisons.length === 1
     ? releaseKey(matchingComparisons[0].release)
-    : linkedCompareKey;
+    : linkedComparisonMatches && linkedComparison
+      ? releaseKey(linkedComparison.release)
+      : linkedCompareKey;
   useEffect(() => {
-    setLinkedComparison(null);
     setComparisonError(null);
     const wanted = parseReleaseKey(linkedCompareKey);
-    if (!wanted || !hasNS || loadedComparison) {
+    if (!wanted || !hasNS) {
+      setLinkedComparison(null);
       setComparisonLoading(false);
       return;
     }
+    if (loadedComparison) {
+      setComparisonLoading(false);
+      return;
+    }
+    setLinkedComparison(null);
     let cancelled = false;
     const controller = new AbortController();
     setComparisonLoading(true);
@@ -532,13 +546,19 @@ export default function ReleasesPage() {
       .getRelease(ns, wanted.name, wanted.version, wanted.schema_version ?? schemaVersion ?? 0, { signal: controller.signal })
       .then(
         ({ release }) => {
-          if (!cancelled)
+          if (!cancelled) {
+            const resolved = releaseKey(release);
+            setLinkedCompareKey(resolved);
+            if (resolved !== linkedCompareKey) {
+              replaceQuery({ compare: resolved });
+            }
             setLinkedComparison({
               release,
               current: false,
               previous: false,
               activation_revision: 0,
             });
+          }
         },
         (error: unknown) => {
           if (!cancelled && !isAbortError(error))
@@ -554,7 +574,7 @@ export default function ReleasesPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [linkedCompareKey, hasNS, loadedComparison, ns, schemaVersion]);
+  }, [linkedCompareKey, hasNS, loadedComparison, ns, replaceQuery, schemaVersion]);
 
   return (
     <>
@@ -825,7 +845,7 @@ export default function ReleasesPage() {
         comparisonLoading={comparisonLoading}
         comparisonError={comparisonError}
         releases={
-          linkedComparison && !loadedComparison ? [...releases, linkedComparison] : releases
+          linkedComparison && matchingComparisons.length === 0 ? [...releases, linkedComparison] : releases
         }
         busyAction={busyAction}
         activationFailure={activationFailure}
