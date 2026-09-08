@@ -742,17 +742,24 @@ class AsyncReleaseLoader:
                 if self._stop_event.is_set():
                     break
                 received = True
-                if event.revision > self._last_seen_revision:
-                    self._last_seen_revision = event.revision
                 kind = event.WhichOneof("event")
                 if kind == "snapshot":
+                    if event.revision > self._last_seen_revision:
+                        self._last_seen_revision = event.revision
                     self._offer_candidate(
                         _Candidate(_clone_release(event.snapshot.release), event.revision)
                     )
                 elif kind == "activation":
+                    if event.revision > self._last_seen_revision:
+                        self._last_seen_revision = event.revision
                     self._offer_candidate(
                         _Candidate(_clone_release(event.activation.release), event.revision)
                     )
+                elif kind == "heartbeat":
+                    if event.revision > self._last_seen_revision:
+                        self._last_seen_revision = event.revision
+                elif kind == "acknowledgement_rejected":
+                    self._discard_rejected_ack(event.acknowledgement_rejected)
         except asyncio.CancelledError:
             raise
         except grpc.RpcError as exc:
@@ -772,6 +779,33 @@ class AsyncReleaseLoader:
                 except Exception:
                     pass
         return received
+
+    def _discard_rejected_ack(
+        self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
+    ) -> None:
+        namespace = self._require_namespace()
+        if (
+            rejection.reason != "activation_unavailable"
+            or rejection.namespace.env != namespace.env
+            or rejection.namespace.app != namespace.app
+            or rejection.name != self._config.name
+            or rejection.schema_version != self._require_schema_version()
+            or rejection.client_name != self._client_name
+            or rejection.instance_id != self._instance_id
+        ):
+            return
+        current = self._ack_latest.get(rejection.state)
+        if current is None:
+            return
+        generation, acknowledgement, _dirty = current
+        if (
+            generation == rejection.sequence
+            and acknowledgement.sequence == rejection.sequence
+            and acknowledgement.version == rejection.version
+            and acknowledgement.activation_revision == rejection.activation_revision
+            and acknowledgement.state == rejection.state
+        ):
+            del self._ack_latest[rejection.state]
 
     async def _ack_sender(self, call: Any) -> None:
         while not self._stop_event.is_set():
@@ -857,6 +891,7 @@ class AsyncReleaseLoader:
         if current is None or current[1].activation_revision <= candidate.revision:
             self._ack_generation += 1
             generation = self._ack_generation
+            acknowledgement.sequence = generation
             self._ack_latest[state] = (generation, acknowledgement, True)
             self._ack_event.set()
             self._ack_counts[state] += 1

@@ -1047,6 +1047,8 @@ class ReleaseLoader:
                     self._offer_candidate(
                         _Candidate(_clone_release(event.activation.release), event.revision)
                     )
+                elif kind == "acknowledgement_rejected":
+                    self._discard_rejected_ack(event.acknowledgement_rejected)
         except grpc.RpcError as exc:
             if exc.code() in _TERMINAL_WATCH_CODES:
                 with self._candidate_cond:
@@ -1060,6 +1062,34 @@ class ReleaseLoader:
                 if self._watch_call is call:
                     self._watch_call = None
         return received_event
+
+    def _discard_rejected_ack(
+        self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
+    ) -> None:
+        if (
+            rejection.reason != "activation_unavailable"
+            or rejection.namespace.env != self._namespace.env
+            or rejection.namespace.app != self._namespace.app
+            or rejection.name != self._config.name
+            or rejection.schema_version != self._require_schema_version()
+            or rejection.client_name != self._client_name
+            or rejection.instance_id != self._instance_id
+        ):
+            return
+        with self._ack_cond:
+            current = self._ack_latest.get(rejection.state)
+            if current is None:
+                return
+            generation, acknowledgement = current
+            if (
+                generation == rejection.sequence
+                and acknowledgement.sequence == rejection.sequence
+                and acknowledgement.version == rejection.version
+                and acknowledgement.activation_revision == rejection.activation_revision
+                and acknowledgement.state == rejection.state
+            ):
+                del self._ack_latest[rejection.state]
+                self._ack_cond.notify_all()
 
     def _watch_requests(self):
         with self._candidate_cond:
@@ -1163,6 +1193,7 @@ class ReleaseLoader:
             if current is None or current[1].activation_revision <= candidate.revision:
                 self._ack_sequence += 1
                 generation = self._ack_sequence
+                acknowledgement.sequence = generation
                 self._ack_latest[state] = (generation, acknowledgement)
                 self._ack_cond.notify_all()
                 accepted = True

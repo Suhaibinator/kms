@@ -311,6 +311,67 @@ def test_async_digest_selector_resolves_once_and_pins_every_transport(monkeypatc
     asyncio.run(scenario())
 
 
+def _ack_rejection(loader, acknowledgement, *, sequence=None, revision=999):
+    return kms_pb2.WatchReleaseEvent(
+        acknowledgement_rejected=kms_pb2.ReleaseAcknowledgementRejectedEvent(
+            namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
+            name="runtime",
+            schema_version=1,
+            version=acknowledgement.version,
+            activation_revision=acknowledgement.activation_revision,
+            client_name=loader.client_name,
+            instance_id=loader.instance_id,
+            state=acknowledgement.state,
+            sequence=sequence if sequence is not None else acknowledgement.sequence,
+            reason="activation_unavailable",
+        ),
+        revision=revision,
+    )
+
+
+def test_async_delayed_ack_rejection_preserves_newer_generation(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    loader._namespace = NamespaceRef("prod", "app")
+    first = release_module._Candidate(*_release(1, 10))
+    second = release_module._Candidate(*_release(2, 20))
+    loader._ack(first, "received")
+    old = loader._ack_latest["received"][1]
+    assert old.sequence > 0
+    loader._ack(second, "received")
+    newer = loader._ack_latest["received"][1]
+    loader._discard_rejected_ack(_ack_rejection(loader, old).acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    foreign = _ack_rejection(loader, newer)
+    foreign.acknowledgement_rejected.instance_id = "other"
+    loader._discard_rejected_ack(foreign.acknowledgement_rejected)
+    assert loader._ack_latest["received"][1] is newer
+    loader._discard_rejected_ack(_ack_rejection(loader, newer).acknowledgement_rejected)
+    assert "received" not in loader._ack_latest
+
+
+def test_async_ack_rejection_does_not_advance_cursor_or_block_activation(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        prepared = []
+
+        def prepare(_cancel, snapshot):
+            prepared.append(snapshot.version)
+            return _Prepared()
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: prepared == [1])
+        await _wait_for(lambda: bool(stub.acknowledgements and stub.calls))
+        acknowledgement = stub.acknowledgements[-1]
+        stub.calls[-1].push(_ack_rejection(loader, acknowledgement, revision=10_000))
+        stub.activate(_release(2, 11))
+        await _wait_for(lambda: prepared == [1, 2])
+        loader.stop()
+        await task
+        assert loader._last_seen_revision == 11
+
+    asyncio.run(scenario())
+
+
 def test_async_loader_waits_on_inactive_track_then_applies_first_activation(monkeypatch):
     async def scenario():
         loader, stub, _client = _loader(
