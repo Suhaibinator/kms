@@ -67,6 +67,14 @@ function abortError(): Error {
   return new DOMException("aborted", "AbortError");
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** A stream mock that stays open until its signal aborts, exposing onSnapshot. */
 function openStream() {
   const handle: { push?: (s: SubscriberStreamSnapshot) => void; end?: () => void } = {};
@@ -206,6 +214,109 @@ describe("useReleaseSubscribers", () => {
 
     const { result: noNs } = renderHook(() => useReleaseSubscribers(null, "runtime"));
     expect(noNs.current.transport).toBe("off");
+  });
+
+  it.each([
+    ["environment", { env: "staging", app: "gradethis" }, "runtime", 1],
+    ["application", { env: "prod", app: "billing" }, "runtime", 1],
+    ["release name", ns, "batch", 1],
+    ["schema", ns, "runtime", 2],
+  ])(
+    "hides prior-track rows during a delayed %s switch",
+    async (_label, nextNS, nextName, nextSchema) => {
+      const second = deferred<{
+        subscribers: ReleaseSubscriberState[];
+        current_revision: number;
+        next_page_token: string;
+      }>();
+      mocks.releaseSubscribers
+        .mockResolvedValueOnce({
+          subscribers: [row({ release_version: 1, activation_revision: 7 })],
+          current_revision: 7,
+          next_page_token: "",
+        })
+        .mockImplementationOnce(() => second.promise);
+      openStream();
+      openStream();
+      const { result, rerender } = renderHook(
+        ({ targetNS, targetName, schemaVersion }) =>
+          useReleaseSubscribers(targetNS, targetName, { schemaVersion }),
+        { initialProps: { targetNS: ns, targetName: "runtime", schemaVersion: 1 } },
+      );
+      await waitFor(() => expect(result.current.instances).toHaveLength(1));
+
+      rerender({ targetNS: nextNS, targetName: nextName, schemaVersion: nextSchema });
+      expect(result.current.instances).toEqual([]);
+      expect(result.current.currentRevision).toBe(0);
+      expect(result.current.transport).toBe("off");
+      expect(result.current.stale).toBe(false);
+      expect(result.current.lastUpdatedAt).toBeNull();
+
+      second.resolve({ subscribers: [], current_revision: 9, next_page_token: "" });
+      await waitFor(() => expect(result.current.currentRevision).toBe(9));
+    },
+  );
+
+  it("rejects stale list and SSE callbacks after switching away and back to the same track", async () => {
+    const oldList = deferred<{
+      subscribers: ReleaseSubscriberState[];
+      current_revision: number;
+      next_page_token: string;
+    }>();
+    mocks.releaseSubscribers
+      .mockResolvedValueOnce({ subscribers: [], current_revision: 10, next_page_token: "" })
+      .mockImplementationOnce(() => oldList.promise)
+      .mockResolvedValueOnce({ subscribers: [], current_revision: 20, next_page_token: "" })
+      .mockResolvedValueOnce({ subscribers: [], current_revision: 30, next_page_token: "" });
+    const oldStream = openStream();
+    openStream();
+    openStream();
+    const { result, rerender } = renderHook(
+      ({ schemaVersion }) => useReleaseSubscribers(ns, "runtime", { schemaVersion }),
+      { initialProps: { schemaVersion: 1 } },
+    );
+    await waitFor(() => expect(oldStream.push).toBeDefined());
+    void result.current.refresh();
+    await waitFor(() => expect(mocks.releaseSubscribers).toHaveBeenCalledTimes(2));
+    rerender({ schemaVersion: 2 });
+    await waitFor(() => expect(result.current.currentRevision).toBe(20));
+    rerender({ schemaVersion: 1 });
+    expect(result.current.instances).toEqual([]);
+    await waitFor(() => expect(result.current.currentRevision).toBe(30));
+
+    act(() => {
+      oldList.resolve({
+        subscribers: [row({ release_version: 1, activation_revision: 7 })],
+        current_revision: 7,
+        next_page_token: "",
+      });
+      oldStream.push?.(snapshot([row({ release_version: 1, activation_revision: 8 })], 8));
+    });
+    await act(async () => Promise.resolve());
+    expect(result.current.instances).toEqual([]);
+    expect(result.current.currentRevision).toBe(30);
+  });
+
+  it("hides state synchronously and ignores callbacks after disabling", async () => {
+    const stream = openStream();
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useReleaseSubscribers(ns, "runtime", { enabled, schemaVersion: 4 }),
+      { initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(result.current.instances).toHaveLength(1));
+    await waitFor(() => expect(stream.push).toBeDefined());
+
+    rerender({ enabled: false });
+    expect(result.current).toMatchObject({
+      instances: [],
+      currentRevision: 0,
+      transport: "off",
+      stale: false,
+      lastUpdatedAt: null,
+    });
+    act(() => stream.push?.(snapshot([row({ activation_revision: 99 })], 99)));
+    expect(result.current.instances).toEqual([]);
+    expect(result.current.currentRevision).toBe(0);
   });
 
   it("uses polling only when transport is poll, and refresh() reloads on demand", async () => {

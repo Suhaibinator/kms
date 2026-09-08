@@ -37,6 +37,16 @@ export const RECONNECT_BASE_MS = 1_000;
 export const RECONNECT_MAX_MS = 30_000;
 export const STREAM_FAILURES_BEFORE_POLL = 2;
 
+type ReleaseSubscribersData = Omit<ReleaseSubscribersState, "refresh">;
+
+const emptySubscriberData = (): ReleaseSubscribersData => ({
+  instances: [],
+  currentRevision: 0,
+  transport: "off",
+  stale: false,
+  lastUpdatedAt: null,
+});
+
 /** Full-jitter backoff: uniform in [0, min(max, base·2^(attempt-1))]. */
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
   const ceiling = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1));
@@ -65,15 +75,43 @@ export function useReleaseSubscribers(
   const schemaVersion = opts.schemaVersion ?? 0;
   const env = ns?.env ?? "";
   const app = ns?.app ?? "";
-
-  const [instances, setInstances] = useState<SubscriberInstance[]>([]);
-  const [currentRevision, setCurrentRevision] = useState(0);
-  const [transport, setTransport] = useState<SubscriberTransport>("off");
-  const [stale, setStale] = useState(false);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const scope = enabled ? JSON.stringify([env, app, name, schemaVersion]) : "";
+  const scopeRef = useRef({ scope, generation: 0 });
+  if (scopeRef.current.scope !== scope) {
+    scopeRef.current = { scope, generation: scopeRef.current.generation + 1 };
+  }
+  const generation = scopeRef.current.generation;
+  const [result, setResult] = useState<{
+    scope: string;
+    generation: number;
+    data: ReleaseSubscribersData;
+  }>(() => ({ scope, generation, data: emptySubscriberData() }));
   const request = useLatestRequest();
-  // The stream has its own controller: a refresh must not abort it.
-  const mounted = useRef(false);
+
+  const isCurrentScope = useCallback(
+    () =>
+      scopeRef.current.scope === scope &&
+      scopeRef.current.generation === generation &&
+      scope !== "",
+    [scope, generation],
+  );
+
+  const update = useCallback(
+    (change: Partial<ReleaseSubscribersData>) => {
+      if (!isCurrentScope()) return;
+      setResult((current) => ({
+        scope,
+        generation,
+        data: {
+          ...(current.scope === scope && current.generation === generation
+            ? current.data
+            : emptySubscriberData()),
+          ...change,
+        },
+      }));
+    },
+    [generation, isCurrentScope, scope],
+  );
 
   const refresh = useCallback(async () => {
     if (!enabled) return;
@@ -87,28 +125,30 @@ export function useReleaseSubscribers(
         { signal: run.signal },
         schemaVersion,
       );
-      if (!run.current) return;
-      setInstances(groupSubscriberInstances(page.subscribers ?? []));
-      setCurrentRevision(page.current_revision ?? 0);
-      setLastUpdatedAt(Date.now());
-      setStale(false);
+      if (!run.current || !isCurrentScope()) return;
+      update({
+        instances: groupSubscriberInstances(page.subscribers ?? []),
+        currentRevision: page.current_revision ?? 0,
+        lastUpdatedAt: Date.now(),
+        stale: false,
+      });
     } catch (err) {
-      if (!run.current || isAbortError(err)) return;
-      setStale(true);
+      if (!run.current || !isCurrentScope() || isAbortError(err)) return;
+      update({ stale: true });
     }
-  }, [enabled, env, app, name, request, schemaVersion]);
+  }, [enabled, env, app, name, request, schemaVersion, isCurrentScope, update]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `refresh` already encodes the namespace, name and enabled flag; listing them again would only restart the stream twice.
   useEffect(() => {
-    mounted.current = true;
     if (!enabled) {
-      setTransport("off");
-      setInstances([]);
-      setCurrentRevision(0);
-      setStale(false);
-      setLastUpdatedAt(null);
+      setResult({ scope, generation, data: emptySubscriberData() });
       return;
     }
+
+    setResult((current) =>
+      current.scope === scope && current.generation === generation
+        ? current
+        : { scope, generation, data: emptySubscriberData() },
+    );
 
     const controller = new AbortController();
     const { signal } = controller;
@@ -131,7 +171,7 @@ export function useReleaseSubscribers(
     const startPolling = () => {
       if (polling || signal.aborted) return;
       polling = true;
-      setTransport("poll");
+      update({ transport: "poll" });
       document.addEventListener("visibilitychange", onVisibilityChange);
       schedulePoll();
     };
@@ -144,14 +184,16 @@ export function useReleaseSubscribers(
           await api.subscriberStream({ env, app }, name, schemaVersion, {
             signal,
             onSnapshot: (snapshot) => {
-              if (signal.aborted) return;
+              if (signal.aborted || !isCurrentScope()) return;
               failures = 0;
               attempt = 0;
-              setInstances(groupSubscriberInstances(snapshot.subscribers ?? []));
-              setCurrentRevision(snapshot.current_revision ?? 0);
-              setLastUpdatedAt(Date.now());
-              setStale(false);
-              setTransport("stream");
+              update({
+                instances: groupSubscriberInstances(snapshot.subscribers ?? []),
+                currentRevision: snapshot.current_revision ?? 0,
+                lastUpdatedAt: Date.now(),
+                stale: false,
+                transport: "stream",
+              });
             },
           });
           // The server ended the stream cleanly; reconnect without penalty.
@@ -163,7 +205,7 @@ export function useReleaseSubscribers(
             return;
           }
           failures += 1;
-          setStale(true);
+          update({ stale: true });
           if (failures >= STREAM_FAILURES_BEFORE_POLL) {
             startPolling();
             return;
@@ -181,15 +223,28 @@ export function useReleaseSubscribers(
     });
 
     return () => {
-      mounted.current = false;
       controller.abort();
       if (pollTimer !== undefined) window.clearTimeout(pollTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [enabled, mode, refresh]);
+  }, [
+    enabled,
+    mode,
+    refresh,
+    generation,
+    isCurrentScope,
+    scope,
+    update,
+    env,
+    app,
+    name,
+    schemaVersion,
+  ]);
 
-  return useMemo(
-    () => ({ instances, currentRevision, transport, stale, lastUpdatedAt, refresh }),
-    [instances, currentRevision, transport, stale, lastUpdatedAt, refresh],
-  );
+  const data =
+    result.scope === scope && result.generation === generation && enabled
+      ? result.data
+      : emptySubscriberData();
+
+  return useMemo(() => ({ ...data, refresh }), [data, refresh]);
 }
