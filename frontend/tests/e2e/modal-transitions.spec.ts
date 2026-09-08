@@ -23,10 +23,7 @@ for (const entry of ["list", "application"] as const) {
         exact: true,
       });
       if (entry === "list") {
-        await expect(newSecret).toHaveAttribute(
-          "href",
-          "/secrets/new?env=prod&app=gradethis",
-        );
+        await expect(newSecret).toHaveAttribute("href", "/secrets/new?env=prod&app=gradethis");
       }
       await newSecret.click();
       const create = page.getByRole("dialog", { name: "New secret", exact: true });

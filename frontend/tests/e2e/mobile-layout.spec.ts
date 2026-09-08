@@ -127,10 +127,7 @@ test("full-screen editor follows visual viewport changes without losing its draf
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
   const newSecret = page.getByRole("link", { name: "New secret", exact: true }).first();
-  await expect(newSecret).toHaveAttribute(
-    "href",
-    "/secrets/new?env=prod&app=gradethis",
-  );
+  await expect(newSecret).toHaveAttribute("href", "/secrets/new?env=prod&app=gradethis");
   await newSecret.click();
   const editor = page
     .getByRole("dialog")
@@ -160,10 +157,7 @@ test("mobile editor stays within the viewport when visual viewport measurements 
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
   const newSecret = page.getByRole("link", { name: "New secret", exact: true }).first();
-  await expect(newSecret).toHaveAttribute(
-    "href",
-    "/secrets/new?env=prod&app=gradethis",
-  );
+  await expect(newSecret).toHaveAttribute("href", "/secrets/new?env=prod&app=gradethis");
   await newSecret.click();
   const editor = page.getByRole("dialog", { name: "New secret", exact: true });
   await editor.getByPlaceholder("stripe-api-key").fill("resize-draft");
