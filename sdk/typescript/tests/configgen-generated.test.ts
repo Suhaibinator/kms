@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClientReleaseLoaderOptions } from "../src/client.js";
+import { type ClientReleaseLoaderOptions, KmsClient } from "../src/client.js";
+import { ConfigError } from "../src/errors.js";
 import type { AppliedReport, DefaultMismatchReport } from "../src/configstore/errors.js";
 import type { ManagedReleaseClient } from "../src/configstore/manager.js";
 import { parameterHash, parseDefaultsArtifact } from "../src/configstore/index.js";
@@ -31,6 +32,7 @@ import {
 } from "./fixtures/configgen/config.generated.js";
 import type { Config } from "./fixtures/configgen/config.js";
 import { Store as SecretsOnlyStore } from "./fixtures/configgen/secrets-only.generated.js";
+import { FakeTransport } from "./helpers/fake-transport.js";
 
 describe("generated managed configuration binding", () => {
   it("encodes all groups canonically and rejects non-zero secret defaults", () => {
@@ -261,6 +263,22 @@ describe("generated managed configuration binding", () => {
     controller.abort();
     await expect(manager.wait()).resolves.toBeUndefined();
   });
+
+  it.each([0n, 2n])(
+    "rejects numeric schema %s overrides of the generated digest",
+    async (schemaVersion) => {
+      const transport = new FakeTransport(() => undefined);
+      const client = new KmsClient({ transport });
+      try {
+        await expect(
+          verifyReleaseDefaults(client, defaultConfig(), { namespace: "prod/api", schemaVersion }),
+        ).rejects.toThrow(ConfigError);
+        expect(transport.calls).toHaveLength(0);
+      } finally {
+        await client.close();
+      }
+    },
+  );
 
   it("verifies source defaults through canonical hashes without sending values", async () => {
     const defaults = defaultConfig();

@@ -25,6 +25,8 @@ export interface VerifyOptions {
   readonly release?: string;
   /** Informational label sent with the request. */
   readonly profile?: string;
+  /** Exact numeric track, including 0. Mutually exclusive with input.schemaSha256. */
+  readonly schemaVersion?: bigint;
   readonly signal?: AbortSignal;
   readonly deadline?: Date;
 }
@@ -177,6 +179,7 @@ export async function verifyDefaults(
     ...(options.release ? { release: options.release } : {}),
     ...(options.profile ? { profile: options.profile } : {}),
     ...(input.schemaSha256 ? { schemaSha256: input.schemaSha256 } : {}),
+    ...(options.schemaVersion !== undefined ? { schemaVersion: options.schemaVersion } : {}),
     entries,
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.deadline ? { deadline: options.deadline } : {}),

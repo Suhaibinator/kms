@@ -99,8 +99,8 @@ export async function consumeVerifyDeclarations(client: KmsClient): Promise<Veri
   });
   return verifyDefaults(
     client,
-    { schemaSha256: "0".repeat(64), contract, groups: { runtime: "{}" } },
-    { namespace: "prod/api" },
+    { schemaSha256: "", contract, groups: { runtime: "{}" } },
+    { namespace: "prod/api", schemaVersion: 0n },
   );
 }
 

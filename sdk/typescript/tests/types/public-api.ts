@@ -281,9 +281,27 @@ export async function verifiesDefaults(client: KmsClient): Promise<string> {
     { namespace: "prod/api" },
   );
   const canonical: Uint8Array = canonicalParameterValue("json", "{}");
+  const schemaFree: VerifyResult = await verifyDefaults(
+    client,
+    { schemaSha256: "", contract: managedContract, groups: { runtime: "{}" } },
+    { namespace: "prod/api", schemaVersion: 0n },
+  );
+  void verifyDefaults(
+    client,
+    { schemaSha256: "", contract: [], groups: {} },
+    // @ts-expect-error numeric schema selectors use bigint, not number
+    { namespace: "prod/api", schemaVersion: 0 },
+  );
   const wireSchema: bigint = wire.schemaVersion;
   const managedSchema: bigint = result.schemaVersion;
-  void [wire.passed(), wireSchema, managedSchema, canonical, RateLimitedError];
+  void [
+    wire.passed(),
+    wireSchema,
+    managedSchema,
+    schemaFree.schemaVersion,
+    canonical,
+    RateLimitedError,
+  ];
   return result.passed()
     ? result.report()
     : result

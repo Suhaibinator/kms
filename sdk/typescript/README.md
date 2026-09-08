@@ -431,6 +431,13 @@ travels in either direction; the `VerifyResult` exposes `passed()`,
 identity; `RateLimitedError` means the budget is spent, so wait for the window
 to reset instead of retrying.
 
+Generated verification selects the binding's embedded schema digest. For custom
+schema-free inputs, call `verifyDefaults` from `@suhaibinator/kms/configstore`
+with `input.schemaSha256: ""` and `options.schemaVersion: 0n`. Numeric selection
+and a nonempty input digest are mutually exclusive, so generated bindings reject
+numeric overrides. Results retain the resolved `schemaVersion`, including zero,
+in the returned object, JSON, and human report.
+
 ```ts
 import { verifyReleaseDefaults } from "./config.generated.js";
 
