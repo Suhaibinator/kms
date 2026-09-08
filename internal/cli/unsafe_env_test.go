@@ -14,7 +14,7 @@ func unsafeEnvFixture(f *envFixture, release bool) []string {
 		f.installRelease()
 		f.releases.release.Entries[0].Alias = "node-options"
 		setEnvTestReleaseDigest(f.releases.release)
-		return []string{"--release", "runtime"}
+		return []string{"--release", "runtime", "--schema-version", "0"}
 	}
 	f.params.list[0].Ref.Key = "node_options"
 	return nil
