@@ -48,10 +48,11 @@ func (s *Service) auditProtectedReleaseReference(ctx context.Context, pr Princip
 	if !ok {
 		return
 	}
-	if _, err := rs.FindProtectedReleaseReference(ctx, ref, kind, version); err != nil {
+	protected, err := rs.FindProtectedReleaseReference(ctx, ref, kind, version)
+	if err != nil {
 		return
 	}
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.reference_blocked", kind, ref, namespaceID, version, "deny", map[string]string{"operation": operation})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.reference_blocked", kind, ref, namespaceID, version, "deny", releaseAuditMetadata(protected.SchemaVersion, 0, map[string]string{"operation": operation, "release_name": protected.ReleaseName, "release_version": strconv.FormatUint(protected.ReleaseVersion, 10)}))
 }
 
 func validateReleaseAddress(ns domain.NamespaceRef, name string) error {
@@ -73,6 +74,7 @@ type releaseCandidateValue struct {
 }
 
 func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, in domain.CreateConfigurationReleaseInput) (domain.ConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, Name: in.Name, SchemaVersion: in.SchemaVersion})
 	if err := validateReleaseAddress(in.Namespace, in.Name); err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
@@ -325,6 +327,7 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 }
 
 func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ConfigurationRelease{}, err
@@ -344,6 +347,7 @@ func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, tra
 }
 
 func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ActiveConfigurationRelease{}, err
@@ -385,6 +389,7 @@ func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, f
 }
 
 func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64) ([]domain.ReleaseValidationError, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return nil, err
@@ -582,6 +587,7 @@ func (s *Service) validateReleaseValues(ctx context.Context, pr Principal, rs st
 }
 
 func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, version uint64, expectedCurrent *uint64) (domain.ActiveConfigurationRelease, bool, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ActiveConfigurationRelease{}, false, err
@@ -639,7 +645,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 			outcome = ReleaseOutcomeRolledBack
 		}
 		s.m().ReleaseOutcome(outcome)
-		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
+		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", releaseAuditMetadata(track.SchemaVersion, active.ActivationRevision, map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)}))
 		s.getHub().Wake()
 		s.notifyReleaseSubscribers(track)
 	}
@@ -651,6 +657,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 // authorized like activation and audited by activation's event classification
 // (configuration_release.rollback).
 func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal, track domain.ReleaseTrack, expectedCurrent *uint64) (domain.RollbackResult, error) {
+	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.RollbackResult{}, err
@@ -715,6 +722,7 @@ func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, ns 
 }
 
 func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Principal, ack domain.ReleaseAcknowledgement) error {
+	ctx = withReleaseAuditTrack(ctx, ack.Track())
 	if err := validateReleaseAddress(ack.Namespace, ack.ReleaseName); err != nil {
 		return err
 	}
@@ -770,7 +778,7 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 		return err
 	}
 	s.notifyReleaseSubscribers(ack.Track())
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", releaseAuditMetadata(ack.SchemaVersion, ack.ActivationRevision, map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)}))
 	return nil
 }
 

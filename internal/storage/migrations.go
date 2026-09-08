@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
+	"strconv"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"gorm.io/gorm"
@@ -186,15 +187,45 @@ func (s *SQLStore) ApplyApplicationMigration(ctx context.Context, in Application
 		if err != nil {
 			return err
 		}
+		// The activation revision is assigned inside this transaction. Attach
+		// it before persisting the existing audit records so audit and state
+		// cannot disagree or commit independently.
+		activationMetadata := func(event domain.AuditEvent) (domain.AuditEvent, error) {
+			metadata := map[string]string{}
+			if event.Metadata != "" {
+				if err := json.Unmarshal([]byte(event.Metadata), &metadata); err != nil {
+					return event, err
+				}
+			}
+			if metadata == nil {
+				metadata = map[string]string{}
+			}
+			metadata["schema_version"] = strconv.FormatUint(release.SchemaVersion, 10)
+			if event.EventType == "configuration_release.activate" || event.EventType == "application.release.migrate" {
+				metadata["activation_revision"] = strconv.FormatUint(out.ActivationRevision, 10)
+				metadata["previous_version"] = strconv.FormatUint(out.PreviousVersion, 10)
+			}
+			encoded, err := json.Marshal(metadata)
+			event.Metadata = string(encoded)
+			return event, err
+		}
 		for _, event := range in.ResourceAudits {
 			if event.ResourceType == domain.ResourceConfigurationRelease {
 				event.ResourceVersion = release.Version
+				event, err = activationMetadata(event)
+				if err != nil {
+					return err
+				}
 			}
 			if err := appendAudit(tx, event); err != nil {
 				return err
 			}
 		}
 		in.Audit.ResourceVersion = release.Version
+		in.Audit, err = activationMetadata(in.Audit)
+		if err != nil {
+			return err
+		}
 		return appendAudit(tx, in.Audit)
 	})
 	if err != nil {

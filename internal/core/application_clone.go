@@ -15,6 +15,9 @@ import (
 // never copied and are reported as needs_value. Each item fails
 // independently (boundedApplicationError), so a partial clone is inspectable.
 func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal, in domain.CloneEnvironmentInput) (domain.CloneEnvironmentResult, error) {
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: in.TargetEnv, App: in.Application}, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.environment_clone", domain.ResourceApplication, in.Application); err != nil {
 		return domain.CloneEnvironmentResult{}, err
 	}
@@ -148,7 +151,8 @@ func (s *Service) CloneApplicationEnvironment(ctx context.Context, pr Principal,
 		result.Items = append(result.Items, item)
 	}
 	s.auditRefWithNamespaceID(ctx, pr, "application.environment_clone", domain.ResourceApplication, domain.Ref{NS: targetNS, Key: app.Name}, target.ID, 0, "allow", map[string]string{
-		"source_env": sourceNS.Env, "target_env": targetNS.Env, "namespace_created": strconv.FormatBool(created),
+		"schema_version": strconv.FormatUint(app.SchemaVersion, 10),
+		"source_env":     sourceNS.Env, "target_env": targetNS.Env, "namespace_created": strconv.FormatBool(created),
 		"copied": strconv.Itoa(copied), "needs_value": strconv.Itoa(len(result.NeedsValue)),
 	})
 	return result, nil

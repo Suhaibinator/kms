@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -422,14 +423,22 @@ func TestApplicationMigrationCorrelatedResourceAudits(t *testing.T) {
 		if err := json.Unmarshal([]byte(event.Metadata), &meta); err != nil {
 			t.Fatal(err)
 		}
-		if event.EventType == "application.release.migrate" && (meta["schema_version"] != "2" || meta["source_version"] != "1" || meta["source_activation_revision"] == "" || meta["previous_version"] != "1" || meta["parameter_write_count"] != "1") {
+		if event.EventType == "application.release.migrate" && (meta["schema_version"] != "2" || meta["source_version"] != "1" || meta["source_activation_revision"] == "" || meta["previous_version"] != "0" || meta["parameter_write_count"] != "1") {
 			t.Fatalf("missing migration metadata: %+v", meta)
 		}
-		if event.EventType == "configuration_release.activate" && meta["previous_version"] != "1" {
+		if event.EventType == "configuration_release.activate" && meta["previous_version"] != "0" {
 			t.Fatalf("missing activation metadata: %+v", meta)
 		}
+		if event.ResourceType == domain.ResourceConfigurationRelease && meta["schema_version"] != "2" {
+			t.Fatalf("missing destination schema: %+v", event)
+		}
+		if event.EventType == "configuration_release.activate" || event.EventType == "application.release.migrate" {
+			if meta["activation_revision"] != fmt.Sprint(result.Activation.ActivationRevision) || meta["source_schema_version"] != "1" {
+				t.Fatalf("missing activation identity: %+v", event)
+			}
+		}
 		for key := range meta {
-			if key != "operation" && key != "schema_version" && key != "source_version" && key != "source_activation_revision" && key != "previous_version" && key != "parameter_write_count" {
+			if key != "activation_revision" && key != "source_schema_version" && key != "operation" && key != "schema_version" && key != "source_version" && key != "source_activation_revision" && key != "previous_version" && key != "parameter_write_count" {
 				t.Fatalf("unexpected potentially sensitive metadata: %s", key)
 			}
 		}

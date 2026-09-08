@@ -45,6 +45,9 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.ApplicationReleaseCreateResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.release.create", domain.ResourceApplication, in.Namespace.App); err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
@@ -71,6 +74,7 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if !app.ArchivedAt.IsZero() {
 		return domain.ApplicationReleaseCreateResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
+	ctx = withReleaseAuditTrack(ctx, applicationTrack(app, in.Namespace))
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: app.ReleaseName})
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
@@ -315,9 +319,13 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 
 func (s *Service) auditApplicationRelease(ctx context.Context, pr Principal, namespace domain.Namespace, result domain.ApplicationReleaseCreateResult, event, decision string) {
 	metadata := map[string]string{
-		"valid": fmt.Sprint(result.Valid), "executed": fmt.Sprint(result.Executed),
+		"schema_version": fmt.Sprint(result.SchemaVersion),
+		"valid":          fmt.Sprint(result.Valid), "executed": fmt.Sprint(result.Executed),
 		"created": fmt.Sprint(result.Created), "validation_count": fmt.Sprint(len(result.Validation)),
 		"missing_secret_count": fmt.Sprint(len(result.MissingSecrets)),
+	}
+	if result.Release != nil {
+		metadata["release_version"] = fmt.Sprint(result.Release.Version)
 	}
 	s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceApplication, domain.Ref{NS: namespace.NamespaceRef, Key: result.ReleaseName}, namespace.ID, 0, decision, metadata)
 }

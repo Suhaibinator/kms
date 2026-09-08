@@ -77,17 +77,49 @@ func (s *Service) ApplyApplicationDefaults(ctx context.Context, pr Principal, in
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.DefaultsApplyResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: in.Namespace, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.defaults", domain.ResourceApplication, in.Namespace.App); err != nil {
 		return domain.DefaultsApplyResult{}, err
 	}
+	errorMetadata := func(reason, digest string) map[string]string {
+		meta := map[string]string{"reason": reason}
+		if in.SchemaVersion != nil {
+			return releaseAuditMetadata(*in.SchemaVersion, 0, meta)
+		}
+		// Failed artifact preflight can still name a registered track. Resolve
+		// only for this audit enrichment; unknown/malformed artifacts remain
+		// unscoped and lookup failures never replace the original error.
+		if digest == "" {
+			return meta
+		}
+		apps, err := s.applicationStore()
+		if err != nil {
+			return meta
+		}
+		app, err := apps.GetApplication(ctx, in.Namespace.App)
+		if err != nil {
+			return meta
+		}
+		releases, err := s.releaseStore()
+		if err != nil {
+			return meta
+		}
+		schema, err := releases.GetConfigurationSchemaByDigest(ctx, app.Name, app.ReleaseName, digest)
+		if err == nil {
+			return releaseAuditMetadata(schema.Version, 0, meta)
+		}
+		return meta
+	}
 	artifact, err := parseDefaultsArtifact(in.Artifact)
 	if err != nil {
-		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", map[string]string{"reason": "invalid_artifact"})
+		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", errorMetadata("invalid_artifact", ""))
 		return domain.DefaultsApplyResult{}, err
 	}
 	plan, err := s.buildDefaultsPlan(ctx, in, artifact)
 	if err != nil {
-		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", map[string]string{"reason": "preflight_failed"})
+		s.auditRef(ctx, pr, "application.defaults.preview", domain.ResourceApplication, domain.Ref{NS: in.Namespace, Key: "defaults"}, 0, "error", errorMetadata("preflight_failed", artifact.SchemaSHA256))
 		return domain.DefaultsApplyResult{}, err
 	}
 	if !in.Execute {
@@ -358,6 +390,7 @@ func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.Nam
 		counts[entry.Status]++
 	}
 	meta := map[string]string{
+		"schema_version":       strconv.FormatUint(plan.transaction.SchemaVersion, 10),
 		"create_count":         strconv.Itoa(counts[domain.DefaultsStatusCreate]),
 		"unchanged_count":      strconv.Itoa(counts[domain.DefaultsStatusUnchanged]),
 		"update_count":         strconv.Itoa(counts[domain.DefaultsStatusUpdate]),

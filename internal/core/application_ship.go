@@ -41,6 +41,9 @@ type shipValueChange struct {
 // (4xx); every evaluated outcome is a ShipResult whose Status says what
 // happened. Dry runs validate the candidate in memory and write nothing.
 func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in domain.ShipInput) (domain.ShipResult, error) {
+	if in.SchemaVersion != nil {
+		ctx = withReleaseAuditTrack(ctx, domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: in.Environment, App: in.Application}, SchemaVersion: *in.SchemaVersion})
+	}
 	if err := s.requireAdmin(ctx, pr, "application.ship", domain.ResourceApplication, in.Application); err != nil {
 		return domain.ShipResult{}, err
 	}
@@ -190,7 +193,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	sort.Strings(aliases)
 	auditMeta := func(extra map[string]string) map[string]string {
-		meta := map[string]string{"environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
+		meta := map[string]string{"schema_version": strconv.FormatUint(app.SchemaVersion, 10), "environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
 		maps.Copy(meta, extra)
 		return meta
 	}
@@ -252,7 +255,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	result.Status = domain.ShipStatusActivated
 	result.Activation = &domain.ShipActivation{ActivationRevision: active.ActivationRevision, PreviousVersion: active.PreviousVersion, Changed: changed}
-	audit("allow", map[string]string{"activated": "true", "release_version": strconv.FormatUint(release.Version, 10)})
+	audit("allow", map[string]string{"activated": "true", "release_version": strconv.FormatUint(release.Version, 10), "activation_revision": strconv.FormatUint(active.ActivationRevision, 10)})
 	return result, nil
 }
 

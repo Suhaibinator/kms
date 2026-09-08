@@ -22,7 +22,14 @@ func (s *Service) requireAdmin(ctx context.Context, pr Principal, eventType, res
 		return nil
 	}
 	s.m().AuthzDenied(eventType)
-	s.auditName(ctx, pr, eventType, resourceType, name, "deny", nil)
+	var metadata map[string]string
+	if track, ok := ctx.Value(releaseAuditTrackKey{}).(domain.ReleaseTrack); ok && resourceType == domain.ResourceApplication && track.Namespace.App == name {
+		metadata = releaseAuditMetadata(track.SchemaVersion, 0, nil)
+		if source, ok := ctx.Value(releaseAuditSourceSchemaKey{}).(uint64); ok {
+			metadata["source_schema_version"] = strconv.FormatUint(source, 10)
+		}
+	}
+	s.auditName(ctx, pr, eventType, resourceType, name, "deny", metadata)
 	return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 }
 

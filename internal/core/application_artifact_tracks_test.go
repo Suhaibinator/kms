@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/Suhaibinator/kms/internal/storage"
 	"strings"
 	"testing"
 
@@ -49,8 +51,34 @@ func TestArtifactOperationsResolveEmbeddedTrackAcrossRegistrations(t *testing.T)
 			if err != nil || !executed.executed || (operation == "release" && executed.schema != app.SchemaVersion) {
 				t.Fatalf("execution changed track: %+v %v", executed, err)
 			}
+			eventType := "application.release.create"
+			if operation == "defaults" {
+				eventType = "application.defaults.apply"
+			}
+			audits, _, auditErr := st.ListAudit(ctx, domain.AuditFilter{EventType: eventType}, storage.ListPage{})
+			if auditErr != nil || len(audits) != 1 {
+				t.Fatalf("artifact audits: %+v %v", audits, auditErr)
+			}
+			metadata := auditMetadataForTest(t, audits[0])
+			if metadata["schema_version"] != fmt.Sprint(app.SchemaVersion) {
+				t.Fatalf("artifact audit selected newest track: %+v", audits[0])
+			}
+			if operation == "release" && metadata["release_version"] != "1" {
+				t.Fatalf("generated release identity: %+v", audits[0])
+			}
 			if _, err := runArtifactTrackOperation(ctx, svc, ns, operation, raw, &app.SchemaVersion, ""); err != nil {
 				t.Fatalf("matching numeric selection: %v", err)
+			}
+			if operation == "defaults" {
+				missing := ns
+				missing.Env = "missing"
+				if _, err := runArtifactTrackOperation(ctx, svc, missing, operation, raw, nil, ""); !errors.Is(err, domain.ErrNotFound) {
+					t.Fatalf("expected defaults preflight failure: %v", err)
+				}
+				failures, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: "application.defaults.preview", Decision: "error"}, storage.ListPage{})
+				if err != nil || len(failures) != 1 || auditMetadataForTest(t, failures[0])["schema_version"] != fmt.Sprint(app.SchemaVersion) {
+					t.Fatalf("failed digest-selected preflight omitted track: %+v %v", failures, err)
+				}
 			}
 			for _, version := range []uint64{0, newer.Version} {
 				if _, err := runArtifactTrackOperation(ctx, svc, ns, operation, raw, &version, ""); !errors.Is(err, domain.ErrFailedPrecondition) {

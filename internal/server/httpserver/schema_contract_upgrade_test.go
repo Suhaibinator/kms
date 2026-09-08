@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -93,6 +94,28 @@ func TestSchemaContractHTTPDrivesSecretOnlyUpgrade(t *testing.T) {
 		if !matched {
 			t.Fatalf("destination changed immutable resource pin: %+v", entry)
 		}
+	}
+	// Audit JSON is consumed directly by the console; schema/revision metadata
+	// must remain decimal strings and distinguish the two release-1 tracks.
+	w = e.admin(http.MethodGet, "/api/v1/audit?event_type=configuration_release.activate", nil)
+	mustStatus(t, w, http.StatusOK)
+	seenTracks := map[string]string{}
+	for _, raw := range decodeBody(t, w)["events"].([]any) {
+		event := raw.(map[string]any)
+		if event["resource_env"] != "dev" || event["resource_app"] != "gradethis" {
+			continue
+		}
+		if event["resource_version"] != float64(1) {
+			t.Fatalf("expected colliding release versions: %v", event)
+		}
+		var metadata map[string]string
+		if err := json.Unmarshal([]byte(event["metadata_json"].(string)), &metadata); err != nil {
+			t.Fatal(err)
+		}
+		seenTracks[metadata["schema_version"]] = metadata["activation_revision"]
+	}
+	if seenTracks["1"] != strconv.FormatUint(source.ActivationRevision, 10) || seenTracks[strconv.FormatUint(targetTrack.SchemaVersion, 10)] != strconv.FormatUint(target.ActivationRevision, 10) {
+		t.Fatalf("HTTP audit lost track identity: %v", seenTracks)
 	}
 	sourceAfter, err := e.svc.GetActiveConfigurationRelease(ctx, pr, sourceTrack)
 	if err != nil || !reflect.DeepEqual(sourceAfter, source) {
