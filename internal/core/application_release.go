@@ -64,7 +64,7 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
-	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	app, err = s.selectArtifactApplicationTrack(ctx, app, in.SchemaVersion, artifact.SchemaSHA256)
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
@@ -125,18 +125,15 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	if err != nil {
 		return applicationReleasePlan{}, err
 	}
-	if app.SchemaVersion == 0 {
-		return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
-	}
-	schema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
+	var schema domain.ConfigurationSchema
+	if app.SchemaVersion != 0 {
+		schema, err = rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+		if err != nil {
+			return applicationReleasePlan{}, err
 		}
-		return applicationReleasePlan{}, err
 	}
 	if schema.Digest != artifact.SchemaSHA256 {
-		return applicationReleasePlan{}, applicationReleaseSchemaDriftError(ctx, rs, app, artifact.SchemaSHA256)
+		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
 	}
 	parameters := make(map[string]configstore.DefaultsParameter, len(artifact.Parameters))
 	for _, parameter := range artifact.Parameters {
@@ -314,16 +311,6 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		CurrentPins: currentPins,
 	}
 	return applicationReleasePlan{result: result, transaction: transaction}, nil
-}
-
-func applicationReleaseSchemaDriftError(ctx context.Context, store storage.ReleaseStore, app domain.Application, digest string) error {
-	if _, err := findConfigurationSchemaByDigest(ctx, store, app.Name, app.ReleaseName, digest); err != nil {
-		if errors.Is(err, domain.ErrFailedPrecondition) {
-			return domain.Errorf(domain.ErrFailedPrecondition, "generated schema is not registered for %s/%s; run schema upload, then defaults apply with --update-definition", app.Name, app.ReleaseName)
-		}
-		return err
-	}
-	return domain.Errorf(domain.ErrFailedPrecondition, "application schema differs from generated defaults; run defaults apply with --update-definition first")
 }
 
 func (s *Service) auditApplicationRelease(ctx context.Context, pr Principal, namespace domain.Namespace, result domain.ApplicationReleaseCreateResult, event, decision string) {

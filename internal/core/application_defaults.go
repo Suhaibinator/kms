@@ -154,7 +154,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if in.UpdateDefinition && in.SchemaVersion != nil {
 		return defaultsPlan{}, domain.Errorf(domain.ErrInvalidArgument, "schema override cannot update the application default")
 	}
-	app, err = s.selectApplicationTrack(ctx, app, in.SchemaVersion)
+	app, err = s.selectArtifactApplicationTrack(ctx, app, in.SchemaVersion, artifact.SchemaSHA256)
 	if err != nil {
 		return defaultsPlan{}, err
 	}
@@ -177,19 +177,6 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	releaseStore, err := s.releaseStore()
 	if err != nil {
 		return defaultsPlan{}, err
-	}
-	if app.SchemaVersion == 0 {
-		if artifact.SchemaSHA256 != "" {
-			return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "schema-free defaults must not claim a registered schema digest")
-		}
-	} else {
-		schema, err := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
-		if err != nil {
-			return defaultsPlan{}, err
-		}
-		if schema.Digest != artifact.SchemaSHA256 {
-			return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults do not match the selected schema digest")
-		}
 	}
 	definitionChanged := in.UpdateDefinition && (persistedApp.SchemaVersion != desiredApp.SchemaVersion || !reflect.DeepEqual(persistedApp.Contract, desiredApp.Contract))
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
@@ -363,14 +350,6 @@ func applicationContractFromArtifact(artifact []configstore.ContractEntry) []dom
 		converted[index] = domain.ApplicationContractField{Alias: entry.Alias, Kind: string(entry.Kind), ContentType: entry.ContentType}
 	}
 	return converted
-}
-
-func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, application, releaseName, digest string) (domain.ConfigurationSchema, error) {
-	schema, err := store.GetConfigurationSchemaByDigest(ctx, application, releaseName, digest)
-	if errors.Is(err, domain.ErrNotFound) {
-		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema for %s/%s before updating the application definition", application, releaseName)
-	}
-	return schema, err
 }
 
 func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.NamespaceRef, plan defaultsPlan, eventType, decision string) {
