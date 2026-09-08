@@ -641,9 +641,9 @@ func (r ReleaseIdentity) IsZero() bool {
 
 func (r ReleaseIdentity) String() string {
 	if r.namespace == "" && r.name == "" {
-		return fmt.Sprintf("release@%d#%d", r.version, r.activationRevision)
+		return fmt.Sprintf("release@%d#%d schema_version=%d", r.version, r.activationRevision, r.schemaVersion)
 	}
-	return fmt.Sprintf("%s/%s@%d#%d", r.namespace, r.name, r.version, r.activationRevision)
+	return fmt.Sprintf("%s/%s@%d#%d schema_version=%d", r.namespace, r.name, r.version, r.activationRevision, r.schemaVersion)
 }
 
 func (r ReleaseIdentity) MarshalJSON() ([]byte, error) {

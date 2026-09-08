@@ -45,7 +45,7 @@ func messagesOf(lines []logLine) []string {
 }
 
 func logTestIdentity() ReleaseIdentity {
-	return ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 11, digest: "d"}
+	return ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 11, schemaVersion: 7, digest: "d"}
 }
 
 func TestLogSinkSetAndLoggerAreAtomic(t *testing.T) {
@@ -87,7 +87,7 @@ func TestSlogCallbacksLogsDefaultMismatch(t *testing.T) {
 	}
 	line := lines[0]
 	if line["level"] != "ERROR" || line["msg"] != "kms config diverges from source defaults" ||
-		line["component"] != "api" || line["phase"] != "startup" || line["release"] != "prod/app/runtime@4#11" {
+		line["component"] != "api" || line["phase"] != "startup" || line["release"] != "prod/app/runtime@4#11 schema_version=7" {
 		t.Fatalf("line = %v", line)
 	}
 	fields, ok := line["fields"].([]any)
@@ -122,7 +122,7 @@ func TestSlogCallbacksLogsStartupAppliedWithSortedGroupSnapshot(t *testing.T) {
 	}
 	applied := lines[0]
 	if applied["level"] != "INFO" || applied["component"] != "configstore" || applied["phase"] != "startup" ||
-		applied["release"] != "prod/app/runtime@4#11" || applied["release_version"] != float64(4) ||
+		applied["release"] != "prod/app/runtime@4#11 schema_version=7" || applied["release_version"] != float64(4) ||
 		applied["activation_revision"] != float64(11) || applied["default_divergent"] != true {
 		t.Fatalf("applied line = %v", applied)
 	}
@@ -185,7 +185,7 @@ func TestSlogCallbacksLogsRuntimeReloadWithFieldChanges(t *testing.T) {
 		t.Fatalf("messages = %v", got)
 	}
 	reloaded := lines[0]
-	if reloaded["level"] != "INFO" || reloaded["release"] != "prod/app/runtime@4#11" || reloaded["default_divergent"] != false || reloaded["changed_count"] != float64(2) {
+	if reloaded["level"] != "INFO" || reloaded["release"] != "prod/app/runtime@4#11 schema_version=7" || reloaded["default_divergent"] != false || reloaded["changed_count"] != float64(2) {
 		t.Fatalf("reloaded line = %v", reloaded)
 	}
 	if lines[1]["path"] != "limits.rate" || lines[1]["previous"] != float64(10) || lines[1]["current"] != float64(20) {
@@ -215,7 +215,7 @@ func TestSlogCallbacksLogsCandidateRejected(t *testing.T) {
 	line := lines[0]
 	paths, _ := line["paths"].([]any)
 	if line["level"] != "ERROR" || line["msg"] != "kms config candidate rejected" || line["component"] != "worker" ||
-		line["category"] != "restart_required" || line["release"] != "prod/app/runtime@4#11" || len(paths) != 2 || paths[0] != "database.endpoint" {
+		line["category"] != "restart_required" || line["release"] != "prod/app/runtime@4#11 schema_version=7" || len(paths) != 2 || paths[0] != "database.endpoint" {
 		t.Fatalf("line = %v", line)
 	}
 }
@@ -285,7 +285,7 @@ func TestLogSinkBufferIsBoundedAndHonoursHandlerLevel(t *testing.T) {
 	if last["level"] != "WARN" || last["msg"] != "kms config startup log records dropped" || last["dropped"] != float64(11) {
 		t.Fatalf("drop notice = %v", last)
 	}
-	if lines[0]["release"] != "prod/app/runtime@0#0" || lines[logSinkBufferLimit-1]["release"] != fmt.Sprintf("prod/app/runtime@%d#%d", logSinkBufferLimit-1, logSinkBufferLimit-1) {
+	if lines[0]["release"] != "prod/app/runtime@0#0 schema_version=0" || lines[logSinkBufferLimit-1]["release"] != fmt.Sprintf("prod/app/runtime@%d#%d schema_version=0", logSinkBufferLimit-1, logSinkBufferLimit-1) {
 		t.Fatalf("buffered records lost their order: first=%v last=%v", lines[0], lines[logSinkBufferLimit-1])
 	}
 

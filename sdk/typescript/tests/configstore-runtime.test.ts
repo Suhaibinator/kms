@@ -150,6 +150,18 @@ describe("configstore defensive values and reports", () => {
       activationRevision: maximum,
       schemaVersion: maximum,
     });
+    expect(String(new ReleaseIdentity())).toBe("release@0#0 schemaVersion=0");
+    expect(
+      String(
+        new ReleaseIdentity({
+          namespace: "prod/app",
+          name: "runtime",
+          version: 4n,
+          activationRevision: 8n,
+          schemaVersion: maximum,
+        }),
+      ),
+    ).toBe(`prod/app/runtime@4#8 schemaVersion=${maximum}`);
 
     for (const field of ["version", "activationRevision", "schemaVersion"] as const) {
       for (const value of [1, "1", null]) {

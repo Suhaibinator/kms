@@ -198,7 +198,7 @@ abstract class ReleaseIdentity {
   }
 
   protected safeString(type: string): string {
-    return `${type}{${this.namespace}/${this.name} version=${this.version} revision=${this.activationRevision} digest=${this.digest} entries=${this.#entries.size}}`;
+    return `${type}{${this.namespace}/${this.name} version=${this.version} revision=${this.activationRevision} schemaVersion=${this.schemaVersion} digest=${this.digest} entries=${this.#entries.size}}`;
   }
 }
 

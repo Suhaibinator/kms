@@ -184,7 +184,8 @@ class ReleaseManifest:
             "ReleaseManifest("
             f"namespace={self.namespace!r}, name={self.name!r}, "
             f"version={self.version}, activation_revision={self.activation_revision}, "
-            f"digest={self.digest!r}, entries={len(self.entries)})"
+            f"schema_version={self.schema_version}, digest={self.digest!r}, "
+            f"entries={len(self.entries)})"
         )
 
     __str__ = __repr__
@@ -216,7 +217,8 @@ class ReleaseSnapshot:
             "ReleaseSnapshot("
             f"namespace={self.namespace!r}, name={self.name!r}, "
             f"version={self.version}, activation_revision={self.activation_revision}, "
-            f"digest={self.digest!r}, entries={len(self.entries)}, "
+            f"schema_version={self.schema_version}, digest={self.digest!r}, "
+            f"entries={len(self.entries)}, "
             f"parameters={len(self.parameters)}, secrets={len(self.secrets)} [REDACTED])"
         )
 

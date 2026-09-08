@@ -60,6 +60,8 @@ describe("release snapshots", () => {
     expect(json).not.toContain("min");
     expect(json).toContain('"activationRevision":"9007199254740993"');
     expect(inspect(snapshot)).not.toContain("sensitive-value");
+    expect(inspect(snapshot)).not.toContain("min");
+    expect(inspect(snapshot)).toContain("schemaVersion=0");
   });
 
   it("accepts every uint64 boundary on public release identity objects", () => {
@@ -96,11 +98,13 @@ describe("release snapshots", () => {
         schemaVersion: 0n,
       }),
     ).toMatchObject({ version: 0n, activationRevision: 0n, schemaVersion: 0n });
-    expect(new ReleaseManifest(identity)).toMatchObject({
+    const manifest = new ReleaseManifest(identity);
+    expect(manifest).toMatchObject({
       version: maximum,
       activationRevision: maximum,
       schemaVersion: maximum,
     });
+    expect(String(manifest)).toContain(`schemaVersion=${maximum}`);
     expect(
       new ReleaseSnapshot({ ...identity, parameters: new Map(), secrets: new Map() }),
     ).toMatchObject({

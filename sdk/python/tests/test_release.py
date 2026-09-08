@@ -670,6 +670,23 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     assert "secret-1" not in repr(snapshot)
     assert "value-1" not in repr(snapshot)
     assert "[REDACTED]" in repr(snapshot)
+    assert "schema_version=1" in repr(snapshot)
+    schema_zero = release_module.ReleaseSnapshot(
+        **{**snapshot.__dict__, "schema_version": 0}
+    )
+    assert "schema_version=0" in str(schema_zero)
+    manifest = release_module.ReleaseManifest(
+        namespace="prod/app",
+        name="runtime",
+        version=1,
+        activation_revision=10,
+        schema_version=17,
+        digest="digest",
+        metadata_json="metadata-canary",
+        entries={},
+    )
+    assert "schema_version=17" in repr(manifest)
+    assert "metadata-canary" not in repr(manifest)
     assert client._secret_stub.metadata_versions == [1]
     with pytest.raises(TypeError):
         snapshot.parameters["setting"] = "changed"

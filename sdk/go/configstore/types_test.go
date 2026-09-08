@@ -265,7 +265,7 @@ func TestDefaultMismatchReportNormalizesUnsafeCallerPath(t *testing.T) {
 
 func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	identity := ReleaseIdentityFromSnapshot(kmsclient.ReleaseSnapshot{})
-	if !identity.IsZero() || strings.Contains(identity.String(), "[REDACTED]") {
+	if !identity.IsZero() || identity.String() != "release@0#0 schema_version=0" || strings.Contains(identity.String(), "[REDACTED]") {
 		t.Fatalf("unexpected zero identity: %s", identity.String())
 	}
 	encoded, err := json.Marshal(identity)
@@ -274,6 +274,10 @@ func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "entries") || strings.Contains(string(encoded), "metadata") {
 		t.Fatalf("identity JSON contains candidate data: %s", encoded)
+	}
+	nonzero := ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8, schemaVersion: 17}
+	if got := fmt.Sprintf("%+v", nonzero); got != "prod/app/runtime@4#8 schema_version=17" {
+		t.Fatalf("nonzero identity = %q", got)
 	}
 }
 
@@ -291,7 +295,7 @@ func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
 	}
 	report := newCandidateRejectionReport(
 		RejectRestartRequired,
-		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8},
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8, schemaVersion: 17},
 		candidateErr.pathsCopy(),
 	)
 	paths := report.Paths()
@@ -313,6 +317,9 @@ func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
 		if strings.Contains(rendered, canary) || strings.Contains(rendered, "INJECTED") {
 			t.Fatalf("candidate rejection report leaked unsafe data: %q", rendered)
 		}
+	}
+	if !strings.Contains(report.String(), "schema_version=17") {
+		t.Fatalf("candidate rejection report omitted schema identity: %q", report.String())
 	}
 	if report.Category() != RejectRestartRequired || report.Release().Version() != 4 {
 		t.Fatalf("report identity/category = %s/%s", report.Category(), report.Release())

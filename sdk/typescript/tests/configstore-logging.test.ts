@@ -35,6 +35,7 @@ const release = new ReleaseIdentity({
   name: "runtime",
   version: 4n,
   activationRevision: 9n,
+  schemaVersion: 7n,
 });
 
 describe("consoleCallbacks", () => {
@@ -54,7 +55,7 @@ describe("consoleCallbacks", () => {
         attrs: {
           component: "api",
           phase: "startup",
-          release: "prod/api/runtime@4#9",
+          release: "prod/api/runtime@4#9 schemaVersion=7",
           fields: [
             { path: "runtime.limit", expected: 1, actual: 2 },
             { path: "database.password", expected: "[REDACTED]", actual: 3 },
@@ -81,7 +82,7 @@ describe("consoleCallbacks", () => {
     ]);
     expect(records[0]?.attrs).toEqual({
       phase: "startup",
-      release: "prod/api/runtime@4#9",
+      release: "prod/api/runtime@4#9 schemaVersion=7",
       release_version: "4",
       activation_revision: "9",
       default_divergent: true,
@@ -118,7 +119,7 @@ describe("consoleCallbacks", () => {
         attrs: {
           component: "worker",
           phase: "runtime",
-          release: "prod/api/runtime@4#9",
+          release: "prod/api/runtime@4#9 schemaVersion=7",
           release_version: "4",
           activation_revision: "9",
           default_divergent: false,
@@ -172,7 +173,7 @@ describe("consoleCallbacks", () => {
     ]);
     expect(records[2]?.attrs).toEqual({
       category: "restart_required",
-      release: "prod/api/runtime@4#9",
+      release: "prod/api/runtime@4#9 schemaVersion=7",
       paths: ["runtime.restart"],
     });
   });
