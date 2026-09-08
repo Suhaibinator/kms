@@ -463,7 +463,8 @@ message ConfigurationRelease {
 message CreateReleaseRequest {
   NamespaceRef namespace = 1;
   string name = 2;
-  uint64 schema_version = 3;
+  // Required, including explicit 0 for the schema-free track.
+  optional uint64 schema_version = 3;
   repeated ReleaseEntrySelector entries = 4;
   string metadata_json = 5;
 }

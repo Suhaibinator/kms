@@ -263,7 +263,7 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 	}
 	return &kmsv1.CreateReleaseRequest{
 		Namespace: pns, Name: definition.Name,
-		SchemaVersion: definition.SchemaVersion,
+		SchemaVersion: &definition.SchemaVersion,
 		Entries:       selectors, MetadataJson: definition.MetadataJSON,
 	}, nil
 }

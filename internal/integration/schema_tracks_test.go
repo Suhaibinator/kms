@@ -50,7 +50,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := releases.CreateRelease(auth, &kmsv1.CreateReleaseRequest{Namespace: wireNS, Name: name, SchemaVersion: schema,
+		result, err := releases.CreateRelease(auth, &kmsv1.CreateReleaseRequest{Namespace: wireNS, Name: name, SchemaVersion: &schema,
 			Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "workers", Kind: "parameter", Ref: ref, Version: parameter.GetVersion()}}})
 		if err != nil {
 			t.Fatal(err)

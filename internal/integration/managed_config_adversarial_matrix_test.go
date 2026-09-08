@@ -189,7 +189,9 @@ func (h *adversarialManagedApp) createReleaseWithSchema(
 	}
 	request := &kmsv1.CreateReleaseRequest{Namespace: h.namespace, Name: adversarialReleaseName, Entries: entries}
 	if attachSchema {
-		request.SchemaVersion = h.schemaVersion
+		request.SchemaVersion = &h.schemaVersion
+	} else {
+		request.SchemaVersion = new(uint64)
 	}
 	created, err := h.releases.CreateRelease(h.authCtx, request)
 	if err != nil {
@@ -713,7 +715,7 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 	contractEntries[1].Alias = "runtime_unexpected"
 	if _, createErr := app.releases.CreateRelease(app.authCtx, &kmsv1.CreateReleaseRequest{
 		Namespace: app.namespace, Name: adversarialReleaseName, Entries: contractEntries,
-		SchemaVersion: app.schemaVersion,
+		SchemaVersion: &app.schemaVersion,
 	}); status.Code(createErr) != codes.FailedPrecondition {
 		t.Fatalf("create contract-drift release error = %v, want failed precondition", createErr)
 	}

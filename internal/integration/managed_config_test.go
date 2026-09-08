@@ -123,7 +123,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
 		t.Helper()
 		request := &kmsv1.CreateReleaseRequest{
-			Namespace: namespace, Name: managedRelease, SchemaVersion: schemaVersion,
+			Namespace: namespace, Name: managedRelease, SchemaVersion: &schemaVersion,
 			Entries: []*kmsv1.ReleaseEntrySelector{
 				{Alias: "database", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/database"), Version: candidate.database},
 				{Alias: "runtime", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/runtime"), Version: candidate.runtime},

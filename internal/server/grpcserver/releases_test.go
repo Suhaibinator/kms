@@ -99,6 +99,12 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		t.Fatalf("duplicate schema code = %s err=%v, want AlreadyExists", status.Code(err), err)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
+	if _, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
+		Namespace: pNS("prod", "app"), Name: "runtime",
+		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create missing schema code = %s err=%v, want InvalidArgument", status.Code(err), err)
+	}
 	for name, call := range map[string]func() error{
 		"get": func() error {
 			_, e := releases.GetRelease(adminCtx(), &kmsv1.GetReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1})
@@ -125,7 +131,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil || resolved.GetSchemaVersion() != pinnedSchema.Version {
 		t.Fatalf("resolve schema: %+v %v", resolved, err)
 	}
-	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: &pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +145,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if !active.GetChanged() || active.GetActivationRevision() == 0 {
 		t.Fatalf("active=%+v", active)
 	}
-	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: &pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,12 +369,21 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{
+	if _, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
+		Namespace: pNS("prod", "app"), Name: "runtime",
+		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create missing schema code = %s err=%v, want InvalidArgument", status.Code(err), err)
+	}
+	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: new(uint64), Entries: []*kmsv1.ReleaseEntrySelector{
 		{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"},
 		{Alias: "greeting", Kind: "parameter", Ref: pRef("prod", "app", "greeting"), Label: "current"},
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if created.GetRelease().GetVersion() != 1 || created.GetRelease().GetSchemaVersion() != 0 {
+		t.Fatalf("explicit schema zero release = %+v, want schema 0 version 1", created.GetRelease())
 	}
 	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion()})
 	if err != nil {

@@ -2917,10 +2917,11 @@ func (x *ConfigurationRelease) GetCreatedAtUnixMs() int64 {
 }
 
 type CreateReleaseRequest struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Namespace     *NamespaceRef           `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Name          string                  `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	SchemaVersion uint64                  `protobuf:"varint,3,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Namespace *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Required, including explicit 0 for the schema-free track.
+	SchemaVersion *uint64                 `protobuf:"varint,3,opt,name=schema_version,json=schemaVersion,proto3,oneof" json:"schema_version,omitempty"`
 	Entries       []*ReleaseEntrySelector `protobuf:"bytes,4,rep,name=entries,proto3" json:"entries,omitempty"`
 	MetadataJson  string                  `protobuf:"bytes,5,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2972,8 +2973,8 @@ func (x *CreateReleaseRequest) GetName() string {
 }
 
 func (x *CreateReleaseRequest) GetSchemaVersion() uint64 {
-	if x != nil {
-		return x.SchemaVersion
+	if x != nil && x.SchemaVersion != nil {
+		return *x.SchemaVersion
 	}
 	return 0
 }
@@ -9682,13 +9683,14 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\rmetadata_json\x18\a \x01(\tR\fmetadataJson\x12\x1d\n" +
 	"\n" +
 	"created_by\x18\b \x01(\tR\tcreatedBy\x12+\n" +
-	"\x12created_at_unix_ms\x18\t \x01(\x03R\x0fcreatedAtUnixMs\"\xe2\x01\n" +
+	"\x12created_at_unix_ms\x18\t \x01(\x03R\x0fcreatedAtUnixMs\"\xfa\x01\n" +
 	"\x14CreateReleaseRequest\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
-	"\x0eschema_version\x18\x03 \x01(\x04R\rschemaVersion\x126\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12*\n" +
+	"\x0eschema_version\x18\x03 \x01(\x04H\x00R\rschemaVersion\x88\x01\x01\x126\n" +
 	"\aentries\x18\x04 \x03(\v2\x1c.kms.v1.ReleaseEntrySelectorR\aentries\x12#\n" +
-	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJson\"O\n" +
+	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJsonB\x11\n" +
+	"\x0f_schema_version\"O\n" +
 	"\x15CreateReleaseResponse\x126\n" +
 	"\arelease\x18\x01 \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\"\xb9\x01\n" +
 	"\x16ValidateReleaseRequest\x122\n" +
@@ -10687,6 +10689,7 @@ func file_kms_v1_kms_proto_init() {
 	if File_kms_v1_kms_proto != nil {
 		return
 	}
+	file_kms_v1_kms_proto_msgTypes[45].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[47].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[50].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[52].OneofWrappers = []any{}

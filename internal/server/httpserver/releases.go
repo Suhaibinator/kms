@@ -12,6 +12,10 @@ func (s *server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	if body.SchemaVersion == nil {
+		s.writeError(w, r, invalidArg("schema_version is required"))
+		return
+	}
 	release, err := s.svc.CreateConfigurationRelease(r.Context(), principalFrom(r.Context()), body.toDomain())
 	if err != nil {
 		s.writeError(w, r, err)

@@ -551,7 +551,7 @@ type releaseSelectorDTO struct {
 type createReleaseDTO struct {
 	Namespace     namespaceRefDTO      `json:"namespace"`
 	Name          string               `json:"name"`
-	SchemaVersion uint64               `json:"schema_version"`
+	SchemaVersion *uint64              `json:"schema_version"`
 	Entries       []releaseSelectorDTO `json:"entries"`
 	MetadataJSON  string               `json:"metadata_json"`
 }
@@ -565,7 +565,7 @@ func (d createReleaseDTO) toDomain() domain.CreateConfigurationReleaseInput {
 		})
 	}
 	return domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: d.Name, SchemaVersion: d.SchemaVersion,
+		Namespace: ns, Name: d.Name, SchemaVersion: *d.SchemaVersion,
 		Entries: entries, Metadata: d.MetadataJSON,
 	}
 }

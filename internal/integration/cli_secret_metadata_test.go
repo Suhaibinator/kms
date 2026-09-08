@@ -39,7 +39,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 
 	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
 	created, err := releases.CreateRelease(actx, &kmsv1.CreateReleaseRequest{
-		Namespace: ref.GetNamespace(), Name: "runtime",
+		Namespace: ref.GetNamespace(), Name: "runtime", SchemaVersion: new(uint64),
 		Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "history", Kind: "secret", Ref: ref, Version: 7}},
 	})
 	if err != nil {

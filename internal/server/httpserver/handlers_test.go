@@ -1608,7 +1608,8 @@ func TestRollbackReleaseHTTP(t *testing.T) {
 		mustStatus(t, w, http.StatusOK)
 		w = e.admin(http.MethodPost, "/api/v1/releases", map[string]any{
 			"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime",
-			"entries": []map[string]any{{"alias": "config", "kind": "parameter", "ref": map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config"}}},
+			"schema_version": 0,
+			"entries":        []map[string]any{{"alias": "config", "kind": "parameter", "ref": map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config"}}},
 		})
 		mustStatus(t, w, http.StatusCreated)
 	}
@@ -1637,4 +1638,43 @@ func TestRollbackReleaseHTTP(t *testing.T) {
 	}
 	w = e.do(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"}, nil)
 	mustStatus(t, w, http.StatusUnauthorized)
+}
+
+func TestCreateReleaseRequiresSchemaVersionPresence(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.createNS("prod", "app")
+	w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "app", "key": "config", "value": "1", "content_type": "integer",
+	})
+	mustStatus(t, w, http.StatusOK)
+
+	request := map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"},
+		"name":      "runtime",
+		"entries": []map[string]any{{
+			"alias": "config", "kind": "parameter",
+			"ref":   map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config"},
+			"label": "current",
+		}},
+	}
+	for _, value := range []any{"missing", nil} {
+		if value == nil {
+			request["schema_version"] = nil
+		} else {
+			delete(request, "schema_version")
+		}
+		w = e.admin(http.MethodPost, "/api/v1/releases", request)
+		mustStatus(t, w, http.StatusBadRequest)
+		if errCode(t, w) != "invalid_argument" {
+			t.Fatalf("schema selector %v code = %s", value, errCode(t, w))
+		}
+	}
+
+	request["schema_version"] = 0
+	w = e.admin(http.MethodPost, "/api/v1/releases", request)
+	mustStatus(t, w, http.StatusCreated)
+	release := decodeBody(t, w)["release"].(map[string]any)
+	if release["schema_version"].(float64) != 0 || release["version"].(float64) != 1 {
+		t.Fatalf("explicit schema zero release = %v, want schema 0 version 1", release)
+	}
 }

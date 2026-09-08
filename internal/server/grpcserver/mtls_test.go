@@ -179,7 +179,7 @@ func TestMTLS_ReleaseWatchHeartbeatRejectsRevokedCertificate(t *testing.T) {
 	}
 	adminReleases := kmsv1.NewConfigurationReleaseServiceClient(adminConn)
 	created, err := adminReleases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{
-		Namespace: pNS(ns.Env, ns.App), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{{
+		Namespace: pNS(ns.Env, ns.App), Name: "runtime", SchemaVersion: new(uint64), Entries: []*kmsv1.ReleaseEntrySelector{{
 			Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: pRef(ns.Env, ns.App, "config"), Label: domain.LabelCurrent,
 		}},
 	})

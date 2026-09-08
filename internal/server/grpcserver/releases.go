@@ -100,6 +100,9 @@ func (h *configurationReleaseServer) removeConnection(key releaseConnectionKey, 
 }
 
 func (h *configurationReleaseServer) CreateRelease(ctx context.Context, req *kmsv1.CreateReleaseRequest) (*kmsv1.CreateReleaseResponse, error) {
+	if req.SchemaVersion == nil {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
+	}
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err

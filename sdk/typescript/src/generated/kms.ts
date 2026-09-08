@@ -436,7 +436,8 @@ export interface ConfigurationRelease {
 export interface CreateReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
-  schemaVersion: bigint;
+  /** Required, including explicit 0 for the schema-free track. */
+  schemaVersion?: bigint | undefined;
   entries: ReleaseEntrySelector[];
   metadataJson: string;
 }
@@ -7069,7 +7070,7 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
 };
 
 function createBaseCreateReleaseRequest(): CreateReleaseRequest {
-  return { namespace: undefined, name: "", schemaVersion: 0n, entries: [], metadataJson: "" };
+  return { namespace: undefined, name: "", schemaVersion: undefined, entries: [], metadataJson: "" };
 }
 
 export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
@@ -7080,7 +7081,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
     }
-    if (message.schemaVersion !== 0n) {
+    if (message.schemaVersion !== undefined) {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
@@ -7168,7 +7169,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
         ? BigInt(object.schemaVersion)
         : isSet(object.schema_version)
         ? BigInt(object.schema_version)
-        : 0n,
+        : undefined,
       entries: globalThis.Array.isArray(object?.entries)
         ? object.entries.map((e: any) => ReleaseEntrySelector.fromJSON(e))
         : [],
@@ -7188,7 +7189,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
-    if (message.schemaVersion !== 0n) {
+    if (message.schemaVersion !== undefined) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
     if (message.entries?.length) {
@@ -7211,7 +7212,7 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     message.name = object.name ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
-      : 0n;
+      : undefined;
     message.entries = object.entries?.map((e) => ReleaseEntrySelector.fromPartial(e)) || [];
     message.metadataJson = object.metadataJson ?? "";
     return message;
@@ -20105,5 +20106,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 97ee70e2dc73a0c4557976b69c29db9c4a77f47880cc352efd066a3d30457fe8
+// source-sha256: 94605295ff170dc2470b3be83cfc6f7807892e61dde9275d1955331c16e2ef7c
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

@@ -342,7 +342,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
 	created, err := releases.CreateRelease(rootCtx, &kmsv1.CreateReleaseRequest{
-		Namespace: networkNS("prod", "release-identity"), Name: "runtime",
+		Namespace: networkNS("prod", "release-identity"), Name: "runtime", SchemaVersion: new(uint64),
 		Entries: []*kmsv1.ReleaseEntrySelector{{
 			Alias: "workers", Kind: domain.ReleaseEntryParameter,
 			Ref: networkRef("prod", "release-identity", "workers"), Label: domain.LabelCurrent,
