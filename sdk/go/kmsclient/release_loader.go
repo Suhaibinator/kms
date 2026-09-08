@@ -383,6 +383,9 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	if initial.release == nil {
 		return errors.New("kmsclient: active release response was empty")
 	}
+	if initial.release.GetSchemaVersion() != l.trackSchemaVersion {
+		return errors.New("kmsclient: active release response schema track mismatch")
+	}
 	l.lastSeen.Store(initial.revision)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -420,6 +423,11 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	}
 
 	queue := func(candidate releaseCandidate) {
+		// A malformed or stale server response from another schema track must not
+		// cancel or supersede work for the loader's pinned track.
+		if candidate.release == nil || candidate.release.GetSchemaVersion() != l.trackSchemaVersion {
+			return
+		}
 		if !shouldQueueReleaseCandidate(candidate, latestCandidate, haveLatestCandidate, retryLatestCandidate) {
 			return
 		}
