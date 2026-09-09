@@ -11,7 +11,7 @@ describe("crumbs", () => {
       const trail = crumbs.release({ env: "prod", app: "gradethis" }, "runtime", 1, schemaVersion);
       expect(trail[1].href).toBe(`/applications?app=gradethis&schema_version=${schemaVersion}`);
       expect(trail[2].href).toBe(
-        `/applications?app=gradethis&schema_version=${schemaVersion}&env=prod`,
+        `/applications/environment?app=gradethis&env=prod&schema_version=${schemaVersion}`,
       );
       expect(crumbs.environment({ env: "prod", app: "gradethis" }, schemaVersion)[1].href).toBe(
         trail[1].href,
@@ -27,7 +27,10 @@ describe("crumbs", () => {
     expect(crumbs.parameter({ env: "prod", app: "gradethis", key: "config/database" })).toEqual([
       { label: "Applications", href: "/applications" },
       { ident: { kind: "app", value: "gradethis" }, href: "/applications?app=gradethis" },
-      { ident: { kind: "env", value: "prod" }, href: "/applications?app=gradethis&env=prod" },
+      {
+        ident: { kind: "env", value: "prod" },
+        href: "/applications/environment?app=gradethis&env=prod",
+      },
       { label: "Parameters", href: "/parameters?env=prod&app=gradethis" },
       {
         ident: { kind: "key", value: "config/database" },

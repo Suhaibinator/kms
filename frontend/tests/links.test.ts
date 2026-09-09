@@ -41,6 +41,36 @@ describe("links", () => {
     );
   });
 
+  it("environment deep links keep the app, env, schema_version, ship, rollback order", () => {
+    expect(links.environment("gradethis", "prod")).toBe(
+      "/applications/environment?app=gradethis&env=prod",
+    );
+    expect(links.environment("gradethis", "prod", { schemaVersion: 1 })).toBe(
+      "/applications/environment?app=gradethis&env=prod&schema_version=1",
+    );
+    expect(links.environment("gradethis", "prod", { ship: "rate_limits" })).toBe(
+      "/applications/environment?app=gradethis&env=prod&ship=rate_limits",
+    );
+    expect(links.environment("gradethis", "prod", { ship: true })).toBe(
+      "/applications/environment?app=gradethis&env=prod&ship=1",
+    );
+    expect(links.environment("gradethis", "prod", { ship: false })).toBe(
+      "/applications/environment?app=gradethis&env=prod",
+    );
+    expect(links.environment("gradethis", "prod", { rollback: true })).toBe(
+      "/applications/environment?app=gradethis&env=prod&rollback=1",
+    );
+    expect(
+      links.environment("a b", "prod eu", {
+        schemaVersion: 2,
+        ship: "a b",
+        rollback: true,
+      }),
+    ).toBe(
+      "/applications/environment?app=a%20b&env=prod%20eu&schema_version=2&ship=a%20b&rollback=1",
+    );
+  });
+
   it("identities", () => {
     expect(links.identities()).toBe("/identities");
     expect(links.identities({})).toBe("/identities");

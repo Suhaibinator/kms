@@ -14,7 +14,7 @@ import { ResourceLink } from "./ResourceLink";
 import { UnreleasedBadge } from "./ValueBadges";
 
 /** What the version chip's tooltip says about the active release's pin. */
-function pinTooltip(value: OverviewValue, hasActiveRelease: boolean): string {
+export function pinTooltip(value: OverviewValue, hasActiveRelease: boolean): string {
   if (!hasActiveRelease) return "No release is active in this environment.";
   return value.pinned_version === undefined
     ? "Not in the active release."

@@ -50,7 +50,7 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
             return (
               <li key={env.env} className={`fleet-env ${env.production ? "fleet-env-prod" : ""}`}>
                 <Link
-                  href={links.application(name, { env: env.env })}
+                  href={links.environment(name, env.env)}
                   className="fleet-env-link"
                   aria-label={`${env.env}: ${env.status}${env.production ? " (production)" : ""}`}
                 >

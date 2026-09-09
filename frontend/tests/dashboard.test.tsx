@@ -411,7 +411,7 @@ describe("DashboardPage", () => {
     );
     expect(within(gradethis).getByText("Needs attention")).toBeVisible();
     const prodLink = within(gradethis).getByRole("link", { name: "prod: degraded (production)" });
-    expect(prodLink).toHaveAttribute("href", links.application("gradethis", { env: "prod" }));
+    expect(prodLink).toHaveAttribute("href", links.environment("gradethis", "prod"));
     expect(prodLink.querySelector(".status-dot")).toHaveClass("status-degraded", "status-prod");
     // The production marker is a sibling of the ellipsised name, not a
     // pseudo-element inside it, so a narrow card truncates the name and keeps

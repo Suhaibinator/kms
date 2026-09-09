@@ -113,6 +113,12 @@ describe("palette index", () => {
     expect(ids).not.toContain("action:rollback:prod/legacy");
     expect(ids.filter((id) => id.startsWith("alias:prod/legacy"))).toEqual([]);
 
+    // The environment item drills into the environment page when the
+    // namespace's application is known.
+    expect(index.find((item) => item.id === "env:prod/gradethis")?.href).toBe(
+      links.environment("gradethis", "prod"),
+    );
+
     const alias = index.find((item) => item.id === "alias:prod/gradethis/rate_limits");
     expect(alias).toMatchObject({
       group: "Aliases",
