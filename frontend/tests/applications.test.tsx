@@ -718,6 +718,30 @@ describe("ApplicationsPage", () => {
     );
   });
 
+  it("narrows both tabs from one value filter", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    const view = render(<ApplicationsPage />);
+    expect(await screen.findByRole("region", { name: "dev environment" })).toBeVisible();
+
+    // `rate` reaches rate_limits and nothing else in the fixture contract.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "rate" } });
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(within(dev).getByText("Values · 1 of 3")).toBeVisible();
+    expect(within(dev).getByText("rate_limits")).toBeVisible();
+    expect(within(dev).queryByText("db_password")).toBeNull();
+
+    // The tab lives in the URL, so switching is a query change; the filter is
+    // local state on the page and has to survive it.
+    mocks.query = { app: ready.application.name, tab: "matrix" };
+    view.rerender(<ApplicationsPage />);
+    expect(await screen.findByRole("heading", { name: "Configuration matrix" })).toBeVisible();
+    expect(screen.getByLabelText("Filter values")).toHaveValue("rate");
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("rate_limits")).toBeVisible();
+    expect(within(table).queryByText("db_password")).toBeNull();
+  });
+
   it("explains a non-admin deep link instead of a bare error", async () => {
     mocks.query = { app: "gradethis" };
     mocks.applicationOverview.mockRejectedValue(new ApiError("forbidden", "admin only", 403));

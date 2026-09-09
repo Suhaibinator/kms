@@ -206,22 +206,23 @@ describe("ConfigurationMatrix", () => {
     );
     if (!value) throw new Error("fixture row is not in the contract");
     value.alias = "zzz_contract_name";
-    renderMatrix(overview);
+    // The box itself lives on the application page now, beside the tabs, so
+    // one filter narrows both this table and the pipeline.
+    const props = propsFor(overview, { filter: target.key.toUpperCase() });
+    const { rerender } = render(<ConfigurationMatrix {...props} />);
 
-    const filter = screen.getByRole("searchbox", { name: "Filter keys" });
-    fireEvent.change(filter, { target: { value: target.key.toUpperCase() } });
     let table = screen.getByRole("table");
     expect(within(table).getByText(target.key)).toBeVisible();
     for (const row of others.filter((row) => !row.key.includes(target.key))) {
       expect(within(table).queryByText(row.key)).toBeNull();
     }
 
-    fireEvent.change(filter, { target: { value: "zzz_contract" } });
+    rerender(<ConfigurationMatrix {...props} filter="zzz_contract" />);
     table = screen.getByRole("table");
     expect(within(table).getByText(target.key)).toBeVisible();
     expect(within(table).getAllByRole("row")).toHaveLength(2); // header + the one match
 
-    fireEvent.change(filter, { target: { value: "no-such-key-anywhere" } });
+    rerender(<ConfigurationMatrix {...props} filter="no-such-key-anywhere" />);
     expect(screen.getByText("No rows match the filter.")).toBeVisible();
   });
 

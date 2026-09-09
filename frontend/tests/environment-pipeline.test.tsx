@@ -38,7 +38,7 @@ const callbacks: EnvironmentCallbacks = {
   onFix: vi.fn(),
 };
 
-function renderPipeline(overview: ApplicationOverview, focusEnv?: string) {
+function renderPipeline(overview: ApplicationOverview, focusEnv?: string, filter?: string) {
   return render(
     <EnvironmentPipeline
       application={overview.application}
@@ -46,6 +46,7 @@ function renderPipeline(overview: ApplicationOverview, focusEnv?: string) {
       rows={overview.rows}
       focusEnv={focusEnv}
       callbacks={callbacks}
+      filter={filter}
     />,
   );
 }
@@ -410,6 +411,31 @@ describe("EnvironmentPipeline", () => {
     );
     const dev = screen.getByRole("region", { name: "dev environment" });
     expect(within(dev).queryByText(/not active/)).toBeNull();
+  });
+
+  it("narrows every column's values and counts what is left", () => {
+    renderPipeline(incident, undefined, "d");
+    for (const name of ["dev", "prod"]) {
+      const column = screen.getByRole("region", { name: `${name} environment` });
+      // `d` prefixes both database and db_password, and neither word of
+      // rate_limits starts with it.
+      expect(within(column).getByText("Values · 2 of 3")).toBeVisible();
+      expect(within(column).getByText("db_password")).toBeVisible();
+      expect(within(column).queryByText("rate_limits")).toBeNull();
+    }
+  });
+
+  it("says so when a column has nothing left to show", () => {
+    renderPipeline(incident, undefined, "no-such-alias");
+    const column = screen.getByRole("region", { name: "dev environment" });
+    expect(within(column).getByText("Values · 0 of 3")).toBeVisible();
+    expect(within(column).getByText("No values match \u201cno-such-alias\u201d.")).toBeVisible();
+  });
+
+  it("leaves the section title alone with no filter", () => {
+    renderPipeline(incident);
+    const column = screen.getByRole("region", { name: "dev environment" });
+    expect(within(column).getByText("Values")).toBeVisible();
   });
 
   it("makes the scroller a focusable, labelled group", () => {

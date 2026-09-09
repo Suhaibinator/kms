@@ -63,12 +63,15 @@ export function EnvironmentColumn({
   rows,
   focused,
   callbacks,
+  filter,
 }: {
   application: Application;
   environment: EnvironmentOverview;
   rows: ApplicationConfigurationRow[];
   focused: boolean;
   callbacks: EnvironmentCallbacks;
+  /** The application page's value filter, applied to this column's values. */
+  filter?: string;
 }) {
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
@@ -166,6 +169,7 @@ export function EnvironmentColumn({
         onOpenParameter={callbacks.onOpenParameter}
         onShip={callbacks.onShip}
         onEditContract={() => callbacks.onEditContract?.(ns.env)}
+        filter={filter}
       />
       <ReleaseSection
         environment={environment}

@@ -6,6 +6,7 @@ import { Icon } from "@/components/icons";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Button } from "@/components/ui/button";
 import { countNoun } from "@/lib/format";
+import { matchesSearch } from "@/lib/key-search";
 import { links } from "@/lib/links";
 import type { EnvironmentOverview, OverviewValue } from "@/lib/types";
 import { AddResourceButton } from "./AddResourceButton";
@@ -29,6 +30,7 @@ export function ValuesSection({
   onOpenParameter,
   onShip,
   onEditContract,
+  filter = "",
 }: {
   environment: EnvironmentOverview;
   /** Present resources in this namespace that no contract alias resolves to, per kind. */
@@ -40,13 +42,21 @@ export function ValuesSection({
   onShip: (env: string, alias?: string) => void;
   /** An empty contract is fixed at the application, not in this column. */
   onEditContract: () => void;
+  /** The application page's value filter; matches alias or key. */
+  filter?: string;
 }) {
   const ns = environment.namespace;
   const env = ns.env;
   const hasActive = Boolean(environment.release.active);
+  const shown = environment.values.filter((value) =>
+    matchesSearch({ key: value.key ?? value.alias, text: value.alias }, filter),
+  );
+  const filtering = filter.trim() !== "" && environment.values.length > 0;
   return (
     <section className="pipeline-section" aria-label={`Values in ${env}`}>
-      <h3 className="pipeline-section-title">Values</h3>
+      <h3 className="pipeline-section-title">
+        {filtering ? `Values · ${shown.length} of ${environment.values.length}` : "Values"}
+      </h3>
       {environment.values.length === 0 ? (
         <div className="pipeline-row">
           <span className="faint text-sm">The contract has no aliases.</span>
@@ -55,9 +65,13 @@ export function ValuesSection({
             Manage releases
           </Button>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="pipeline-row">
+          <span className="faint text-sm">{`No values match “${filter.trim()}”.`}</span>
+        </div>
       ) : (
         <ul className="pipeline-rows">
-          {environment.values.map((value) => {
+          {shown.map((value) => {
             const key = value.key ?? value.alias;
             return (
               <li className="pipeline-row" key={value.alias} data-alias={value.alias}>

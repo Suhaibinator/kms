@@ -15,6 +15,7 @@ export function EnvironmentPipeline({
   rows,
   focusEnv,
   callbacks,
+  filter,
 }: {
   application: Application;
   environments: EnvironmentOverview[];
@@ -22,6 +23,8 @@ export function EnvironmentPipeline({
   /** The `?env=` column to scroll to and focus. */
   focusEnv?: string | null;
   callbacks: EnvironmentCallbacks;
+  /** The application page's value filter, threaded to every column. */
+  filter?: string;
 }) {
   const ordered = orderEnvironments(environments);
   // The scroller takes focus so keyboard users can reach offscreen columns
@@ -39,6 +42,7 @@ export function EnvironmentPipeline({
             rows={rows}
             focused={focusEnv === environment.namespace.env}
             callbacks={callbacks}
+            filter={filter}
           />
         ))}
       </div>

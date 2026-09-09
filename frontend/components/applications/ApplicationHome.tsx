@@ -21,6 +21,7 @@ import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
+import { SearchField } from "@/components/SearchField";
 import { releaseKey } from "@/components/releases/utils";
 import { StatusChip } from "@/components/StatusChip";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
@@ -227,6 +228,9 @@ export function ApplicationHome({
   const [definitionOpen, setDefinitionOpen] = useState(false);
   const [deriveOpen, setDeriveOpen] = useState(false);
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
+  // Narrows both tabs, and survives switching between them. Local state, not
+  // the URL: `?app/env/tab/ship/rollback/migrate/new` is already a lot to carry.
+  const [valueFilter, setValueFilter] = useState("");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
   // Ship is waiting for the secret; opening its workspace on top would hide the modal.
@@ -760,16 +764,29 @@ export function ApplicationHome({
           {/* mb-2, not mb-4: the Tabs root is a flex column with gap-2, so the
               margin stacks on top of it and mb-4 spent 24px against the page's
               16px rhythm. */}
-          <TabsList variant="line" aria-label="Application views" className="mb-2">
-            <TabsTrigger value="pipeline">Environments</TabsTrigger>
-            <TabsTrigger value="matrix">Matrix</TabsTrigger>
-          </TabsList>
+          {/* One box beside the tabs, so a filter typed on either tab is still
+              applied after switching to the other. */}
+          <div className="between mb-2 items-end">
+            <TabsList variant="line" aria-label="Application views">
+              <TabsTrigger value="pipeline">Environments</TabsTrigger>
+              <TabsTrigger value="matrix">Matrix</TabsTrigger>
+            </TabsList>
+            <SearchField
+              className="w-full max-w-[280px]"
+              label="Filter values"
+              placeholder="Filter by alias or key"
+              value={valueFilter}
+              onChange={setValueFilter}
+              onClear={() => setValueFilter("")}
+            />
+          </div>
           <TabsContent value="pipeline">
             <EnvironmentPipeline
               application={application}
               environments={environments}
               rows={overview.rows}
               focusEnv={focusEnv}
+              filter={valueFilter}
               callbacks={{
                 onAddValue: openAddValue,
                 onAddSecret: openSecret,
@@ -828,6 +845,7 @@ export function ApplicationHome({
               }))}
               overview={environments}
               rows={overview.rows}
+              filter={valueFilter}
               onAddSecret={(environment, key) => setSecretSeed({ environment, key })}
               onAddValue={openAddValueForKey}
               onOpenSecret={openExistingSecret}

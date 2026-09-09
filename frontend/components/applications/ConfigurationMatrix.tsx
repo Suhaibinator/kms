@@ -5,8 +5,9 @@ import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { SortHeaderRow, useSort } from "@/components/SortableTable";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
-import { Badge, Checkbox, Input } from "@/components/ui";
+import { Badge, Checkbox } from "@/components/ui";
 import { Button } from "@/components/ui/button";
+import { matchesSearch } from "@/lib/key-search";
 import { links } from "@/lib/links";
 import { resourceId, valueForKey } from "@/lib/overview";
 import { isProductionEnvironment } from "@/lib/readiness";
@@ -39,6 +40,8 @@ export interface ConfigurationMatrixProps {
   /** The overview's per-environment contract values, for alias and pin lookup. */
   overview?: EnvironmentOverview[];
   rows: ApplicationConfigurationRow[];
+  /** The application page's value filter; matches key or contract alias. */
+  filter?: string;
   onAddSecret: (environment: string, key: string) => void;
   onAddValue?: (environment: string, key: string) => void;
   onOpenSecret?: (environment: string, key: string) => void;
@@ -82,6 +85,7 @@ export function ConfigurationMatrix({
   environments,
   overview,
   rows,
+  filter = "",
   onAddSecret,
   onAddValue,
   onOpenSecret,
@@ -89,7 +93,6 @@ export function ConfigurationMatrix({
   onEdit,
 }: ConfigurationMatrixProps) {
   const sort = useSort<ApplicationConfigurationRow>(links.applications(), COLUMNS);
-  const [filter, setFilter] = useState("");
   const [incompleteOnly, setIncompleteOnly] = useState(false);
   const incompleteId = useId();
 
@@ -107,16 +110,13 @@ export function ConfigurationMatrix({
     [rows, overview],
   );
 
-  const needle = filter.trim().toLowerCase();
   // Filter, sort and count missing cells in one pass; the footer describes the
   // rows on screen, so it is derived from the same list they render from.
   const { visible, missing } = useMemo(() => {
     const kept = matrixRows.filter(({ row, alias }) => {
       if (incompleteOnly && !isIncomplete(row, environments)) return false;
-      if (!needle) return true;
-      return (
-        row.key.toLowerCase().includes(needle) || Boolean(alias?.toLowerCase().includes(needle))
-      );
+      // The same multi-token semantics the list pages search with.
+      return matchesSearch({ key: row.key, text: alias }, filter);
     });
     const sorted = sort.apply(kept.map(({ row }) => row));
     const byId = new Map(kept.map((entry) => [entry.id, entry]));
@@ -128,20 +128,14 @@ export function ConfigurationMatrix({
       });
     }
     return { visible, missing };
-  }, [matrixRows, needle, incompleteOnly, environments, sort.apply]);
+  }, [matrixRows, filter, incompleteOnly, environments, sort.apply]);
   const anyMissing = missing.some((count) => count > 0);
 
   return (
     <>
       <div className="matrix-toolbar">
-        <Input
-          type="search"
-          className="matrix-filter min-w-[200px]"
-          placeholder="Filter keys"
-          aria-label="Filter keys"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        />
+        {/* The filter box lives beside the tabs on the application page, so one
+            search narrows both this table and the pipeline. */}
         <div className="checkbox-row">
           <Checkbox
             id={incompleteId}

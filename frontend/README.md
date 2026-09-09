@@ -40,6 +40,14 @@ its own:
   `BulkActionBar` and `BulkDeleteDialog` (`components/BulkSelection.tsx`) run the
   existing per-item API once per selection with `runBulk` (`lib/bulk.ts`); there
   are no bulk endpoints.
+- **Search** — one `<SearchField>` (`components/SearchField.tsx`), focused with
+  `/` and cleared with Esc. A non-empty box switches the page out of server
+  pagination: `useNamespaceIndex` (`lib/useNamespaceIndex.ts`) walks the whole
+  namespace once, up to 5,000 rows, and `lib/key-search.ts` ranks it — every
+  whitespace token has to match the key or the row's text, key hits outrank
+  value hits, and the best 200 are shown with the matched characters marked
+  (`components/Highlight.tsx`). The query lives in `?q=`, so a search is a
+  shareable link; the old `?key_prefix=` still opens as one.
 
 Keyboard shortcuts are declared in `lib/shortcuts.ts` and rendered by the `?`
 sheet. A new `keydown` handler belongs in that list.
