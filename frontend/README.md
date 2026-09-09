@@ -24,6 +24,20 @@ The Next.js development server proxies `/api/*` to
 an identity token. See the root [quickstart](../README.md#initialize-and-run-locally)
 for a local server setup.
 
+## Application and environment routes
+
+`/applications?app=` is the application: every environment side by side, for
+comparing them. `/applications/environment?app=&env=` is one environment on its
+own — its values as a sortable table, its release, subscribers, findings and
+namespace settings, with Ship, Roll back and Connect SDK promoted into the
+header. Both pages read the same overview (`useApplicationOverview`) and mount
+the same modals through `useApplicationActions`, which takes the `pathname` it
+should clean its query params back onto. `links.environment(app, env)` and
+`crumbs.environment` are the drill-down and are what a breadcrumb walks back
+through; `links.application(app, { env })` still means "the application page
+focused on that column" and stays the target of audit rows and `?ship=` deep
+links.
+
 ## List tables
 
 Every list page composes the same three pieces, so a new one does not invent

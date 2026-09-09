@@ -267,12 +267,37 @@ describe("EnvironmentPipeline", () => {
     expect(dev.querySelector(".finding-list")).toBeNull();
   });
 
+  it("links the column header's env chip to the environment page", () => {
+    renderPipeline(incident);
+    const prod = screen.getByRole("region", { name: "prod environment" });
+    expect(within(prod).getByRole("link", { name: "prod" })).toHaveAttribute(
+      "href",
+      links.environment(incident.application.name, "prod", {
+        schemaVersion: incident.application.schema_version,
+      }),
+    );
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(within(dev).getByRole("link", { name: "dev" })).toHaveAttribute(
+      "href",
+      links.environment(incident.application.name, "dev", {
+        schemaVersion: incident.application.schema_version,
+      }),
+    );
+  });
+
   it("offers the namespace pages from the column menu", async () => {
     renderPipeline(incident);
     fireEvent.click(screen.getByRole("button", { name: "More for prod" }));
     // Base UI names the popup after its trigger.
     const menu = await screen.findByRole("menu", { name: "More for prod" });
     const app = incident.application.name;
+    const menuitems = within(menu).getAllByRole("menuitem");
+    expect(menuitems[0]).toHaveTextContent("Open environment");
+    expect(menuitems[0]).toHaveAttribute(
+      "href",
+      links.environment(app, "prod", { schemaVersion: incident.application.schema_version }),
+    );
+    expect(within(menu).getByRole("menuitem", { name: "Open environment" })).toBe(menuitems[0]);
     expect(within(menu).getByRole("menuitem", { name: "Parameters" })).toHaveAttribute(
       "href",
       `/parameters?env=prod&app=${app}`,

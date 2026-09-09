@@ -907,6 +907,35 @@ function handle(
           next_page_token: "",
         },
       };
+    case "PATCH /namespaces": {
+      const target = state.namespaces[String(b.env ?? "")];
+      if (!target || String(b.app ?? "") !== target.namespace.app) {
+        return error(404, "not_found", "namespace not found");
+      }
+      target.namespace = {
+        ...target.namespace,
+        description: String(b.description ?? ""),
+        allowed_auth_methods: (b.allowed_auth_methods as Namespace["allowed_auth_methods"]) ?? [],
+      };
+      return { status: 200, body: { namespace: target.namespace } };
+    }
+    case "DELETE /namespaces": {
+      const target = state.namespaces[env];
+      if (!target || params.get("app") !== target.namespace.app) {
+        return error(404, "not_found", "namespace not found");
+      }
+      // The server answers a non-empty namespace with 412; the console is
+      // meant to have disabled the action long before this.
+      if (
+        Object.keys(target.parameters).length > 0 ||
+        Object.keys(target.secrets).length > 0 ||
+        (target.namespace.identity_count ?? 0) > 0
+      ) {
+        return error(412, "failed_precondition", "namespace is not empty");
+      }
+      delete state.namespaces[env];
+      return { status: 200, body: {} };
+    }
     case "GET /applications":
       return {
         status: 200,

@@ -8,7 +8,7 @@ test("namespace rows navigate while their explicit controls remain independent",
   await page.goto("/namespaces");
 
   const manage = page.getByRole("link", { name: "Manage gradethis/prod" });
-  await expect(manage).toHaveAttribute("href", "/applications?app=gradethis&env=prod");
+  await expect(manage).toHaveAttribute("href", "/applications/environment?app=gradethis&env=prod");
   const row = page.locator("tr", { has: manage });
   const tableWrap = page.locator(".ns-group", { has: row }).locator(".table-wrap");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -48,6 +48,6 @@ test("namespace rows navigate while their explicit controls remain independent",
     (box?.x ?? 0) + (box?.width ?? 0) / 2,
     (box?.y ?? 0) + (box?.height ?? 0) / 2,
   );
-  await expect(page).toHaveURL("/applications?app=gradethis&env=prod&schema_version=1");
-  await expect(page.locator('[data-env="prod"]')).toBeVisible();
+  await expect(page).toHaveURL("/applications/environment?app=gradethis&env=prod&schema_version=1");
+  await expect(page.getByRole("button", { name: /Ship to prod/ })).toBeVisible();
 });
