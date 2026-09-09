@@ -36,7 +36,7 @@ for (const width of [320, 390, 400, 640, 641, 768, 769, 1280, 1440]) {
       }
       expect(
         await page
-          .getByRole("textbox", { name: "Key prefix" })
+          .getByRole("searchbox", { name: "Find secret" })
           .evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize)),
       ).toBeGreaterThanOrEqual(16);
     }

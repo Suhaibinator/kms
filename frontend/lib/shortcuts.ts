@@ -2,7 +2,7 @@
 // renders this list, so a handler added without a line here is a shortcut
 // nobody can discover.
 
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 
 /** Stands in for the platform modifier; `shortcutKeys` swaps in ⌘ or Ctrl. */
 export const MOD = "$mod";
@@ -57,6 +57,8 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: ["Tab"], description: "Move to the next column header or row control" },
       { keys: ["↵"], description: "Sort by the focused column header" },
       { keys: ["Space"], description: "Select or clear the focused row checkbox" },
+      { keys: ["/"], description: "Focus the search box" },
+      { keys: ["Esc"], description: "Clear the search box" },
     ],
   },
 ];
@@ -104,4 +106,29 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 export function isShortcutSheetKey(event: KeyboardEvent): boolean {
   if (event.key !== "?" || event.metaKey || event.ctrlKey || event.altKey) return false;
   return !isTypingTarget(event.target);
+}
+
+/**
+ * `/` with no modifier, outside a field. Typing a slash into a key filter or
+ * the palette must not steal the caret out from under it.
+ */
+export function isSearchFocusKey(event: KeyboardEvent): boolean {
+  if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return false;
+  return !isTypingTarget(event.target);
+}
+
+/** Focuses (and selects) the referenced search input when `/` is pressed. */
+export function useSearchShortcut(ref: RefObject<HTMLInputElement | null>): void {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isSearchFocusKey(event)) return;
+      const input = ref.current;
+      if (!input || input.disabled) return;
+      event.preventDefault();
+      input.focus();
+      input.select();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [ref]);
 }

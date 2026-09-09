@@ -1,4 +1,4 @@
-import { ChevronDown, Eye, Filter, MoreHorizontal, X } from "lucide-react";
+import { ChevronDown, Eye, MoreHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
@@ -9,12 +9,14 @@ import {
   SelectRowCell,
   useBulkSelection,
 } from "@/components/BulkSelection";
+import { Highlight, Snippet } from "@/components/Highlight";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
 import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
+import { SearchField } from "@/components/SearchField";
 import {
   headerLabels,
   MobileListToolbar,
@@ -47,19 +49,27 @@ import {
   useQueryParams,
 } from "@/lib/hooks";
 import { canonicalParameterValue } from "@/lib/json-text";
+import {
+  buildSearchIndex,
+  INDEX_MAX_PAGES,
+  INDEX_PAGE_SIZE,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_RESULT_LIMIT,
+  searchIndex,
+} from "@/lib/key-search";
 import { links } from "@/lib/links";
 import { rememberNamespace } from "@/lib/namespace-memory";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { Parameter } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
+import { useNamespaceIndex } from "@/lib/useNamespaceIndex";
 import { useParameterSchema } from "@/lib/useParameterSchema";
 import {
   firstError,
   MAX_KEY_LENGTH,
   validateContentType,
   validateKey,
-  validateKeyPrefix,
   validateMetadataJson,
   validateParameterValue,
   validateValueSize,
@@ -74,11 +84,22 @@ const KEY_COUNTER_FROM = MAX_KEY_LENGTH - 56;
 /** The fields of the new-parameter form that carry their own validation. */
 type CreateField = "key" | "value" | "contentType" | "metadata";
 
-/** Identifies the list a response belongs to, so a stale one cannot mark a
- *  different namespace/prefix/page as loaded. */
-function requestScope(selection: NamespaceSelection, prefix: string, token: string): string {
-  return JSON.stringify([selection.env, selection.app, prefix, token]);
+/** Identifies the browse list a response belongs to, so a stale one cannot
+ *  mark a different namespace/page as loaded. The search query is deliberately
+ *  absent: searching does not refetch this list. */
+function requestScope(selection: NamespaceSelection, token: string): string {
+  return JSON.stringify([selection.env, selection.app, token]);
 }
+
+/** What the URL seeding effect compares against. It carries the query so an
+ *  internal `?q=` replacement is recognised as this page's own work, and the
+ *  namespace so an external navigation still resets the box. */
+function seedScope(selection: NamespaceSelection, query: string): string {
+  return JSON.stringify([selection.env, selection.app, query]);
+}
+
+/** How much of the namespace the index can hold, for the truncation note. */
+const INDEX_MAX_KEYS = (INDEX_PAGE_SIZE * INDEX_MAX_PAGES).toLocaleString("en-US");
 
 // Module scope so the sort controller's memos stay stable across renders.
 const COLUMNS: ReadonlyArray<SortColumn<Parameter>> = [
@@ -91,6 +112,7 @@ const COLUMNS: ReadonlyArray<SortColumn<Parameter>> = [
 ];
 
 const PAGE_SORT_HINT = "Sorts the rows loaded on this page, not the whole namespace.";
+const SEARCH_SORT_HINT = "Sorts the matches, not the whole namespace.";
 
 /** Named once: the header checkbox, the mobile toolbar and the skeleton that
  *  reserves that toolbar's row all have to say the same thing, and the
@@ -101,14 +123,21 @@ export default function ParametersPage() {
   const toast = useToast();
   const { identity } = useAuth();
   const { namespaces, error: nsError } = useNamespaces();
-  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+  const { values: queryValues, ready: queryReady } = useQueryParams([
+    "env",
+    "app",
+    "q",
+    "key_prefix",
+  ]);
   const replaceQuery = useQueryReplace("/parameters");
   const sort = useSort<Parameter>("/parameters", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
-  const [prefixInput, setPrefixInput] = useState("");
-  const [prefixTouched, setPrefixTouched] = useState(false);
-  const [prefix, setPrefix] = useState("");
+  // What the box holds right now, and what the ranker has been told about —
+  // the second lands one debounce after the last keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState("");
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [parameterTarget, setParameterTarget] = useState<Parameter | null>(null);
   const [rows, setRows] = useState<Parameter[]>([]);
@@ -116,7 +145,8 @@ export default function ParametersPage() {
   const [loadedScope, setLoadedScope] = useState("");
   const request = useLatestRequest();
 
-  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
+  // No query here: clearing a search returns to the page you were browsing.
+  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app]));
   const { pageToken, setNextToken } = paging;
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -159,17 +189,26 @@ export default function ParametersPage() {
     setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
-    const kp = queryValues.key_prefix ?? "";
-    const scope = requestScope({ env, app }, kp, "");
-    // An internal replace can acknowledge an applied filter after the user
+    // `key_prefix` is the old filter's parameter: a bookmarked link still
+    // opens, now as a search for the same text.
+    const q = queryValues.q ?? queryValues.key_prefix ?? "";
+    const scope = seedScope({ env, app }, q);
+    // An internal replace can acknowledge an applied search after the user
     // has started typing the next draft. Only external scope changes reset it.
     if (appliedScope.current === scope) return;
     appliedScope.current = scope;
     setNs((current) => (current.env === env && current.app === app ? current : { env, app }));
-    setPrefixInput(kp);
-    setPrefix(kp);
-    setPrefixTouched(false);
+    setSearchInput(q);
+    setQuery(q);
   }, [queryReady, queryValues]);
+
+  // A pending keystroke must not commit after the page is gone.
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -185,7 +224,6 @@ export default function ParametersPage() {
   // Client-side mirrors of the server's validators (see lib/validation.ts).
   // They fail fast on input the API is certain to reject; the server still has
   // the last word, and its errors keep arriving as toasts.
-  const prefixError = validateKeyPrefix(prefixInput.trim());
   const keyError = validateKey(key.trim());
   const contentTypeError = validateContentType(contentType);
   const metadataError = validateMetadataJson(metadataJson);
@@ -199,7 +237,6 @@ export default function ParametersPage() {
   // A message stays hidden until the user has left the field or tried to
   // submit, so a freshly opened form is never already covered in errors.
   const invalidFormDraft = !valueValid && valueError === null;
-  const shownPrefixError = prefixTouched ? prefixError : null;
   const shownKeyError = errors.shown("key", keyError);
   const shownValueError = errors.shown("value", valueError);
   const shownContentTypeError = errors.shown("contentType", contentTypeError);
@@ -220,13 +257,9 @@ export default function ParametersPage() {
     key !== "" || value !== "" || contentType !== "string" || !isEmptyJson(metadataJson);
 
   const load = useCallback(
-    async (
-      token: string,
-      selection: NamespaceSelection,
-      activePrefix: string,
-    ): Promise<Parameter[] | null> => {
+    async (token: string, selection: NamespaceSelection): Promise<Parameter[] | null> => {
       const run = request.begin();
-      const scope = requestScope(selection, activePrefix, token);
+      const scope = requestScope(selection, token);
       if (!selection.env || !selection.app) {
         setRows([]);
         setNextToken("");
@@ -238,7 +271,7 @@ export default function ParametersPage() {
       try {
         const res = await api.listParameters(
           { env: selection.env, app: selection.app },
-          activePrefix || undefined,
+          undefined,
           100,
           token || undefined,
           { signal: run.signal },
@@ -263,33 +296,93 @@ export default function ParametersPage() {
     [request, setNextToken, toast],
   );
 
+  const searchMode = query !== "";
+  const browseScope = requestScope(ns, pageToken);
+  // The browse list is fetched once per namespace/page. Searching does not
+  // touch it, so clearing a search puts the same page back without a refetch.
+  const requestedScope = useRef<string | null>(null);
   useEffect(() => {
-    void load(pageToken, ns, prefix);
-  }, [load, pageToken, ns, prefix]);
+    if (searchMode) return;
+    const scope = requestScope(ns, pageToken);
+    if (requestedScope.current === scope) return;
+    requestedScope.current = scope;
+    void load(pageToken, ns);
+  }, [load, pageToken, ns, searchMode]);
+
+  // The whole namespace, walked only while a search is running.
+  const fetchIndexPage = useCallback(
+    async (token: string, signal: AbortSignal) => {
+      const res = await api.listParameters(
+        { env: ns.env, app: ns.app },
+        undefined,
+        INDEX_PAGE_SIZE,
+        token || undefined,
+        { signal },
+      );
+      return { items: res.parameters ?? [], next: res.next_page_token ?? "" };
+    },
+    [ns.env, ns.app],
+  );
+  const onIndexError = useCallback(
+    (error: unknown) => toast.error(error, "Failed to search parameters"),
+    [toast],
+  );
+  const index = useNamespaceIndex<Parameter>(
+    JSON.stringify([ns.env, ns.app]),
+    searchMode && hasNs,
+    fetchIndexPage,
+    onIndexError,
+  );
+  const { invalidate: invalidateIndex } = index;
+  const searchable = useMemo(
+    () => buildSearchIndex(index.rows, (p: Parameter) => ({ key: p.key, text: p.value })),
+    [index.rows],
+  );
+  const matches = useMemo(
+    () => (searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : []),
+    [searchable, query, searchMode],
+  );
+
+  /** Re-reads whatever the current mode is showing after a write. The other
+   *  mode is only marked stale: its rows are refetched when it comes back. */
+  const refresh = useCallback(async (): Promise<Parameter[] | null> => {
+    invalidateIndex();
+    if (searchMode) {
+      requestedScope.current = null;
+      return null;
+    }
+    return load(pageToken, ns);
+  }, [invalidateIndex, load, ns, pageToken, searchMode]);
 
   function onSelectNamespace(next: NamespaceSelection) {
-    appliedScope.current = requestScope(next, prefix, "");
+    appliedScope.current = seedScope(next, query);
     setNs(next);
     setDeleteTarget(null);
     replaceQuery({ env: next.env, app: next.app });
   }
-  function applyFilter(e: React.FormEvent) {
-    e.preventDefault();
-    setPrefixTouched(true);
-    if (prefixError) return;
-    const next = prefixInput.trim();
-    appliedScope.current = requestScope(ns, next, "");
+  // Called from the input's own handler, never an effect: the URL may only be
+  // rewritten in response to something the operator did (see lib/url.ts).
+  function commitSearch(next: string) {
+    appliedScope.current = seedScope(ns, next);
     setDeleteTarget(null);
-    setPrefix(next);
-    replaceQuery({ key_prefix: next });
+    setQuery(next);
+    void replaceQuery({ q: next });
   }
-  function clearFilter() {
-    appliedScope.current = requestScope(ns, "", "");
-    setPrefixInput("");
-    setPrefixTouched(false);
-    setDeleteTarget(null);
-    setPrefix("");
-    replaceQuery({ key_prefix: "" });
+  function onSearchChange(value: string) {
+    setSearchInput(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null;
+      commitSearch(value.trim());
+    }, SEARCH_DEBOUNCE_MS);
+  }
+  function clearSearch() {
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current);
+      searchTimer.current = null;
+    }
+    setSearchInput("");
+    commitSearch("");
   }
 
   function openCreate() {
@@ -331,10 +424,18 @@ export default function ParametersPage() {
         `${createNs.env}/${createNs.app}/${k}`,
       );
       setCreateOpen(false);
+      // The index is dropped whichever namespace the parameter landed in: it
+      // may be the one a search is about to be run against.
+      invalidateIndex();
       // If the new parameter lands in the currently viewed namespace, refresh.
       if (createNs.env === ns.env && createNs.app === ns.app) {
-        paging.reset();
-        await load("", ns, prefix);
+        if (searchMode) {
+          requestedScope.current = null;
+        } else {
+          paging.reset();
+          requestedScope.current = requestScope(ns, "");
+          await load("", ns);
+        }
       }
     } catch (err) {
       toast.error(err, "Failed to save parameter");
@@ -356,7 +457,7 @@ export default function ParametersPage() {
       setDeleteTarget(null);
       // Deleting the last row of page N would otherwise strand the operator on
       // an empty page with no way forward.
-      const remaining = await load(pageToken, ns, prefix);
+      const remaining = await refresh();
       if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
@@ -367,18 +468,45 @@ export default function ParametersPage() {
 
   // A deep link's env/app land one frame after mount, so "Choose an
   // environment" would flash before the list it asked for.
-  const awaitingDeepLink = !seeded && (!queryReady || !!queryValues.env || !!queryValues.app);
-  // A response has arrived for exactly this namespace/prefix/page. Gating on
-  // this rather than on `loading` keeps the empty state from flashing before
-  // the first request has even started.
-  const scope = requestScope(ns, prefix, pageToken);
-  const settled = loadedScope === scope;
+  const awaitingDeepLink =
+    !seeded &&
+    (!queryReady ||
+      !!queryValues.env ||
+      !!queryValues.app ||
+      !!queryValues.q ||
+      !!queryValues.key_prefix);
+  // A response has arrived for exactly this namespace/page — or, in search
+  // mode, the index has finished loading. Gating on this rather than on
+  // `loading` keeps the empty state from flashing before the first request has
+  // even started.
+  const settled = searchMode ? index.ready : loadedScope === browseScope;
+  const busy = searchMode ? index.loading : loading;
   const keyLength = [...key].length;
 
-  const sortedRows = sort.apply(rows);
-  // Scoped to this exact namespace/prefix/page: any of them changing is a
+  // Rank first, cut to the result limit, and only then order by column: the
+  // whole index is never sorted, and with no column chosen `sortRows` copies,
+  // so relevance order survives.
+  const matchByKey = useMemo(
+    () => new Map(matches.map((match) => [match.item.key, match])),
+    [matches],
+  );
+  const visibleRows = sort.apply(searchMode ? matches.map((match) => match.item) : rows);
+  const sortHint = searchMode ? SEARCH_SORT_HINT : PAGE_SORT_HINT;
+  const summaryHint = [
+    sort.sort ? sortHint : null,
+    searchMode && matches.length >= SEARCH_RESULT_LIMIT
+      ? `Showing the best ${SEARCH_RESULT_LIMIT} matches — keep typing`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // Scoped to this exact namespace, query and page: any of them changing is a
   // different list, and the ticks must not travel to it.
-  const selection = useBulkSelection(canBulkDelete ? rows.map((row) => row.key) : [], scope);
+  const listScope = JSON.stringify([ns.env, ns.app, query, searchMode ? "" : pageToken]);
+  const selection = useBulkSelection(
+    canBulkDelete ? visibleRows.map((row) => row.key) : [],
+    listScope,
+  );
 
   async function onBulkDelete() {
     const targets = selection.selected;
@@ -397,7 +525,7 @@ export default function ParametersPage() {
       else toast.error(new Error(summary.detail), summary.title);
       setBulkOpen(false);
       selection.clear();
-      const remaining = await load(pageToken, ns, prefix);
+      const remaining = await refresh();
       if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
     } finally {
       setBulkBusy(false);
@@ -413,7 +541,7 @@ export default function ParametersPage() {
         actions={<Button onClick={openCreate}>New parameter</Button>}
       />
 
-      <form className="filters" onSubmit={applyFilter}>
+      <div className="filters">
         {/* The create modal mounts a second picker, so both need their own ids
             or a <label for> resolves to whichever control rendered first. */}
         <NamespacePicker
@@ -424,29 +552,21 @@ export default function ParametersPage() {
           envId="filter-env"
         />
         <div className="filter-grow">
-          {/* Keep this toolbar compact; the prefix rule rides on the placeholder
-              and validation message instead of a permanently visible hint. */}
-          <Field label="Key prefix" error={shownPrefixError}>
-            <Input
-              id="key-prefix"
-              className="font-mono"
-              placeholder="billing"
-              value={prefixInput}
-              disabled={!hasNs}
-              onChange={(e) => setPrefixInput(e.target.value)}
-              onBlur={() => setPrefixTouched(true)}
-            />
-          </Field>
+          <SearchField
+            label="Find parameter"
+            placeholder="Search keys and values"
+            value={searchInput}
+            disabled={!hasNs}
+            onChange={onSearchChange}
+            onClear={clearSearch}
+            hint={
+              searchMode && settled && !index.complete
+                ? `Searched the first ${INDEX_MAX_KEYS} keys in this namespace.`
+                : undefined
+            }
+          />
         </div>
-        <Button type="submit" variant="outline" disabled={!hasNs || shownPrefixError !== null}>
-          <Filter size={15} aria-hidden />
-          Filter
-        </Button>
-        <Button type="button" variant="ghost" onClick={clearFilter} disabled={!hasNs}>
-          <X size={15} aria-hidden />
-          Clear
-        </Button>
-      </form>
+      </div>
 
       {awaitingDeepLink ? (
         <TableSkeleton
@@ -454,7 +574,7 @@ export default function ParametersPage() {
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
           toolbar
-          toolbarHint={PAGE_SORT_HINT}
+          toolbarHint={sortHint}
           toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
           summary
         />
@@ -462,33 +582,33 @@ export default function ParametersPage() {
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its parameters.
         </EmptyState>
-      ) : !settled || loading ? (
+      ) : !settled || busy ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           trailing={1}
           toolbar
-          toolbarHint={PAGE_SORT_HINT}
+          toolbarHint={sortHint}
           toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
           summary
         />
-      ) : rows.length === 0 ? (
+      ) : visibleRows.length === 0 ? (
         <EmptyState
           icon={<Icon.parameter size={20} />}
           title="No parameters found"
           actions={
-            prefix ? (
-              <Button variant="outline" onClick={clearFilter}>
+            searchMode ? (
+              <Button variant="outline" onClick={clearSearch}>
                 <X size={15} aria-hidden />
-                Clear filter
+                Clear search
               </Button>
             ) : (
               <Button onClick={openCreate}>New parameter</Button>
             )
           }
         >
-          {prefix
-            ? "No parameters match this key prefix."
+          {searchMode
+            ? `No parameters match \u201c${query}\u201d.`
             : `No parameters in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (
@@ -497,19 +617,20 @@ export default function ParametersPage() {
             controller={sort}
             selection={canBulkDelete ? selection : undefined}
             selectionLabel={SELECT_ALL_LABEL}
-            hint={PAGE_SORT_HINT}
+            hint={sortHint}
           />
           <table className="data">
             <TableSummary
-              shown={sortedRows.length}
+              shown={visibleRows.length}
+              total={searchMode ? matches.length : undefined}
               noun="parameters"
-              filters={prefix ? 1 : 0}
-              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+              filters={searchMode ? 1 : 0}
+              hint={summaryHint || undefined}
             />
             <thead>
               <SortHeaderRow
                 controller={sort}
-                hint={PAGE_SORT_HINT}
+                hint={sortHint}
                 before={
                   canBulkDelete ? (
                     <SelectAllCell selection={selection} label={SELECT_ALL_LABEL} />
@@ -519,75 +640,83 @@ export default function ParametersPage() {
               />
             </thead>
             <tbody>
-              {sortedRows.map((p) => (
-                <tr key={p.key} data-state={selection.has(p.key) ? "selected" : undefined}>
-                  {canBulkDelete ? (
-                    <SelectRowCell selection={selection} id={p.key} label={`Select ${p.key}`} />
-                  ) : null}
-                  <td data-label="Key">
-                    <Link
-                      className="cell-path"
-                      href={links.parameterDetail(p)}
-                      onClick={(event) => {
-                        if (shouldOpenWorkspace(event)) setParameterTarget(p);
-                      }}
-                    >
-                      {p.key}
-                    </Link>
-                  </td>
-                  <td data-label="Version">v{p.version}</td>
-                  <td className="nowrap" data-label="Type">
-                    {p.content_type || <span className="faint">—</span>}
-                  </td>
-                  <td data-label="Labels">
-                    <div className="row-wrap">
-                      {labelEntries(p.labels).map(([k, v]) => (
-                        <Badge key={k} kind="accent">
-                          {k}: v{v}
-                        </Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="nowrap" data-label="Created">
-                    {formatUnixMs(p.created_at_unix_ms)}
-                  </td>
-                  <td data-label="Actions">
-                    <div className="row-actions">
-                      <ButtonLink
-                        variant="outline"
-                        size="sm"
+              {visibleRows.map((p) => {
+                const match = matchByKey.get(p.key);
+                return (
+                  <tr key={p.key} data-state={selection.has(p.key) ? "selected" : undefined}>
+                    {canBulkDelete ? (
+                      <SelectRowCell selection={selection} id={p.key} label={`Select ${p.key}`} />
+                    ) : null}
+                    <td data-label="Key">
+                      <Link
+                        className="cell-path"
                         href={links.parameterDetail(p)}
                         onClick={(event) => {
                           if (shouldOpenWorkspace(event)) setParameterTarget(p);
                         }}
                       >
-                        <Eye size={14} aria-hidden />
-                        Details
-                      </ButtonLink>
-                      {/* Delete is the only destructive row action; it sits
+                        <Highlight text={p.key} ranges={match?.keyRanges} />
+                      </Link>
+                      {/* Only the value matched: show the operator why the row is
+                        here, rather than a key with nothing highlighted. */}
+                      {match && match.textRanges.length > 0 ? (
+                        <Snippet text={p.value} ranges={match.textRanges} />
+                      ) : null}
+                    </td>
+                    <td data-label="Version">v{p.version}</td>
+                    <td className="nowrap" data-label="Type">
+                      {p.content_type || <span className="faint">—</span>}
+                    </td>
+                    <td data-label="Labels">
+                      <div className="row-wrap">
+                        {labelEntries(p.labels).map(([k, v]) => (
+                          <Badge key={k} kind="accent">
+                            {k}: v{v}
+                          </Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="nowrap" data-label="Created">
+                      {formatUnixMs(p.created_at_unix_ms)}
+                    </td>
+                    <td data-label="Actions">
+                      <div className="row-actions">
+                        <ButtonLink
+                          variant="outline"
+                          size="sm"
+                          href={links.parameterDetail(p)}
+                          onClick={(event) => {
+                            if (shouldOpenWorkspace(event)) setParameterTarget(p);
+                          }}
+                        >
+                          <Eye size={14} aria-hidden />
+                          Details
+                        </ButtonLink>
+                        {/* Delete is the only destructive row action; it sits
                           behind a menu so a stray click cannot reach it. */}
-                      <ActionMenu
-                        trigger={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`More actions for ${p.key}`}
-                          >
-                            <MoreHorizontal size={15} aria-hidden />
-                          </Button>
-                        }
-                        items={[
-                          {
-                            key: "delete",
-                            label: "Delete",
-                            onSelect: () => setDeleteTarget(p),
-                          },
-                        ]}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <ActionMenu
+                          trigger={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`More actions for ${p.key}`}
+                            >
+                              <MoreHorizontal size={15} aria-hidden />
+                            </Button>
+                          }
+                          items={[
+                            {
+                              key: "delete",
+                              label: "Delete",
+                              onSelect: () => setDeleteTarget(p),
+                            },
+                          ]}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -603,18 +732,20 @@ export default function ParametersPage() {
         />
       ) : null}
 
-      <Pagination
-        hasNext={paging.hasNext}
-        onNext={paging.next}
-        hasPrevious={paging.hasPrevious}
-        onPrevious={paging.previous}
-        onReset={paging.reset}
-        showReset={paging.hasPrevious}
-        page={paging.page}
-        count={rows.length}
-        loading={!settled}
-        noun="parameters"
-      />
+      {searchMode ? null : (
+        <Pagination
+          hasNext={paging.hasNext}
+          onNext={paging.next}
+          hasPrevious={paging.hasPrevious}
+          onPrevious={paging.previous}
+          onReset={paging.reset}
+          showReset={paging.hasPrevious}
+          page={paging.page}
+          count={rows.length}
+          loading={!settled}
+          noun="parameters"
+        />
+      )}
 
       <Modal
         mobileFullScreen
@@ -769,8 +900,8 @@ export default function ParametersPage() {
       <ParameterWorkspace
         parameterRef={parameterTarget}
         onClose={() => setParameterTarget(null)}
-        onChanged={() => void load(pageToken, ns, prefix)}
-        onDeleted={() => void load(pageToken, ns, prefix)}
+        onChanged={() => void refresh()}
+        onDeleted={() => void refresh()}
       />
     </>
   );

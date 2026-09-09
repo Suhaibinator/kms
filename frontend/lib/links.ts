@@ -25,10 +25,11 @@ function refQuery(ref: ResourceRef): string {
   return `${nsQuery(ref)}&key=${encodeURIComponent(ref.key)}`;
 }
 
-function listLink(base: string, ns?: NamespaceRef, keyPrefix?: string): string {
+/** A list page, optionally with the search box prefilled (`?q=`). */
+function listLink(base: string, ns?: NamespaceRef, query?: string): string {
   if (!ns) return base;
-  const prefix = keyPrefix ? `&key_prefix=${encodeURIComponent(keyPrefix)}` : "";
-  return `${base}?${nsQuery(ns)}${prefix}`;
+  const search = query ? `&q=${encodeURIComponent(query)}` : "";
+  return `${base}?${nsQuery(ns)}${search}`;
 }
 
 export interface ApplicationLinkOptions {
@@ -109,15 +110,14 @@ export const links = {
     }
     return links.application(app, { env });
   },
-  secrets: (ns?: NamespaceRef, keyPrefix?: string): string => listLink("/secrets", ns, keyPrefix),
+  secrets: (ns?: NamespaceRef, query?: string): string => listLink("/secrets", ns, query),
   secretDetail: (ref: ResourceRef): string => `/secrets/detail?${refQuery(ref)}`,
   newSecret: (ns?: NamespaceRef, key?: string): string => {
     if (!ns) return "/secrets/new";
     const keyPart = key ? `&key=${encodeURIComponent(key)}` : "";
     return `/secrets/new?${nsQuery(ns)}${keyPart}`;
   },
-  parameters: (ns?: NamespaceRef, keyPrefix?: string): string =>
-    listLink("/parameters", ns, keyPrefix),
+  parameters: (ns?: NamespaceRef, query?: string): string => listLink("/parameters", ns, query),
   parameterDetail: (ref: ResourceRef): string => `/parameters/detail?${refQuery(ref)}`,
   releases: (opts?: {
     app?: string;

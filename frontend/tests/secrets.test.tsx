@@ -121,41 +121,8 @@ async function openNewVersion(secret: SecretMetadata = SECRET): Promise<HTMLElem
   return screen.getByRole("dialog", { name: "New secret version" });
 }
 
-describe("secret list filter validation", () => {
-  it("blocks a key prefix the list API would reject", async () => {
-    const listSecrets = vi
-      .spyOn(api, "listSecrets")
-      .mockResolvedValue({ secrets: [], next_page_token: "" });
-    render(<SecretsPage />);
-    await chooseNamespace();
-    const prefix = screen.getByLabelText("Key prefix");
-
-    // A trailing slash is what the placeholder suggests, and the server's
-    // key rule rejects it — but not until the operator has left the field.
-    fireEvent.change(prefix, { target: { value: "billing/" } });
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-
-    fireEvent.blur(prefix);
-    expect(screen.getByText("Key must not start or end with '/'.")).toBeVisible();
-    expect(prefix).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "Filter" })).toBeDisabled();
-
-    listSecrets.mockClear();
-    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
-    expect(listSecrets).not.toHaveBeenCalled();
-
-    // Dropping the slash makes the same prefix legal again — and the same
-    // submit now reaches the API, so the block above was the validator's doing.
-    fireEvent.change(prefix, { target: { value: "billing" } });
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Filter" })).toBeEnabled();
-
-    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
-    await vi.waitFor(() => expect(listSecrets).toHaveBeenCalled());
-    expect(listSecrets.mock.lastCall?.[1]).toBe("billing");
-  });
-
-  it("clears the rows it was showing when the next load fails", async () => {
+describe("secret list search", () => {
+  it("takes free text the key rule would have rejected", async () => {
     const listSecrets = vi
       .spyOn(api, "listSecrets")
       .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
@@ -163,19 +130,44 @@ describe("secret list filter validation", () => {
     await chooseNamespace();
     expect(await screen.findByText(SECRET.key)).toBeVisible();
 
-    // A failed reload must not leave the previous result on screen: those rows
-    // would read as the current filter's answer.
+    // "billing/" is not a legal key, and the old prefix filter refused it.
+    // A search is free text: it narrows, it never validates.
+    const search = screen.getByLabelText("Find secret");
+    fireEvent.change(search, { target: { value: "billing/" } });
+    fireEvent.blur(search);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(search).not.toHaveAttribute("aria-invalid", "true");
+    // The index is walked with no prefix; the ranking happens here.
+    await waitFor(() =>
+      expect(listSecrets).toHaveBeenLastCalledWith(
+        { env: NAMESPACE.env, app: NAMESPACE.app },
+        undefined,
+        1000,
+        undefined,
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("clears the rows it was showing when the index load fails", async () => {
+    const listSecrets = vi
+      .spyOn(api, "listSecrets")
+      .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    render(<SecretsPage />);
+    await chooseNamespace();
+    expect(await screen.findByText(SECRET.key)).toBeVisible();
+
+    // A failed index load must not leave the browse page on screen: those rows
+    // would read as the search's answer.
     listSecrets.mockRejectedValue(new Error("offline"));
-    const prefix = screen.getByLabelText("Key prefix");
-    fireEvent.change(prefix, { target: { value: "billing" } });
-    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
+    fireEvent.change(screen.getByLabelText("Find secret"), { target: { value: "api" } });
 
     expect(await screen.findByText("No secrets found")).toBeVisible();
     expect(screen.queryByText(SECRET.key)).not.toBeInTheDocument();
-    expect(mocks.toast.error).toHaveBeenCalled();
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
   });
 
-  it("writes the namespace and prefix back to the URL", async () => {
+  it("writes the namespace and the search back to the URL", async () => {
     vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
     render(<SecretsPage />);
     await chooseNamespace();
@@ -186,35 +178,45 @@ describe("secret list filter validation", () => {
       { shallow: true, scroll: false },
     );
 
-    const prefix = screen.getByLabelText("Key prefix");
-    fireEvent.change(prefix, { target: { value: "billing" } });
-    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
-    expect(mocks.router.replace).toHaveBeenLastCalledWith(
-      { pathname: "/secrets", query: { key_prefix: "billing" } },
-      undefined,
-      { shallow: true, scroll: false },
+    const search = screen.getByLabelText("Find secret");
+    fireEvent.change(search, { target: { value: "billing" } });
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenLastCalledWith(
+        { pathname: "/secrets", query: { q: "billing" } },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
     );
 
-    // An empty value drops the key rather than writing `key_prefix=`.
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    expect(mocks.router.replace).toHaveBeenLastCalledWith(
-      { pathname: "/secrets", query: {} },
-      undefined,
-      { shallow: true, scroll: false },
+    // An empty box drops the key rather than writing `q=`.
+    fireEvent.change(search, { target: { value: "" } });
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenLastCalledWith(
+        { pathname: "/secrets", query: {} },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
     );
   });
 
-  it("treats an empty prefix as the whole namespace", async () => {
-    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
+  it("opens a legacy ?key_prefix= link as a search", async () => {
+    const listSecrets = vi
+      .spyOn(api, "listSecrets")
+      .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "api" };
     render(<SecretsPage />);
-    await chooseNamespace();
-    const prefix = screen.getByLabelText("Key prefix");
-
-    fireEvent.focus(prefix);
-    fireEvent.blur(prefix);
-
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Filter" })).toBeEnabled();
+    await waitFor(() => expect(keyColumn()).toEqual([SECRET.key]));
+    expect(screen.getByLabelText("Find secret")).toHaveValue("api");
+    expect(listSecrets).toHaveBeenCalledTimes(1);
+    expect(listSecrets).toHaveBeenLastCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      undefined,
+      1000,
+      undefined,
+      expect.anything(),
+    );
+    // No pager while searching: the matches are the whole answer.
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
   });
 
   it("reorders the loaded page from a column header and records the sort in the URL", async () => {
@@ -1407,20 +1409,37 @@ async function generateBindingKey() {
 }
 
 describe("secrets list navigation", () => {
-  it("keeps rows when Filter or Clear does not change the scope", async () => {
-    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+  it("keeps rows when a search starts and ends", async () => {
+    const list = vi
+      .spyOn(api, "listSecrets")
+      .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
     render(<SecretsPage />);
     await screen.findByText(SECRET.key);
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(list).toHaveBeenCalledTimes(1);
+
+    const input = screen.getByLabelText("Find secret");
+    fireEvent.change(input, { target: { value: "api" } });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list).toHaveBeenLastCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      undefined,
+      1000,
+      undefined,
+      expect.anything(),
+    );
+    // The key is on screen with the typed characters marked, so it is no
+    // longer one text node.
+    await waitFor(() => expect(keyColumn()).toEqual([SECRET.key]));
+    expect(document.querySelector(".cell-path mark")).toHaveTextContent("api");
+
+    // Emptying the box returns to the browse page already in hand.
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).not.toHaveTextContent("filter"),
+    );
     expect(screen.getByText(SECRET.key)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    expect(screen.getByText(SECRET.key)).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "api" } });
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    await screen.findByText(SECRET.key);
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    expect(screen.getByText(SECRET.key)).toBeVisible();
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("follows same-page navigation and history when query fields change or disappear", async () => {
@@ -1430,61 +1449,79 @@ describe("secrets list navigation", () => {
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
     const view = render(<SecretsPage />);
     await screen.findByText(SECRET.key);
-    mocks.router.query = { env: "dev", app: "other", key_prefix: "new" };
+    // A `?q=` link searches the new namespace instead of browsing it.
+    mocks.router.query = { env: "dev", app: "other", q: "new" };
     view.rerender(<SecretsPage />);
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
         { env: "dev", app: "other" },
-        "new",
-        100,
+        undefined,
+        1000,
         undefined,
         expect.anything(),
       ),
     );
-    expect(screen.getByLabelText("Key prefix")).toHaveValue("new");
-    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    expect(screen.getByLabelText("Find secret")).toHaveValue("new");
+    mocks.router.query = { env: "dev", app: "other" };
     view.rerender(<SecretsPage />);
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
-        { env: NAMESPACE.env, app: NAMESPACE.app },
+        { env: "dev", app: "other" },
         undefined,
         100,
         undefined,
         expect.anything(),
       ),
     );
-    expect(screen.getByLabelText("Key prefix")).toHaveValue("");
+    expect(screen.getByLabelText("Find secret")).toHaveValue("");
     mocks.router.query = {};
     view.rerender(<SecretsPage />);
     expect(await screen.findByText("Choose an environment")).toBeVisible();
   });
 });
 
-it("preserves a newer filter draft when an internal URL replacement settles late", async () => {
-  const list = vi
-    .spyOn(api, "listSecrets")
-    .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+it("preserves a newer search draft when an internal URL replacement settles late", async () => {
+  vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
   mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
   const view = render(<SecretsPage />);
   await screen.findByText(SECRET.key);
-  const input = screen.getByLabelText("Key prefix");
+  const input = screen.getByLabelText("Find secret");
   fireEvent.change(input, { target: { value: "db" } });
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  fireEvent.change(input, { target: { value: "db/cache" } });
-  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "db" };
-  view.rerender(<SecretsPage />);
-  expect(input).toHaveValue("db/cache");
   await waitFor(() =>
-    expect(list).toHaveBeenLastCalledWith(
-      { env: NAMESPACE.env, app: NAMESPACE.app },
-      "db",
-      100,
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/secrets", query: { env: NAMESPACE.env, app: NAMESPACE.app, q: "db" } },
       undefined,
-      expect.anything(),
+      { shallow: true, scroll: false },
     ),
   );
+  // The next keystroke lands before that replacement makes it back into
+  // router.query; the draft must survive it.
+  fireEvent.change(input, { target: { value: "db/cache" } });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "db" };
+  view.rerender(<SecretsPage />);
+  expect(input).toHaveValue("db/cache");
+
   // A real navigation to another applied scope still replaces the draft.
-  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "external" };
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "external" };
   view.rerender(<SecretsPage />);
   expect(input).toHaveValue("external");
+});
+
+describe("secrets search", () => {
+  it("finds a key the browse page never loaded", async () => {
+    const deep: SecretMetadata = { ...SECRET, key: "billing/token" };
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listSecrets").mockImplementation(async (_ns, _prefix, pageSize, pageToken) => {
+      if (pageSize !== 1000) return { secrets: [SECRET], next_page_token: "" };
+      return pageToken
+        ? { secrets: [deep], next_page_token: "" }
+        : { secrets: [SECRET], next_page_token: "page-2" };
+    });
+    render(<SecretsPage />);
+    await screen.findByText(SECRET.key);
+
+    fireEvent.change(screen.getByLabelText("Find secret"), { target: { value: "token" } });
+    await waitFor(() => expect(keyColumn()).toEqual([deep.key]));
+    expect(document.querySelector(".cell-path mark")).toHaveTextContent("token");
+  });
 });

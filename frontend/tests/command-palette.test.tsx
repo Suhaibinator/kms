@@ -195,7 +195,8 @@ describe("fuzzyScore / searchPalette", () => {
       title: 'Search secrets for "db/host"',
       href: links.secrets(ns, "db/host"),
     });
-    expect(actions[0]?.href).toBe("/parameters?env=prod&app=gradethis&key_prefix=db%2Fhost");
+    expect(actions[0]?.href).toBe("/parameters?env=prod&app=gradethis&q=db%2Fhost");
+    expect(actions[0]?.subtitle).toBe("Keys matching db/host · prod/gradethis");
   });
 });
 

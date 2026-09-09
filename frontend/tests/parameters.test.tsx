@@ -298,28 +298,25 @@ describe("parameters page", () => {
     );
   });
 
-  it("counts the rows on screen, and the filter narrowing them", async () => {
+  it("counts the rows on screen, and the search narrowing them", async () => {
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
     vi.spyOn(api, "listParameters").mockResolvedValue({
       parameters: [ALPHA, BETA],
       next_page_token: "",
     });
-    const { rerender } = render(<ParametersPage />);
+    render(<ParametersPage />);
     expect(await screen.findByText(ALPHA.key)).toBeVisible();
     const summary = screen.getByTestId("table-summary");
     expect(summary).toHaveTextContent("Showing 2 of 2 parameters");
     expect(summary).not.toHaveTextContent("filter");
 
-    vi.mocked(api.listParameters).mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
-    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "al" };
-    rerender(<ParametersPage />);
-    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "al" } });
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.change(screen.getByLabelText("Find parameter"), { target: { value: "al" } });
     await waitFor(() =>
       expect(screen.getByTestId("table-summary")).toHaveTextContent(
         "Showing 1 of 1 parameter · 1 filter active",
       ),
     );
+    expect(keyColumn()).toEqual([ALPHA.key]);
   });
 
   it("writes the chosen namespace back to the URL", async () => {
@@ -336,20 +333,38 @@ describe("parameters page", () => {
 });
 
 describe("parameters list navigation", () => {
-  it("keeps rows when Filter or Clear does not change the scope", async () => {
-    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+  it("keeps rows when a search starts and ends", async () => {
+    const list = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
     render(<ParametersPage />);
     await screen.findByText(ALPHA.key);
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(list).toHaveBeenCalledTimes(1);
+
+    const input = screen.getByLabelText("Find parameter");
+    fireEvent.change(input, { target: { value: "alp" } });
+    // One extra call, and it is the index walk: page size 1000, no prefix.
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list).toHaveBeenLastCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      undefined,
+      1000,
+      undefined,
+      expect.anything(),
+    );
+    // The key is on screen with the typed characters marked, so it is no
+    // longer one text node.
+    await waitFor(() => expect(keyColumn()).toEqual([ALPHA.key]));
+    expect(document.querySelector(".cell-path mark")).toHaveTextContent("alp");
+
+    // Emptying the box returns to the browse page already in hand.
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).not.toHaveTextContent("filter"),
+    );
     expect(screen.getByText(ALPHA.key)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    expect(screen.getByText(ALPHA.key)).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "api" } });
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    await screen.findByText(ALPHA.key);
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-    expect(screen.getByText(ALPHA.key)).toBeVisible();
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("follows same-page navigation and history when query fields change or disappear", async () => {
@@ -359,30 +374,31 @@ describe("parameters list navigation", () => {
     mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
     const view = render(<ParametersPage />);
     await screen.findByText(ALPHA.key);
-    mocks.router.query = { env: "dev", app: "other", key_prefix: "new" };
+    // A `?q=` link searches the new namespace instead of browsing it.
+    mocks.router.query = { env: "dev", app: "other", q: "new" };
     view.rerender(<ParametersPage />);
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
         { env: "dev", app: "other" },
-        "new",
-        100,
+        undefined,
+        1000,
         undefined,
         expect.anything(),
       ),
     );
-    expect(screen.getByLabelText("Key prefix")).toHaveValue("new");
-    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    expect(screen.getByLabelText("Find parameter")).toHaveValue("new");
+    mocks.router.query = { env: "dev", app: "other" };
     view.rerender(<ParametersPage />);
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith(
-        { env: NAMESPACE.env, app: NAMESPACE.app },
+        { env: "dev", app: "other" },
         undefined,
         100,
         undefined,
         expect.anything(),
       ),
     );
-    expect(screen.getByLabelText("Key prefix")).toHaveValue("");
+    expect(screen.getByLabelText("Find parameter")).toHaveValue("");
     mocks.router.query = {};
     view.rerender(<ParametersPage />);
     expect(await screen.findByText("Choose an environment")).toBeVisible();
@@ -480,31 +496,126 @@ it("blocks new-version writes while a numeric form draft is incomplete", async (
   );
 });
 
-it("preserves a newer filter draft when an internal URL replacement settles late", async () => {
-  const list = vi
-    .spyOn(api, "listParameters")
-    .mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+it("preserves a newer search draft when an internal URL replacement settles late", async () => {
+  vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
   mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
   const view = render(<ParametersPage />);
   await screen.findByText(ALPHA.key);
-  const input = screen.getByLabelText("Key prefix");
+  const input = screen.getByLabelText("Find parameter");
   fireEvent.change(input, { target: { value: "db" } });
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  fireEvent.change(input, { target: { value: "db/cache" } });
-  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "db" };
-  view.rerender(<ParametersPage />);
-  expect(input).toHaveValue("db/cache");
   await waitFor(() =>
-    expect(list).toHaveBeenLastCalledWith(
-      { env: NAMESPACE.env, app: NAMESPACE.app },
-      "db",
-      100,
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/parameters",
+        query: { env: NAMESPACE.env, app: NAMESPACE.app, q: "db" },
+      },
       undefined,
-      expect.anything(),
+      { shallow: true, scroll: false },
     ),
   );
+  // The next keystroke lands before that replacement makes it back into
+  // router.query; the draft must survive it.
+  fireEvent.change(input, { target: { value: "db/cache" } });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "db" };
+  view.rerender(<ParametersPage />);
+  expect(input).toHaveValue("db/cache");
+
   // A real navigation to another applied scope still replaces the draft.
-  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "external" };
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "external" };
   view.rerender(<ParametersPage />);
   expect(input).toHaveValue("external");
+});
+
+describe("parameters search", () => {
+  const DEEP = parameter("billing/timeout");
+
+  /** A list mock that pages only when the index asks for 1,000 at a time. */
+  function pagedList(first: Parameter[], second: Parameter[]) {
+    return vi
+      .spyOn(api, "listParameters")
+      .mockImplementation(async (_ns, _prefix, pageSize, pageToken) => {
+        if (pageSize !== 1000) return { parameters: first, next_page_token: "" };
+        return pageToken
+          ? { parameters: second, next_page_token: "" }
+          : { parameters: first, next_page_token: "page-2" };
+      });
+  }
+
+  it("finds a key the browse page never loaded", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    pagedList([ALPHA], [DEEP]);
+    render(<ParametersPage />);
+    await screen.findByText(ALPHA.key);
+
+    // `timeout` is nowhere near the front of `billing/timeout`, and the row
+    // only exists on the second index page.
+    fireEvent.change(screen.getByLabelText("Find parameter"), { target: { value: "timeout" } });
+    await waitFor(() => expect(keyColumn()).toEqual([DEEP.key]));
+    expect(document.querySelector(".cell-path mark")).toHaveTextContent("timeout");
+  });
+
+  it("shows a snippet when only the value matched", async () => {
+    const gateway: Parameter = {
+      ...parameter("gateway"),
+      value: "https://payments.example.test/v2/charge",
+      content_type: "string",
+    };
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [ALPHA, gateway],
+      next_page_token: "",
+    });
+    render(<ParametersPage />);
+    await screen.findByText(ALPHA.key);
+
+    fireEvent.change(screen.getByLabelText("Find parameter"), { target: { value: "payments" } });
+    // The snippet lives in the Key cell, under the key itself.
+    await waitFor(() => expect(keyColumn()).toHaveLength(1));
+    expect(keyColumn()[0]).toMatch(/^gateway/);
+    const snippet = document.querySelector(".search-snippet");
+    expect(snippet).not.toBeNull();
+    expect(snippet).toHaveTextContent("payments");
+    // The key carried no match, so nothing in it is marked.
+    expect(document.querySelector(".cell-path mark")).toBeNull();
+  });
+
+  it("renders a ?q= deep link without flashing the browse table", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "beta" };
+    const list = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [ALPHA, BETA], next_page_token: "" });
+    render(<ParametersPage />);
+    // The skeleton holds the page until the index answers; the unfiltered
+    // browse table never appears.
+    expect(keyColumn()).toEqual([]);
+    await waitFor(() => expect(keyColumn()).toEqual([BETA.key]));
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0]?.[2]).toBe(1000);
+    // No pager while searching: the matches are the whole answer.
+    expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+    expect(screen.getByTestId("table-summary")).toHaveTextContent(
+      "Showing 1 of 1 parameter · 1 filter active",
+    );
+  });
+
+  it("drops a deleted row from the matches", async () => {
+    const alt = parameter("alt");
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "al" };
+    const list = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [ALPHA, alt], next_page_token: "" });
+    vi.spyOn(api, "deleteParameter").mockResolvedValue({ revision: 2 });
+    render(<ParametersPage />);
+    await waitFor(() => expect(keyColumn()).toEqual([ALPHA.key, alt.key]));
+
+    list.mockResolvedValue({ parameters: [alt], next_page_token: "" });
+    fireEvent.click(screen.getByRole("button", { name: `More actions for ${ALPHA.key}` }));
+    const menu = await screen.findByRole("menu", { name: `More actions for ${ALPHA.key}` });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete" }));
+    const confirm = await screen.findByRole("dialog", { name: "Delete parameter?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete parameter" }));
+
+    // The index is re-walked, so the deleted key leaves the results.
+    await waitFor(() => expect(keyColumn()).toEqual([alt.key]));
+  });
 });

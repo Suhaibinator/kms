@@ -2340,6 +2340,54 @@
     border: none;
   }
 
+  /* ---------- Search boxes and match highlighting ---------- */
+
+  /* The icon and the `/` hint sit inside the control's box, so the input keeps
+     the height and focus ring every other field in the row has. */
+  .search-field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+  .search-field-icon {
+    position: absolute;
+    left: var(--space-2);
+    color: var(--text-faint);
+    pointer-events: none;
+  }
+  .search-field-input {
+    padding-left: calc(var(--space-2) * 2 + 15px);
+    padding-right: calc(var(--space-2) * 2 + 12px);
+  }
+  /* Chrome's own clear button would land under the hint; the box is cleared
+     with Esc or by emptying it. */
+  .search-field-input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .search-field-kbd {
+    position: absolute;
+    right: var(--space-2);
+    pointer-events: none;
+  }
+  /* A highlight must not move a character: background and weight only, never
+     padding or a different family. */
+  .cell-path mark,
+  .search-snippet mark {
+    background: var(--accent-soft);
+    color: inherit;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+  }
+  .search-snippet {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--mono);
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+    overflow-wrap: anywhere;
+  }
+
   .filters {
     display: flex;
     gap: var(--space-3);
