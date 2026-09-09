@@ -1,4 +1,3 @@
-import { useSchemaRegistry } from "@/lib/useSchemaRegistry";
 import {
   Archive,
   ArchiveRestore,
@@ -11,59 +10,28 @@ import {
   Send,
   SlidersHorizontal,
 } from "lucide-react";
-import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetupAction } from "@/components/applications/contracts";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
-import { Modal } from "@/components/Modal";
-import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
-import { ParameterWorkspace } from "@/components/parameters/ParameterWorkspace";
 import { SearchField } from "@/components/SearchField";
-import { releaseKey } from "@/components/releases/utils";
 import { StatusChip } from "@/components/StatusChip";
-import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
-import RollbackDialog from "@/components/ship/RollbackDialog";
-import ShipModal from "@/components/ship/ShipModal";
 import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
-import {
-  api,
-  isSecretAlreadyExists,
-  type ResourceRef,
-  SECRET_ALREADY_EXISTS_MESSAGE,
-} from "@/lib/api";
+import { api } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
-import { links } from "@/lib/links";
-import { valueFor, valueForKey } from "@/lib/overview";
-import type { FixAction } from "@/lib/readiness";
-import type {
-  ApplicationConfigurationRow,
-  ApplicationOverview,
-  Finding,
-  HealthResponse,
-  ReleaseEntryKind,
-  ShipResult,
-} from "@/lib/types";
+import type { ApplicationOverview, Finding } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
-import { AddEnvironmentModal } from "./AddEnvironmentModal";
-import { ApplicationDefinitionModal } from "./ApplicationDefinitionModal";
-import { BulkParameterModal } from "./BulkParameterModal";
-import CloneEnvironmentModal from "./CloneEnvironmentModal";
 import { ConfigurationMatrix } from "./ConfigurationMatrix";
 import { ALIGNMENT_CODES, DefinitionCard } from "./DefinitionCard";
-import { DeriveSchemaDialog } from "./DeriveSchemaDialog";
 import { EnvironmentPipeline } from "./EnvironmentPipeline";
-import { ImportDefaultsModal } from "./ImportDefaultsModal";
-import { QuickSecretModal } from "./QuickSecretModal";
-import { SchemaMigrationModal } from "./SchemaMigrationModal";
-import type { CloneSeed, QuickSecretSeed } from "./shared";
+import { useApplicationActions } from "./useApplicationActions";
 import type { OverviewFreshness } from "./useApplicationOverview";
 
 export interface ApplicationHomeProps {
@@ -85,11 +53,6 @@ export interface ApplicationHomeProps {
   /** `?migrate=<schema version>` opens schema migration from the registry. */
   migrate?: string | null;
   schemaVersion?: number;
-}
-
-interface ShipTarget {
-  env?: string;
-  alias?: string;
 }
 
 /** A button that acts directly with one environment or offers a menu of them. */
@@ -192,7 +155,6 @@ export function ApplicationHome({
   schemaVersion = overview.application.schema_version,
 }: ApplicationHomeProps) {
   const toast = useToast();
-  const router = useRouter();
   const replaceQuery = useQueryReplace("/applications");
   const application = overview.application;
   const archived = application.archived_at_unix_ms > 0;
@@ -214,45 +176,22 @@ export function ApplicationHome({
     () => activeEnvironments.map((environment) => environment.namespace.env),
     [activeEnvironments],
   );
-  const aliases = application.contract.map((field) => field.alias);
   const findings = useMemo(() => applicationFindings(overview), [overview]);
 
-  const [shipTarget, setShipTarget] = useState<ShipTarget | null>(null);
-  const [rollbackEnv, setRollbackEnv] = useState<string | null>(null);
+  const { callbacks, actions, modals, schemas, latestSchema } = useApplicationActions({
+    overview,
+    reload,
+    onWritingChange,
+    pathname: "/applications",
+    defaultEnv: defaultShipEnv,
+    schemaVersion,
+    tab,
+  });
+
   const [rollbackMenuOpen, setRollbackMenuOpen] = useState(false);
-  const [environmentOpen, setEnvironmentOpen] = useState(false);
-  const [environmentSaving, setEnvironmentSaving] = useState(false);
-  const [cloneSeed, setCloneSeed] = useState<CloneSeed | null>(null);
-  const [cloneOpen, setCloneOpen] = useState(false);
-  const cloneRefresh = useRef<Promise<void> | null>(null);
-  const [definitionOpen, setDefinitionOpen] = useState(false);
-  const [deriveOpen, setDeriveOpen] = useState(false);
-  const [connectEnv, setConnectEnv] = useState<string | null>(null);
   // Narrows both tabs, and survives switching between them. Local state, not
   // the URL: `?app/env/tab/ship/rollback/migrate/new` is already a lot to carry.
   const [valueFilter, setValueFilter] = useState("");
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
-  // Ship is waiting for the secret; opening its workspace on top would hide the modal.
-  const [parameterTarget, setParameterTarget] = useState<ResourceRef | null>(null);
-  const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
-  const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
-  const registry = useSchemaRegistry(overview.application.name, overview.application.release_name);
-  const schemas = registry.schemas ?? [];
-  const latestSchema = schemas[0] ?? null;
-
-  const [migrationEnv, setMigrationEnv] = useState<string | null>(null);
-  const [migrationSchemaVersion, setMigrationSchemaVersion] = useState<number | undefined>();
-  const [secretSaving, setSecretSaving] = useState(false);
-  const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
-  const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
-  const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
-  const writing = writeRow !== null;
-  useEffect(() => {
-    onWritingChange?.(writing);
-    return () => onWritingChange?.(false);
-  }, [writing, onWritingChange]);
-  const [writeSaving, setWriteSaving] = useState(false);
   const [lifecycleSaving, setLifecycleSaving] = useState(false);
 
   // Seed the modals from the URL once per value: a palette action that sets
@@ -263,12 +202,13 @@ export function ApplicationHome({
   const seededShip = useRef<string | null>(null);
   const seededRollback = useRef<string | null>(null);
   const seededMigration = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `actions` is rebuilt every render; the seeded refs, not the dependency list, decide when a param opens a modal.
   useEffect(() => {
     if (!ship) {
       seededShip.current = null;
     } else if (seededShip.current !== ship) {
       seededShip.current = ship;
-      setShipTarget({ env: focusEnv ?? defaultShipEnv, alias: ship === "1" ? undefined : ship });
+      actions.openShip(focusEnv ?? defaultShipEnv, ship === "1" ? undefined : ship);
     }
     if (rollback !== "1") {
       seededRollback.current = null;
@@ -280,7 +220,7 @@ export function ApplicationHome({
           : activeNames.length === 1
             ? activeNames[0]
             : null;
-      if (target) setRollbackEnv(target);
+      if (target) actions.openRollback(target);
       else if (activeNames.length > 1) setRollbackMenuOpen(true);
     }
     if (!migrate) {
@@ -289,244 +229,43 @@ export function ApplicationHome({
       seededMigration.current = migrate;
       const version = Number(migrate);
       if (Number.isSafeInteger(version) && version > 0 && activeNames.length) {
-        setMigrationSchemaVersion(version);
-        setMigrationEnv(focusEnv && activeNames.includes(focusEnv) ? focusEnv : activeNames[0]);
+        actions.openMigrate(
+          focusEnv && activeNames.includes(focusEnv) ? focusEnv : activeNames[0],
+          version,
+        );
       }
     }
   }, [ship, rollback, migrate, focusEnv, defaultShipEnv, activeNames]);
 
-  // Health only matters to the Connect SDK panel (endpoint + TLS warning).
-  useEffect(() => {
-    if (!connectEnv || health) return;
-    let cancelled = false;
-    api
-      .health()
-      .then((response) => {
-        if (!cancelled) setHealth(response);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [connectEnv, health]);
-
-  /** Land on the column that was open in Ship, and drop `?ship=` so it cannot reopen. */
-  function closeShip(environment?: string) {
-    setShipTarget(null);
-    if (ship || environment)
-      replaceQuery({ ship: "", ...(environment ? { env: environment } : {}) });
-  }
-
-  function onShipped(result: ShipResult, environment: string) {
-    const release = result.release;
-    if (result.status === "activated" && release) {
-      toast.success(`Shipped ${release.name}@${release.version} to ${environment}`, undefined, {
-        action: {
-          label: "Open release",
-          onClick: () =>
-            void router.push(
-              links.releases({
-                app: application.name,
-                env: environment,
-                name: release.name,
-                release: releaseKey(release),
-                schemaVersion,
-              }),
-            ),
-        },
-      });
-    }
-    void reload();
-  }
-
-  function closeRollback() {
-    setRollbackEnv(null);
-    if (rollback) replaceQuery({ rollback: "" });
-  }
-
-  /** Write one parameter by its physical key (a matrix cell). */
-  function openAddValueForKey(environment: string, key: string) {
-    setRetryEnvironments(null);
-    setWriteTargets([environment]);
-    setWriteRow({ key, kind: "parameter", environments: {} });
-  }
-
-  /** Write the parameter a contract alias resolves to (a pipeline row or a finding). */
-  function openAddValue(environment: string, alias: string) {
-    openAddValueForKey(environment, valueFor(environments, environment, alias)?.key ?? alias);
-  }
-
-  function openWriteRow(row: ApplicationConfigurationRow) {
-    setRetryEnvironments(null);
-    setWriteTargets(null);
-    setWriteRow(row);
-  }
-
-  function closeWrite() {
-    setWriteRow(null);
-    // A partial failure still wrote the environments that succeeded; the
-    // overview is refreshed once the user is done retrying, not underneath them.
-    if (retryEnvironments) {
-      setRetryEnvironments(null);
-      void reload();
-    }
-  }
-
-  /** Quick-add a secret for an alias: the key the alias resolves to, typed like a sibling environment's value. */
-  function openSecret(
-    environment: string,
-    alias: string,
-    then?: QuickSecretSeed["then"],
-    physicalKey?: string,
-  ) {
-    const value = valueFor(environments, environment, alias);
-    const contentType = environments
-      .flatMap((candidate) => candidate.values)
-      .find((candidate) => candidate.alias === alias && candidate.content_type)?.content_type;
-    setSecretSeed({ environment, key: physicalKey ?? value?.key ?? alias, contentType, then });
-  }
-
-  function openExistingSecret(environment: string, key: string) {
-    setSecretTarget({ env: environment, app: application.name, key });
-  }
-
-  function openExistingParameter(environment: string, key: string) {
-    setParameterTarget({ env: environment, app: application.name, key });
-  }
-
-  function manageContract(environment = defaultShipEnv) {
-    if (!environment) {
-      setEnvironmentOpen(true);
-      return;
-    }
-    void router.push(
-      links.releases({
-        app: application.name,
-        env: environment,
-        name: application.release_name,
-        schemaVersion,
-      }),
-    );
-  }
-
   function onSetupAction(action: SetupAction) {
     switch (action.kind) {
       case "manage-contract":
-        manageContract();
+        actions.manageContract();
         break;
       case "register-schema":
-        setDeriveOpen(true);
+        actions.openDerive();
         break;
       case "add-environment":
-        setEnvironmentOpen(true);
+        actions.openAddEnvironment();
         break;
       case "fill-values": {
         const field = application.contract.find((entry) => entry.alias === action.alias);
-        if (action.alias && field?.kind === "secret") openSecret(action.env, action.alias);
-        else if (action.alias) openAddValue(action.env, action.alias);
-        else setShipTarget({ env: action.env });
+        if (action.alias && field?.kind === "secret") actions.openSecret(action.env, action.alias);
+        else if (action.alias) actions.openAddValue(action.env, action.alias);
+        else actions.openShip(action.env);
         break;
       }
       case "ship":
-        setShipTarget({ env: action.env });
+        actions.openShip(action.env);
         break;
-      case "connect":
-        setConnectEnv(action.env ?? defaultShipEnv ?? null);
+      case "connect": {
+        const target = action.env ?? defaultShipEnv;
+        if (target) actions.openConnect(target);
         break;
+      }
       case "create-app":
         break;
     }
-  }
-
-  /** The key a finding's alias resolves to in its environment (falls back to the alias). */
-  function keyFor(finding: Finding): string {
-    const alias = finding.scope.alias ?? "";
-    return valueFor(environments, finding.scope.env ?? "", alias)?.key ?? alias;
-  }
-
-  // Every FixAction in lib/readiness.ts lands somewhere on this page or on the
-  // resource the finding names.
-  function onFix(action: FixAction, finding: Finding) {
-    const scopeEnv = finding.scope.env ?? defaultShipEnv;
-    const ns = { env: scopeEnv ?? "", app: application.name };
-    switch (action) {
-      case "add_environment":
-        setEnvironmentOpen(true);
-        break;
-      case "edit_contract":
-        manageContract(scopeEnv);
-        break;
-      case "pin_schema":
-        setDeriveOpen(true);
-        break;
-      case "ship":
-        setShipTarget({ env: scopeEnv, alias: finding.scope.alias });
-        break;
-      case "create_parameter":
-        if (scopeEnv && finding.scope.alias) openAddValue(scopeEnv, finding.scope.alias);
-        else setShipTarget({ env: scopeEnv });
-        break;
-      case "create_secret":
-        openSecret(scopeEnv ?? "", finding.scope.alias ?? "");
-        break;
-      case "open_resource":
-        openExistingParameter(ns.env, keyFor(finding));
-        break;
-      case "open_secret":
-        openExistingSecret(ns.env, keyFor(finding));
-        break;
-      case "open_release": {
-        const active = environments.find((candidate) => candidate.namespace.env === scopeEnv)
-          ?.release.active;
-        void router.push(
-          links.releases({
-            app: application.name,
-            env: scopeEnv,
-            name: application.release_name,
-            release: active ? releaseKey(active) : undefined,
-            schemaVersion,
-          }),
-        );
-        break;
-      }
-      case "connect_sdk":
-        setConnectEnv(scopeEnv ?? null);
-        break;
-      case "open_subscribers":
-        void router.push(links.subscribers());
-        break;
-      case "open_health":
-        void router.push(links.health());
-        break;
-    }
-  }
-
-  const rollbackTarget = activeEnvironments.find(
-    (environment) => environment.namespace.env === rollbackEnv,
-  );
-  // The alias the open secret serves, read from the overview's resolved values.
-  /** The alias behind an opened resource plus a way back to its column, shown under the workspace title. */
-  function workspaceContext(target: ResourceRef, kind: ReleaseEntryKind) {
-    const alias = valueForKey(
-      environments.find((candidate) => candidate.namespace.env === target.env),
-      kind,
-      target.key,
-    )?.alias;
-    return (
-      <span className="row-wrap">
-        {alias ? <Ident kind="alias" value={alias} tooltip={false} /> : null}
-        <Ident
-          kind="app"
-          value={application.name}
-          tooltip={false}
-          href={links.application(application.name, {
-            schemaVersion,
-            env: target.env,
-            tab: tab === "matrix" ? "matrix" : undefined,
-          })}
-        />
-      </span>
-    );
   }
 
   async function setArchived(next: boolean) {
@@ -552,7 +291,7 @@ export function ApplicationHome({
         Import defaults
       </>,
       environmentNames,
-      setDefaultsEnv,
+      actions.openImportDefaults,
     ),
     {
       key: "add-environment",
@@ -562,7 +301,7 @@ export function ApplicationHome({
           Add environment
         </>
       ),
-      onSelect: () => setEnvironmentOpen(true),
+      onSelect: () => actions.openAddEnvironment(),
     },
     {
       key: "edit-definition",
@@ -572,7 +311,7 @@ export function ApplicationHome({
           Edit definition
         </>
       ),
-      onSelect: () => setDefinitionOpen(true),
+      onSelect: () => actions.openDefinition(),
     },
     environmentItem(
       "connect-sdk",
@@ -581,7 +320,7 @@ export function ApplicationHome({
         Connect SDK
       </>,
       environmentNames,
-      setConnectEnv,
+      actions.openConnect,
     ),
     {
       key: "archive",
@@ -633,12 +372,7 @@ export function ApplicationHome({
                 aria-label="Schema version"
                 value={schemaVersion}
                 onChange={(event) => {
-                  setDefinitionOpen(false);
-                  setDeriveOpen(false);
-                  setDefaultsEnv(null);
-                  setShipTarget(null);
-                  setRollbackEnv(null);
-                  setMigrationEnv(null);
+                  actions.closeAll();
                   void replaceQuery({
                     schema_version: event.target.value,
                     ship: "",
@@ -686,13 +420,13 @@ export function ApplicationHome({
               icon={<Send size={15} />}
               variant="default"
               environments={archived ? [] : focusEnv ? [focusEnv] : environmentNames}
-              onPick={(environment) => setShipTarget({ env: environment })}
+              onPick={(environment) => actions.openShip(environment)}
             />
             <EnvironmentAction
               label="Roll back"
               icon={<RotateCcw size={15} />}
               environments={activeNames}
-              onPick={setRollbackEnv}
+              onPick={actions.openRollback}
               open={rollbackMenuOpen}
               onOpenChange={setRollbackMenuOpen}
             />
@@ -715,25 +449,24 @@ export function ApplicationHome({
       ) : overview.status === "setup" ? (
         <SetupPanel overview={overview} onAction={onSetupAction} />
       ) : (
-        <FindingList findings={findings} onFix={onFix} className="application-findings" />
+        <FindingList findings={findings} onFix={actions.onFix} className="application-findings" />
       )}
       <DefinitionCard
         overview={overview}
-        onManageReleases={() => manageContract()}
-        onDeriveSchema={() => setDeriveOpen(true)}
+        onManageReleases={() => actions.manageContract()}
+        onDeriveSchema={() => actions.openDerive()}
         latestSchemaVersion={latestSchema?.version}
         onUpgrade={
           activeNames.length
-            ? () => {
-                setMigrationSchemaVersion(latestSchema?.version);
-                setMigrationEnv(
+            ? () =>
+                actions.openMigrate(
                   focusEnv && activeNames.includes(focusEnv)
                     ? focusEnv
                     : activeNames.length === 1
                       ? activeNames[0]
                       : "",
-                );
-              }
+                  latestSchema?.version,
+                )
             : undefined
         }
       />
@@ -747,7 +480,7 @@ export function ApplicationHome({
                 Unarchive application
               </Button>
             ) : (
-              <Button onClick={() => setEnvironmentOpen(true)}>Add environment</Button>
+              <Button onClick={() => actions.openAddEnvironment()}>Add environment</Button>
             )
           }
         >
@@ -787,19 +520,7 @@ export function ApplicationHome({
               rows={overview.rows}
               focusEnv={focusEnv}
               filter={valueFilter}
-              callbacks={{
-                onAddValue: openAddValue,
-                onAddSecret: openSecret,
-                onOpenSecret: openExistingSecret,
-                onOpenParameter: openExistingParameter,
-                onShip: (environment, alias) => setShipTarget({ env: environment, alias }),
-                onRollback: setRollbackEnv,
-                onConnect: setConnectEnv,
-                onImportDefaults: setDefaultsEnv,
-                onMigrateSchema: setMigrationEnv,
-                onEditContract: manageContract,
-                onFix,
-              }}
+              callbacks={callbacks}
             />
           </TabsContent>
           <TabsContent value="matrix">
@@ -822,14 +543,16 @@ export function ApplicationHome({
               <div className="row-wrap">
                 <Button
                   variant="outline"
-                  onClick={() => setSecretSeed({ environment: "", key: "" })}
+                  onClick={() => actions.openSecretSeed({ environment: "", key: "" })}
                 >
                   <Plus size={15} />
                   New secret
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => openWriteRow({ key: "", kind: "parameter", environments: {} })}
+                  onClick={() =>
+                    actions.openWriteRow({ key: "", kind: "parameter", environments: {} })
+                  }
                 >
                   <Plus size={15} />
                   New parameter
@@ -846,255 +569,20 @@ export function ApplicationHome({
               overview={environments}
               rows={overview.rows}
               filter={valueFilter}
-              onAddSecret={(environment, key) => setSecretSeed({ environment, key })}
-              onAddValue={openAddValueForKey}
-              onOpenSecret={openExistingSecret}
-              onOpenParameter={openExistingParameter}
-              onEdit={openWriteRow}
+              onAddSecret={(environment, key) => actions.openSecretSeed({ environment, key })}
+              onAddValue={actions.openAddValueForKey}
+              onOpenSecret={(environment, key) =>
+                actions.openSecretWorkspace({ env: environment, app: application.name, key })
+              }
+              onOpenParameter={(environment, key) =>
+                actions.openParameter({ env: environment, app: application.name, key })
+              }
+              onEdit={actions.openWriteRow}
             />
           </TabsContent>
         </Tabs>
       )}
-
-      <ShipModal
-        application={application}
-        environments={environments}
-        schemaJson={overview.schema_json}
-        initialEnvironment={shipTarget?.env}
-        initialAlias={shipTarget?.alias}
-        open={!archived && shipTarget !== null}
-        onClose={closeShip}
-        onShipped={onShipped}
-        onAddSecret={(environment, alias) => openSecret(environment, alias, "stay")}
-        onOpenSecret={openExistingSecret}
-        onRolledBack={() => void reload()}
-      />
-      <SchemaMigrationModal
-        application={application}
-        environments={environments}
-        initialEnvironment={migrationEnv ?? undefined}
-        initialSchemaVersion={migrationSchemaVersion}
-        open={!archived && migrationEnv !== null}
-        onClose={() => {
-          setMigrationEnv(null);
-          setMigrationSchemaVersion(undefined);
-          if (migrate) replaceQuery({ migrate: "" });
-        }}
-        onApplied={() => void reload()}
-      />
-      <RollbackDialog
-        namespace={{ env: rollbackEnv ?? "", app: application.name }}
-        name={application.release_name}
-        active={rollbackTarget?.release.active ?? null}
-        open={!archived && rollbackEnv !== null}
-        onClose={closeRollback}
-        onDone={() => {
-          closeRollback();
-          void reload();
-        }}
-      />
-      <Modal
-        mobileFullScreen
-        open={connectEnv !== null}
-        title="Connect SDK"
-        onClose={() => setConnectEnv(null)}
-        wide
-      >
-        {connectEnv ? (
-          <ConnectSdkPanel
-            namespace={{ env: connectEnv, app: application.name }}
-            releaseName={application.release_name}
-            schemaVersion={schemaVersion}
-            aliases={aliases}
-            health={health}
-            allowedAuthMethods={
-              environments.find((item) => item.namespace.env === connectEnv)?.namespace
-                .allowed_auth_methods
-            }
-          />
-        ) : null}
-      </Modal>
-      <AddEnvironmentModal
-        app={application.name}
-        environments={environmentNames}
-        open={!archived && environmentOpen}
-        saving={environmentSaving}
-        onClose={() => setEnvironmentOpen(false)}
-        onClone={(seed) => {
-          setEnvironmentOpen(false);
-          setCloneSeed(seed);
-          setCloneOpen(true);
-        }}
-        onSave={async (environment, description, methods) => {
-          setEnvironmentSaving(true);
-          try {
-            await api.createNamespace({
-              env: environment,
-              app: application.name,
-              description,
-              allowed_auth_methods: methods,
-            });
-            toast.success("Environment added", `${environment}/${application.name} is ready.`);
-            setEnvironmentOpen(false);
-            await reload();
-          } catch (error) {
-            toast.error(error, "Failed to add environment");
-          } finally {
-            setEnvironmentSaving(false);
-          }
-        }}
-      />
-      <CloneEnvironmentModal
-        application={application}
-        environments={environments}
-        seed={cloneSeed}
-        open={!archived && cloneOpen}
-        onClose={() => setCloneOpen(false)}
-        onCreated={(result) => {
-          setCloneOpen(false);
-          replaceQuery({ env: result.namespace.env });
-          cloneRefresh.current = reload();
-        }}
-        onAddSecret={async (environment, alias, key) => {
-          // Wait until the new environment is reflected in all modal props, so
-          // opening recovery cannot reset a value typed during the refresh.
-          await cloneRefresh.current;
-          openSecret(environment, alias, undefined, key);
-        }}
-        onAddParameter={async (environment, key) => {
-          // The target must be in the overview before opening the environment picker.
-          await cloneRefresh.current;
-          openAddValueForKey(environment, key);
-        }}
-      />
-      <ApplicationDefinitionModal
-        open={!archived && definitionOpen}
-        application={application}
-        onClose={() => setDefinitionOpen(false)}
-        onSaved={() => {
-          setDefinitionOpen(false);
-          void reload();
-        }}
-      />
-      <DeriveSchemaDialog
-        open={!archived && deriveOpen}
-        application={application}
-        existingSchemaJson={overview.schema_json}
-        onClose={() => setDeriveOpen(false)}
-        onPinned={() => {
-          registry.reload();
-          setDeriveOpen(false);
-          void reload();
-        }}
-      />
-      <QuickSecretModal
-        app={application.name}
-        environments={environmentNames}
-        seed={secretSeed}
-        saving={secretSaving}
-        onClose={() => setSecretSeed(null)}
-        onSave={async (request) => {
-          setSecretSaving(true);
-          try {
-            const response = await api.createSecret({
-              env: request.environment,
-              app: application.name,
-              key: request.key,
-              value_base64: request.valueBase64,
-              content_type: request.contentType,
-              metadata_json: request.metadataJson,
-              ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
-              create_only: true,
-              expires_at_unix_ms: request.expiresAtUnixMs,
-            });
-            toast.success(
-              `Secret created (version ${response.version})`,
-              `${application.name} · ${request.environment} · ${request.key}`,
-            );
-            return response;
-          } catch (error) {
-            if (isSecretAlreadyExists(error)) {
-              toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
-            } else {
-              toast.error(error, "Failed to create secret");
-            }
-            throw error;
-          } finally {
-            setSecretSaving(false);
-          }
-        }}
-        onCreated={(ref) => {
-          // A secret added for Ship returns to the modal that asked for it.
-          if (secretSeed?.then !== "stay") setSecretTarget(ref);
-          setSecretSeed(null);
-          void reload();
-        }}
-      />
-      <ParameterWorkspace
-        parameterRef={parameterTarget}
-        context={parameterTarget ? workspaceContext(parameterTarget, "parameter") : undefined}
-        onClose={() => setParameterTarget(null)}
-        onChanged={() => void reload()}
-        onDeleted={() => void reload()}
-      />
-      <SecretWorkspace
-        secretRef={secretTarget}
-        context={secretTarget ? workspaceContext(secretTarget, "secret") : undefined}
-        onClose={() => setSecretTarget(null)}
-        onChanged={() => void reload()}
-        onDeleted={() => void reload()}
-      />
-      <ImportDefaultsModal
-        application={application.name}
-        schemaVersion={schemaVersion}
-        environment={defaultsEnv ?? ""}
-        production={
-          environments.find((candidate) => candidate.namespace.env === defaultsEnv)?.production ??
-          false
-        }
-        open={!archived && defaultsEnv !== null}
-        onClose={() => setDefaultsEnv(null)}
-        onImported={reload}
-      />
-      <BulkParameterModal
-        app={application.name}
-        environments={environmentNames}
-        schemaJson={overview.schema_json}
-        row={writeRow}
-        initialEnvironments={writeTargets}
-        retryEnvironments={retryEnvironments}
-        saving={writeSaving}
-        onClose={closeWrite}
-        onSave={async (request) => {
-          setWriteSaving(true);
-          try {
-            const response = await api.putApplicationParameter(request);
-            const failures = response.results.filter((result) => result.error);
-            if (failures.length === 0) {
-              toast.success(
-                "Values updated",
-                `Created independent versions in ${response.results.length} ${response.results.length === 1 ? "environment" : "environments"}.`,
-              );
-              setWriteRow(null);
-              setRetryEnvironments(null);
-              await reload();
-              return;
-            }
-            toast.error(
-              new Error(
-                failures.map((result) => `${result.environment}: ${result.error}`).join("; "),
-              ),
-              "Some environments failed",
-            );
-            // Keep the modal and its edits; narrow the targets to what failed.
-            setRetryEnvironments(failures.map((result) => result.environment));
-          } catch (error) {
-            toast.error(error, "Failed to update values");
-          } finally {
-            setWriteSaving(false);
-          }
-        }}
-      />
+      {modals}
     </div>
   );
 }

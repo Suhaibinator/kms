@@ -14,6 +14,7 @@ const EMPTY = "__empty__";
 export function AddEnvironmentModal({
   app,
   environments = [],
+  initialCopyFrom,
   open,
   saving,
   onClose,
@@ -23,6 +24,8 @@ export function AddEnvironmentModal({
   app: string;
   /** Existing environment names, offered under "Start from". */
   environments?: string[];
+  /** Preselects "Copy values from <env>" when the form opens (the environment page clones from itself). */
+  initialCopyFrom?: string;
   open: boolean;
   saving: boolean;
   onClose: () => void;
@@ -45,15 +48,17 @@ export function AddEnvironmentModal({
   // An environment is the env half of a namespace, so it follows the label rule.
   const environmentProblem = validateEnv(environment.trim());
   const production = isProductionEnvironment(environment.trim());
-  const dirty = environment !== "" || description !== "" || token || startFrom !== EMPTY;
+  const seededStartFrom =
+    initialCopyFrom && environments.includes(initialCopyFrom) ? initialCopyFrom : EMPTY;
+  const dirty = environment !== "" || description !== "" || token || startFrom !== seededStartFrom;
   useEffect(() => {
     if (!open) return;
     setEnvironment("");
     setDescription("");
     setToken(false);
-    setStartFrom(EMPTY);
+    setStartFrom(seededStartFrom);
     reset();
-  }, [open, reset]);
+  }, [open, reset, seededStartFrom]);
 
   function submit() {
     markAllTouched();
