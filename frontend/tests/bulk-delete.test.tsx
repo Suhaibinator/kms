@@ -196,7 +196,7 @@ describe("bulk delete on the parameters list", () => {
     expect(cell).not.toHaveAttribute("data-label");
   });
 
-  it("drops the selection when the filter changes the list under it", async () => {
+  it("drops the selection when the search changes the list under it", async () => {
     vi.spyOn(api, "listParameters").mockResolvedValue({
       parameters: [parameter("alpha"), parameter("beta")],
       next_page_token: "",
@@ -209,8 +209,7 @@ describe("bulk delete on the parameters list", () => {
       "1 parameter selected",
     );
 
-    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "be" } });
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.change(screen.getByLabelText("Find parameter"), { target: { value: "be" } });
     await waitFor(() => expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull());
   });
 

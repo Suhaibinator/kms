@@ -1,4 +1,4 @@
-import { Filter, X } from "lucide-react";
+import { X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
@@ -9,8 +9,10 @@ import {
   SelectRowCell,
   useBulkSelection,
 } from "@/components/BulkSelection";
+import { Highlight } from "@/components/Highlight";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { SearchField } from "@/components/SearchField";
 import {
   headerLabels,
   MobileListToolbar,
@@ -19,15 +21,7 @@ import {
 } from "@/components/SortableTable";
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
-import {
-  EmptyState,
-  Field,
-  Input,
-  PageHeader,
-  Pagination,
-  TableSkeleton,
-  TableSummary,
-} from "@/components/ui";
+import { EmptyState, PageHeader, Pagination, TableSkeleton, TableSummary } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
@@ -42,13 +36,21 @@ import { bulkSummary, runBulk } from "@/lib/bulk";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
 import { useCursorPagination, useLatestRequest, useNamespaces, useQueryParams } from "@/lib/hooks";
+import {
+  buildSearchIndex,
+  INDEX_MAX_PAGES,
+  INDEX_PAGE_SIZE,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_RESULT_LIMIT,
+  searchIndex,
+} from "@/lib/key-search";
 import { links } from "@/lib/links";
 import { rememberNamespace } from "@/lib/namespace-memory";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { SecretMetadata } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
-import { validateKeyPrefix } from "@/lib/validation";
+import { useNamespaceIndex } from "@/lib/useNamespaceIndex";
 import { shouldOpenWorkspace } from "@/lib/workspace";
 
 function currentVersion(s: SecretMetadata): number | null {
@@ -58,11 +60,22 @@ function currentVersion(s: SecretMetadata): number | null {
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
-/** Identifies the list a response belongs to, so a stale one cannot mark a
- *  different namespace/prefix/page as loaded. */
-function requestScope(selection: NamespaceSelection, prefix: string, token: string): string {
-  return JSON.stringify([selection.env, selection.app, prefix, token]);
+/** Identifies the browse list a response belongs to, so a stale one cannot
+ *  mark a different namespace/page as loaded. The search query is deliberately
+ *  absent: searching does not refetch this list. */
+function requestScope(selection: NamespaceSelection, token: string): string {
+  return JSON.stringify([selection.env, selection.app, token]);
 }
+
+/** What the URL seeding effect compares against. It carries the query so an
+ *  internal `?q=` replacement is recognised as this page's own work, and the
+ *  namespace so an external navigation still resets the box. */
+function seedScope(selection: NamespaceSelection, query: string): string {
+  return JSON.stringify([selection.env, selection.app, query]);
+}
+
+/** How much of the namespace the index can hold, for the truncation note. */
+const INDEX_MAX_KEYS = (INDEX_PAGE_SIZE * INDEX_MAX_PAGES).toLocaleString("en-US");
 
 // Module scope so the sort controller's memos stay stable across renders.
 const COLUMNS: ReadonlyArray<SortColumn<SecretMetadata>> = [
@@ -76,6 +89,7 @@ const COLUMNS: ReadonlyArray<SortColumn<SecretMetadata>> = [
 ];
 
 const PAGE_SORT_HINT = "Sorts the rows loaded on this page, not the whole namespace.";
+const SEARCH_SORT_HINT = "Sorts the matches, not the whole namespace.";
 
 /** Named once: the header checkbox, the mobile toolbar and the skeleton that
  *  reserves that toolbar's row all have to say the same thing, and the
@@ -86,14 +100,21 @@ export default function SecretsPage() {
   const toast = useToast();
   const { identity } = useAuth();
   const { namespaces, error: nsError } = useNamespaces();
-  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+  const { values: queryValues, ready: queryReady } = useQueryParams([
+    "env",
+    "app",
+    "q",
+    "key_prefix",
+  ]);
   const replaceQuery = useQueryReplace("/secrets");
   const sort = useSort<SecretMetadata>("/secrets", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
-  const [prefixInput, setPrefixInput] = useState("");
-  const [prefix, setPrefix] = useState("");
-  const [prefixTouched, setPrefixTouched] = useState(false);
+  // What the box holds right now, and what the ranker has been told about —
+  // the second lands one debounce after the last keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState("");
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
   const [loading, setLoading] = useState(false);
@@ -107,7 +128,8 @@ export default function SecretsPage() {
   const [secretSaving, setSecretSaving] = useState(false);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
 
-  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
+  // No query here: clearing a search returns to the page you were browsing.
+  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app]));
   const { pageToken, setNextToken } = paging;
 
   const [seeded, setSeeded] = useState(false);
@@ -117,17 +139,26 @@ export default function SecretsPage() {
     setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
-    const kp = queryValues.key_prefix ?? "";
-    const scope = requestScope({ env, app }, kp, "");
-    // An internal replace can acknowledge an applied filter after the user
+    // `key_prefix` is the old filter's parameter: a bookmarked link still
+    // opens, now as a search for the same text.
+    const q = queryValues.q ?? queryValues.key_prefix ?? "";
+    const scope = seedScope({ env, app }, q);
+    // An internal replace can acknowledge an applied search after the user
     // has started typing the next draft. Only external scope changes reset it.
     if (appliedScope.current === scope) return;
     appliedScope.current = scope;
     setNs((current) => (current.env === env && current.app === app ? current : { env, app }));
-    setPrefixInput(kp);
-    setPrefix(kp);
-    setPrefixTouched(false);
+    setSearchInput(q);
+    setQuery(q);
   }, [queryReady, queryValues]);
+
+  // A pending keystroke must not commit after the page is gone.
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -140,14 +171,10 @@ export default function SecretsPage() {
     if (hasNs) rememberNamespace({ env: ns.env, app: ns.app });
   }, [hasNs, ns.env, ns.app]);
 
-  // An empty prefix lists the whole namespace; anything else must be a legal key.
-  const prefixError = validateKeyPrefix(prefixInput.trim());
-  const shownPrefixError = prefixTouched ? prefixError : null;
-
   const load = useCallback(
-    async (token: string, selection: NamespaceSelection, activePrefix: string) => {
+    async (token: string, selection: NamespaceSelection) => {
       const run = request.begin();
-      const scope = requestScope(selection, activePrefix, token);
+      const scope = requestScope(selection, token);
       if (!selection.env || !selection.app) {
         setSecrets([]);
         setNextToken("");
@@ -159,7 +186,7 @@ export default function SecretsPage() {
       try {
         const res = await api.listSecrets(
           { env: selection.env, app: selection.app },
-          activePrefix || undefined,
+          undefined,
           100,
           token || undefined,
           { signal: run.signal },
@@ -183,30 +210,88 @@ export default function SecretsPage() {
     [request, setNextToken, toast],
   );
 
+  const searchMode = query !== "";
+  const browseScope = requestScope(ns, pageToken);
+  // The browse list is fetched once per namespace/page. Searching does not
+  // touch it, so clearing a search puts the same page back without a refetch.
+  const requestedScope = useRef<string | null>(null);
   useEffect(() => {
-    void load(pageToken, ns, prefix);
-  }, [load, pageToken, ns, prefix]);
+    if (searchMode) return;
+    const scope = requestScope(ns, pageToken);
+    if (requestedScope.current === scope) return;
+    requestedScope.current = scope;
+    void load(pageToken, ns);
+  }, [load, pageToken, ns, searchMode]);
+
+  // The whole namespace, walked only while a search is running.
+  const fetchIndexPage = useCallback(
+    async (token: string, signal: AbortSignal) => {
+      const res = await api.listSecrets(
+        { env: ns.env, app: ns.app },
+        undefined,
+        INDEX_PAGE_SIZE,
+        token || undefined,
+        { signal },
+      );
+      return { items: res.secrets ?? [], next: res.next_page_token ?? "" };
+    },
+    [ns.env, ns.app],
+  );
+  const onIndexError = useCallback(
+    (error: unknown) => toast.error(error, "Failed to search secrets"),
+    [toast],
+  );
+  const index = useNamespaceIndex<SecretMetadata>(
+    JSON.stringify([ns.env, ns.app]),
+    searchMode && hasNs,
+    fetchIndexPage,
+    onIndexError,
+  );
+  const { invalidate: invalidateIndex } = index;
+  const searchable = useMemo(
+    () => buildSearchIndex(index.rows, (secret: SecretMetadata) => ({ key: secret.key })),
+    [index.rows],
+  );
+  const matches = useMemo(
+    () => (searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : []),
+    [searchable, query, searchMode],
+  );
+
+  /** Re-reads whatever the current mode is showing after a write. The other
+   *  mode is only marked stale: its rows are refetched when it comes back. */
+  const refresh = useCallback(() => {
+    invalidateIndex();
+    if (searchMode) requestedScope.current = null;
+    else void load(pageToken, ns);
+  }, [invalidateIndex, load, ns, pageToken, searchMode]);
 
   function onSelectNamespace(next: NamespaceSelection) {
-    appliedScope.current = requestScope(next, prefix, "");
+    appliedScope.current = seedScope(next, query);
     setNs(next);
     replaceQuery({ env: next.env, app: next.app });
   }
-  function applyFilter(e: React.FormEvent) {
-    e.preventDefault();
-    setPrefixTouched(true);
-    if (prefixError) return;
-    const next = prefixInput.trim();
-    appliedScope.current = requestScope(ns, next, "");
-    setPrefix(next);
-    replaceQuery({ key_prefix: next });
+  // Called from the input's own handler, never an effect: the URL may only be
+  // rewritten in response to something the operator did (see lib/url.ts).
+  function commitSearch(next: string) {
+    appliedScope.current = seedScope(ns, next);
+    setQuery(next);
+    void replaceQuery({ q: next });
   }
-  function clearFilter() {
-    appliedScope.current = requestScope(ns, "", "");
-    setPrefixInput("");
-    setPrefixTouched(false);
-    setPrefix("");
-    replaceQuery({ key_prefix: "" });
+  function onSearchChange(value: string) {
+    setSearchInput(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null;
+      commitSearch(value.trim());
+    }, SEARCH_DEBOUNCE_MS);
+  }
+  function clearSearch() {
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current);
+      searchTimer.current = null;
+    }
+    setSearchInput("");
+    commitSearch("");
   }
 
   const newSecretLink = hasNs ? links.newSecret(ns) : links.newSecret();
@@ -222,21 +307,47 @@ export default function SecretsPage() {
 
   // A deep link's env/app land one frame after mount, so "Choose an
   // environment" would flash before the list it asked for.
-  const awaitingDeepLink = !seeded && (!queryReady || !!queryValues.env || !!queryValues.app);
-  // A response has arrived for exactly this namespace/prefix/page. Gating on
-  // this rather than on `loading` keeps the empty state from flashing before
-  // the first request has even started.
-  const scope = requestScope(ns, prefix, pageToken);
-  const settled = loadedScope === scope;
+  const awaitingDeepLink =
+    !seeded &&
+    (!queryReady ||
+      !!queryValues.env ||
+      !!queryValues.app ||
+      !!queryValues.q ||
+      !!queryValues.key_prefix);
+  // A response has arrived for exactly this namespace/page — or, in search
+  // mode, the index has finished loading. Gating on this rather than on
+  // `loading` keeps the empty state from flashing before the first request has
+  // even started.
+  const settled = searchMode ? index.ready : loadedScope === browseScope;
+  const busy = searchMode ? index.loading : loading;
 
-  const sortedSecrets = sort.apply(secrets);
+  // Rank first, cut to the result limit, and only then order by column: the
+  // whole index is never sorted, and with no column chosen `sortRows` copies,
+  // so relevance order survives.
+  const matchByKey = useMemo(
+    () => new Map(matches.map((match) => [match.item.key, match])),
+    [matches],
+  );
+  const visibleSecrets = sort.apply(searchMode ? matches.map((match) => match.item) : secrets);
+  const sortHint = searchMode ? SEARCH_SORT_HINT : PAGE_SORT_HINT;
+  const summaryHint = [
+    sort.sort ? sortHint : null,
+    searchMode && matches.length >= SEARCH_RESULT_LIMIT
+      ? `Showing the best ${SEARCH_RESULT_LIMIT} matches — keep typing`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Bulk delete is an admin convenience; the console's only role distinction is
   // admin vs client identity, and a client's writes depend on a policy the
   // console cannot see.
   const canBulkDelete = identity?.kind === "admin";
+  // Scoped to this exact namespace, query and page: any of them changing is a
+  // different list, and the ticks must not travel to it.
+  const listScope = JSON.stringify([ns.env, ns.app, query, searchMode ? "" : pageToken]);
   const selection = useBulkSelection(
-    canBulkDelete ? secrets.map((secret) => secret.key) : [],
-    scope,
+    canBulkDelete ? visibleSecrets.map((secret) => secret.key) : [],
+    listScope,
   );
 
   async function onBulkDelete() {
@@ -256,7 +367,7 @@ export default function SecretsPage() {
       else toast.error(new Error(summary.detail), summary.title);
       setBulkOpen(false);
       selection.clear();
-      await load(pageToken, ns, prefix);
+      refresh();
     } finally {
       setBulkBusy(false);
     }
@@ -275,37 +386,31 @@ export default function SecretsPage() {
         }
       />
 
-      <form className="filters" onSubmit={applyFilter}>
+      <div className="filters">
         <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
         <div className="filter-grow">
-          <Field label="Key prefix" error={shownPrefixError}>
-            <Input
-              id="key-prefix"
-              className="font-mono"
-              placeholder="billing"
-              value={prefixInput}
-              disabled={!hasNs}
-              onChange={(e) => setPrefixInput(e.target.value)}
-              onBlur={() => setPrefixTouched(true)}
-            />
-          </Field>
+          <SearchField
+            label="Find secret"
+            placeholder="Search keys"
+            value={searchInput}
+            disabled={!hasNs}
+            onChange={onSearchChange}
+            onClear={clearSearch}
+            hint={
+              searchMode && settled && !index.complete
+                ? `Searched the first ${INDEX_MAX_KEYS} keys in this namespace.`
+                : undefined
+            }
+          />
         </div>
-        <Button type="submit" variant="outline" disabled={!hasNs || !!shownPrefixError}>
-          <Filter size={15} aria-hidden />
-          Filter
-        </Button>
-        <Button type="button" variant="ghost" onClick={clearFilter} disabled={!hasNs}>
-          <X size={15} aria-hidden />
-          Clear
-        </Button>
-      </form>
+      </div>
 
       {awaitingDeepLink ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           toolbar
-          toolbarHint={PAGE_SORT_HINT}
+          toolbarHint={sortHint}
           toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
           summary
         />
@@ -313,24 +418,24 @@ export default function SecretsPage() {
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its secrets.
         </EmptyState>
-      ) : !settled || loading ? (
+      ) : !settled || busy ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
           leading={canBulkDelete ? 1 : 0}
           toolbar
-          toolbarHint={PAGE_SORT_HINT}
+          toolbarHint={sortHint}
           toolbarSelection={canBulkDelete && SELECT_ALL_LABEL}
           summary
         />
-      ) : secrets.length === 0 ? (
+      ) : visibleSecrets.length === 0 ? (
         <EmptyState
           icon={<Icon.secret size={20} />}
           title="No secrets found"
           actions={
-            prefix ? (
-              <Button variant="outline" onClick={clearFilter}>
+            searchMode ? (
+              <Button variant="outline" onClick={clearSearch}>
                 <X size={15} aria-hidden />
-                Clear filter
+                Clear search
               </Button>
             ) : (
               <ButtonLink href={newSecretLink} onClick={openNewSecret}>
@@ -339,7 +444,9 @@ export default function SecretsPage() {
             )
           }
         >
-          {prefix ? "No secrets match this key prefix." : `No secrets in ${ns.env}/${ns.app} yet.`}
+          {searchMode
+            ? `No secrets match \u201c${query}\u201d.`
+            : `No secrets in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
@@ -347,19 +454,20 @@ export default function SecretsPage() {
             controller={sort}
             selection={canBulkDelete ? selection : undefined}
             selectionLabel={SELECT_ALL_LABEL}
-            hint={PAGE_SORT_HINT}
+            hint={sortHint}
           />
           <table className="data">
             <TableSummary
-              shown={sortedSecrets.length}
+              shown={visibleSecrets.length}
+              total={searchMode ? matches.length : undefined}
               noun="secrets"
-              filters={prefix ? 1 : 0}
-              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+              filters={searchMode ? 1 : 0}
+              hint={summaryHint || undefined}
             />
             <thead>
               <SortHeaderRow
                 controller={sort}
-                hint={PAGE_SORT_HINT}
+                hint={sortHint}
                 before={
                   canBulkDelete ? (
                     <SelectAllCell selection={selection} label={SELECT_ALL_LABEL} />
@@ -368,8 +476,9 @@ export default function SecretsPage() {
               />
             </thead>
             <tbody>
-              {sortedSecrets.map((s) => {
+              {visibleSecrets.map((s) => {
                 const cur = currentVersion(s);
+                const match = matchByKey.get(s.key);
                 return (
                   <tr key={s.key} data-state={selection.has(s.key) ? "selected" : undefined}>
                     {canBulkDelete ? (
@@ -383,7 +492,7 @@ export default function SecretsPage() {
                           if (shouldOpenWorkspace(event)) setSecretTarget(s);
                         }}
                       >
-                        {s.key}
+                        <Highlight text={s.key} ranges={match?.keyRanges} />
                       </Link>
                     </td>
                     <td className="nowrap" data-label="Type">
@@ -417,18 +526,20 @@ export default function SecretsPage() {
         />
       ) : null}
 
-      <Pagination
-        hasNext={paging.hasNext}
-        onNext={paging.next}
-        hasPrevious={paging.hasPrevious}
-        onPrevious={paging.previous}
-        onReset={paging.reset}
-        showReset={paging.hasPrevious}
-        page={paging.page}
-        count={secrets.length}
-        loading={!settled}
-        noun="secrets"
-      />
+      {searchMode ? null : (
+        <Pagination
+          hasNext={paging.hasNext}
+          onNext={paging.next}
+          hasPrevious={paging.hasPrevious}
+          onPrevious={paging.previous}
+          onReset={paging.reset}
+          showReset={paging.hasPrevious}
+          page={paging.page}
+          count={secrets.length}
+          loading={!settled}
+          noun="secrets"
+        />
+      )}
 
       <BulkDeleteDialog
         open={bulkOpen}
@@ -484,14 +595,14 @@ export default function SecretsPage() {
         onCreated={(ref) => {
           setNewSecretOpen(false);
           setSecretTarget(ref);
-          void load(pageToken, ns, prefix);
+          refresh();
         }}
       />
       <SecretWorkspace
         secretRef={secretTarget}
         onClose={() => setSecretTarget(null)}
-        onChanged={() => void load(pageToken, ns, prefix)}
-        onDeleted={() => void load(pageToken, ns, prefix)}
+        onChanged={refresh}
+        onDeleted={refresh}
       />
     </>
   );

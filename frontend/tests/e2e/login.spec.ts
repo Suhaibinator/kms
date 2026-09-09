@@ -148,9 +148,7 @@ test("portalled dropdowns and filter controls stay visually consistent", async (
   const controls = [
     trigger,
     page.getByRole("combobox", { name: "Environment" }),
-    page.getByRole("textbox", { name: "Key prefix" }),
-    page.getByRole("button", { name: "Filter" }),
-    page.getByRole("button", { name: "Clear" }),
+    page.getByRole("searchbox", { name: "Find parameter" }),
   ];
   const boxes = await Promise.all(controls.map((control) => control.boundingBox()));
   expect(boxes.every(Boolean)).toBe(true);
