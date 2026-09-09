@@ -463,6 +463,16 @@ class ManagedConfigManager(Generic[T]):
             self._rejected(identity, error)
             raise
 
+    def _validate_manifest(self, *args: Any) -> None:
+        manifest = args[-1]
+        try:
+            validate_manifest(self.binding.spec.contract, manifest.entries)
+        except CandidateError as error:
+            identity = ReleaseIdentity.from_candidate(manifest)
+            self._observed = identity
+            self._rejected(identity, error)
+            raise
+
     def _rejected(self, identity: ReleaseIdentity, error: CandidateError) -> None:
         key = _identity_key(identity)
         if key == self._last_rejection_key:
@@ -547,10 +557,9 @@ def start_managed_config(
         name=release, namespace=namespace,
         binding_keys=binding._binding_keys, **loader_options,
     )
+    manager: ManagedConfigManager[T]
     if "validate_manifest" in inspect.signature(ReleaseLoaderConfig).parameters:
-        kwargs["validate_manifest"] = lambda *args: validate_manifest(
-            binding.spec.contract, args[-1].entries
-        )
+        kwargs["validate_manifest"] = lambda *args: manager._validate_manifest(*args)
     manager = ManagedConfigManager(ReleaseLoader(client, ReleaseLoaderConfig(**kwargs)), binding, callbacks)  # type: ignore[arg-type]
     manager.start()
     manager.wait_until_ready()
@@ -572,9 +581,10 @@ async def start_async_managed_config(
             binding_keys=binding._binding_keys, **loader_options,
         )
         if "validate_manifest" in inspect.signature(AsyncReleaseLoaderConfig).parameters:
-            kwargs["validate_manifest"] = lambda *args: validate_manifest(
-                binding.spec.contract, args[-1].entries
-            )
+            def validate(*args: Any) -> None:
+                assert manager is not None
+                manager._validate_manifest(*args)
+            kwargs["validate_manifest"] = validate
         manager = AsyncManagedConfigManager(
             AsyncReleaseLoader(client, AsyncReleaseLoaderConfig(**kwargs)), binding, callbacks
         )

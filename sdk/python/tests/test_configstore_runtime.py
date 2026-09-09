@@ -30,7 +30,7 @@ from kms_paramstore.configstore import (
     start_async_managed_config,
     start_managed_config,
 )
-from kms_paramstore.release import ReleaseSnapshot
+from kms_paramstore.release import ReleaseManifest, ReleaseSnapshot, ReleaseStartupError
 from kms_paramstore.secret import Secret
 
 
@@ -240,6 +240,94 @@ def test_manifest_mismatch_is_classified_before_resolution() -> None:
     with pytest.raises(CandidateError, match="config_contract_mismatch") as caught:
         validate_manifest((ContractEntry("runtime", "parameter", "json"),), {})
     assert caught.value.release_rejection_category == "config_contract_mismatch"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("callback_raises", [False, True])
+def test_managed_start_reports_prefetch_contract_rejection(
+    monkeypatch, asynchronous: bool, callback_raises: bool,
+) -> None:
+    from tests import test_async_release, test_release
+
+    helpers = test_async_release if asynchronous else test_release
+    release, revision = helpers._release(1, 10)
+    _unused_loader, stub, client = helpers._loader(monkeypatch, (release, revision))
+    reports = []
+    fetches = []
+
+    def unexpected_fetch(*args, **kwargs):
+        fetches.append(True)
+        raise AssertionError("contract rejection must precede resource fetching")
+
+    monkeypatch.setattr(client._param_stub, "GetParameter", unexpected_fetch)
+    monkeypatch.setattr(client, "get_secret", unexpected_fetch)
+
+    def rejected(report):
+        reports.append(report)
+        if callback_raises:
+            raise RuntimeError("callback failure canary")
+
+    options = dict(
+        release="runtime", schema_version=1, binding=ConfigBinding(RuntimeConfig, {}),
+        callbacks=Callbacks(lambda _report: None, on_candidate_rejected=rejected),
+    )
+    with pytest.raises(ReleaseStartupError) as caught:
+        if asynchronous:
+            asyncio.run(start_async_managed_config(client, **options))
+        else:
+            start_managed_config(client, **options)
+    assert caught.value.category == "config_contract_mismatch"
+    assert "canary" not in str(caught.value)
+    assert fetches == []
+    assert len(reports) == 1
+    assert reports[0].category == "config_contract_mismatch"
+    assert reports[0].release == ReleaseIdentity(
+        namespace="prod/app", name="runtime", version=1,
+        activation_revision=10, schema_version=1, digest=release.digest,
+    )
+    assert reports[0].paths() == ()
+    assert any(
+        ack.state == "rejected" and ack.rejection_category == "config_contract_mismatch"
+        for ack in stub.acknowledgements
+    )
+
+
+@pytest.mark.parametrize("manager_type", [ManagedConfigManager, AsyncManagedConfigManager])
+@pytest.mark.parametrize("mismatch", ["alias", "kind", "content_type"])
+def test_prefetch_rejection_preserves_current_and_deduplicates(manager_type, mismatch) -> None:
+    from dataclasses import replace
+
+    reports = []
+    binding = ConfigBinding(RuntimeConfig, {})
+    manager = manager_type(
+        object(), binding,
+        Callbacks(lambda _report: None, on_candidate_rejected=reports.append),
+    )
+    manager._prepare(snapshot()).commit()
+    applied = binding.current
+    entries = {entry.alias: entry for entry in binding.spec.contract}
+    if mismatch == "alias":
+        entries.pop("runtime")
+    elif mismatch == "kind":
+        entries["runtime"] = ContractEntry("runtime", "secret")
+    else:
+        entries["runtime"] = ContractEntry("runtime", "parameter", "string")
+    manifest = ReleaseManifest(
+        namespace="prod/app", name="runtime", version=2, activation_revision=3,
+        schema_version=1, digest="digest-2", metadata_json="{}", entries=entries,
+    )
+    for candidate in (manifest, manifest, replace(manifest, activation_revision=4)):
+        with pytest.raises(CandidateError, match="config_contract_mismatch"):
+            manager._validate_manifest(None, candidate)
+        assert binding.current is applied
+        assert manager._observed == ReleaseIdentity.from_candidate(candidate)
+        assert manager._applied == applied.release
+    assert [report.release.activation_revision for report in reports] == [3, 4]
+    valid = replace(manifest, entries={entry.alias: entry for entry in binding.spec.contract})
+    manager._validate_manifest(None, valid)
+    manager._prepare(snapshot(secret_version=3)).commit()
+    assert binding.current.release.version == 3
+    assert len(reports) == 2
 
 
 def test_default_mismatch_callback_is_required_and_callable() -> None:
