@@ -95,16 +95,28 @@ function scoreEntry<T>(entry: IndexEntry<T>, tokens: readonly string[]): number 
   return total;
 }
 
+export interface SearchResults<T> {
+  /** The best `limit` matches, ranked. */
+  matches: Array<SearchMatch<T>>;
+  /**
+   * How many rows matched in all, before the cut. The list's footer counts
+   * this rather than `matches.length`, which would report a namespace of a
+   * thousand hits as "Showing 200 of 200".
+   */
+  total: number;
+}
+
 /**
  * The best `limit` rows for `query`, strongest first and then by key, so the
- * order is stable for the same input. Every whitespace token has to match the
- * key or the text; key hits always outrank value-only hits.
+ * order is stable for the same input, alongside the true match count. Every
+ * whitespace token has to match the key or the text; key hits always outrank
+ * value-only hits.
  */
 export function searchIndex<T>(
   index: SearchIndex<T>,
   query: string,
   limit: number = SEARCH_RESULT_LIMIT,
-): Array<SearchMatch<T>> {
+): SearchResults<T> {
   const tokens = wordsOf(query);
   const scored: Array<{ entry: IndexEntry<T>; score: number }> = [];
   if (tokens.length === 0) {
@@ -117,7 +129,7 @@ export function searchIndex<T>(
   }
   scored.sort((a, b) => b.score - a.score || (a.entry.key < b.entry.key ? -1 : 1));
   // Ranges are only worth computing for the rows that made the cut.
-  return scored.slice(0, limit).map(({ entry, score }) => {
+  const matches = scored.slice(0, limit).map(({ entry, score }) => {
     const keyRanges = matchRangesLower(entry.lowerKey, tokens);
     return {
       item: entry.item,
@@ -127,6 +139,7 @@ export function searchIndex<T>(
         keyRanges.length === 0 && entry.lowerText ? matchRangesLower(entry.lowerText, tokens) : [],
     };
   });
+  return { matches, total: scored.length };
 }
 
 /** The same multi-token semantics as a boolean, for the local filters. */

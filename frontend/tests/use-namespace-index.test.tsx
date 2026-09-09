@@ -87,6 +87,31 @@ describe("useNamespaceIndex", () => {
     expect(fetchPage.mock.calls[1]?.[0]).toBe("");
   });
 
+  it("reports a failed walk instead of an empty index, and retries on invalidate", async () => {
+    const onError = vi.fn();
+    const fetchPage = vi
+      .fn<(token: string) => Promise<IndexPage<string>>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ items: ["a"], next: "" });
+
+    const { result } = renderHook(() => useNamespaceIndex("scope-1", true, fetchPage, onError));
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(Error));
+
+    // `ready` stays false: an index that failed to load must never read as a
+    // namespace that simply has nothing in it.
+    expect(result.current.ready).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.rows).toEqual([]);
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Nothing was cached, so the retry is a real one.
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.rows).toEqual(["a"]);
+    expect(result.current.error).toBeNull();
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+
   it("does not fetch at all while enabled is false", () => {
     const fetchPage = vi.fn<(token: string) => Promise<IndexPage<string>>>();
     const { result } = renderHook(() => useNamespaceIndex("scope-1", false, fetchPage));
@@ -97,6 +122,7 @@ describe("useNamespaceIndex", () => {
       complete: true,
       loading: false,
       ready: false,
+      error: null,
     });
   });
 });

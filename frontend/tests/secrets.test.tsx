@@ -158,11 +158,13 @@ describe("secret list search", () => {
     expect(await screen.findByText(SECRET.key)).toBeVisible();
 
     // A failed index load must not leave the browse page on screen: those rows
-    // would read as the search's answer.
+    // would read as the search's answer. Nor may it read as "no matches" —
+    // nothing was searched.
     listSecrets.mockRejectedValue(new Error("offline"));
     fireEvent.change(screen.getByLabelText("Find secret"), { target: { value: "api" } });
 
-    expect(await screen.findByText("No secrets found")).toBeVisible();
+    expect(await screen.findByText("Search failed")).toBeVisible();
+    expect(screen.queryByText("No secrets found")).not.toBeInTheDocument();
     expect(screen.queryByText(SECRET.key)).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
   });
@@ -1523,5 +1525,41 @@ describe("secrets search", () => {
     fireEvent.change(screen.getByLabelText("Find secret"), { target: { value: "token" } });
     await waitFor(() => expect(keyColumn()).toEqual([deep.key]));
     expect(document.querySelector(".cell-path mark")).toHaveTextContent("token");
+  });
+});
+
+describe("secrets search failures", () => {
+  it("clears a legacy ?key_prefix= link instead of refilling the box", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "api" };
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    render(<SecretsPage />);
+    const input = screen.getByLabelText("Find secret");
+    await waitFor(() => expect(input).toHaveValue("api"));
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenLastCalledWith(
+        { pathname: "/secrets", query: { env: NAMESPACE.env, app: NAMESPACE.app } },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
+    );
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    await waitFor(() => expect(keyColumn()).toEqual([SECRET.key]));
+    expect(screen.getByLabelText("Find secret")).toHaveValue("");
+  });
+
+  it("offers a retry when the index could not be loaded", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "api" };
+    const list = vi.spyOn(api, "listSecrets").mockRejectedValue(new Error("offline"));
+    render(<SecretsPage />);
+
+    expect(await screen.findByText("Search failed")).toBeVisible();
+    expect(screen.queryByText(/No secrets match/)).toBeNull();
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+
+    list.mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(keyColumn()).toEqual([SECRET.key]));
   });
 });

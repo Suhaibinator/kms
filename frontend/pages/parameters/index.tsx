@@ -1,4 +1,4 @@
-import { ChevronDown, Eye, MoreHorizontal, X } from "lucide-react";
+import { ChevronDown, Eye, MoreHorizontal, RefreshCw, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
@@ -338,8 +338,9 @@ export default function ParametersPage() {
     () => buildSearchIndex(index.rows, (p: Parameter) => ({ key: p.key, text: p.value })),
     [index.rows],
   );
-  const matches = useMemo(
-    () => (searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : []),
+  const { matches, total: matchTotal } = useMemo(
+    () =>
+      searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : { matches: [], total: 0 },
     [searchable, query, searchMode],
   );
 
@@ -366,7 +367,9 @@ export default function ParametersPage() {
     appliedScope.current = seedScope(ns, next);
     setDeleteTarget(null);
     setQuery(next);
-    void replaceQuery({ q: next });
+    // `key_prefix` goes with it: the seeding effect falls back to that legacy
+    // key, so leaving it behind would refill the box the moment it is cleared.
+    void replaceQuery({ q: next, key_prefix: "" });
   }
   function onSearchChange(value: string) {
     setSearchInput(value);
@@ -494,7 +497,9 @@ export default function ParametersPage() {
   const sortHint = searchMode ? SEARCH_SORT_HINT : PAGE_SORT_HINT;
   const summaryHint = [
     sort.sort ? sortHint : null,
-    searchMode && matches.length >= SEARCH_RESULT_LIMIT
+    // Only once the cut actually dropped something: at exactly the limit
+    // nothing was hidden, and saying otherwise would be a lie.
+    searchMode && matchTotal > SEARCH_RESULT_LIMIT
       ? `Showing the best ${SEARCH_RESULT_LIMIT} matches — keep typing`
       : null,
   ]
@@ -582,6 +587,19 @@ export default function ParametersPage() {
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its parameters.
         </EmptyState>
+      ) : searchMode && index.error ? (
+        <EmptyState
+          icon={<Icon.parameter size={20} />}
+          title="Search failed"
+          actions={
+            <Button variant="outline" onClick={() => invalidateIndex()}>
+              <RefreshCw size={15} aria-hidden />
+              Retry
+            </Button>
+          }
+        >
+          This namespace could not be loaded, so there is nothing to search yet.
+        </EmptyState>
       ) : !settled || busy ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
@@ -622,7 +640,7 @@ export default function ParametersPage() {
           <table className="data">
             <TableSummary
               shown={visibleRows.length}
-              total={searchMode ? matches.length : undefined}
+              total={searchMode ? matchTotal : undefined}
               noun="parameters"
               filters={searchMode ? 1 : 0}
               hint={summaryHint || undefined}
