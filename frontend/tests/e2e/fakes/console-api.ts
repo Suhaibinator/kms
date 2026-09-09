@@ -899,11 +899,23 @@ function handle(
           client_cert_presented: false,
         },
       };
+    // The counts are answered live here, and only here: the server fills
+    // identity_count in this query alone, which is why the console reads what
+    // a namespace still holds from this list rather than from the overview.
     case "GET /namespaces":
       return {
         status: 200,
         body: {
-          namespaces: Object.values(state.namespaces).map((entry) => entry.namespace),
+          namespaces: Object.values(state.namespaces).map((entry) => ({
+            ...entry.namespace,
+            parameter_count: Object.keys(entry.parameters).length,
+            secret_count: Object.keys(entry.secrets).length,
+            identity_count: state.identities.filter(
+              (identity) =>
+                identity.namespace?.env === entry.namespace.env &&
+                identity.namespace?.app === entry.namespace.app,
+            ).length,
+          })),
           next_page_token: "",
         },
       };

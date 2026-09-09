@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShipModalProps } from "@/components/applications/contracts";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
-import type { ApplicationOverview } from "@/lib/types";
+import type { ApplicationOverview, Namespace } from "@/lib/types";
 import EnvironmentPage from "@/pages/applications/environment";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 import { chooseSelectOption } from "./select-test-utils";
@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
   deleteNamespace: vi.fn(),
   listIdentities: vi.fn(),
   health: vi.fn(),
+  namespaces: {
+    namespaces: [] as Namespace[],
+    loading: false,
+    error: null as unknown,
+    reload: vi.fn(),
+  },
   shipModal: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }));
@@ -52,6 +58,12 @@ vi.mock("@/lib/api", async (importOriginal) => {
     },
   };
 });
+// The settings card reads what the environment still holds from the namespace
+// list, which is the only query that fills identity_count.
+vi.mock("@/lib/hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/hooks")>()),
+  useNamespaces: () => mocks.namespaces,
+}));
 vi.mock("@/components/ship/ShipModal", () => ({
   default: (props: ShipModalProps) => {
     mocks.shipModal(props);
@@ -64,6 +76,24 @@ vi.mock("@/components/ship/ShipModal", () => ({
 }));
 
 const incident = incidentJson as unknown as ApplicationOverview;
+
+/** A row of `GET /namespaces`, which is where the identity count comes from. */
+function listedNamespace(
+  env: string,
+  counts: { parameters?: number; secrets?: number; identities?: number } = {},
+): Namespace {
+  return {
+    env,
+    app: "gradethis",
+    description: `${env}/gradethis`,
+    allowed_auth_methods: ["token"],
+    created_by: "admin",
+    created_at_unix_ms: 1,
+    parameter_count: counts.parameters ?? 0,
+    secret_count: counts.secrets ?? 0,
+    identity_count: counts.identities ?? 0,
+  };
+}
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /** The overview the page will load, with the environment's namespace patched. */
@@ -99,6 +129,16 @@ describe("EnvironmentPage", () => {
     mocks.deleteNamespace.mockReset();
     mocks.listIdentities.mockReset().mockResolvedValue({ identities: [], next_page_token: "" });
     mocks.health.mockReset().mockRejectedValue(new Error("offline"));
+    // The fixture's dev namespace holds two parameters and one secret.
+    mocks.namespaces = {
+      namespaces: [
+        listedNamespace("dev", { parameters: 2, secrets: 1 }),
+        listedNamespace("prod", { parameters: 2, secrets: 1 }),
+      ],
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    };
     mocks.shipModal.mockClear();
     mocks.toast.success.mockClear();
     mocks.toast.error.mockClear();
@@ -210,14 +250,47 @@ describe("EnvironmentPage", () => {
     expect(mocks.deleteNamespace).not.toHaveBeenCalled();
   });
 
+  it("counts bound identities the overview does not carry", async () => {
+    // The overview's namespace never has identity_count; only the namespace
+    // list does, and an environment with a bound identity is not deletable.
+    mocks.namespaces.namespaces = [
+      listedNamespace("dev", { identities: 1 }),
+      listedNamespace("prod"),
+    ];
+    await renderPage(
+      overviewWith("dev", { parameter_count: 0, secret_count: 0, identity_count: 0 }),
+    );
+    expect(screen.getByRole("button", { name: /Delete environment/ })).toBeDisabled();
+    expect(screen.getByText("1 bound identity must be removed first.")).toBeVisible();
+    expect(screen.getByText(/0 parameters · 0 secrets · 1 bound identities/)).toBeVisible();
+  });
+
+  it("holds the delete action back until the namespace list answers", async () => {
+    mocks.namespaces = { namespaces: [], loading: true, error: null, reload: vi.fn() };
+    await renderPage();
+    expect(screen.getByRole("button", { name: /Delete environment/ })).toBeDisabled();
+    expect(screen.getByText("Checking what this environment still holds…")).toBeVisible();
+  });
+
+  it("offers a retry when the namespace list fails", async () => {
+    const reload = vi.fn();
+    mocks.namespaces = { namespaces: [], loading: false, error: new Error("offline"), reload };
+    await renderPage();
+    expect(screen.getByRole("button", { name: /Delete environment/ })).toBeDisabled();
+    expect(screen.getByText("Could not check what this environment still holds.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(reload).toHaveBeenCalled();
+  });
+
   it("deletes an empty environment and returns to the application", async () => {
     mocks.deleteNamespace.mockResolvedValue({});
+    mocks.namespaces.namespaces = [listedNamespace("dev"), listedNamespace("prod")];
     await renderPage(
       overviewWith("dev", { parameter_count: 0, secret_count: 0, identity_count: 0 }),
     );
     fireEvent.click(screen.getByRole("button", { name: /Delete environment/ }));
-    const confirm = await screen.findByRole("dialog", { name: "Delete namespace?" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "Delete namespace" }));
+    const confirm = await screen.findByRole("dialog", { name: "Delete environment?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete environment" }));
     await waitFor(() =>
       expect(mocks.deleteNamespace).toHaveBeenCalledWith({ env: "dev", app: "gradethis" }),
     );

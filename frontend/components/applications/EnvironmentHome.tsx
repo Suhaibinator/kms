@@ -21,6 +21,7 @@ import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
+import { useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { countOtherKeys } from "@/lib/overview";
 import type { ApplicationOverview, EnvironmentOverview, Namespace } from "@/lib/types";
@@ -34,6 +35,12 @@ import { ReleaseSection } from "./ReleaseSection";
 import { SubscribersSection } from "./SubscribersSection";
 import { useApplicationActions } from "./useApplicationActions";
 import type { OverviewFreshness } from "./useApplicationOverview";
+
+/** What the namespace list says this environment still holds. */
+type ContentsState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; namespace: Namespace };
 
 export interface EnvironmentHomeProps {
   overview: ApplicationOverview;
@@ -114,7 +121,37 @@ export function EnvironmentHome({
     }
   }, [ship, rollback, env, active]);
 
-  const blockReason = deleteBlockReason(ns);
+  // What the environment still holds, and therefore whether it can be deleted.
+  // The overview's namespace carries parameter and secret counts only — the
+  // server fills identity_count in the namespace list query alone — so a
+  // namespace whose last contents are bound identities would otherwise look
+  // empty here and be refused with 412 on delete. The namespace list is the
+  // one place that answers all three; useNamespaces pages it once and caches
+  // it for every page in this session.
+  const {
+    namespaces,
+    loading: namespacesLoading,
+    error: namespacesError,
+    reload: reloadNamespaces,
+  } = useNamespaces();
+  const listed =
+    namespaces.find((candidate) => candidate.env === env && candidate.app === ns.app) ?? null;
+  const contents: ContentsState = listed
+    ? { status: "ready", namespace: listed }
+    : namespacesLoading
+      ? { status: "loading" }
+      : {
+          status: "error",
+          message: namespacesError
+            ? "Could not check what this environment still holds."
+            : "This environment is not in the namespace list.",
+        };
+  const blockReason =
+    contents.status === "ready"
+      ? deleteBlockReason(contents.namespace)
+      : contents.status === "loading"
+        ? "Checking what this environment still holds…"
+        : contents.message;
   const canRollback = Boolean(active && active.previous_version > 0);
   const releaseHref = links.releases({
     app: ns.app,
@@ -191,7 +228,7 @@ export function EnvironmentHome({
         </>
       ),
       disabled: blockReason !== null,
-      onSelect: () => setDeleteTarget(ns),
+      onSelect: () => setDeleteTarget(contents.status === "ready" ? contents.namespace : ns),
     },
   ];
 
@@ -375,8 +412,15 @@ export function EnvironmentHome({
           <div>
             <dt className="faint text-sm">Contents</dt>
             <dd>
-              {ns.parameter_count} parameters · {ns.secret_count} secrets · {ns.identity_count ?? 0}{" "}
-              bound identities
+              {contents.status === "ready" ? (
+                <>
+                  {contents.namespace.parameter_count} parameters ·{" "}
+                  {contents.namespace.secret_count} secrets ·{" "}
+                  {contents.namespace.identity_count ?? 0} bound identities
+                </>
+              ) : (
+                <span className="faint">…</span>
+              )}
             </dd>
           </div>
         </dl>
@@ -387,7 +431,7 @@ export function EnvironmentHome({
             size="sm"
             disabled={blockReason !== null}
             aria-describedby={blockReason ? "environment-delete-reason" : undefined}
-            onClick={() => setDeleteTarget(ns)}
+            onClick={() => setDeleteTarget(contents.status === "ready" ? contents.namespace : ns)}
           >
             <Trash2 size={14} aria-hidden />
             Delete environment
@@ -396,6 +440,11 @@ export function EnvironmentHome({
             <span id="environment-delete-reason" className="faint text-sm">
               {blockReason}
             </span>
+          ) : null}
+          {contents.status === "error" ? (
+            <Button type="button" variant="outline" size="sm" onClick={reloadNamespaces}>
+              Retry
+            </Button>
           ) : null}
         </div>
       </section>
@@ -411,6 +460,7 @@ export function EnvironmentHome({
       />
       <DeleteEnvironmentDialog
         namespace={deleteTarget}
+        noun="environment"
         onCancel={() => setDeleteTarget(null)}
         onDeleted={() => {
           setDeleteTarget(null);

@@ -39,6 +39,11 @@ export default function EnvironmentPage() {
 
   // Pin the schema track in the URL once it is known, so the breadcrumbs and
   // every link out of this page stay on the track that is being shown.
+  // `router.replace` directly, not `useQueryReplace`: lib/url.ts forbids that
+  // helper in an effect because it would fight the form state. This write is
+  // not a form's — it records what the server answered with, it runs at most
+  // once (guarded by `schemaVersion !== undefined`), and the application page
+  // pins its own track the same way.
   useEffect(() => {
     if (!ready || !name || invalidSchema || schemaVersion !== undefined || !slot?.data) return;
     void router.replace(

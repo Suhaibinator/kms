@@ -45,11 +45,15 @@ export function deleteBlockReason(ns: Namespace): string | null {
  */
 export function DeleteEnvironmentDialog({
   namespace,
+  noun = "namespace",
   onCancel,
   onDeleted,
 }: {
   /** The namespace to delete; `null` closes the dialog. */
   namespace: Namespace | null;
+  /** What the surface calls this thing: the namespaces list says namespace, the
+   *  environment page says environment. */
+  noun?: "namespace" | "environment";
   onCancel: () => void;
   /** Called after the server has deleted it: the caller navigates or reloads. */
   onDeleted: (ns: Namespace) => void;
@@ -74,16 +78,16 @@ export function DeleteEnvironmentDialog({
   return (
     <ConfirmDialog
       open={namespace !== null}
-      title="Delete namespace?"
+      title={`Delete ${noun}?`}
       danger
       message={
         <>
-          Delete namespace{" "}
+          Delete {noun}{" "}
           <span className="mono">{namespace ? `${namespace.env}/${namespace.app}` : ""}</span>? This
-          is only possible because it holds no parameters or secrets.
+          is only possible because it holds no parameters, secrets, or bound identities.
         </>
       }
-      confirmLabel="Delete namespace"
+      confirmLabel={`Delete ${noun}`}
       busy={deleting}
       onConfirm={onDelete}
       onCancel={onCancel}
