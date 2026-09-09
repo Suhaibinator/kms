@@ -23,7 +23,7 @@ func newJSONLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
 func decodeLogLines(t *testing.T, buffer *bytes.Buffer) []logLine {
 	t.Helper()
 	var lines []logLine
-	for _, raw := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+	for raw := range strings.SplitSeq(strings.TrimSpace(buffer.String()), "\n") {
 		if raw == "" {
 			continue
 		}

@@ -128,7 +128,7 @@ func loadFixtureContract(t *testing.T) (schemaSHA256 string, contract []domain.A
 // reportHasRow reports whether the tabwriter-aligned report contains a
 // verdict row with exactly these columns.
 func reportHasRow(report, verdict, alias, contentType string) bool {
-	for _, line := range strings.Split(report, "\n") {
+	for line := range strings.SplitSeq(report, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 3 && fields[0] == verdict && fields[1] == alias && fields[2] == contentType {
 			return true
@@ -480,7 +480,7 @@ func TestKMSVerifyOverRealKMS(t *testing.T) {
 		defer func() { _ = addressed.Close() }()
 		if _, err := fixturekms.Start(f.ctx, addressed, fixturekms.Options{
 			Release: kmsverifyRelease, Defaults: fixtureconfig.Defaults, InstanceID: "verify-only",
-			Callbacks: configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
+			OnDefaultMismatch: func(configstore.DefaultMismatchReport) {},
 		}); !errors.Is(err, kmsclient.ErrPermissionDenied) {
 			t.Fatalf("generated store Start as verify-only = %v, want ErrPermissionDenied", err)
 		}

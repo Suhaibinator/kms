@@ -55,7 +55,7 @@ func startTestOptions(callback func(DefaultMismatchReport)) Options {
 		Contract: []ContractEntry{{
 			Alias: "settings", Kind: ContractKindParameter, ContentType: "json",
 		}},
-		Callbacks: Callbacks{OnDefaultMismatch: callback},
+		OnDefaultMismatch: callback,
 	}
 }
 
@@ -190,8 +190,8 @@ func TestStatusPreservesSelectedTrackWhileNewerActivationIsQueued(t *testing.T) 
 			releaseSecondOnce := sync.OnceFunc(func() { close(releaseSecond) })
 			manager, err := Start(ctx, client, Options{
 				Release: "runtime", SchemaVersion: &schemaVersion,
-				Contract:  []ContractEntry{{Alias: "settings", Kind: ContractKindParameter, ContentType: "json"}},
-				Callbacks: Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) {}},
+				Contract:          []ContractEntry{{Alias: "settings", Kind: ContractKindParameter, ContentType: "json"}},
+				OnDefaultMismatch: func(DefaultMismatchReport) {},
 			}, func(_ context.Context, snapshot kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 				if snapshot.Version() == 2 {
 					close(secondPreparing)

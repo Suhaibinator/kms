@@ -40,12 +40,12 @@ func putBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, key byte, optio
 		Bound:       key != 0,
 		Encrypt: func(version uint64) (EncryptedPayload, error) {
 			payload := EncryptedPayload{
-				Ciphertext:   []byte(fmt.Sprintf("ciphertext-%d", version)),
-				EncryptedDEK: []byte(fmt.Sprintf("wrapped-dek-%d", version)),
+				Ciphertext:   fmt.Appendf(nil, "ciphertext-%d", version),
+				EncryptedDEK: fmt.Appendf(nil, "wrapped-dek-%d", version),
 				KEKID:        "kek-a",
 				WrapMode:     domain.WrapModeStandard,
 				Algorithm:    "AES-256-GCM",
-				Nonce:        []byte(fmt.Sprintf("nonce-%d", version)),
+				Nonce:        fmt.Appendf(nil, "nonce-%d", version),
 				AAD:          fmt.Sprintf("aad-%d", version),
 			}
 			if key != 0 {

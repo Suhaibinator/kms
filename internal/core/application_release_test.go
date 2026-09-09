@@ -25,7 +25,7 @@ func applicationPlanEntry(t *testing.T, result domain.ApplicationReleaseCreateRe
 func TestBuildApplicationReleasePlanRejectsInvalidContractSize(t *testing.T) {
 	oversized := make([]domain.ApplicationContractField, maxReleaseEntries+1)
 	for _, contract := range [][]domain.ApplicationContractField{nil, oversized} {
-		_, err := (&Service{}).buildApplicationReleasePlan(context.Background(), adminPrincipal(), domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "dev", App: "app"}}, domain.Application{Name: "app", Contract: contract}, configstore.DefaultsArtifact{}, nil, "{}")
+		_, err := (&Service{}).buildApplicationReleasePlan(context.Background(), adminPrincipal(), domain.Namespace{Env: "dev", App: "app"}, domain.Application{Name: "app", Contract: contract}, configstore.DefaultsArtifact{}, nil, "{}")
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("contract size %d error = %v", len(contract), err)
 		}

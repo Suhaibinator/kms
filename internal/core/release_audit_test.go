@@ -240,7 +240,7 @@ func TestMigrationAuditsSeparateSourceAndDestinationActivation(t *testing.T) {
 	ctx := context.Background()
 	svc, st, in := migrationFixture(t)
 	pr := adminPrincipal()
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if attempt == 1 {
 			shipped, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: in.Namespace.App, Environment: in.Namespace.Env, SchemaVersion: &in.SourceSchemaVersion, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("15")}}})
 			if err != nil || shipped.Release.Version != 2 {

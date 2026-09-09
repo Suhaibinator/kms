@@ -41,7 +41,7 @@ func TestSchemaTracksConcurrentAllocationActivationAndRetention(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, len(tracks)*versions)
 	for _, track := range tracks {
-		for i := 0; i < versions; i++ {
+		for range versions {
 			wg.Add(1)
 			go func(track domain.ReleaseTrack) {
 				defer wg.Done()

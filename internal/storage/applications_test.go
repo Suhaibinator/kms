@@ -115,14 +115,14 @@ func TestApplicationSchemaOwnershipAndLifecycle(t *testing.T) {
 	if err != nil || len(archivedOnly) != 1 || archivedOnly[0].Name != "payments" {
 		t.Fatalf("archived applications = %+v err=%v", archivedOnly, err)
 	}
-	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "prod", App: "payments"}}); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{Env: "prod", App: "payments"}); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("create environment for archived application error = %v", err)
 	}
 	unarchived, err := store.UnarchiveApplication(ctx, "payments")
 	if err != nil || !unarchived.ArchivedAt.IsZero() || unarchived.ArchivedBy != "" {
 		t.Fatalf("unarchived application = %+v err=%v", unarchived, err)
 	}
-	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "prod", App: "payments"}}); err != nil {
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{Env: "prod", App: "payments"}); err != nil {
 		t.Fatalf("create environment after unarchive: %v", err)
 	}
 	if _, err := store.ArchiveApplication(ctx, "payments", "operator"); !errors.Is(err, domain.ErrFailedPrecondition) {
@@ -167,16 +167,14 @@ func TestConfigurationSchemaConcurrentDuplicateDigest(t *testing.T) {
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			_, err := store.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{
 				Application: "payments", ReleaseName: "runtime", Schema: `{"type":"object"}`,
 				Digest: "same-digest", Metadata: "{}",
 			})
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

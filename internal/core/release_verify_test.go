@@ -462,7 +462,7 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 
 	t.Run("request budget", func(t *testing.T) {
 		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1, Burst: 2, MismatchBudgetPerHour: 1000})
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil {
 				t.Fatalf("burst call %d: %v", i+1, err)
 			}

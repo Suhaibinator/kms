@@ -56,16 +56,14 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	store, err := configkms.Start(storeCtx, demo.client, configkms.Options{
 		Release:  exampleRelease,
 		Defaults: appconfig.Defaults,
-		Callbacks: configstore.Callbacks{
-			OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
-				mismatches <- report
-			},
-			OnApplied: func(report configstore.AppliedReport) {
-				applied <- report
-			},
-			OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
-				rejections <- report
-			},
+		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
+			mismatches <- report
+		},
+		OnApplied: func(report configstore.AppliedReport) {
+			applied <- report
+		},
+		OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
+			rejections <- report
 		},
 		// Keep counter and callback assertions deterministic. A short interval
 		// would deliberately retry the same rejected active release.

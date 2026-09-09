@@ -36,10 +36,9 @@ func TestManagerStartupMismatchIsAppliedAndReportedAtErrorSeverity(t *testing.T)
 	var applied []AppliedReport
 	published := 0
 	aborted := 0
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(report DefaultMismatchReport) { reports = append(reports, report) },
-		OnApplied:         func(report AppliedReport) { applied = append(applied, report) },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		OnApplied:         func(report AppliedReport) { applied = append(applied, report) }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
 			Publish: func() { published++ },
 			Abort:   func() { aborted++ },
@@ -89,10 +88,9 @@ func TestManagerStartupMismatchIsAppliedAndReportedAtErrorSeverity(t *testing.T)
 func TestManagerRuntimeAppliedReportCarriesRedactedChanges(t *testing.T) {
 	var applied []AppliedReport
 	var next PreparedCandidate
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(DefaultMismatchReport) {},
-		OnApplied:         func(report AppliedReport) { applied = append(applied, report) },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
+		OnApplied:         func(report AppliedReport) { applied = append(applied, report) }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
 
 	next = PreparedCandidate{Publish: func() {}}
 	initial, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
@@ -155,10 +153,9 @@ func TestManagerRuntimeAppliedReportCarriesRedactedChanges(t *testing.T) {
 
 func TestManagerAppliedReportGroupsIsEmptyWhenUnsupplied(t *testing.T) {
 	var applied []AppliedReport
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(DefaultMismatchReport) {},
-		OnApplied:         func(report AppliedReport) { applied = append(applied, report) },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		OnApplied:         func(report AppliedReport) { applied = append(applied, report) }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{Publish: func() {}}, nil
 	})
 	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
@@ -174,13 +171,12 @@ func TestManagerAppliedReportGroupsIsEmptyWhenUnsupplied(t *testing.T) {
 
 func TestManagerAppliedCallbackPanicDoesNotBlockReadiness(t *testing.T) {
 	calls := 0
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(DefaultMismatchReport) {},
 		OnApplied: func(AppliedReport) {
 			calls++
 			panic("applied callback panic")
-		},
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{Publish: func() {}}, nil
 	})
 	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
@@ -200,7 +196,7 @@ func TestManagerAppliedCallbackPanicDoesNotBlockReadiness(t *testing.T) {
 
 func TestManagedPreparedReportsDivergenceFieldCount(t *testing.T) {
 	var next PreparedCandidate
-	manager := unitManager(Options{Callbacks: Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) {}}},
+	manager := unitManager(Options{OnDefaultMismatch: func(DefaultMismatchReport) {}},
 		func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
 
 	next = PreparedCandidate{
@@ -237,9 +233,8 @@ func TestManagedPreparedReportsDivergenceFieldCount(t *testing.T) {
 func TestManagerRuntimeDivergenceRestorationAndDeduplication(t *testing.T) {
 	var reports []DefaultMismatchReport
 	var next PreparedCandidate
-	manager := unitManager(Options{Callbacks: Callbacks{
-		OnDefaultMismatch: func(report DefaultMismatchReport) { reports = append(reports, report) },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+	manager := unitManager(Options{
+		OnDefaultMismatch: func(report DefaultMismatchReport) { reports = append(reports, report) }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return next, nil
 	})
 
@@ -304,9 +299,8 @@ func TestManagerRejectsWholeRuntimeCandidateForRestartChange(t *testing.T) {
 	aborted := 0
 	reports := 0
 	var next PreparedCandidate
-	manager := unitManager(Options{Callbacks: Callbacks{
-		OnDefaultMismatch: func(DefaultMismatchReport) { reports++ },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
+	manager := unitManager(Options{
+		OnDefaultMismatch: func(DefaultMismatchReport) { reports++ }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
 
 	next = PreparedCandidate{Publish: func() { published++ }}
 	initial, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
@@ -340,12 +334,11 @@ func TestManagerIsolatesMismatchCallbackPanicAndAdmitsCandidate(t *testing.T) {
 	aborted := 0
 	published := 0
 	callbacks := 0
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(DefaultMismatchReport) {
 			callbacks++
 			panic("secret callback panic")
-		},
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
 			Publish:            func() { published++ },
 			Abort:              func() { aborted++ },
@@ -377,9 +370,8 @@ func TestManagerIsolatesMismatchCallbackPanicAndAdmitsCandidate(t *testing.T) {
 func TestManagerReportsDivergenceAgainAfterCleanGeneration(t *testing.T) {
 	reports := 0
 	divergent := true
-	manager := unitManager(Options{Callbacks: Callbacks{
-		OnDefaultMismatch: func(DefaultMismatchReport) { reports++ },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+	manager := unitManager(Options{
+		OnDefaultMismatch: func(DefaultMismatchReport) { reports++ }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		candidate := PreparedCandidate{Publish: func() {}}
 		if divergent {
 			candidate.DefaultDifferences = []FieldDifference{{Path: "group.field", Expected: 1, Actual: 2}}
@@ -409,7 +401,7 @@ func TestManagerReportsDivergenceAgainAfterCleanGeneration(t *testing.T) {
 
 func TestManagerRequiresPublishAndAbortIsIdempotent(t *testing.T) {
 	aborted := 0
-	manager := unitManager(Options{Callbacks: Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) {}}},
+	manager := unitManager(Options{OnDefaultMismatch: func(DefaultMismatchReport) {}},
 		func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 			return PreparedCandidate{Abort: func() { aborted++ }}, nil
 		})
@@ -447,10 +439,9 @@ func TestStartRejectsNilMismatchCallbackBeforeLoaderRuns(t *testing.T) {
 func TestManagerReportsSafeRestartPathsOncePerCandidate(t *testing.T) {
 	var reports []CandidateRejectionReport
 	var next PreparedCandidate
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch:   func(DefaultMismatchReport) {},
-		OnCandidateRejected: func(report CandidateRejectionReport) { reports = append(reports, report) },
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		OnCandidateRejected: func(report CandidateRejectionReport) { reports = append(reports, report) }}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return next, nil
 	})
 
@@ -490,13 +481,12 @@ func TestManagerReportsSafeRestartPathsOncePerCandidate(t *testing.T) {
 func TestManagerCandidateRejectionCallbackPanicCannotChangeAdmissionOrRepeat(t *testing.T) {
 	const canary = "application-validation-canary"
 	var reports []CandidateRejectionReport
-	manager := unitManager(Options{Callbacks: Callbacks{
+	manager := unitManager(Options{
 		OnDefaultMismatch: func(DefaultMismatchReport) {},
 		OnCandidateRejected: func(report CandidateRejectionReport) {
 			reports = append(reports, report)
 			panic("callback panic must be isolated")
-		},
-	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, Reject(RejectConfigValidationFailed, errors.New(canary))
 	})
 

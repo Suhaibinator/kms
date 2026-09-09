@@ -700,9 +700,7 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := maps.Clone(guardBase)
-			for key, value := range fields {
-				request[key] = value
-			}
+			maps.Copy(request, fields)
 			guarded := e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", request)
 			mustStatus(t, guarded, http.StatusBadRequest)
 			if got := errCode(t, guarded); got != "invalid_argument" {
@@ -1039,9 +1037,7 @@ func TestSecretBindingUnlockFailuresAreIndistinguishable(t *testing.T) {
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
 			base := map[string]any{"env": "prod", "app": "gradethis", "key": "credential-errors"}
-			for key, value := range operation.body {
-				base[key] = value
-			}
+			maps.Copy(base, operation.body)
 			var wantBody string
 			for _, credential := range []string{"", "short", wrongKey} {
 				request := maps.Clone(base)

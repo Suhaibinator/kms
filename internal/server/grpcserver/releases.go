@@ -346,8 +346,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 			}
 			ack := domain.ReleaseAcknowledgement{Namespace: ns, SchemaVersion: reg.SchemaVersion, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()}
 			ackErr := h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
-			var unavailable *domain.ReleaseAcknowledgementUnavailableError
-			if errors.As(ackErr, &unavailable) {
+			if _, ok := errors.AsType[*domain.ReleaseAcknowledgementUnavailableError](ackErr); ok {
 				if !sendResult(receiveResult{rejected: &kmsv1.ReleaseAcknowledgementRejectedEvent{
 					Namespace: a.GetNamespace(), Name: reg.Name, SchemaVersion: reg.SchemaVersion,
 					Version: a.GetVersion(), ActivationRevision: a.GetActivationRevision(),

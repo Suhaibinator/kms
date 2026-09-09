@@ -48,7 +48,7 @@ func scrapeText(t *testing.T, m *metrics.Metrics) string {
 // expected strings below spell out.
 func seriesValue(t *testing.T, body, series string) (float64, bool) {
 	t.Helper()
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		name, value, ok := strings.Cut(line, " ")
 		if !ok || name != series {
 			continue

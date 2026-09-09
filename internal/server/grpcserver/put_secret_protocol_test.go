@@ -66,34 +66,34 @@ func v02PutSecretRequest(t *testing.T, env, app, key string, value []byte, clien
 	boolType := descriptorpb.FieldDescriptorProto_TYPE_BOOL
 	int64Type := descriptorpb.FieldDescriptorProto_TYPE_INT64
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
-		Syntax:  proto.String("proto3"),
-		Name:    proto.String("kms/v02/kms.proto"),
-		Package: proto.String("kms.v1"),
+		Syntax:  new("proto3"),
+		Name:    new("kms/v02/kms.proto"),
+		Package: new("kms.v1"),
 		MessageType: []*descriptorpb.DescriptorProto{
 			{
-				Name: proto.String("NamespaceRef"),
+				Name: new("NamespaceRef"),
 				Field: []*descriptorpb.FieldDescriptorProto{
-					{Name: proto.String("env"), Number: proto.Int32(1), Label: &optional, Type: &stringType},
-					{Name: proto.String("app"), Number: proto.Int32(2), Label: &optional, Type: &stringType},
+					{Name: new("env"), Number: proto.Int32(1), Label: &optional, Type: &stringType},
+					{Name: new("app"), Number: proto.Int32(2), Label: &optional, Type: &stringType},
 				},
 			},
 			{
-				Name: proto.String("ResourceRef"),
+				Name: new("ResourceRef"),
 				Field: []*descriptorpb.FieldDescriptorProto{
-					{Name: proto.String("namespace"), Number: proto.Int32(1), Label: &optional, Type: &message, TypeName: proto.String(".kms.v1.NamespaceRef")},
-					{Name: proto.String("key"), Number: proto.Int32(2), Label: &optional, Type: &stringType},
+					{Name: new("namespace"), Number: proto.Int32(1), Label: &optional, Type: &message, TypeName: new(".kms.v1.NamespaceRef")},
+					{Name: new("key"), Number: proto.Int32(2), Label: &optional, Type: &stringType},
 				},
 			},
 			{
-				Name: proto.String("PutSecretRequest"),
+				Name: new("PutSecretRequest"),
 				Field: []*descriptorpb.FieldDescriptorProto{
-					{Name: proto.String("ref"), Number: proto.Int32(1), Label: &optional, Type: &message, TypeName: proto.String(".kms.v1.ResourceRef")},
-					{Name: proto.String("value"), Number: proto.Int32(2), Label: &optional, Type: &bytesType},
-					{Name: proto.String("content_type"), Number: proto.Int32(3), Label: &optional, Type: &stringType},
-					{Name: proto.String("metadata_json"), Number: proto.Int32(4), Label: &optional, Type: &stringType},
-					{Name: proto.String("client_bound"), Number: proto.Int32(5), Label: &optional, Type: &boolType},
-					{Name: proto.String("generate_access_token"), Number: proto.Int32(6), Label: &optional, Type: &boolType},
-					{Name: proto.String("expires_at_unix_ms"), Number: proto.Int32(7), Label: &optional, Type: &int64Type},
+					{Name: new("ref"), Number: proto.Int32(1), Label: &optional, Type: &message, TypeName: new(".kms.v1.ResourceRef")},
+					{Name: new("value"), Number: proto.Int32(2), Label: &optional, Type: &bytesType},
+					{Name: new("content_type"), Number: proto.Int32(3), Label: &optional, Type: &stringType},
+					{Name: new("metadata_json"), Number: proto.Int32(4), Label: &optional, Type: &stringType},
+					{Name: new("client_bound"), Number: proto.Int32(5), Label: &optional, Type: &boolType},
+					{Name: new("generate_access_token"), Number: proto.Int32(6), Label: &optional, Type: &boolType},
+					{Name: new("expires_at_unix_ms"), Number: proto.Int32(7), Label: &optional, Type: &int64Type},
 				},
 			},
 		},

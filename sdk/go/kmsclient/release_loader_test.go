@@ -185,7 +185,7 @@ func TestReleaseLoaderResolvesDigestOnceAndPinsNumericTrackAcrossRuns(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for run := 0; run < 2; run++ {
+	for run := range 2 {
 		ctx, cancel := context.WithCancel(context.Background())
 		committed := make(chan struct{})
 		errCh := make(chan error, 1)
@@ -2298,8 +2298,7 @@ func TestReleaseLoaderAppliedAckCarriesDivergenceFromReporter(t *testing.T) {
 func TestReleaseLoaderPlainPreparedReleaseAckHasNoDivergence(t *testing.T) {
 	server, loader := newDivergenceTestLoader(t, 4, 40)
 	prepared := &testPreparedRelease{done: make(chan struct{})}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() {
 		_ = loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) { return prepared, nil })
 	}()

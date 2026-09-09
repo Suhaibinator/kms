@@ -62,8 +62,7 @@ func exitCodeFor(err error) int {
 			return exitError
 		}
 	}
-	var usage usageError
-	if errors.As(err, &usage) {
+	if _, ok := errors.AsType[usageError](err); ok {
 		return exitUsage
 	}
 	switch {

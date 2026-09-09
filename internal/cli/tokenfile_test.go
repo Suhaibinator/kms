@@ -222,8 +222,7 @@ func TestFinalizeRejectsTwoTokenSources(t *testing.T) {
 			if err == nil {
 				t.Fatal("finalize accepted two token sources")
 			}
-			var usage usageError
-			if !errors.As(err, &usage) {
+			if _, ok := errors.AsType[usageError](err); !ok {
 				t.Fatalf("finalize error = %T (%v), want usageError", err, err)
 			}
 			if !strings.Contains(err.Error(), tc.want) {

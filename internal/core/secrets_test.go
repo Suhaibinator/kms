@@ -640,7 +640,7 @@ func TestBindingCohortPreviewHasPerIdentityBurstLimit(t *testing.T) {
 	ref := tref("preview-rate-limit")
 	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
 			t.Fatalf("preview %d: %v", i+1, err)
 		}

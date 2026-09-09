@@ -80,8 +80,8 @@ func mustLookup(t *testing.T, key string) Setting {
 // field as a dotted key, mirroring how a YAML config file addresses it.
 func configLeafKeys(t *testing.T, typ reflect.Type, prefix string, out map[string]bool) {
 	t.Helper()
-	for i := range typ.NumField() {
-		f := typ.Field(i)
+	for f := range typ.Fields() {
+		f := f
 		if !f.IsExported() {
 			continue
 		}
@@ -113,7 +113,7 @@ func TestSettingsRegistryCoversConfig(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]bool{}
-	configLeafKeys(t, reflect.TypeOf(Config{}), "", want)
+	configLeafKeys(t, reflect.TypeFor[Config](), "", want)
 
 	got := map[string]bool{}
 	for _, s := range Settings {

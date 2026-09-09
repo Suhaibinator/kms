@@ -45,16 +45,14 @@ func run(parent context.Context, output io.Writer) error {
 	store, err := configkms.Start(storeCtx, demo.client, configkms.Options{
 		Release:  exampleRelease,
 		Defaults: appconfig.Defaults,
-		Callbacks: configstore.Callbacks{
-			OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
-				mismatches <- report
-			},
-			OnApplied: func(report configstore.AppliedReport) {
-				applied <- report
-			},
-			OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
-				rejections <- report
-			},
+		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
+			mismatches <- report
+		},
+		OnApplied: func(report configstore.AppliedReport) {
+			applied <- report
+		},
+		OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
+			rejections <- report
 		},
 		ReconcileInterval: time.Hour,
 		InstanceID:        "managed-config-example-1",

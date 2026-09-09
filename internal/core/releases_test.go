@@ -99,16 +99,13 @@ func TestConfigurationReleaseConcurrentFirstCreatesAdoptWinnerContract(t *testin
 	results := make(chan result, 2)
 	var wg sync.WaitGroup
 	for _, alias := range []string{"alpha", "beta"} {
-		alias := alias
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			release, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
 				Namespace: ns, Name: "runtime", Entries: []domain.ReleaseEntrySelector{{Alias: alias, Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: alias}}},
 			})
 			results <- result{alias: alias, release: release, err: err}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

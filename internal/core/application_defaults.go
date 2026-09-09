@@ -44,7 +44,7 @@ type defaultsPlanDigestEntry struct {
 type defaultsPlanDigestInput struct {
 	ExpectedApplicationSchemaVersion uint64                             `json:"expected_application_schema_version,omitempty"`
 	ExpectedApplicationContract      []domain.ApplicationContractField  `json:"expected_application_contract,omitempty"`
-	ExpectedApplicationUpdatedAt     time.Time                          `json:"expected_application_updated_at,omitempty"`
+	ExpectedApplicationUpdatedAt     time.Time                          `json:"expected_application_updated_at"`
 	ArtifactDigest                   string                             `json:"artifact_digest"`
 	NamespaceID                      int64                              `json:"namespace_id"`
 	ReleaseName                      string                             `json:"release_name"`

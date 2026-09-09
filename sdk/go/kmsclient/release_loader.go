@@ -1048,7 +1048,7 @@ func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (release
 	cctx, cancel := l.client.callCtx(ctx)
 	defer cancel()
 	resp, err := l.client.releases.GetActiveRelease(cctx, &kmsv1.GetActiveReleaseRequest{
-		Namespace: ns.proto(), Name: l.cfg.Name, SchemaVersion: proto.Uint64(l.trackSchemaVersion),
+		Namespace: ns.proto(), Name: l.cfg.Name, SchemaVersion: new(l.trackSchemaVersion),
 	})
 	if err != nil {
 		return releaseCandidate{}, mapError(err)
@@ -1131,7 +1131,7 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 			ClientName:       l.client.clientName,
 			InstanceId:       l.instanceID,
 			LastSeenRevision: l.lastSeen.Load(),
-			SchemaVersion:    proto.Uint64(l.trackSchemaVersion),
+			SchemaVersion:    new(l.trackSchemaVersion),
 		},
 	}}); err != nil {
 		return false, false, err

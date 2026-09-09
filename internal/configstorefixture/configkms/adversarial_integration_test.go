@@ -617,9 +617,9 @@ func TestAdversarialDefaultSecretsMustBeExactZeroIncludingMetadata(t *testing.T)
 				defaults.RuntimeToken = metadataOnly
 			}
 			store, startErr := Start(context.Background(), client, Options{
-				Release:   fixtureReleaseName,
-				Defaults:  func() *fixtureconfig.Config { return defaults },
-				Callbacks: configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
+				Release:           fixtureReleaseName,
+				Defaults:          func() *fixtureconfig.Config { return defaults },
+				OnDefaultMismatch: func(configstore.DefaultMismatchReport) {},
 			})
 			if store != nil || startErr == nil || !strings.Contains(startErr.Error(), "must be zero") {
 				t.Fatalf("metadata-bearing default secret Start = (%v, %v), want exact-zero rejection", store, startErr)

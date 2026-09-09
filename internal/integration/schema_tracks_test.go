@@ -14,7 +14,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func integrationSchemaVersion(version uint64) *uint64 { return &version }
+//go:fix inline
+func integrationSchemaVersion(version uint64) *uint64 { return new(version) }
 
 // This test uses the real TLS/gRPC, authorization, storage, and watch stack.
 // Both clients deliberately share a process identity; their schemas alone must
@@ -60,7 +61,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	activate := func(release *kmsv1.ConfigurationRelease, expected uint64) uint64 {
 		t.Helper()
 		result, err := releases.ActivateRelease(auth, &kmsv1.ActivateReleaseRequest{Namespace: wireNS, Name: name,
-			SchemaVersion: integrationSchemaVersion(release.GetSchemaVersion()), Version: release.GetVersion(), ExpectedCurrentVersion: &expected})
+			SchemaVersion: new(release.GetSchemaVersion()), Version: release.GetVersion(), ExpectedCurrentVersion: &expected})
 		if err != nil || !result.GetChanged() {
 			t.Fatalf("activation = %v, %v", result, err)
 		}
@@ -141,7 +142,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	}
 	defer func() { _ = sdk.Close() }()
 	unknown, err := kmsclient.NewReleaseLoader(sdk, kmsclient.ReleaseLoaderConfig{
-		Name: name, SchemaVersion: integrationSchemaVersion(secondSchema.Version + 1),
+		Name: name, SchemaVersion: new(secondSchema.Version + 1),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -286,12 +286,11 @@ func TestGeneratedStartRejectsMissingBindingKey(t *testing.T) {
 	installInitial(t, server, initial)
 	client := newFixtureClient(t, server)
 	defer func() { _ = client.Close() }()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	_, err = Start(ctx, client, Options{
 		Release: fixtureReleaseName, Defaults: fixtureconfig.Defaults,
-		Callbacks:  configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
-		InstanceID: "missing-binding-key",
+		OnDefaultMismatch: func(configstore.DefaultMismatchReport) {},
+		InstanceID:        "missing-binding-key",
 	})
 	if err == nil || !strings.Contains(err.Error(), kmsclient.ReleaseRejectBindingKeyUnavailable) {
 		t.Fatalf("Start error = %v, want %s", err, kmsclient.ReleaseRejectBindingKeyUnavailable)

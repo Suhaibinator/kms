@@ -104,9 +104,8 @@ func TestApplicationMigrationTransactionConcurrentCAS(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	start := make(chan struct{})
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() { defer wg.Done(); <-start; _, err := st.ApplyApplicationMigration(ctx, in); errs <- err }()
+	for range 2 {
+		wg.Go(func() { ; <-start; _, err := st.ApplyApplicationMigration(ctx, in); errs <- err })
 	}
 	close(start)
 	wg.Wait()

@@ -46,7 +46,6 @@ func TestV03WireFieldLayouts(t *testing.T) {
 
 	messages := File_kms_v1_kms_proto.Messages()
 	for _, test := range tests {
-		test := test
 		t.Run(test.message, func(t *testing.T) {
 			descriptor := messages.ByName(protoreflect.Name(test.message))
 			if descriptor == nil {

@@ -43,12 +43,10 @@ func startFaultFixture(t *testing.T, initial releaseData, options faultStartOpti
 		options.onDefaultMismatch = func(configstore.DefaultMismatchReport) {}
 	}
 	store, err := Start(ctx, client, Options{
-		Release:  fixtureReleaseName,
-		Defaults: fixtureconfig.Defaults,
-		Callbacks: configstore.Callbacks{
-			OnDefaultMismatch:   options.onDefaultMismatch,
-			OnCandidateRejected: options.onCandidateRejected,
-		},
+		Release:             fixtureReleaseName,
+		Defaults:            fixtureconfig.Defaults,
+		OnDefaultMismatch:   options.onDefaultMismatch,
+		OnCandidateRejected: options.onCandidateRejected,
 
 		ReconcileInterval:    options.reconcileInterval,
 		MaxConcurrentFetches: 4,

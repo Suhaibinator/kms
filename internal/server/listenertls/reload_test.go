@@ -443,9 +443,7 @@ func TestSwapDuringHandshakes(t *testing.T) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-done:
@@ -460,7 +458,7 @@ func TestSwapDuringHandshakes(t *testing.T) {
 				}
 				_ = conn.Close()
 			}
-		}()
+		})
 	}
 	for i := range 20 {
 		if i%2 == 0 {

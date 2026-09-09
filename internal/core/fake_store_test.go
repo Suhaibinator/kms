@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -738,12 +739,7 @@ func equalFakeVersions(a, b []uint64) bool {
 }
 
 func containsFakeVersion(versions []uint64, target uint64) bool {
-	for _, version := range versions {
-		if version == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(versions, target)
 }
 
 func (f *fakeStore) resolveVersion(sec *fakeSecret, version uint64, label string) (uint64, bool) {

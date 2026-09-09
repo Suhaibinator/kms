@@ -458,11 +458,11 @@ var grpcServices = func() map[string]map[string]struct{} {
 // yields two empty strings, which grpcLabels maps to ValueUnknown.
 func splitFullMethod(fullMethod string) (service, method string) {
 	trimmed := strings.TrimPrefix(fullMethod, "/")
-	i := strings.Index(trimmed, "/")
-	if i < 0 {
+	before, after, ok := strings.Cut(trimmed, "/")
+	if !ok {
 		return "", ""
 	}
-	return trimmed[:i], trimmed[i+1:]
+	return before, after
 }
 
 // grpcLabels resolves a full method name to the service and method labels.

@@ -19,7 +19,7 @@ import (
 // SHM is a disposable index and is rebuilt there. Nonempty rollback journals
 // require operator recovery because they may reference external super-journals.
 func copyBaselineSnapshot(path string) (string, func(), error) {
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		snapshot, cleanup, changed, err := copyBaselineSnapshotAttempt(path)
 		if err != nil || !changed {
 			return snapshot, cleanup, err

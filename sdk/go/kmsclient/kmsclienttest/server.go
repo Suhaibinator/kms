@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1276,7 +1277,7 @@ func (s *Server) unboundVersionsLocked(display string) ([]uint64, error) {
 			versions = append(versions, info.GetVersion())
 		}
 	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	slices.Sort(versions)
 	if len(versions) == 0 {
 		return nil, status.Error(codes.FailedPrecondition, "secret has no unbound versions")
 	}

@@ -65,11 +65,11 @@ func TestOptionsAndManagerFormattingRedactBindingKeys(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			options := Options{
-				Release:       "runtime",
-				SchemaVersion: test.schemaVersion,
-				SchemaSHA256:  test.schemaSHA256,
-				BindingKeys:   map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
-				Callbacks:     Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) }},
+				Release:           "runtime",
+				SchemaVersion:     test.schemaVersion,
+				SchemaSHA256:      test.schemaSHA256,
+				BindingKeys:       map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
+				OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) },
 			}
 			want := `Options{release="runtime" ` + test.wantSelector + ` contract_entries=0 reconcile_interval=0s max_concurrent_fetches=0 instance_id=""}`
 			for format, rendered := range map[string]string{
@@ -99,8 +99,8 @@ func TestOptionsAndManagerFormattingRedactBindingKeys(t *testing.T) {
 
 	options := Options{
 		Release: "runtime", SchemaVersion: &positive,
-		BindingKeys: map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
-		Callbacks:   Callbacks{OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) }},
+		BindingKeys:       map[string]kmsclient.BindingKey{"password": kmsclient.NewBindingKey(canary)},
+		OnDefaultMismatch: func(DefaultMismatchReport) { panic(canary) },
 	}
 	manager := unitManager(options, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, nil

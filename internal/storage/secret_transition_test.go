@@ -17,12 +17,12 @@ import (
 func transitionPayload(bound bool, marker byte) func(SecretVersionRecord, uint64) (EncryptedPayload, error) {
 	return func(_ SecretVersionRecord, version uint64) (EncryptedPayload, error) {
 		payload := EncryptedPayload{
-			Ciphertext:   []byte(fmt.Sprintf("fresh-ciphertext-%c-%d", marker, version)),
-			EncryptedDEK: []byte(fmt.Sprintf("fresh-dek-%c-%d", marker, version)),
+			Ciphertext:   fmt.Appendf(nil, "fresh-ciphertext-%c-%d", marker, version),
+			EncryptedDEK: fmt.Appendf(nil, "fresh-dek-%c-%d", marker, version),
 			KEKID:        "kek-a",
 			WrapMode:     domain.WrapModeStandard,
 			Algorithm:    "AES-256-GCM",
-			Nonce:        []byte(fmt.Sprintf("fresh-nonce-%c-%d", marker, version)),
+			Nonce:        fmt.Appendf(nil, "fresh-nonce-%c-%d", marker, version),
 			AAD:          fmt.Sprintf("fresh-aad-%c-%d", marker, version),
 		}
 		if bound {

@@ -13,7 +13,7 @@
 package kmsmetrics
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -171,7 +171,7 @@ func rejectedCategories(rejected map[configstore.RejectionCategory]uint64) []con
 		}
 		extra = append(extra, category)
 	}
-	sort.Slice(extra, func(i, j int) bool { return extra[i] < extra[j] })
+	slices.Sort(extra)
 	return append(categories, extra...)
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json/v2"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -756,9 +757,7 @@ func (m *memStore) RotateKEK(context.Context, domain.KeyMetadata,
 
 func cloneSecretLabels(labels map[string]uint64) map[string]uint64 {
 	out := make(map[string]uint64, len(labels))
-	for label, version := range labels {
-		out[label] = version
-	}
+	maps.Copy(out, labels)
 	return out
 }
 
