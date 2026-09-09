@@ -1,6 +1,7 @@
 import { ChevronsDownUp, ChevronsUpDown, WrapText } from "lucide-react";
 import { useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { EmptyValue } from "@/components/EmptyValue";
 import { JsonHighlight } from "@/components/JsonHighlight";
 import { JsonTree, useJsonTree } from "@/components/JsonTree";
 import { Button } from "@/components/ui/button";
@@ -129,6 +130,10 @@ export function ValueView({
   ...rest
 }: Omit<JsonViewProps, "raw" | "highlight"> & { value: string; contentType: string }) {
   const json = contentType === "json";
+  // An empty string is a stored value, not an absent one; an empty code block
+  // with a copy button says neither. (`json` never reaches here empty: "" is
+  // not valid JSON, so it keeps the block and its parse error.)
+  if (!json && value === "") return <EmptyValue />;
   const raw = json ? (formatJson(value) ?? value) : value;
   // The clipboard gets the value as stored, not the pretty-printed display.
   return <JsonView raw={raw} highlight={json} copyValue={value} {...rest} />;

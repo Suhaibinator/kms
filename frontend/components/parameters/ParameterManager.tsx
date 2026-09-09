@@ -927,6 +927,7 @@ export default function ParameterManager({
             <ParameterValueInput
               contentType={contentType}
               value={value}
+              storedValue={current?.value}
               inputRef={valueRef}
               schema={contentType === "json" ? (versionSchema?.schema ?? null) : null}
               schemaLabel={

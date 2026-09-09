@@ -212,6 +212,7 @@ export function BulkParameterModal({
             key={row?.key ?? "new"}
             contentType={contentType}
             value={value}
+            storedValue={opened.value}
             schema={schema}
             inputRef={valueRef}
             rows={7}

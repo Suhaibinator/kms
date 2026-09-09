@@ -433,6 +433,36 @@ it("uses create-only writes and retains the draft when the key already exists", 
   expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("replacement");
 });
 
+it("refuses to create a parameter from a blank value box until the empty string is explicit", async () => {
+  vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+  const put = vi.spyOn(api, "putParameter").mockResolvedValue({ version: 1, revision: 1 });
+  mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+  render(<ParametersPage />);
+  await screen.findByText(ALPHA.key);
+  fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+  const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Key" }), {
+    target: { value: "blank-config" },
+  });
+
+  // A forgotten value used to save as "" with nothing but a success toast.
+  expect(within(dialog).getByRole("button", { name: "Save parameter" })).toBeDisabled();
+  expect(within(dialog).getByTestId("value-empty-hint")).toHaveTextContent(
+    "Type a value, or tick Empty string.",
+  );
+
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Empty string/ }));
+  await waitFor(() =>
+    expect(within(dialog).getByRole("button", { name: "Save parameter" })).toBeEnabled(),
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save parameter" }));
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "blank-config", value: "", content_type: "string" }),
+    ),
+  );
+});
+
 it("blocks creation while a visible numeric form draft is incomplete", async () => {
   vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
   vi.spyOn(api, "applicationOverview").mockRejectedValue(new Error("No pinned schema"));

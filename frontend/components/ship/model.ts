@@ -133,7 +133,13 @@ export function rowError(row: ShipRow): string | null {
   if (row.reuseVersion !== undefined) return null;
   if (row.loadError) return `Could not load the current value: ${row.loadError}`;
   if (!row.loaded) return "Loading the current value…";
-  if (row.draftValid === false) return "Fix the invalid field above.";
+  if (row.draftValid === false) {
+    // A blank string box is not an invalid draft, it is an unanswered one:
+    // say what to do rather than pointing at a field that looks fine.
+    return row.content_type === "string" && row.value === ""
+      ? "Type a value, or tick Empty string."
+      : "Fix the invalid field above.";
+  }
   return validateParameterValue(row.value, row.content_type) ?? validateValueSize(row.value);
 }
 

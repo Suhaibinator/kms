@@ -1307,6 +1307,10 @@ export function SchemaMigrationModal({
                         aria-label={`${field.alias} value`}
                         contentType={field.content_type ?? "string"}
                         value={field.value ?? ""}
+                        // A field with no source is prefilled with "" here by
+                        // construction, so it opens as an explicit empty
+                        // rather than as an unanswered box.
+                        storedValue={field.originalValue ?? ""}
                         onChange={(value) => update(field.id, { value })}
                         onValidityChange={(valid) => {
                           setFieldValidity((current) =>
