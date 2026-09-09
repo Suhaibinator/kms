@@ -16,7 +16,13 @@ export interface NamespaceIndex<T> {
   loading: boolean;
   /** A walk has finished for exactly this scope; the rows below are its answer. */
   ready: boolean;
-  /** Drop the cache and walk again — call it after every write. */
+  /**
+   * What the walk failed with, if it did. `ready` stays false and nothing is
+   * cached, so a caller's retry is a real retry: an empty index is never
+   * mistaken for "the namespace has nothing matching".
+   */
+  error: unknown;
+  /** Drop the cache and walk again — call it after every write, and to retry. */
   invalidate: () => void;
 }
 
@@ -26,10 +32,11 @@ interface IndexState<T> {
   complete: boolean;
   loading: boolean;
   ready: boolean;
+  error: unknown;
 }
 
 function idle<T>(scope: string): IndexState<T> {
-  return { scope, rows: [], complete: true, loading: false, ready: false };
+  return { scope, rows: [], complete: true, loading: false, ready: false, error: null };
 }
 
 /**
@@ -69,7 +76,13 @@ export function useNamespaceIndex<T>(
   // biome-ignore lint/correctness/useExhaustiveDependencies: `fetchPage`/`onError` are read through refs on purpose, and `generation` is the invalidation signal.
   useEffect(() => {
     if (!enabled) {
-      setState((current) => (current.scope === scope && !current.ready ? current : idle<T>(scope)));
+      // A walk that failed is forgotten along with the search that ran it, so
+      // the next one starts from a clean slate rather than a stale error.
+      setState((current) =>
+        current.scope === scope && !current.ready && !current.loading && !current.error
+          ? current
+          : idle<T>(scope),
+      );
       return;
     }
     const cached = cache.current;
@@ -80,11 +93,12 @@ export function useNamespaceIndex<T>(
         complete: cached.complete,
         loading: false,
         ready: true,
+        error: null,
       });
       return;
     }
     const run = request.begin();
-    setState({ scope, rows: [], complete: false, loading: true, ready: false });
+    setState({ scope, rows: [], complete: false, loading: true, ready: false, error: null });
     void (async () => {
       const all: T[] = [];
       // The same guard `loadNamespaces` uses: a server that keeps handing back
@@ -107,11 +121,13 @@ export function useNamespaceIndex<T>(
         }
         if (!run.current) return;
         cache.current = { scope, rows: all, complete };
-        setState({ scope, rows: all, complete, loading: false, ready: true });
+        setState({ scope, rows: all, complete, loading: false, ready: true, error: null });
       } catch (error) {
         if (!run.current || isAbortError(error)) return;
         errorRef.current?.(error);
-        setState({ scope, rows: [], complete: true, loading: false, ready: true });
+        // Nothing is cached and `ready` stays false: an index that failed to
+        // load must not render as a namespace with no matches.
+        setState({ scope, rows: [], complete: true, loading: false, ready: false, error });
       }
     })();
   }, [scope, enabled, generation, request]);
@@ -122,6 +138,7 @@ export function useNamespaceIndex<T>(
     complete: current.complete,
     loading: current.loading,
     ready: current.ready,
+    error: current.error,
     invalidate,
   };
 }

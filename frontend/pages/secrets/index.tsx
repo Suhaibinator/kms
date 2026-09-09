@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
@@ -252,8 +252,9 @@ export default function SecretsPage() {
     () => buildSearchIndex(index.rows, (secret: SecretMetadata) => ({ key: secret.key })),
     [index.rows],
   );
-  const matches = useMemo(
-    () => (searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : []),
+  const { matches, total: matchTotal } = useMemo(
+    () =>
+      searchMode ? searchIndex(searchable, query, SEARCH_RESULT_LIMIT) : { matches: [], total: 0 },
     [searchable, query, searchMode],
   );
 
@@ -275,7 +276,9 @@ export default function SecretsPage() {
   function commitSearch(next: string) {
     appliedScope.current = seedScope(ns, next);
     setQuery(next);
-    void replaceQuery({ q: next });
+    // `key_prefix` goes with it: the seeding effect falls back to that legacy
+    // key, so leaving it behind would refill the box the moment it is cleared.
+    void replaceQuery({ q: next, key_prefix: "" });
   }
   function onSearchChange(value: string) {
     setSearchInput(value);
@@ -332,7 +335,9 @@ export default function SecretsPage() {
   const sortHint = searchMode ? SEARCH_SORT_HINT : PAGE_SORT_HINT;
   const summaryHint = [
     sort.sort ? sortHint : null,
-    searchMode && matches.length >= SEARCH_RESULT_LIMIT
+    // Only once the cut actually dropped something: at exactly the limit
+    // nothing was hidden, and saying otherwise would be a lie.
+    searchMode && matchTotal > SEARCH_RESULT_LIMIT
       ? `Showing the best ${SEARCH_RESULT_LIMIT} matches — keep typing`
       : null,
   ]
@@ -418,6 +423,19 @@ export default function SecretsPage() {
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its secrets.
         </EmptyState>
+      ) : searchMode && index.error ? (
+        <EmptyState
+          icon={<Icon.secret size={20} />}
+          title="Search failed"
+          actions={
+            <Button variant="outline" onClick={() => invalidateIndex()}>
+              <RefreshCw size={15} aria-hidden />
+              Retry
+            </Button>
+          }
+        >
+          This namespace could not be loaded, so there is nothing to search yet.
+        </EmptyState>
       ) : !settled || busy ? (
         <TableSkeleton
           headers={headerLabels(COLUMNS)}
@@ -459,7 +477,7 @@ export default function SecretsPage() {
           <table className="data">
             <TableSummary
               shown={visibleSecrets.length}
-              total={searchMode ? matches.length : undefined}
+              total={searchMode ? matchTotal : undefined}
               noun="secrets"
               filters={searchMode ? 1 : 0}
               hint={summaryHint || undefined}

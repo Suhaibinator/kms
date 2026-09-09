@@ -20,18 +20,25 @@ function indexOf(rows: Row[]) {
   return buildSearchIndex(rows, toDoc);
 }
 
+/** The ranked matches alone, for the cases that only care about order. */
+function matchesFor(rows: Row[] | ReturnType<typeof indexOf>, query: string, limit?: number) {
+  const index = Array.isArray(rows) ? indexOf(rows) : rows;
+  return searchIndex(index, query, limit).matches;
+}
+
 describe("searchIndex", () => {
   it("finds a key by a word-prefix token", () => {
     const index = indexOf([{ key: "billing/timeout" }]);
-    const results = searchIndex(index, "timeout");
-    expect(results.map((r) => r.item.key)).toEqual(["billing/timeout"]);
-    expect(results[0]?.score).toBe(40);
+    const { matches, total } = searchIndex(index, "timeout");
+    expect(matches.map((r) => r.item.key)).toEqual(["billing/timeout"]);
+    expect(matches[0]?.score).toBe(40);
+    expect(total).toBe(1);
   });
 
   it("requires every token to match, ANDed across the query", () => {
     const index = indexOf([{ key: "billing/timeout" }]);
-    expect(searchIndex(index, "bill out").map((r) => r.item.key)).toEqual(["billing/timeout"]);
-    expect(searchIndex(index, "bill zzz")).toEqual([]);
+    expect(matchesFor(index, "bill out").map((r) => r.item.key)).toEqual(["billing/timeout"]);
+    expect(matchesFor(index, "bill zzz")).toEqual([]);
   });
 
   it("ranks a key hit above a value-only hit", () => {
@@ -39,7 +46,7 @@ describe("searchIndex", () => {
       { key: "apps/shared-secret" },
       { key: "apps/other", text: "the shared secret lives here" },
     ]);
-    const results = searchIndex(index, "shared");
+    const results = matchesFor(index, "shared");
     expect(results.map((r) => r.item.key)).toEqual(["apps/shared-secret", "apps/other"]);
     const [keyHit, valueHit] = results;
     expect(keyHit?.score).toBeGreaterThan(valueHit?.score ?? Number.POSITIVE_INFINITY);
@@ -54,25 +61,34 @@ describe("searchIndex", () => {
   it("does not search a value longer than MAX_SEARCHED_TEXT_CHARS", () => {
     const longText = `${"x".repeat(MAX_SEARCHED_TEXT_CHARS + 1)} uniqueword`;
     const index = indexOf([{ key: "apps/big", text: longText }]);
-    expect(searchIndex(index, "uniqueword")).toEqual([]);
+    expect(matchesFor(index, "uniqueword")).toEqual([]);
 
     // The same word, in a value under the cap, is found: the cap is why the
     // long value above did not match, not the word itself.
     const shortIndex = indexOf([{ key: "apps/small", text: "uniqueword" }]);
-    expect(searchIndex(shortIndex, "uniqueword").map((r) => r.item.key)).toEqual(["apps/small"]);
+    expect(matchesFor(shortIndex, "uniqueword").map((r) => r.item.key)).toEqual(["apps/small"]);
   });
 
-  it("caps the number of results at limit", () => {
+  it("caps the returned matches at limit but reports the true total", () => {
     const rows = Array.from({ length: 5 }, (_, i) => ({ key: `apps/token-${i}` }));
-    const results = searchIndex(indexOf(rows), "token", 2);
-    expect(results).toHaveLength(2);
+    const { matches, total } = searchIndex(indexOf(rows), "token", 2);
+    expect(matches).toHaveLength(2);
+    // The caller's footer counts this, not the cut list: five rows matched.
+    expect(total).toBe(5);
+  });
+
+  it("reports a total equal to the match count when nothing was cut", () => {
+    const rows = Array.from({ length: 3 }, (_, i) => ({ key: `apps/token-${i}` }));
+    const { matches, total } = searchIndex(indexOf(rows), "token", 3);
+    expect(matches).toHaveLength(3);
+    expect(total).toBe(3);
   });
 
   it("breaks score ties deterministically by ascending key order", () => {
     // All three keys end in "-token", so a query of "token" scores each of
     // them identically as a word-prefix match.
     const rows = [{ key: "gamma-token" }, { key: "alpha-token" }, { key: "beta-token" }];
-    const results = searchIndex(indexOf(rows), "token");
+    const results = matchesFor(rows, "token");
     const scores = new Set(results.map((r) => r.score));
     expect(scores.size).toBe(1);
     expect(results.map((r) => r.item.key)).toEqual(["alpha-token", "beta-token", "gamma-token"]);

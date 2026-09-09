@@ -4,6 +4,7 @@ import ParameterManager from "@/components/parameters/ParameterManager";
 import { api } from "@/lib/api";
 import { lastNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Namespace, Parameter } from "@/lib/types";
+import { SEARCH_RESULT_LIMIT } from "@/lib/key-search";
 import { MAX_KEY_LENGTH } from "@/lib/validation";
 import ParametersPage from "@/pages/parameters/index";
 import { chooseSelectOption } from "./select-test-utils";
@@ -617,5 +618,81 @@ describe("parameters search", () => {
 
     // The index is re-walked, so the deleted key leaves the results.
     await waitFor(() => expect(keyColumn()).toEqual([alt.key]));
+  });
+});
+
+describe("parameters search failures and totals", () => {
+  it("clears a legacy ?key_prefix= link instead of refilling the box", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "db" };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [ALPHA, parameter("db/host")],
+      next_page_token: "",
+    });
+    render(<ParametersPage />);
+    const input = screen.getByLabelText("Find parameter");
+    await waitFor(() => expect(input).toHaveValue("db"));
+
+    fireEvent.change(input, { target: { value: "" } });
+    // Both keys leave the URL. Dropping only `q` would let the seeding effect
+    // fall back to `key_prefix` and type the old filter back in.
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenLastCalledWith(
+        { pathname: "/parameters", query: { env: NAMESPACE.env, app: NAMESPACE.app } },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
+    );
+    // The page re-reads the settled URL; the box must stay empty.
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    await waitFor(() => expect(keyColumn()).toEqual([ALPHA.key, "db/host"]));
+    expect(screen.getByLabelText("Find parameter")).toHaveValue("");
+  });
+
+  it("counts every match, not just the ones on screen", async () => {
+    // One more than the result limit, so the cut is real and the hint honest.
+    const many = Array.from({ length: SEARCH_RESULT_LIMIT + 1 }, (_, i) =>
+      parameter(`token-${String(i).padStart(4, "0")}`),
+    );
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "token" };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: many,
+      next_page_token: "",
+    });
+    render(<ParametersPage />);
+    await waitFor(() => expect(keyColumn()).toHaveLength(SEARCH_RESULT_LIMIT));
+
+    const summary = screen.getByTestId("table-summary");
+    expect(summary).toHaveTextContent(
+      `Showing ${SEARCH_RESULT_LIMIT} of ${SEARCH_RESULT_LIMIT + 1} parameters`,
+    );
+    expect(summary).toHaveTextContent(`Showing the best ${SEARCH_RESULT_LIMIT} matches`);
+  });
+
+  it("does not claim results were cut when they were not", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "alpha" };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [ALPHA, BETA],
+      next_page_token: "",
+    });
+    render(<ParametersPage />);
+    await waitFor(() => expect(keyColumn()).toEqual([ALPHA.key]));
+    const summary = screen.getByTestId("table-summary");
+    expect(summary).toHaveTextContent("Showing 1 of 1 parameter");
+    expect(summary).not.toHaveTextContent("keep typing");
+  });
+
+  it("offers a retry when the index could not be loaded", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, q: "alpha" };
+    const list = vi.spyOn(api, "listParameters").mockRejectedValue(new Error("offline"));
+    render(<ParametersPage />);
+
+    // A failed walk is not an answer: never the "no matches" empty state.
+    expect(await screen.findByText("Search failed")).toBeVisible();
+    expect(screen.queryByText(/No parameters match/)).toBeNull();
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+
+    list.mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(keyColumn()).toEqual([ALPHA.key]));
   });
 });
