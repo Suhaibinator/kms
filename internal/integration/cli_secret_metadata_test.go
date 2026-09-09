@@ -45,7 +45,7 @@ func TestCLISecretReadsWithLargeVersionHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{SchemaVersion: integrationSchemaVersion(0),
+	if _, err := releases.ActivateRelease(actx, &kmsv1.ActivateReleaseRequest{SchemaVersion: new(uint64(0)),
 		Namespace: ref.GetNamespace(), Name: "runtime", Version: created.GetRelease().GetVersion(),
 	}); err != nil {
 		t.Fatal(err)

@@ -14,9 +14,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-//go:fix inline
-func integrationSchemaVersion(version uint64) *uint64 { return new(version) }
-
 // This test uses the real TLS/gRPC, authorization, storage, and watch stack.
 // Both clients deliberately share a process identity; their schemas alone must
 // keep release ownership, stream queues and acknowledgement rows separate.
@@ -262,7 +259,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	newUpdate := create(secondSchema.Version, "workers-text", "five", "string")
 	activate(newUpdate, 1)
 	receive(newStream, secondSchema.Version, 2)
-	if _, err := env.svc.RollbackConfigurationRelease(ctx, principal, domain.ReleaseTrack{Namespace: ns, Name: name, SchemaVersion: secondSchema.Version}, integrationSchemaVersion(2)); err != nil {
+	if _, err := env.svc.RollbackConfigurationRelease(ctx, principal, domain.ReleaseTrack{Namespace: ns, Name: name, SchemaVersion: secondSchema.Version}, new(uint64(2))); err != nil {
 		t.Fatal(err)
 	}
 	receive(newStream, secondSchema.Version, 1)
