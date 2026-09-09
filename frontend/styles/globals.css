@@ -2182,6 +2182,32 @@
   .value-literal code {
     color: var(--text);
   }
+  /* The string editor stacks the input row, the Empty string tick and the
+     hint: a blank box means "no value yet", so saying so needs the room. */
+  .value-string {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .value-empty-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    justify-self: start;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
+  .value-empty-toggle label {
+    cursor: pointer;
+  }
+  .value-empty-hint {
+    justify-self: start;
+  }
+  /* One marker for a value that is the empty string, wherever a value is
+     printed (components/EmptyValue.tsx); "missing" keeps its own wording. */
+  .empty-value {
+    font-style: italic;
+  }
   .value-binary {
     display: grid;
     gap: var(--space-2);
@@ -2254,6 +2280,12 @@
        the input it belongs to. */
     .value-input-toggle {
       margin-top: 0;
+    }
+    /* The touch floor as padding, not centring, as .ship-mode-toggle takes it:
+       the box stays on the label's first line even when the label wraps. */
+    .value-empty-toggle {
+      min-height: var(--control-h-touch);
+      padding-block: calc((var(--control-h-touch) - 1lh) / 2);
     }
     /* Matches the floor the halves and every neighbouring control sit on. */
     .value-segment {

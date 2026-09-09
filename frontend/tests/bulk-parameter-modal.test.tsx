@@ -52,6 +52,72 @@ describe("bulk parameter draft safety", () => {
     );
   });
 
+  const stringRow: ApplicationConfigurationRow = {
+    key: "banner",
+    kind: "parameter",
+    environments: {
+      dev: { present: true, value: "hold the line", content_type: "string", version: 1 },
+    },
+  };
+
+  it("refuses a cleared string value until the empty string is explicit", async () => {
+    const onSave = vi.fn();
+    render(
+      <BulkParameterModal
+        app="app"
+        environments={environments}
+        row={stringRow}
+        retryEnvironments={null}
+        saving={false}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Update banner" });
+    const input = within(dialog).getByRole("textbox", { name: "Value" });
+    fireEvent.change(input, { target: { value: "" } });
+
+    const apply = within(dialog).getByRole("button", { name: "Apply to 1 environment" });
+    expect(apply).toBeDisabled();
+    expect(within(dialog).getByTestId("value-empty-hint")).toHaveTextContent(
+      "Type a value, or tick Empty string.",
+    );
+
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Empty string/ }));
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ value: "", content_type: "string", environments: ["dev"] }),
+      ),
+    );
+  });
+
+  it("opens a stored empty string ticked", async () => {
+    render(
+      <BulkParameterModal
+        app="app"
+        environments={environments}
+        row={{
+          ...stringRow,
+          environments: {
+            dev: { present: true, value: "", content_type: "string", version: 1 },
+          },
+        }}
+        retryEnvironments={null}
+        saving={false}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Update banner" });
+    expect(within(dialog).getByRole("checkbox", { name: /Empty string/ })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: "Value" })).toBeDisabled();
+    expect(within(dialog).getByTestId("value-empty-hint")).toHaveTextContent(
+      "Saved as an empty string.",
+    );
+  });
+
   it("never substitutes all environments when an explicit clone target is not loaded", async () => {
     render(
       <BulkParameterModal

@@ -1,9 +1,10 @@
 import { ChevronsDownUp, ChevronsUpDown, Upload } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { EmptyValue } from "@/components/EmptyValue";
 import { JsonEditor } from "@/components/JsonEditor";
 import { SchemaForm } from "@/components/SchemaForm";
-import { Input, Textarea } from "@/components/ui";
+import { Checkbox, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { base64ByteLength } from "@/lib/encoding";
@@ -19,6 +20,12 @@ export interface ParameterValueInputProps {
   value: string;
   onChange: (value: string) => void;
   onValidityChange?: (valid: boolean) => void;
+  /**
+   * The value the editor was prefilled from, when the parent prefilled one.
+   * A prefilled `""` opens with Empty string already ticked; without a prefill
+   * a blank string box means "no value yet" and blocks the save.
+   */
+  storedValue?: string;
   /** The alias's pinned sub-schema; only consulted for json values. */
   schema?: JsonSchema | null;
   /** Chips shown beside the Form/JSON toggle when a pinned schema applies. */
@@ -94,6 +101,7 @@ export function ParameterValueInput({
   value,
   onChange,
   onValidityChange,
+  storedValue,
   schema = null,
   schemaLabel,
   preferForm,
@@ -114,7 +122,22 @@ export function ParameterValueInput({
   const pinned = contentType === "json" && schema !== null && buildForm(schema) !== null;
   const inferred = useInferredSchema(value, contentType === "json" && !pinned);
   const hasSchemaEditor = contentType === "json" && Boolean(schema ?? inferred);
-  const valid = validateParameterValue(value, contentType) === null;
+  // A blank string box means "no value yet"; an empty string is something the
+  // operator ticks on purpose. Only `string` has that ambiguity — every other
+  // type either rejects a blank box already or has no blank form.
+  const emptyable = contentType === "string";
+  const [explicitEmpty, setExplicitEmpty] = useState(() => value === "" && storedValue === "");
+  const emptyToggleId = useId();
+  // Re-derived only when the parent prefills again (a new row, a restore),
+  // never on a keystroke: the same discipline `resetKey` uses for schemas.
+  const prefill = useRef(storedValue);
+  useEffect(() => {
+    if (prefill.current === storedValue) return;
+    prefill.current = storedValue;
+    setExplicitEmpty(storedValue === "");
+  }, [storedValue]);
+  const blankString = emptyable && value === "" && !explicitEmpty;
+  const valid = validateParameterValue(value, contentType) === null && !blankString;
   const validityCallback = useRef(onValidityChange);
   validityCallback.current = onValidityChange;
   useEffect(() => {
@@ -331,6 +354,12 @@ export function ParameterValueInput({
     }
     default: {
       const needsTextarea = multiline || /[\r\n]/.test(value);
+      // Typing is a value, so it always means "not explicitly empty"; clearing
+      // the box by hand leaves the tick alone, because blank is not a value.
+      const change = (next: string) => {
+        if (next !== "") setExplicitEmpty(false);
+        onChange(next);
+      };
       const toggle = (
         <Button
           type="button"
@@ -349,40 +378,67 @@ export function ParameterValueInput({
           )}
         </Button>
       );
-      if (needsTextarea) {
-        return (
-          <div className="value-input-row" data-multiline="true">
-            <Textarea
-              {...aria}
-              ref={(node) => assignRef(inputRef, node)}
-              className="font-mono"
-              rows={4}
-              value={value}
-              disabled={disabled}
-              spellCheck={false}
-              placeholder={hint}
-              onChange={(event) => onChange(event.target.value)}
-              onBlur={onBlur}
-            />
-            {toggle}
-          </div>
-        );
-      }
-      return (
+      const row = needsTextarea ? (
+        <div className="value-input-row" data-multiline="true">
+          <Textarea
+            {...aria}
+            ref={(node) => assignRef(inputRef, node)}
+            className="font-mono"
+            rows={4}
+            value={value}
+            disabled={disabled || explicitEmpty}
+            spellCheck={false}
+            placeholder={hint}
+            onChange={(event) => change(event.target.value)}
+            onBlur={onBlur}
+          />
+          {explicitEmpty ? <EmptyValue /> : null}
+          {toggle}
+        </div>
+      ) : (
         <div className="value-input-row">
           <Input
             {...aria}
             ref={(node) => assignRef(inputRef, node)}
             className="font-mono"
             value={value}
-            disabled={disabled}
+            disabled={disabled || explicitEmpty}
             autoComplete="off"
             spellCheck={false}
             placeholder={hint}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={(event) => change(event.target.value)}
             onBlur={onBlur}
           />
+          {explicitEmpty ? <EmptyValue /> : null}
           {toggle}
+        </div>
+      );
+      if (!emptyable) return row;
+      return (
+        <div className="value-string">
+          {row}
+          {/* The label is a sibling, not a wrapper: a label around its own
+              control re-dispatches the click and toggles the box twice. */}
+          <div className="value-empty-toggle">
+            <Checkbox
+              id={emptyToggleId}
+              checked={explicitEmpty}
+              disabled={disabled}
+              // The visible label names the box; with a labelled field the
+              // name carries the field too, so several rows stay tellable apart.
+              aria-label={ariaLabel ? `Empty string for ${ariaLabel}` : "Empty string"}
+              onCheckedChange={(checked) => {
+                setExplicitEmpty(checked === true);
+                if (checked === true) onChange("");
+              }}
+            />
+            <label htmlFor={emptyToggleId}>Empty string</label>
+          </div>
+          {value === "" ? (
+            <span className="value-empty-hint faint text-xs" data-testid="value-empty-hint">
+              {explicitEmpty ? "Saved as an empty string." : "Type a value, or tick Empty string."}
+            </span>
+          ) : null}
         </div>
       );
     }

@@ -106,6 +106,19 @@ describe("ConfigurationMatrix", () => {
     expect(glyphs).toHaveLength(presentSecretCells.length);
   });
 
+  it("marks a stored empty value as (empty) through the shared marker", () => {
+    const overview = clone(ready);
+    const row = overview.rows.find((candidate) => candidate.kind === "parameter");
+    if (!row) throw new Error("fixture has no parameter row");
+    const env = presentEnv(overview, row.key);
+    row.environments[env].value = "";
+    renderMatrix(overview);
+
+    const cell = screen.getByRole("link", { name: `Open ${row.key} in ${env}` });
+    expect(within(cell).getByText("(empty)")).toBeVisible();
+    expect(cell.querySelector(".empty-value")).toHaveAttribute("title", "Empty string");
+  });
+
   it("opens the secret workspace on a plain click", () => {
     const overview = clone(ready);
     const secret = overview.rows.find((row) => row.kind === "secret");

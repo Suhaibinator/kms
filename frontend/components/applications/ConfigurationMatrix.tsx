@@ -1,6 +1,7 @@
 import { SlidersHorizontal } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { EmptyValue } from "@/components/EmptyValue";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { SortHeaderRow, useSort } from "@/components/SortableTable";
@@ -327,7 +328,7 @@ function MatrixCell({
         title={title}
         aria-label={label}
       >
-        {text === "" ? "(empty)" : text}
+        {text === "" ? <EmptyValue /> : text}
       </ResourceLink>
       <span className="matrix-value-meta faint text-sm">
         <span>

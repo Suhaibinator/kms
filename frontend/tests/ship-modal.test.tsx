@@ -1370,6 +1370,63 @@ describe("ShipModal", () => {
     expect(within(dialog()).queryByRole("textbox", { name: "db_password value" })).toBeNull();
   });
 
+  // The fixture's parameters are json and integer; a string alias is the only
+  // content type where a blank box and an empty string mean different things.
+  const stringApp = {
+    ...app,
+    contract: app.contract.map((field) =>
+      field.alias === "rate_limits" ? { ...field, content_type: "string" } : field,
+    ),
+  };
+
+  it("blocks Ship on a cleared string row until the empty string is explicit", async () => {
+    renderModal({ application: stringApp });
+    const editor = await within(dialog()).findByRole("textbox", { name: "rate_limits value" });
+    fireEvent.change(editor, { target: { value: "" } });
+
+    // Clearing the box used to ship "" as if it had been typed on purpose.
+    await settlePreview();
+    expect(dryRuns()).toHaveLength(0);
+    expect(shipButton()).toBeDisabled();
+    expect(
+      within(dialog()).getAllByText("Type a value, or tick Empty string.").length,
+    ).toBeGreaterThan(0);
+
+    fireEvent.click(within(dialog()).getByRole("checkbox", { name: /Empty string/ }));
+    await settlePreview();
+    await waitFor(() => expect(dryRuns()).toHaveLength(1));
+    expect(dryRuns()[0].changes).toEqual([
+      { alias: "rate_limits", value: "", content_type: "string" },
+    ]);
+  });
+
+  it("opens a stored empty string ticked and counts it as unchanged", async () => {
+    mocks.getParameter.mockResolvedValue({
+      parameter: {
+        env: "dev",
+        app: app.name,
+        key: "rate_limits",
+        value: "",
+        content_type: "string",
+        version: 9,
+        metadata_json: "{}",
+        created_by: "admin",
+        created_at_unix_ms: 1,
+        labels: {},
+      },
+    });
+    renderModal({ application: stringApp });
+
+    const box = await within(dialog()).findByRole("checkbox", { name: /Empty string/ });
+    expect(box).toBeChecked();
+    expect(within(dialog()).getByRole("textbox", { name: "rate_limits value" })).toBeDisabled();
+    expect(within(dialog()).getByTestId("ship-row-rate_limits")).toHaveAttribute(
+      "data-changed",
+      "false",
+    );
+    expect(within(dialog()).queryByText("Type a value, or tick Empty string.")).toBeNull();
+  });
+
   it("prefills every missing parameter alias for a first release", async () => {
     const empty: EnvironmentOverview[] = [
       {

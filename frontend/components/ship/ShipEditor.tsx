@@ -2,6 +2,7 @@ import { ChevronDown, GitCompareArrows, RotateCcw, Trash2 } from "lucide-react";
 import { type Ref, useId, useRef, useState } from "react";
 import { AddResourceButton } from "@/components/applications/AddResourceButton";
 import { ResourceLink } from "@/components/applications/ResourceLink";
+import { EmptyValue } from "@/components/EmptyValue";
 import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
@@ -201,8 +202,8 @@ function RowCard({
         </div>
       ) : collapsible && !open ? (
         <div className="ship-row-summary">
-          <span className="ship-row-summary-value" title={row.value ? undefined : "empty"}>
-            {row.value ? firstLine(row.value) : <span className="faint">(no value)</span>}
+          <span className="ship-row-summary-value">
+            {row.value === "" ? <EmptyValue /> : firstLine(row.value)}
           </span>
           <button
             ref={(node) => assignRef(controlRef, node)}
@@ -237,6 +238,7 @@ function RowCard({
             <ParameterValueInput
               contentType={row.content_type}
               value={row.value}
+              storedValue={row.originalValue}
               schema={schema}
               resetKey={String(resetGeneration)}
               onValidityChange={(valid) => onChange({ draftValid: valid })}
@@ -254,9 +256,12 @@ function RowCard({
                 after={row.value}
                 contentType={row.content_type}
                 beforeLabel={
-                  currentVersion !== undefined ? `current v${currentVersion}` : "current"
+                  <>
+                    {currentVersion !== undefined ? `current v${currentVersion}` : "current"}{" "}
+                    {original === "" ? <EmptyValue /> : null}
+                  </>
                 }
-                afterLabel="edited"
+                afterLabel={<>edited {row.value === "" ? <EmptyValue /> : null}</>}
                 maxHeight="40vh"
               />
             </div>

@@ -12,11 +12,15 @@ vi.mock("@/context/ToastContext", () => ({
 function Harness({
   contentType,
   initial = "",
+  storedValue,
   onChange,
+  onValidityChange,
 }: {
   contentType: string;
   initial?: string;
+  storedValue?: string;
   onChange?: (value: string) => void;
+  onValidityChange?: (valid: boolean) => void;
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -25,6 +29,8 @@ function Harness({
         <ParameterValueInput
           contentType={contentType}
           value={value}
+          storedValue={storedValue}
+          onValidityChange={onValidityChange}
           onChange={(next) => {
             setValue(next);
             onChange?.(next);
@@ -107,6 +113,104 @@ describe("ParameterValueInput scalars", () => {
     fireEvent.change(picker, { target: { files: [new File(["hi"], "blob.bin")] } });
     await waitFor(() => expect(screen.getByTestId("out")).toHaveTextContent("aGk="));
     expect(screen.getByTestId("value-binary-size")).toHaveTextContent("Decodes to 2 bytes.");
+  });
+});
+
+describe("an empty string as an explicit choice", () => {
+  const emptyBox = () => screen.getByRole("checkbox", { name: /Empty string/ });
+
+  it("treats a blank string box as no value yet", () => {
+    const validity = vi.fn();
+    render(<Harness contentType="string" onValidityChange={validity} />);
+    expect(validity).toHaveBeenLastCalledWith(false);
+    expect(emptyBox()).not.toBeChecked();
+    expect(screen.getByTestId("value-empty-hint")).toHaveTextContent(
+      "Type a value, or tick Empty string.",
+    );
+    expect(screen.queryByText("(empty)")).toBeNull();
+  });
+
+  it("saves an empty string once the box is ticked", () => {
+    const validity = vi.fn();
+    const onChange = vi.fn();
+    render(<Harness contentType="string" onValidityChange={validity} onChange={onChange} />);
+
+    fireEvent.click(emptyBox());
+    expect(onChange).toHaveBeenLastCalledWith("");
+    expect(validity).toHaveBeenLastCalledWith(true);
+    expect(emptyBox()).toBeChecked();
+    // The stored value is settled, so the box is no longer an open question.
+    expect(screen.getByRole("textbox", { name: "Value" })).toBeDisabled();
+    expect(screen.getByText("(empty)")).toBeVisible();
+    expect(screen.getByTestId("value-empty-hint")).toHaveTextContent("Saved as an empty string.");
+  });
+
+  it("unticks itself as soon as the box holds a value again", () => {
+    const validity = vi.fn();
+    render(<Harness contentType="string" onValidityChange={validity} />);
+    fireEvent.click(emptyBox());
+    fireEvent.click(emptyBox());
+    expect(emptyBox()).not.toBeChecked();
+    expect(validity).toHaveBeenLastCalledWith(false);
+
+    const control = screen.getByRole("textbox", { name: "Value" });
+    expect(control).toBeEnabled();
+    fireEvent.change(control, { target: { value: "strict" } });
+    expect(emptyBox()).not.toBeChecked();
+    expect(validity).toHaveBeenLastCalledWith(true);
+    // A value in the box answers the question; no hint is needed.
+    expect(screen.queryByTestId("value-empty-hint")).toBeNull();
+
+    // Clearing by hand is not a choice: blank means "no value yet" again.
+    fireEvent.change(control, { target: { value: "" } });
+    expect(emptyBox()).not.toBeChecked();
+    expect(validity).toHaveBeenLastCalledWith(false);
+  });
+
+  it("opens ticked when the editor was prefilled with an empty value", () => {
+    const validity = vi.fn();
+    render(<Harness contentType="string" storedValue="" onValidityChange={validity} />);
+    expect(emptyBox()).toBeChecked();
+    expect(validity).toHaveBeenLastCalledWith(true);
+    expect(screen.getByText("(empty)")).toBeVisible();
+  });
+
+  it("leaves a prefilled value alone", () => {
+    const validity = vi.fn();
+    render(
+      <Harness
+        contentType="string"
+        initial="strict"
+        storedValue="strict"
+        onValidityChange={validity}
+      />,
+    );
+    expect(emptyBox()).not.toBeChecked();
+    expect(validity).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole("textbox", { name: "Value" })).toBeEnabled();
+  });
+
+  it("keeps the tick out of every other content type", () => {
+    for (const contentType of ["integer", "float", "boolean", "json", "binary"]) {
+      const { unmount } = render(<Harness contentType={contentType} />);
+      expect(screen.queryByRole("checkbox", { name: /Empty string/ })).toBeNull();
+      expect(screen.queryByTestId("value-empty-hint")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("reports the other content types' blank validity as before", () => {
+    for (const [contentType, blankIsValid] of [
+      ["integer", false],
+      ["float", false],
+      ["boolean", false],
+      ["binary", true],
+    ] as const) {
+      const validity = vi.fn();
+      const { unmount } = render(<Harness contentType={contentType} onValidityChange={validity} />);
+      expect(validity).toHaveBeenLastCalledWith(blankIsValid);
+      unmount();
+    }
   });
 });
 

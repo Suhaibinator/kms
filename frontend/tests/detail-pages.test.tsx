@@ -686,6 +686,26 @@ describe("parameter workspace", () => {
     vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
   });
 
+  it("shows a stored empty value as (empty) rather than an empty code block", async () => {
+    vi.spyOn(api, "parameterMetadata").mockResolvedValue({
+      ...PARAMETER_META,
+      content_type: "string",
+      versions: [{ ...PARAMETER_META.versions[0], content_type: "string" }],
+    });
+    vi.spyOn(api, "getParameter").mockResolvedValue({
+      parameter: { ...PARAMETER, value: "", content_type: "string" },
+    });
+    render(<ParameterWorkspace parameterRef={PARAMETER} onClose={vi.fn()} />);
+
+    const card = (await screen.findByText("Current value")).closest(".card") as HTMLElement;
+    expect(within(card).getByText("(empty)")).toBeVisible();
+    // Nothing to copy and nothing to read: the marker is the whole answer.
+    expect(card.querySelector(".json-view")).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Copy/ })).toBeNull();
+    // "Empty" is not "missing"; that wording belongs to a value that is absent.
+    expect(within(card).queryByText("No current value.")).toBeNull();
+  });
+
   it("saves in place, preserves metadata, and notifies its parent", async () => {
     const onChanged = vi.fn();
     const save = vi.spyOn(api, "putParameter").mockResolvedValue({ version: 3, revision: 9 });
