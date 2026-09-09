@@ -63,6 +63,30 @@ export const links = {
     if (opts?.migrate) params.push(`migrate=${opts.migrate}`);
     return `/applications?${params.join("&")}`;
   },
+  /**
+   * One environment on its own page: its values, release, subscribers and
+   * settings. This is the drill-down; `application(app, { env })` stays the
+   * application overview scrolled to that column.
+   */
+  environment: (
+    app: string,
+    env: string,
+    opts?: {
+      schemaVersion?: number;
+      /** Open the Ship modal: an alias prefills a row, `true` opens it empty. */
+      ship?: string | boolean;
+      /** Open Roll back for this environment. */
+      rollback?: boolean;
+    },
+  ): string => {
+    const params = [`app=${encodeURIComponent(app)}`, `env=${encodeURIComponent(env)}`];
+    if (opts?.schemaVersion !== undefined) params.push(`schema_version=${opts.schemaVersion}`);
+    if (opts?.ship) {
+      params.push(`ship=${opts.ship === true ? "1" : encodeURIComponent(opts.ship)}`);
+    }
+    if (opts?.rollback) params.push("rollback=1");
+    return `/applications/environment?${params.join("&")}`;
+  },
   namespaces: (): string => "/namespaces",
   // `env`/`app` prefill the binding; `new` opens the create form directly;
   // `name` points at one identity (subscriber rows link here).

@@ -28,8 +28,11 @@ function environment(ns: NamespaceRef, schemaVersion?: number): Crumb[] {
   return [
     ...application(ns.app, schemaVersion),
     {
+      // The drill-down, not the application page focused on this column: a
+      // trail that walks down to a parameter walks back up through the
+      // environment's own page.
       ident: { kind: "env", value: ns.env },
-      href: links.application(ns.app, { schemaVersion, env: ns.env }),
+      href: links.environment(ns.app, ns.env, { schemaVersion }),
     },
   ];
 }

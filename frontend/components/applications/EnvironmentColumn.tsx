@@ -100,7 +100,16 @@ export function EnvironmentColumn({
     >
       <header className="pipeline-head">
         <div className="row-wrap">
-          <Ident kind="env" value={ns.env} production={environment.production} />
+          {/* The chip is the way into the environment's own page; the menu
+              repeats it as a labelled item for anyone who opens the menu first. */}
+          <Ident
+            kind="env"
+            value={ns.env}
+            production={environment.production}
+            href={links.environment(ns.app, ns.env, {
+              schemaVersion: application.schema_version,
+            })}
+          />
           <StatusChip status={environment.status} production={environment.production} />
         </div>
         <ActionMenu
@@ -110,6 +119,13 @@ export function EnvironmentColumn({
             </Button>
           }
           items={[
+            {
+              key: "open-environment",
+              label: "Open environment",
+              href: links.environment(ns.app, ns.env, {
+                schemaVersion: application.schema_version,
+              }),
+            },
             { key: "parameters", label: "Parameters", href: links.parameters(ns) },
             { key: "secrets", label: "Secrets", href: links.secrets(ns) },
             {

@@ -116,7 +116,7 @@ export function buildPaletteIndex({
       group: "Environments",
       title: nsLabel(ns),
       subtitle: app ? "Open environment" : ns.description || "Browse parameters",
-      href: app ? links.application(ns.app, { env: ns.env }) : links.parameters(ns),
+      href: app ? links.environment(ns.app, ns.env) : links.parameters(ns),
       keywords: ["environment", "namespace", ns.env, ns.app],
       adminOnly: Boolean(app),
     });
