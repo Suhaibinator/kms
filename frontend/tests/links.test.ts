@@ -85,7 +85,7 @@ describe("links", () => {
   it("secrets list", () => {
     expect(links.secrets()).toBe("/secrets");
     expect(links.secrets(ns)).toBe("/secrets?env=prod&app=billing%20api");
-    expect(links.secrets(ns, "db/")).toBe("/secrets?env=prod&app=billing%20api&key_prefix=db%2F");
+    expect(links.secrets(ns, "db/")).toBe("/secrets?env=prod&app=billing%20api&q=db%2F");
   });
 
   it("secret detail", () => {
@@ -105,9 +105,7 @@ describe("links", () => {
   it("parameters list", () => {
     expect(links.parameters()).toBe("/parameters");
     expect(links.parameters(ns)).toBe("/parameters?env=prod&app=billing%20api");
-    expect(links.parameters(ns, "db/")).toBe(
-      "/parameters?env=prod&app=billing%20api&key_prefix=db%2F",
-    );
+    expect(links.parameters(ns, "db/")).toBe("/parameters?env=prod&app=billing%20api&q=db%2F");
   });
 
   it("parameter detail", () => {

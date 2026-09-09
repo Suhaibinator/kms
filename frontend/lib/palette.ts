@@ -3,6 +3,7 @@
 // comes back. Scoring is token-prefix / substring / subsequence per query
 // token; every token must match somewhere or the item drops out.
 
+import { isSubsequence, wordsOf } from "@/lib/fuzzy";
 import { links, type NamespaceRef } from "@/lib/links";
 import type { Application, Namespace } from "@/lib/types";
 
@@ -188,21 +189,6 @@ export function buildPaletteIndex({
   return isAdmin ? items : items.filter((item) => !item.adminOnly);
 }
 
-const wordsOf = (text: string): string[] =>
-  text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-
-function isSubsequence(needle: string, haystack: string): boolean {
-  let i = 0;
-  for (const ch of haystack) {
-    if (ch === needle[i]) i += 1;
-    if (i === needle.length) return true;
-  }
-  return needle.length === 0;
-}
-
 function scoreToken(token: string, item: PaletteItem): number {
   const title = item.title.toLowerCase();
   if (title === token) return 100;
@@ -293,7 +279,7 @@ export function fallthroughActions(query: string, ns: NamespaceRef | null): Pale
       id: "action:search-parameters",
       group: "Actions",
       title: `Search parameters for "${trimmed}"`,
-      subtitle: `Keys starting with ${trimmed} · ${where}`,
+      subtitle: `Keys matching ${trimmed} · ${where}`,
       href: links.parameters(ns, trimmed),
       keywords: [],
     },
@@ -301,7 +287,7 @@ export function fallthroughActions(query: string, ns: NamespaceRef | null): Pale
       id: "action:search-secrets",
       group: "Actions",
       title: `Search secrets for "${trimmed}"`,
-      subtitle: `Keys starting with ${trimmed} · ${where}`,
+      subtitle: `Keys matching ${trimmed} · ${where}`,
       href: links.secrets(ns, trimmed),
       keywords: [],
     },
