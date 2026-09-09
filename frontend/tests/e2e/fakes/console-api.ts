@@ -668,6 +668,12 @@ function ship(state: ConsoleState, request: ShipRequest): { status: number; body
   if (!ns || request.application !== state.application.name) {
     return error(404, "not_found", "namespace not found");
   }
+  // The server allows an empty change set only for a first release; with an
+  // active one it refuses before doing any work. The console must never send
+  // that request, so the fake refuses it too.
+  if ((request.changes ?? []).length === 0 && ns.active > 0) {
+    return error(400, "invalid_argument", "at least one change is required");
+  }
   for (const change of request.changes ?? []) {
     const field = state.application.contract.find((entry) => entry.alias === change.alias);
     if (!field)

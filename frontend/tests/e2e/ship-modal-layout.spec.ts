@@ -1,7 +1,24 @@
 // Quick Change needs room for every release column; long identifiers wrap
 // within the preview instead of forcing horizontal navigation.
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
 import { incidentState, mockConsole } from "./fakes/console-api";
+
+/**
+ * The dialog's box once it has stopped moving: two identical readings a frame
+ * apart. It is sized by its content, so it re-lays-out as the preview arrives
+ * and a single reading can catch it mid-flight.
+ */
+async function settledBox(target: Locator) {
+  let previous = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const box = await target.boundingBox();
+    const reading = JSON.stringify(box);
+    if (box && reading === previous) return box;
+    previous = reading;
+    await target.page().waitForTimeout(50);
+  }
+  throw new Error("The dialog's geometry never settled");
+}
 
 for (const width of [320, 390, 640, 768, 820, 1024, 1280, 1440]) {
   test(`Quick Change keeps all preview columns visible at ${width}px`, async ({
@@ -71,12 +88,21 @@ for (const width of [320, 390, 640, 768, 820, 1024, 1280, 1440]) {
         table.locator("tbody tr").first().locator('td[data-label="Change"]'),
       ).toBeVisible();
     }
-    const bounds = await dialog.boundingBox();
-    if (!bounds) throw new Error("Missing dialog bounds");
+    const bounds = await settledBox(dialog);
     // The mobile-fullscreen block is `width < 768px`, matching Tailwind's `md`,
-    // so 768 is the first width that gets the centred desktop dialog.
-    if (width >= 768) expect(bounds.width).toBeGreaterThan(720);
-    else expect(bounds.width).toBeCloseTo(width, 0);
+    // so 768 is the first width that gets the centred desktop dialog. That
+    // dialog is `wide="xl"` — 960px, or the viewport less its 32px gutter —
+    // rather than the old full-viewport workspace whose children were then
+    // capped at 900px, leaving ~300px of empty dialog beside them.
+    if (width >= 768) {
+      expect(bounds.width).toBeCloseTo(Math.min(960, width - 32), 0);
+      // The desktop dialog hugs its content between the wizard floor and the
+      // viewport ceiling; it no longer claims the full height whatever it
+      // holds. Below 768 it is deliberately full-screen.
+      expect(bounds.height).toBeLessThanOrEqual(1000 - 32);
+    } else {
+      expect(bounds.width).toBeCloseTo(width, 0);
+    }
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
   });
@@ -166,6 +192,17 @@ test("every ship step shares one measure", async ({ page }, testInfo) => {
   const lefts = new Set(children.map((child) => child.left));
   expect([...widths]).toHaveLength(1);
   expect([...lefts]).toHaveLength(1);
+  // That measure is the dialog's own content box: the modal is sized to hug
+  // its content, so nothing inside it is capped narrower than the dialog.
+  const measure = await page.locator("[data-modal-body]").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return (
+      element.clientWidth -
+      Number.parseFloat(style.paddingLeft) -
+      Number.parseFloat(style.paddingRight)
+    );
+  });
+  expect(Math.abs(children[0].width - measure)).toBeLessThanOrEqual(1);
 });
 
 // The blocked reason keeps its line whether or not it has anything to say: on a

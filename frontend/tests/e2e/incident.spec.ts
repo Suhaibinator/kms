@@ -131,3 +131,65 @@ test("incident: edit & ship to prod, rejected instance, roll back to the previou
   await expect(page.getByTestId("ship-modal")).toHaveCount(0);
   await expect(column).toContainText(`${releaseName}@${activeBefore}`);
 });
+
+// A secret rotated past the active pin is an unreleased change like any other,
+// but it can never be typed into an editor row: the only way it reaches the
+// change set is the opt-in the modal ticks when the whole environment is
+// shipped. Without it the dry run would carry no changes at all, which the
+// server refuses against an active release.
+test("ship an environment whose only unreleased change is a rotated secret", async ({ page }) => {
+  const state = incidentState();
+  const dev = state.namespaces.dev;
+  const releaseName = state.application.release_name;
+  const activeBefore = dev.active;
+  const nextVersion = dev.releases.length + 1;
+  // Rotate the secret past the version the active release pins.
+  dev.secrets.db_password.versionCount = 2;
+  await mockConsole(page, state);
+
+  await page.goto("/applications?app=gradethis&env=dev");
+  const column = page.locator('[data-env="dev"]');
+  await expect(column).toContainText("v2 unreleased");
+  await column.getByRole("button", { name: "1 unreleased change → Ship" }).click();
+
+  const modal = page.getByTestId("ship-modal");
+  await expect(modal).toBeVisible();
+  // No value is edited; the secret's new version is the whole change set, and
+  // the pin row says which way this ship would move it.
+  await expect(modal.getByRole("textbox")).toHaveCount(0);
+  await expect(modal.getByTestId("ship-secret-pin-db_password")).toContainText("v1 → v2");
+  const optIn = modal
+    .getByTestId("ship-drift")
+    .getByRole("checkbox", { name: /include db_password v2/ });
+  await expect(optIn).toBeChecked();
+
+  const preview = modal.getByTestId("ship-preview");
+  await expect(preview).toHaveAttribute("data-stale", "false");
+  await expect(preview.locator('tr[data-alias="db_password"]')).toHaveAttribute(
+    "data-changed",
+    "true",
+  );
+  await expect(modal.getByTestId("ship-validation")).toContainText("valid");
+
+  const ship = page.getByTestId("ship-submit");
+  await expect(ship).toBeEnabled();
+  await ship.click();
+  await expect(modal).toHaveAttribute("data-phase", "rollout");
+  await expect(page.getByRole("dialog", { name: /Shipped/ })).toContainText(
+    `${releaseName}@${nextVersion}`,
+  );
+  const shipped = state.log.filter(
+    (entry) =>
+      entry.path === "/applications/ship" && !(entry.body as { dry_run?: boolean }).dry_run,
+  );
+  expect(shipped).toHaveLength(1);
+  expect((shipped[0].body as { changes: unknown[] }).changes).toEqual([
+    { alias: "db_password", version: 2 },
+  ]);
+  expect(dev.active).toBe(nextVersion);
+  expect(activeBefore).toBe(nextVersion - 1);
+
+  await page.getByTestId("ship-done").click();
+  await expect(page.getByTestId("ship-modal")).toHaveCount(0);
+  await expect(column).toContainText(`${releaseName}@${nextVersion}`);
+});

@@ -6,13 +6,14 @@ import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
-import { Badge, Button, Field } from "@/components/ui";
+import { Badge, Button, Checkbox, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
 import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
 import type { Application, EnvironmentOverview, OverviewValue } from "@/lib/types";
 import {
   addableAliases,
+  type DriftCandidate,
   pinnedSecrets,
   rowChanged,
   type ShipRow,
@@ -33,7 +34,12 @@ export interface ShipEditorProps {
   rows: ShipRow[];
   /** Secret aliases with no resource yet; a value must be added outside this modal. */
   blockers: string[];
+  /** Aliases whose resource moved past the active pin, offered as opt-ins. */
+  drift: DriftCandidate[];
+  /** The drifted aliases this release will pin at their current version. */
+  optIns: string[];
   disabled: boolean;
+  onToggleOptIn: (alias: string, include: boolean) => void;
   onEnvironmentChange: (environment: string) => void;
   onRowChange: (alias: string, patch: Partial<ShipRow>) => void;
   onAddRow: (alias: string) => void;
@@ -263,24 +269,35 @@ function RowCard({
 
 /**
  * One present secret and how the release will carry it: the pin the active
- * release already holds, or the version a first release will pin. Secrets are
+ * release already holds, the version a first release will pin, or — when the
+ * secret has rotated past that pin — whether this ship moves it. Secrets are
  * never typed here, so the only action is Manage.
  */
 function SecretPin({
   value,
   environment,
   app,
+  included,
   onOpen,
 }: {
   value: OverviewValue;
   environment: string;
   app: string;
+  /** The operator opted this secret's current version into the release. */
+  included: boolean;
   onOpen?: (env: string, key: string) => void;
 }) {
+  const pinned = value.pinned_version;
+  const current = value.current_version;
+  const unreleased = pinned !== undefined && current !== undefined && current !== pinned;
   const pin =
-    value.pinned_version !== undefined
-      ? `pinned v${value.pinned_version}`
-      : `will pin v${value.current_version ?? "?"}`;
+    pinned === undefined
+      ? `will pin v${current ?? "?"}`
+      : !unreleased
+        ? `pinned v${pinned}`
+        : included
+          ? `v${pinned} → v${current}`
+          : `pinned v${pinned} · v${current} unreleased`;
   return (
     <li className="ship-secret-pin" data-testid={`ship-secret-pin-${value.alias}`}>
       <Ident kind="alias" value={value.alias} />
@@ -312,7 +329,10 @@ export function ShipEditor({
   env,
   rows,
   blockers,
+  drift,
+  optIns,
   disabled,
+  onToggleOptIn,
   onEnvironmentChange,
   onRowChange,
   onAddRow,
@@ -324,6 +344,7 @@ export function ShipEditor({
 }: ShipEditorProps) {
   const envSelectId = useId();
   const pinsId = useId();
+  const driftId = useId();
   const addable = addableAliases(application, rows);
   const pins = pinnedSecrets(env);
   // With many rows each folds to a line until opened; a row with a problem or
@@ -401,6 +422,7 @@ export function ShipEditor({
                 value={value}
                 environment={environment}
                 app={application.name}
+                included={optIns.includes(value.alias)}
                 onOpen={onOpenSecret}
               />
             ))}
@@ -408,10 +430,52 @@ export function ShipEditor({
         </section>
       ) : null}
 
+      {/* The opt-ins belong to the change set, so they live with the changes:
+          an active release refuses an empty one, and until this list moved
+          here it only appeared once a preview existed — which a change set of
+          nothing could never produce. */}
+      {drift.length > 0 ? (
+        <section className="ship-drift-section" aria-labelledby={driftId} data-testid="ship-drift">
+          <h4 id={driftId} className="ship-subtitle">
+            Unreleased changes
+          </h4>
+          <p className="faint text-sm">
+            These moved past the active pins. Ticked versions are pinned in this release; unticked
+            ones keep the active pin.
+          </p>
+          <ul className="ship-optins">
+            {drift.map((candidate) => {
+              const id = `ship-optin-${candidate.alias}`;
+              const checked = optIns.includes(candidate.alias);
+              return (
+                <li key={candidate.alias}>
+                  <label className="ship-optin" htmlFor={id}>
+                    <Checkbox
+                      id={id}
+                      checked={checked}
+                      disabled={disabled}
+                      onCheckedChange={(next) => onToggleOptIn(candidate.alias, next === true)}
+                    />
+                    <span>
+                      include <code>{candidate.alias}</code> v{candidate.current}
+                      <span className="faint"> (pinned v{candidate.pinned})</span>
+                    </span>
+                    <Badge kind="neutral">{candidate.kind}</Badge>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       {rows.length === 0 ? (
         <p className="faint text-sm ship-empty-rows">
-          No values are being edited. Add a change below, or ship as-is to pin every alias at its
-          current version.
+          {env?.release.active
+            ? drift.length > 0
+              ? "No values are being edited. Add a change below or include an unreleased version above."
+              : "No values are being edited. Add a change below."
+            : "No values are being edited. Add a change below, or ship as-is to pin every alias at its current version."}
         </p>
       ) : (
         <ul className="ship-rows" aria-label="Changes">
