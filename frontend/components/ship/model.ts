@@ -190,6 +190,27 @@ export function driftCandidates(
 }
 
 /**
+ * The opt-ins a fresh compose starts with. Shipping the environment ("N
+ * unreleased changes → Ship") means shipping what has moved, so every drifted
+ * alias is ticked: without it a secret's new version has no way into the
+ * change set, and an active release refuses an empty one. Opening on a single
+ * alias ("Edit & ship") ships that edit alone until the operator ticks more.
+ */
+export function initialOptIns(
+  env: EnvironmentOverview | null,
+  rows: readonly ShipRow[],
+  initialAlias?: string,
+): string[] {
+  if (initialAlias !== undefined) return [];
+  return driftCandidates(env, rows).map((candidate) => candidate.alias);
+}
+
+/** Whether the opt-ins differ from the set the compose step started with. */
+export function optInsChanged(optIns: readonly string[], initial: readonly string[]): boolean {
+  return optIns.length !== initial.length || optIns.some((alias) => !initial.includes(alias));
+}
+
+/**
  * Whether a previewed entry moves the release: a new write, an alias with
  * nothing to pin, or a pin that lands on a different version than before.
  */

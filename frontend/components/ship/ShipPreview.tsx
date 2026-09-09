@@ -3,11 +3,11 @@ import { useState } from "react";
 import { FindingList } from "@/components/FindingList";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { ViolationTable, type ViolationTableProps } from "@/components/releases/ViolationTable";
-import { Badge, Button, Checkbox, Spinner } from "@/components/ui";
+import { Badge, Button, Spinner } from "@/components/ui";
 import type { FixAction } from "@/lib/readiness";
 import type { Finding, ShipEntryChange, ShipPreview as ShipPreviewData } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { type DriftCandidate, entryChanged } from "./model";
+import { entryChanged } from "./model";
 
 export interface ShipPreviewProps {
   application: string;
@@ -20,10 +20,12 @@ export interface ShipPreviewProps {
   error: string | null;
   /** Whether a dry run can be requested at all (every row parses). */
   ready: boolean;
-  drift: DriftCandidate[];
-  optIns: string[];
+  /**
+   * The change set is empty under an active release: the server would reject
+   * the dry run outright, so none is sent and nothing is previewed yet.
+   */
+  nothingToPreview: boolean;
   disabled: boolean;
-  onToggleOptIn: (alias: string, include: boolean) => void;
   onRefresh: () => void;
   onFix: (action: FixAction, finding: Finding) => void;
   /** Links a violation's alias to its resource page. */
@@ -54,10 +56,8 @@ export function ShipPreview({
   stale,
   error,
   ready,
-  drift,
-  optIns,
+  nothingToPreview,
   disabled,
-  onToggleOptIn,
   onRefresh,
   onFix,
   resolveHref,
@@ -76,11 +76,13 @@ export function ShipPreview({
     ? "Previewing…"
     : !ready
       ? "Fix the values above to preview."
-      : stale
-        ? "Edited since the last preview."
-        : preview
-          ? "Up to date."
-          : "";
+      : nothingToPreview
+        ? ""
+        : stale
+          ? "Edited since the last preview."
+          : preview
+            ? "Up to date."
+            : "";
 
   return (
     <section
@@ -100,7 +102,7 @@ export function ShipPreview({
             type="button"
             variant="outline"
             size="sm"
-            disabled={disabled || loading || !ready}
+            disabled={disabled || loading || !ready || nothingToPreview}
             onClick={onRefresh}
           >
             <RefreshCw size={14} aria-hidden />
@@ -115,7 +117,11 @@ export function ShipPreview({
         </div>
       ) : null}
 
-      {preview ? (
+      {nothingToPreview ? (
+        <p className="faint text-sm" data-testid="ship-preview-empty">
+          Nothing to preview yet. Add a change or include an unreleased version above.
+        </p>
+      ) : preview ? (
         <div className="ship-preview-body">
           <div className="ship-preview-section">
             <h4 className="ship-subtitle">Writes</h4>
@@ -211,39 +217,6 @@ export function ShipPreview({
               </Button>
             ) : null}
           </div>
-
-          {drift.length > 0 ? (
-            <div className="ship-preview-section" data-testid="ship-drift">
-              <h4 className="ship-subtitle">Unreleased changes not included</h4>
-              <p className="faint text-sm">
-                These resources moved past the active pins. Tick one to pin its current version in
-                this release; untouched, clients keep serving the pinned version.
-              </p>
-              <ul className="ship-optins">
-                {drift.map((candidate) => {
-                  const id = `ship-optin-${candidate.alias}`;
-                  const checked = optIns.includes(candidate.alias);
-                  return (
-                    <li key={candidate.alias}>
-                      <label className="ship-optin" htmlFor={id}>
-                        <Checkbox
-                          id={id}
-                          checked={checked}
-                          disabled={disabled}
-                          onCheckedChange={(next) => onToggleOptIn(candidate.alias, next === true)}
-                        />
-                        <span>
-                          include <code>{candidate.alias}</code> v{candidate.current}
-                          <span className="faint"> (pinned v{candidate.pinned})</span>
-                        </span>
-                        <Badge kind="neutral">{candidate.kind}</Badge>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
 
           <dl className="ship-facts">
             <dt>Schema</dt>

@@ -12,14 +12,11 @@
     display: grid;
     gap: var(--space-5);
   }
-  /* One measure for every step. The cap used to sit on .ship-form alone, so
-     the stepper, the mode row and the rollout panel ran the full 1160px
-     workspace while the form they head ran 900px, and moving from Preview to
-     Rollout re-flowed the column. Wide tables still scroll inside their own
-     .table-wrap, so nothing needs the extra room. */
-  .ship-modal > * {
-    max-width: 900px;
-  }
+  /* One measure for every step, and it is the dialog's own: the modal is no
+     longer a full-viewport workspace capped at 900px inside — which left ~300px
+     of empty dialog to its right — but an xl dialog that hugs its content, so
+     every child simply fills the column. Wide tables still scroll inside their
+     own .table-wrap, so nothing needs more room than that. */
   /* Grid items default to `min-width: auto`, so one wide child — the preview
      table with its unbreakable mono aliases and keys — widens the shared
      column and every sibling (blurb, blocker cards) stretches with it, which
@@ -630,12 +627,20 @@
   .ship-confirm-summary.is-stale {
     opacity: 0.6;
   }
-  .ship-secret-pins-section {
+  /* The opt-in list sits in the Change step, between the pins and the rows:
+     it is part of the change set, not a report on one. */
+  .ship-secret-pins-section,
+  .ship-drift-section {
     display: grid;
     gap: var(--space-2);
   }
-  .ship-secret-pins-section .ship-subtitle {
+  .ship-secret-pins-section .ship-subtitle,
+  .ship-drift-section .ship-subtitle,
+  .ship-drift-section p {
     margin-bottom: 0;
+  }
+  .ship-drift-section p {
+    margin-top: 0;
   }
   .ship-secret-pin-manage {
     margin-left: auto;

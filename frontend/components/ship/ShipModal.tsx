@@ -31,10 +31,12 @@ import {
   entryChanged,
   everActivated,
   freezePreviewChanges,
+  initialOptIns,
   initialRows,
   makeRow,
   missingSecrets,
   needsTypedConfirmation,
+  optInsChanged,
   PREVIEW_DEBOUNCE_MS,
   readStoredMode,
   reuseWrittenVersions,
@@ -136,6 +138,11 @@ export default function ShipModal({
   // What each row's editor started from, so the dirty guard only fires on a
   // real edit: the prefilled current value, or "" for a row with no value yet.
   const prefilled = useRef(new Map<string, string>());
+  // The opt-ins the compose step started with. Shipping an environment ticks
+  // its unreleased changes up front, and a tick the operator never touched is
+  // not an unsaved edit: the dirty guard compares against this, not against
+  // "anything ticked".
+  const baselineOptIns = useRef<string[]>([]);
   // The environment select is the first real control; the dialog opens on it
   // unless a prefilled row is already editable, in which case it opens there.
   const environmentSelectRef = useRef<HTMLElement | null>(null);
@@ -164,6 +171,11 @@ export default function ShipModal({
   const stale = preview !== null && previewKey !== key;
   const production = needsTypedConfirmation(environment);
   const hasActive = env?.release.active !== undefined;
+  // The server allows an empty change set only for a first release; against an
+  // active one it answers "at least one change is required". Never spend a dry
+  // run on that: say what is missing instead.
+  const nothingToPreview = hasActive && changes.length === 0;
+  const canPreview = ready && !nothingToPreview;
 
   const resetFor = useCallback(
     (nextEnvironment: string) => {
@@ -178,7 +190,9 @@ export default function ShipModal({
         nextRows.filter((row) => row.loaded).map((row) => [row.alias, ""]),
       );
       setRows(nextRows);
-      setOptIns([]);
+      const nextOptIns = initialOptIns(nextEnv, nextRows, initialAlias);
+      baselineOptIns.current = nextOptIns;
+      setOptIns(nextOptIns);
       setPreview(null);
       setPreviewChanges([]);
       setPreviewKey("");
@@ -260,7 +274,7 @@ export default function ShipModal({
   useFocusOnAppear(initialRowControl, open && initialRowLoaded, { unlessMoved: true, restingOn });
 
   const runPreview = useCallback(async () => {
-    if (!ready) return;
+    if (!canPreview) return;
     const run = previewRequest.begin();
     const attempted = changes;
     setPreviewKey(key);
@@ -291,19 +305,20 @@ export default function ShipModal({
   }, [
     application.name,
     application.schema_version,
+    canPreview,
     changes,
     environment,
     key,
     previewRequest,
-    ready,
   ]);
 
-  // Auto dry-run: 400 ms after the last edit, once every row parses.
+  // Auto dry-run: 400 ms after the last edit, once every row parses and the
+  // change set is one the server would accept.
   useEffect(() => {
-    if (!open || phase !== "compose" || !ready || previewKey === key) return;
+    if (!open || phase !== "compose" || !canPreview || previewKey === key) return;
     const timer = window.setTimeout(() => void runPreview(), PREVIEW_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [open, phase, ready, previewKey, key, runPreview]);
+  }, [open, phase, canPreview, previewKey, key, runPreview]);
 
   function changeMode(next: ShipMode) {
     setMode(next);
@@ -370,19 +385,21 @@ export default function ShipModal({
         ? "Fix the values above to ship."
         : blockers.length > 0
           ? `Add the missing ${blockers.length === 1 ? "secret" : "secrets"} first: ${blockers.join(", ")}.`
-          : previewLoading
-            ? "Previewing…"
-            : preview === null
-              ? "Waiting for the preview."
-              : stale
-                ? "Edited since the last preview; it re-runs automatically."
-                : !preview.validation.valid
-                  ? "The candidate release is invalid."
-                  : previewChanges.length === 0 && hasActive
-                    ? "Nothing to ship: no value changed."
-                    : production && confirmText !== environment
-                      ? `Type ${environment} to ship to production.`
-                      : null;
+          : nothingToPreview
+            ? "Nothing to ship: add a change or include an unreleased version."
+            : previewLoading
+              ? "Previewing…"
+              : preview === null
+                ? "Waiting for the preview."
+                : stale
+                  ? "Edited since the last preview; it re-runs automatically."
+                  : !preview.validation.valid
+                    ? "The candidate release is invalid."
+                    : previewChanges.length === 0 && hasActive
+                      ? "Nothing to ship: no value changed."
+                      : production && confirmText !== environment
+                        ? `Type ${environment} to ship to production.`
+                        : null;
 
   // Unsaved edits only matter while composing; once shipped (or in conflict)
   // the values were sent and closing loses nothing.
@@ -396,7 +413,7 @@ export default function ShipModal({
           validateParameterValue(row.value, row.content_type) === null) ||
           row.value !== (prefilled.current.get(row.alias) ?? "")),
     ) ||
-      optIns.length > 0 ||
+      optInsChanged(optIns, baselineOptIns.current) ||
       confirmText !== "");
 
   const parameterAliases = useMemo(
@@ -591,7 +608,12 @@ export default function ShipModal({
       <Modal
         mobileFullScreen
         open={open}
-        workspace
+        // The compose step is a column of forms, not a data workspace: the
+        // dialog hugs its content and lets wide tables scroll inside their own
+        // wrapper. `wizard` keeps a height floor so it does not re-centre
+        // between compose, preview and rollout.
+        wide="xl"
+        wizard
         title={title}
         onClose={handleClose}
         dismissible={phase !== "shipping"}
@@ -678,7 +700,10 @@ export default function ShipModal({
                 env={env}
                 rows={rows}
                 blockers={blockers}
+                drift={drift}
+                optIns={optIns}
                 disabled={disabled}
+                onToggleOptIn={toggleOptIn}
                 onEnvironmentChange={resetFor}
                 onRowChange={patchRow}
                 onAddRow={addRow}
@@ -693,10 +718,8 @@ export default function ShipModal({
                 stale={stale}
                 error={previewError}
                 ready={ready}
-                drift={drift}
-                optIns={optIns}
+                nothingToPreview={nothingToPreview}
                 disabled={disabled}
-                onToggleOptIn={toggleOptIn}
                 onRefresh={() => void runPreview()}
                 onFix={handleFix}
                 resolveHref={resolveHref}

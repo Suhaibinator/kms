@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShipModalProps } from "@/components/applications/contracts";
 import { VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
 import {
+  driftCandidates,
   freezePreviewChanges,
+  initialOptIns,
+  optInsChanged,
   PREVIEW_DEBOUNCE_MS,
   SHIP_MODE_STORAGE_KEY,
+  type ShipRow,
 } from "@/components/ship/model";
 import ShipModal from "@/components/ship/ShipModal";
 import { ApiError } from "@/lib/api";
@@ -127,6 +131,40 @@ const appliedInstance: ReleaseSubscriberState = {
   diagnostic: "",
 };
 
+/** dev, with the secret rotated one version past the pin the active release holds. */
+function rotatedSecret(): EnvironmentOverview[] {
+  return incident.environments.map((env) =>
+    env.namespace.env === "dev"
+      ? {
+          ...env,
+          values: env.values.map((value) =>
+            value.alias === secretAlias
+              ? { ...value, current_version: 2, pinned_version: 1 }
+              : value,
+          ),
+        }
+      : env,
+  );
+}
+
+/**
+ * The backend rule, in the mock: an empty change set is InvalidArgument unless
+ * this would be the environment's first release. Without it the unit tests
+ * would keep accepting a request the server refuses.
+ */
+function shipLike(
+  result: ShipResult = activated,
+  environments: EnvironmentOverview[] = incident.environments,
+) {
+  return async (request: ShipRequest): Promise<ShipResult> => {
+    const env = environments.find((candidate) => candidate.namespace.env === request.environment);
+    if ((request.changes ?? []).length === 0 && env?.release.active !== undefined) {
+      throw new ApiError("invalid_argument", "at least one change is required", 400);
+    }
+    return request.dry_run ? preview : result;
+  };
+}
+
 function renderModal(overrides: Partial<ShipModalProps> = {}) {
   const props: ShipModalProps = {
     application: app,
@@ -176,6 +214,31 @@ function realShips(): ShipRequest[] {
     .filter((request) => request.dry_run !== true);
 }
 
+describe("ship model", () => {
+  it("ticks every unreleased alias when no single alias was named", () => {
+    const [drifted] = rotatedSecret();
+    expect(driftCandidates(drifted, []).map((candidate) => candidate.alias)).toEqual([secretAlias]);
+    expect(initialOptIns(drifted, [], undefined)).toEqual([secretAlias]);
+    // "Edit & ship <alias>" ships that edit alone until the operator says more.
+    expect(initialOptIns(drifted, [], "rate_limits")).toEqual([]);
+    // Nothing has moved past the pins in dev as the fixture stands.
+    expect(initialOptIns(dev, [], undefined)).toEqual([]);
+    // An alias with an editor row is a change, never an opt-in.
+    const rows: ShipRow[] = [
+      { alias: secretAlias, content_type: "string", missing: false, value: "", loaded: true },
+    ];
+    expect(initialOptIns(drifted, rows, undefined)).toEqual([]);
+  });
+
+  it("only calls the opt-ins dirty once they differ from what the modal ticked", () => {
+    expect(optInsChanged([secretAlias], [secretAlias])).toBe(false);
+    expect(optInsChanged([], [])).toBe(false);
+    expect(optInsChanged([], [secretAlias])).toBe(true);
+    expect(optInsChanged([secretAlias], [])).toBe(true);
+    expect(optInsChanged(["database"], [secretAlias])).toBe(true);
+  });
+});
+
 describe("ship editor rows", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -196,9 +259,7 @@ describe("ship editor rows", () => {
         labels: {},
       },
     });
-    mocks.ship.mockImplementation(async (request: ShipRequest) =>
-      request.dry_run ? preview : activated,
-    );
+    mocks.ship.mockImplementation(shipLike());
     mocks.releaseSubscribers.mockResolvedValue({
       subscribers: [],
       current_revision: 119,
@@ -315,9 +376,7 @@ describe("ShipModal", () => {
         labels: {},
       },
     });
-    mocks.ship.mockImplementation(async (request: ShipRequest) =>
-      request.dry_run ? preview : activated,
-    );
+    mocks.ship.mockImplementation(shipLike());
     mocks.releaseSubscribers.mockResolvedValue({
       subscribers: [],
       current_revision: 119,
@@ -736,15 +795,20 @@ describe("ShipModal", () => {
       expect(shipButton()).toBeDisabled();
     });
 
-    it("says there is nothing to ship when no value changed", async () => {
-      const unchanged: ShipResult = { ...preview, preview: { ...preview.preview } };
-      mocks.ship.mockImplementation(async () => unchanged);
-      // dev has an active release and every value present: no row opens.
+    it("says there is nothing to ship, and dry-runs nothing, on an empty change set", async () => {
+      // dev has an active release, every value present and nothing unreleased:
+      // no row opens and there is nothing to include. The server refuses an
+      // empty change set against an active release, so none is sent.
       renderModal({ initialAlias: undefined });
       expect(within(dialog()).queryByRole("textbox")).toBeNull();
       await settlePreview();
-      await waitFor(() => expect(dryRuns()).toHaveLength(1));
-      await waitFor(() => expect(note()).toHaveTextContent("Nothing to ship: no value changed."));
+      expect(dryRuns()).toHaveLength(0);
+      expect(within(dialog()).getByTestId("ship-preview-empty")).toHaveTextContent(
+        "Nothing to preview yet. Add a change or include an unreleased version above.",
+      );
+      expect(note()).toHaveTextContent(
+        "Nothing to ship: add a change or include an unreleased version.",
+      );
       expect(shipButton()).toBeDisabled();
     });
 
@@ -1020,7 +1084,9 @@ describe("ShipModal", () => {
     await settlePreview();
     await waitFor(() => expect(dryRuns()).toHaveLength(1));
 
-    const drift = await within(dialog()).findByTestId("ship-drift");
+    // The list belongs to the change step: it is part of what will ship.
+    const drift = within(within(dialog()).getByTestId("ship-editor")).getByTestId("ship-drift");
+    expect(within(drift).getByText("Unreleased changes")).toBeVisible();
     const optIn = within(drift).getByRole("checkbox", {
       name: new RegExp(`include rate_limits v${prodRateLimits?.current_version}`),
     });
@@ -1040,6 +1106,90 @@ describe("ShipModal", () => {
       { alias: "database", value: '{"host":"db"}', content_type: "json" },
       { alias: "rate_limits", label: "current" },
     ]);
+  });
+
+  it("pre-selects the unreleased secret when the whole environment is shipped", async () => {
+    const environments = rotatedSecret();
+    const { props } = renderModal({ environments, initialAlias: undefined });
+    // No parameter changed, so the secret's new version is the only thing that
+    // can move the release — and the modal was opened to ship exactly that.
+    const drift = within(within(dialog()).getByTestId("ship-editor")).getByTestId("ship-drift");
+    const optIn = within(drift).getByRole("checkbox", {
+      name: new RegExp(`include ${secretAlias} v2`),
+    });
+    expect(optIn).toHaveAttribute("aria-checked", "true");
+
+    await settlePreview();
+    await waitFor(() => expect(dryRuns()).toHaveLength(1));
+    expect(dryRuns()[0].changes).toEqual([{ alias: secretAlias, label: "current" }]);
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+
+    // A tick the operator never touched is not an unsaved edit.
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull();
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the unreleased changes in the editor before any preview exists", async () => {
+    mocks.ship.mockRejectedValue(new ApiError("unavailable", "preview unavailable", 503));
+    mocks.getParameter.mockResolvedValue({ parameter: { value: '{"host": "db"}' } });
+    renderModal({ initialEnvironment: "prod", initialAlias: "database" });
+    await within(dialog()).findByRole("textbox", { name: "database value" });
+    const editor = within(dialog()).getByTestId("ship-editor");
+    expect(within(editor).getByTestId("ship-drift")).toBeVisible();
+    expect(dryRuns()).toHaveLength(0);
+
+    await settlePreview();
+    await waitFor(() =>
+      expect(within(dialog()).getByTestId("ship-preview")).toHaveTextContent("preview unavailable"),
+    );
+    // A failed preview never takes the opt-ins away with it.
+    expect(
+      within(within(dialog()).getByTestId("ship-editor")).getByTestId("ship-drift"),
+    ).toBeVisible();
+  });
+
+  it("shows on the secret's pin row whether this ship moves it", async () => {
+    // An alias was named, so the opt-in starts unticked: the pin row has to say
+    // that the release would leave the rotated secret behind.
+    renderModal({ environments: rotatedSecret(), initialAlias: "rate_limits" });
+    const pin = within(dialog()).getByTestId(`ship-secret-pin-${secretAlias}`);
+    expect(pin).toHaveTextContent("pinned v1 · v2 unreleased");
+
+    const drift = within(dialog()).getByTestId("ship-drift");
+    fireEvent.click(within(drift).getByText(secretAlias).closest("label") as HTMLElement);
+    expect(pin).toHaveTextContent("v1 → v2");
+  });
+
+  it("says what an empty change step means for an active release and for a first one", async () => {
+    // Active release, nothing unreleased: only a new change can ship.
+    const active = renderModal({ initialAlias: undefined });
+    expect(within(dialog()).getByTestId("ship-editor")).toHaveTextContent(
+      "No values are being edited. Add a change below.",
+    );
+    active.unmount();
+
+    // Active release with an unreleased version: including it is the other way.
+    const drifted = renderModal({ environments: rotatedSecret(), initialAlias: undefined });
+    expect(within(dialog()).getByTestId("ship-editor")).toHaveTextContent(
+      "No values are being edited. Add a change below or include an unreleased version above.",
+    );
+    drifted.unmount();
+
+    // No active release: shipping as-is pins every alias where it stands.
+    const first: EnvironmentOverview[] = [
+      {
+        ...dev,
+        status: "unreleased",
+        release_state: "none",
+        release: { latest_version: 0, release_count: 0 },
+        values: dev.values.map((value) => ({ ...value, pinned_version: undefined })),
+      },
+    ];
+    renderModal({ environments: first, initialAlias: undefined });
+    expect(within(dialog()).getByTestId("ship-editor")).toHaveTextContent(
+      "No values are being edited. Add a change below, or ship as-is to pin every alias at its current version.",
+    );
   });
 
   it("is titled Ship and opens on the prefilled row's editor once its value loads", async () => {

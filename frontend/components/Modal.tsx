@@ -39,7 +39,8 @@ export function Modal({
    * — use it for Cancel buttons so they ask before discarding edits.
    */
   footer?: ReactNode | ((close: () => void) => ReactNode);
-  wide?: boolean;
+  /** A wider footprint than the 560px default: 720px, or `"xl"` for 960px. */
+  wide?: boolean | "xl";
   /** Use the available viewport for data-heavy editors and inspectors. */
   workspace?: boolean;
   /** Multi-step content of varying height: keep a floor so the dialog does not resize and re-centre between steps. */
@@ -155,7 +156,11 @@ export function Modal({
           // root font is 14px, so `2rem` was silently 28 while the page gutter
           // beside it is 16. --space-4 × 2 is 32 and matches that gutter.
           "grid max-h-[calc(100dvh_-_var(--space-4)_*_2)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[560px]",
-          wide && "sm:max-w-[720px]",
+          wide === true && "sm:max-w-[720px]",
+          // Static classes, never interpolated: Tailwind only emits what it
+          // can read in the source. The viewport inset matches the max-height
+          // above, so an xl dialog keeps the page gutter at narrow widths.
+          wide === "xl" && "sm:max-w-[min(960px,calc(100vw_-_var(--space-4)_*_2))]",
           // Workspace modals only change their footprint; the row layout is shared.
           workspace &&
             "h-[calc(100dvh_-_var(--space-4)_*_2)] sm:max-w-[min(1200px,calc(100vw_-_var(--space-4)_*_2))]",
