@@ -504,6 +504,47 @@
     margin: 0;
   }
 
+  /* ---------- Environment page ---------- */
+
+  /* The page's own vertical rhythm: PageHeader, switcher, findings, the values
+     table and the panels below it are siblings with nothing else between them. */
+  .environment-home > * + * {
+    margin-top: var(--space-4);
+  }
+  .environment-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  /* Release and Subscribers read side by side once the page is wide enough for
+     two readable columns; below that they stack in the order they matter. */
+  .environment-panels {
+    display: grid;
+    gap: var(--space-4);
+  }
+  @container page (width >= 768px) {
+    .environment-panels {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  /* .pipeline-section separates itself from the section above it with a rule;
+     as a card's only child there is nothing above it to separate from. */
+  .environment-panel > .pipeline-section {
+    padding-top: 0;
+    border-top: 0;
+  }
+  .environment-settings-grid {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    margin-bottom: var(--space-3);
+  }
+  .environment-settings-grid dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
   /* ---------- Setup panel hooks (F-onboard renders the content) ---------- */
 
   .setup-panel {

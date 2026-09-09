@@ -153,7 +153,7 @@ describe("NamespacesPage", () => {
     render(<NamespacesPage />);
     expect(screen.getByRole("link", { name: "Manage payments-api/dev" })).toHaveAttribute(
       "href",
-      "/applications?app=payments-api&env=dev",
+      "/applications/environment?app=payments-api&env=dev",
     );
     expect(screen.getByRole("link", { name: "3" })).toHaveAttribute(
       "href",
