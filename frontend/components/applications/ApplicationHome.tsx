@@ -507,7 +507,7 @@ export function ApplicationHome({
             <SearchField
               className="w-full max-w-[280px]"
               label="Filter values"
-              placeholder="Filter by alias or key"
+              placeholder="Filter by alias, key or value"
               value={valueFilter}
               onChange={setValueFilter}
               onClear={() => setValueFilter("")}

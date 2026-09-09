@@ -1,17 +1,19 @@
 import { Send, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
+import { useMemo } from "react";
 import CopyButton from "@/components/CopyButton";
+import { Snippet } from "@/components/Highlight";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Button } from "@/components/ui/button";
 import { countNoun } from "@/lib/format";
-import { matchesSearch } from "@/lib/key-search";
 import { links } from "@/lib/links";
 import type { EnvironmentOverview, OverviewValue } from "@/lib/types";
 import { AddResourceButton } from "./AddResourceButton";
 import { ResourceLink } from "./ResourceLink";
 import { UnreleasedBadge } from "./ValueBadges";
+import { valueMatches } from "./valueFilter";
 
 /** What the version chip's tooltip says about the active release's pin. */
 export function pinTooltip(value: OverviewValue, hasActiveRelease: boolean): string {
@@ -31,6 +33,7 @@ export function ValuesSection({
   onShip,
   onEditContract,
   filter = "",
+  values,
 }: {
   environment: EnvironmentOverview;
   /** Present resources in this namespace that no contract alias resolves to, per kind. */
@@ -42,14 +45,17 @@ export function ValuesSection({
   onShip: (env: string, alias?: string) => void;
   /** An empty contract is fixed at the application, not in this column. */
   onEditContract: () => void;
-  /** The application page's value filter; matches alias or key. */
+  /** The application page's value filter; matches alias, key or stored value. */
   filter?: string;
+  /** `kind:key` → the value stored in this environment (lib/overview valuesByEnv). */
+  values?: ReadonlyMap<string, string>;
 }) {
   const ns = environment.namespace;
   const env = ns.env;
   const hasActive = Boolean(environment.release.active);
-  const shown = environment.values.filter((value) =>
-    matchesSearch({ key: value.key ?? value.alias, text: value.alias }, filter),
+  const { shown, snippets } = useMemo(
+    () => valueMatches(environment.values, values, filter),
+    [environment.values, values, filter],
   );
   const filtering = filter.trim() !== "" && environment.values.length > 0;
   return (
@@ -73,6 +79,7 @@ export function ValuesSection({
         <ul className="pipeline-rows">
           {shown.map((value) => {
             const key = value.key ?? value.alias;
+            const snippet = snippets.get(value.alias);
             return (
               <li className="pipeline-row" key={value.alias} data-alias={value.alias}>
                 {value.kind === "secret" ? (
@@ -133,6 +140,11 @@ export function ValuesSection({
                       </Button>
                     ) : null}
                   </span>
+                ) : null}
+                {/* Only the stored value matched: say so, or the row is on
+                    screen with nothing on it the operator typed. */}
+                {snippet ? (
+                  <Snippet text={snippet.text} ranges={snippet.ranges} context={20} />
                 ) : null}
               </li>
             );

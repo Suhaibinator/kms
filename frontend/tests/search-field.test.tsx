@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SearchField } from "@/components/SearchField";
@@ -54,6 +56,25 @@ describe("SearchField", () => {
 
     fireEvent.keyDown(input, { key: "Escape" });
     expect(onClear).not.toHaveBeenCalled();
+  });
+
+  // The icon and the `/` hint are absolutely positioned inside the box, so the
+  // text has to start clear of them. The insets have to be utilities: the Input
+  // primitive's own px-3 is one, and it beat the component-layer rule this
+  // replaces, leaving 12px of padding under a 15px icon.
+  it("insets the text past the icon with utilities the primitive's px-3 cannot outrank", () => {
+    const onChange = vi.fn();
+    const onClear = vi.fn();
+    render(<SearchField label="Search" value="" onChange={onChange} onClear={onClear} />);
+    const classes = screen.getByLabelText("Search").className.split(/\s+/);
+    expect(classes).toContain("pl-[calc(var(--space-2)*2_+_15px)]");
+    expect(classes).toContain("pr-[calc(var(--space-2)*2_+_12px)]");
+
+    const css = readFileSync(resolve(process.cwd(), "styles", "globals.css"), "utf8");
+    const rules = [...css.matchAll(/([^{}]+?)\{([^{}]*)\}/g)].filter((match) =>
+      (match[1] ?? "").split(",").some((part) => part.trim() === ".search-field-input"),
+    );
+    expect(rules.map((match) => match[2] ?? "").join("\n")).not.toMatch(/padding/);
   });
 
   it("calls onChange as the operator types", () => {

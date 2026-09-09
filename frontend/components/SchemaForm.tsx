@@ -647,7 +647,9 @@ export function SchemaForm({
             </legend>
             {open ? (
               <>
-                {field.description ? <p className="faint text-sm">{field.description}</p> : null}
+                {field.description ? (
+                  <p className="schema-form-description">{field.description}</p>
+                ) : null}
                 {errorFor(field, null) ? (
                   <p className="field-error" role="alert">
                     {errorFor(field, null)}
@@ -1191,7 +1193,9 @@ export function SchemaForm({
     >
       <legend className="sr-only">{jsonLabel}</legend>
       {toolbar}
-      {rootField.description ? <p className="faint text-sm">{rootField.description}</p> : null}
+      {rootField.description ? (
+        <p className="schema-form-description">{rootField.description}</p>
+      ) : null}
       <div className="schema-form-fields">{(rootField.fields ?? []).map(renderField)}</div>
       {extras.length > 0 || rootField.allowsExtra ? (
         <Field

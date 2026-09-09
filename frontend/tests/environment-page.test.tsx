@@ -209,6 +209,34 @@ describe("EnvironmentPage", () => {
     expect(await screen.findByText(/No values match/)).toBeVisible();
   });
 
+  it("finds a value by text stored inside it and shows where it matched", async () => {
+    await renderPage();
+    // `internal` is only in the database parameter's JSON value, not in any
+    // alias or key: the row is on screen because of what it stores.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "internal" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 1 of 3 values"),
+    );
+    const table = screen.getByRole("table");
+    const row = table.querySelector("tr[data-alias='database']");
+    expect(row).not.toBeNull();
+    expect(row?.querySelector(".search-snippet mark")).toHaveTextContent("internal");
+    expect(within(table).queryByText("rate_limits")).toBeNull();
+
+    // A secret has no readable value, so it matches on its alias alone and is
+    // never given an excerpt.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "db_password" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 1 of 3 values"),
+    );
+    expect(within(table).getByText("db_password")).toBeVisible();
+    expect(table.querySelector(".search-snippet")).toBeNull();
+
+    // A token in no alias, key or value keeps nothing.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "unobtainium" } });
+    expect(await screen.findByText(/No values match/)).toBeVisible();
+  });
+
   it("offers Add value for an alias with nothing behind it", async () => {
     const overview = clone(incident);
     const dev = overview.environments.find((candidate) => candidate.namespace.env === "dev");

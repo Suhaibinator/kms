@@ -742,6 +742,32 @@ describe("ApplicationsPage", () => {
     expect(within(table).queryByText("db_password")).toBeNull();
   });
 
+  it("filters on text stored inside a value, one environment at a time", async () => {
+    mocks.query = { app: incident.application.name };
+    mocks.applicationOverview.mockResolvedValue(incident);
+    render(<ApplicationsPage />);
+    await screen.findByRole("region", { name: "dev environment" });
+
+    // `20` is the prod value of rate_limits and appears in no alias or key, so
+    // it reaches that row in prod and nothing at all in dev.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "20" } });
+    const prod = screen.getByRole("region", { name: "prod environment" });
+    expect(within(prod).getByText("Values · 1 of 3")).toBeVisible();
+    const row = prod.querySelector("li[data-alias='rate_limits']");
+    expect(row?.querySelector(".search-snippet mark")).toHaveTextContent("20");
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(within(dev).getByText(/No values match/)).toBeVisible();
+
+    // A token inside the JSON both environments store reaches both columns,
+    // and the alias it matched under carries no highlight of its own.
+    fireEvent.change(screen.getByLabelText("Filter values"), { target: { value: "internal" } });
+    for (const column of [dev, prod]) {
+      expect(within(column).getByText("Values · 1 of 3")).toBeVisible();
+      const database = column.querySelector("li[data-alias='database']");
+      expect(database?.querySelector(".search-snippet mark")).toHaveTextContent("internal");
+    }
+  });
+
   it("explains a non-admin deep link instead of a bare error", async () => {
     mocks.query = { app: "gradethis" };
     mocks.applicationOverview.mockRejectedValue(new ApiError("forbidden", "admin only", 403));

@@ -57,6 +57,48 @@ export function resourceId(kind: ReleaseEntryKind | string, key: string): string
 }
 
 /**
+ * `kind:key` → the value stored in `env`, for the filters that search inside
+ * values. The overview already carries every parameter's current value (the
+ * matrix renders it), so no page has to load anything to search one; secrets
+ * have no readable value and are simply absent from the map.
+ */
+export function valuesByEnv(
+  rows: readonly ApplicationConfigurationRow[],
+  env: string,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const row of rows) {
+    const cell = row.environments[env];
+    if (!cell?.present || cell.value === undefined) continue;
+    out.set(resourceId(row.kind, row.key), cell.value);
+  }
+  return out;
+}
+
+/** The value stored behind one contract value, from a `valuesByEnv` map. */
+export function storedValue(
+  values: ReadonlyMap<string, string> | undefined,
+  value: OverviewValue,
+): string | undefined {
+  return value.key ? values?.get(resourceId(value.kind, value.key)) : undefined;
+}
+
+/**
+ * Every distinct value one matrix row holds, across its environments, as one
+ * searchable text. The matrix row spans the environments, so a token found in
+ * any of them keeps the row: identical values (the common case) are joined
+ * once, so the text stays the size of the value and not of the row.
+ */
+export function rowValueText(row: ApplicationConfigurationRow): string {
+  const seen = new Set<string>();
+  for (const cell of Object.values(row.environments)) {
+    if (!cell.present || cell.value === undefined) continue;
+    seen.add(cell.value);
+  }
+  return Array.from(seen).join("\n");
+}
+
+/**
  * Present resources in the environment that no contract alias resolves to,
  * counted per kind. Keyed by kind and key so a secret alias resolving to
  * `x` cannot hide an unrelated parameter `x`.

@@ -41,7 +41,13 @@ export function SearchField({
           ref={ref}
           id={id}
           type="search"
-          className="search-field-input font-mono"
+          // The two insets are utilities, not a .search-field-input rule: the
+          // Input primitive's own px-3 is a utility and beats a component-layer
+          // rule (layout rule 5), so the box kept 12px of left padding and the
+          // 15px icon at var(--space-2) drew over the first characters typed.
+          // Each inset clears its overlay: the icon on the left, the `/` hint
+          // on the right, both offset var(--space-2) from their edge.
+          className="search-field-input pl-[calc(var(--space-2)*2_+_15px)] pr-[calc(var(--space-2)*2_+_12px)] font-mono"
           placeholder={placeholder}
           value={value}
           disabled={disabled}

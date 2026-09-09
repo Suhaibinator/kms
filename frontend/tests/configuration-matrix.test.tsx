@@ -239,6 +239,36 @@ describe("ConfigurationMatrix", () => {
     expect(screen.getByText("No rows match the filter.")).toBeVisible();
   });
 
+  it("filters rows by text stored inside a value, in any environment", () => {
+    const overview = clone(incident);
+    // dev stores 7 for rate_limits and prod stores 20; the row spans both, so
+    // a token from either environment's value keeps it.
+    const props = propsFor(overview, { filter: "20" });
+    const { rerender } = render(<ConfigurationMatrix {...props} />);
+    let table = screen.getByRole("table");
+    expect(within(table).getByText("rate_limits")).toBeVisible();
+    expect(within(table).queryByText("database")).toBeNull();
+    // The row says why it is here: the excerpt marks what was typed.
+    expect(table.querySelector(".search-snippet mark")).toHaveTextContent("20");
+
+    // A token inside the JSON value of another row, in neither key nor alias.
+    rerender(<ConfigurationMatrix {...props} filter="internal" />);
+    table = screen.getByRole("table");
+    expect(within(table).getByText("database")).toBeVisible();
+    expect(within(table).queryByText("rate_limits")).toBeNull();
+    expect(table.querySelector(".search-snippet mark")).toHaveTextContent("internal");
+
+    // The secret row has no readable value and matches on its key alone, with
+    // no excerpt to show for it.
+    rerender(<ConfigurationMatrix {...props} filter="db_password" />);
+    table = screen.getByRole("table");
+    expect(within(table).getByText("db_password")).toBeVisible();
+    expect(table.querySelector(".search-snippet")).toBeNull();
+
+    rerender(<ConfigurationMatrix {...props} filter="unobtainium" />);
+    expect(screen.getByText("No rows match the filter.")).toBeVisible();
+  });
+
   it("toggles to incomplete rows only and counts what is missing per environment", () => {
     const overview = clone(ready);
     const [incomplete, ...complete] = overview.rows;

@@ -23,7 +23,7 @@ import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
 import { useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
-import { countOtherKeys } from "@/lib/overview";
+import { countOtherKeys, valuesByEnv } from "@/lib/overview";
 import type { ApplicationOverview, EnvironmentOverview, Namespace } from "@/lib/types";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { DeleteEnvironmentDialog, deleteBlockReason } from "./DeleteEnvironmentDialog";
@@ -86,6 +86,9 @@ export function EnvironmentHome({
     () => countOtherKeys(environment, overview.rows),
     [environment, overview.rows],
   );
+  // The overview carries each parameter's current value, so the values table
+  // can filter on what is stored without loading the namespace itself.
+  const values = useMemo(() => valuesByEnv(overview.rows, env), [overview.rows, env]);
 
   const { callbacks, actions, modals } = useApplicationActions({
     overview,
@@ -352,6 +355,7 @@ export function EnvironmentHome({
       <EnvironmentValuesTable
         environment={environment}
         otherKeys={otherKeys}
+        values={values}
         onAddValue={callbacks.onAddValue}
         onAddSecret={callbacks.onAddSecret}
         onOpenSecret={callbacks.onOpenSecret}

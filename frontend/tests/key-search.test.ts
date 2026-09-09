@@ -3,6 +3,7 @@ import {
   buildSearchIndex,
   MAX_SEARCHED_TEXT_CHARS,
   matchesSearch,
+  matchValueRow,
   type SearchDoc,
   searchIndex,
 } from "@/lib/key-search";
@@ -111,5 +112,57 @@ describe("matchesSearch", () => {
     const doc: SearchDoc = { key: "apps/other", text: "the shared secret lives here" };
     expect(matchesSearch(doc, "shared")).toBe(true);
     expect(matchesSearch(doc, "shared zzz")).toBe(false);
+  });
+});
+
+describe("matchValueRow", () => {
+  const json = '{"host":"db.internal","pool":8}';
+  const row = { key: "gradethis/database", alias: "database", value: json };
+
+  it("matches a token that only appears inside the value", () => {
+    const match = matchValueRow(row, "internal");
+    expect(match).not.toBeNull();
+    // The ranges are offsets into the value, so a snippet can be cut from it.
+    const [range] = match?.valueRanges ?? [];
+    expect(range && json.slice(range[0], range[1])).toBe("internal");
+  });
+
+  it("keeps a row out when a token reaches neither key, alias nor value", () => {
+    expect(matchValueRow(row, "zzz")).toBeNull();
+    expect(matchValueRow(row, "internal zzz")).toBeNull();
+  });
+
+  it("ANDs tokens across the key, the alias and the value", () => {
+    expect(matchValueRow(row, "gradethis internal")).not.toBeNull();
+    expect(matchValueRow(row, "database internal")).not.toBeNull();
+  });
+
+  it("offers no excerpt when the key already spells the query out", () => {
+    expect(matchValueRow(row, "database")?.valueRanges).toEqual([]);
+    // "pool" is in the value as well as being reachable through the key, but
+    // "host" is not: only the token the key hides is worth an excerpt.
+    const match = matchValueRow(row, "gradethis host");
+    const [range] = match?.valueRanges ?? [];
+    expect(range && json.slice(range[0], range[1])).toBe("host");
+  });
+
+  it("matches a value-less row on its alias alone, with no excerpt", () => {
+    const secret = { key: "gradethis/db_password", alias: "db_password" };
+    expect(matchValueRow(secret, "db_password")?.valueRanges).toEqual([]);
+    expect(matchValueRow(secret, "internal")).toBeNull();
+  });
+
+  it("does not search a value over MAX_SEARCHED_TEXT_CHARS, but still finds the alias", () => {
+    const big = {
+      key: "k",
+      alias: "big_blob",
+      value: `${"x".repeat(MAX_SEARCHED_TEXT_CHARS)} uniqueword`,
+    };
+    expect(matchValueRow(big, "uniqueword")).toBeNull();
+    expect(matchValueRow(big, "blob")).not.toBeNull();
+  });
+
+  it("keeps every row for an empty query", () => {
+    expect(matchValueRow(row, "   ")?.valueRanges).toEqual([]);
   });
 });

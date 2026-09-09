@@ -142,17 +142,77 @@ export function searchIndex<T>(
   return { matches, total: scored.length };
 }
 
-/** The same multi-token semantics as a boolean, for the local filters. */
-export function matchesSearch(doc: SearchDoc, query: string): boolean {
-  const tokens = wordsOf(query);
-  if (tokens.length === 0) return true;
-  const lowerKey = doc.key.toLowerCase();
-  const text = doc.text ?? "";
-  const lowerText = text.length > MAX_SEARCHED_TEXT_CHARS ? "" : text.toLowerCase();
+/** Every token has to reach the key or the text; both must already be lowercased. */
+function tokensMatch(lowerKey: string, lowerText: string, tokens: readonly string[]): boolean {
   for (const token of tokens) {
     if (scoreText(token, lowerKey) > 0) continue;
     if (lowerText.includes(token)) continue;
     return false;
   }
   return true;
+}
+
+/** The same multi-token semantics as a boolean, for the local filters. */
+export function matchesSearch(doc: SearchDoc, query: string): boolean {
+  const tokens = wordsOf(query);
+  if (tokens.length === 0) return true;
+  const text = doc.text ?? "";
+  return tokensMatch(
+    doc.key.toLowerCase(),
+    text.length > MAX_SEARCHED_TEXT_CHARS ? "" : text.toLowerCase(),
+    tokens,
+  );
+}
+
+/**
+ * One row of an application's or environment's value list: the physical key,
+ * the contract alias it resolved for, and the value stored behind it. A secret
+ * has no readable value, so it carries none and matches on alias and key alone.
+ */
+export interface ValueSearchDoc {
+  key: string;
+  alias?: string;
+  value?: string;
+}
+
+export interface ValueSearchMatch {
+  /**
+   * Where the query landed inside `value`, for `<Snippet>`. Empty when the key
+   * carried the match, or when the hit was in the alias: the row already shows
+   * both, and only a match hidden inside the value needs explaining.
+   */
+  valueRanges: MatchRange[];
+}
+
+/**
+ * Whether a value row matches, and where inside its value it did. Null when it
+ * does not. Every whitespace token has to reach the key, the alias or the
+ * value — the semantics `searchIndex` gives the list pages, with the alias
+ * added, since these lists are read by alias.
+ */
+export function matchValueRow(doc: ValueSearchDoc, query: string): ValueSearchMatch | null {
+  const tokens = wordsOf(query);
+  if (tokens.length === 0) return { valueRanges: [] };
+  const lowerKey = doc.key.toLowerCase();
+  const lowerAlias = doc.alias?.toLowerCase() ?? "";
+  // The cap applies to the value alone: a row whose value is too large to scan
+  // must still be findable by its alias and key.
+  const lowerValue =
+    doc.value && doc.value.length <= MAX_SEARCHED_TEXT_CHARS ? doc.value.toLowerCase() : "";
+  // Tokens the row does not spell out anywhere the operator can see. They are
+  // the ones worth an excerpt; the rest are already on the row.
+  const unexplained: string[] = [];
+  for (const token of tokens) {
+    if (lowerKey.includes(token) || lowerAlias.includes(token)) continue;
+    if (lowerValue.includes(token)) {
+      unexplained.push(token);
+      continue;
+    }
+    // A fuzzy key hit (a prefix of a word, a subsequence) still counts, but
+    // has no literal characters to point at.
+    if (scoreText(token, lowerKey) > 0) continue;
+    return null;
+  }
+  if (unexplained.length === 0) return { valueRanges: [] };
+  return { valueRanges: matchRangesLower(lowerValue, unexplained) };
 }
