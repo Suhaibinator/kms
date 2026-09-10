@@ -5,7 +5,7 @@ import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
-import { countOtherKeys } from "@/lib/overview";
+import { countOtherKeys, valuesByEnv } from "@/lib/overview";
 import type { FixAction } from "@/lib/readiness";
 import type {
   Application,
@@ -78,6 +78,9 @@ export function EnvironmentColumn({
   const findings = useMemo(() => columnFindings(environment), [environment]);
   const staleFindings = findings.filter((finding) => finding.code === "instance_stale");
   const otherKeys = useMemo(() => countOtherKeys(environment, rows), [environment, rows]);
+  // The overview already carries every parameter's value, so the filter can
+  // search inside them without this column loading anything.
+  const values = useMemo(() => valuesByEnv(rows, ns.env), [rows, ns.env]);
   // `?env=` deep links land on the column: scroll it into view. Focus stays
   // where it is — the ring (.pipeline-column-focused) marks the target, and a
   // query-only navigation is not a request to move the keyboard cursor.
@@ -186,6 +189,7 @@ export function EnvironmentColumn({
         onShip={callbacks.onShip}
         onEditContract={() => callbacks.onEditContract?.(ns.env)}
         filter={filter}
+        values={values}
       />
       <ReleaseSection
         environment={environment}

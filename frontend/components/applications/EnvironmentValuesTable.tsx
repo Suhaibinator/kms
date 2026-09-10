@@ -2,22 +2,23 @@ import { Send, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { Snippet } from "@/components/Highlight";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { SearchField } from "@/components/SearchField";
-import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { MobileListToolbar, SortHeaderRow, useSort } from "@/components/SortableTable";
+import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { TableSummary } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { countNoun } from "@/lib/format";
-import { matchesSearch } from "@/lib/key-search";
 import { links } from "@/lib/links";
 import type { SortColumn } from "@/lib/sort";
 import type { EnvironmentOverview, OverviewValue } from "@/lib/types";
 import { AddResourceButton } from "./AddResourceButton";
 import { ResourceLink } from "./ResourceLink";
-import { UnreleasedBadge, isUnreleased } from "./ValueBadges";
+import { isUnreleased, UnreleasedBadge } from "./ValueBadges";
 import { pinTooltip } from "./ValuesSection";
+import { valueMatches } from "./valueFilter";
 
 /** One word for the row's condition, so the State column can be ordered. */
 function stateLabel(value: OverviewValue, hasActiveRelease: boolean): string {
@@ -39,12 +40,13 @@ const COLUMNS: ReadonlyArray<SortColumn<OverviewValue>> = [
 
 /**
  * The environment's contract values as a real list table: sortable through
- * `?sort=&dir=`, filterable by alias or key, and carrying the same actions the
- * pipeline column offers in its cramped column layout.
+ * `?sort=&dir=`, filterable by alias, key or stored value, and carrying the
+ * same actions the pipeline column offers in its cramped column layout.
  */
 export function EnvironmentValuesTable({
   environment,
   otherKeys,
+  values,
   onAddValue,
   onAddSecret,
   onOpenSecret,
@@ -55,6 +57,8 @@ export function EnvironmentValuesTable({
   environment: EnvironmentOverview;
   /** Present resources in this namespace that no contract alias resolves to, per kind. */
   otherKeys: { parameters: number; secrets: number };
+  /** `kind:key` → the value stored in this environment (lib/overview valuesByEnv). */
+  values?: ReadonlyMap<string, string>;
   onAddValue: (env: string, alias: string) => void;
   onAddSecret: (env: string, alias: string) => void;
   onOpenSecret?: (env: string, key: string) => void;
@@ -68,12 +72,9 @@ export function EnvironmentValuesTable({
   const hasActive = Boolean(environment.release.active);
   const sort = useSort<OverviewValue>("/applications/environment", COLUMNS);
   const [filter, setFilter] = useState("");
-  const shown = useMemo(
-    () =>
-      environment.values.filter((value) =>
-        matchesSearch({ key: value.key ?? value.alias, text: value.alias }, filter),
-      ),
-    [environment.values, filter],
+  const { shown, snippets } = useMemo(
+    () => valueMatches(environment.values, values, filter),
+    [environment.values, values, filter],
   );
   const trimmed = filter.trim();
 
@@ -84,7 +85,7 @@ export function EnvironmentValuesTable({
         <SearchField
           className="w-full max-w-[280px]"
           label="Filter values"
-          placeholder="Filter by alias or key"
+          placeholder="Filter by alias, key or value"
           value={filter}
           onChange={setFilter}
           onClear={() => setFilter("")}
@@ -128,10 +129,14 @@ export function EnvironmentValuesTable({
               ) : (
                 sort.apply(shown).map((value) => {
                   const key = value.key ?? value.alias;
+                  const snippet = snippets.get(value.alias);
                   return (
                     <tr key={value.alias} data-alias={value.alias}>
                       <td data-label="Alias">
                         <Ident kind="alias" value={value.alias} tooltip={false} />
+                        {/* Only the stored value matched: show the operator the
+                            hit, rather than a row with nothing they typed on it. */}
+                        {snippet ? <Snippet text={snippet.text} ranges={snippet.ranges} /> : null}
                       </td>
                       <td data-label="Kind">
                         <span className="row-wrap">

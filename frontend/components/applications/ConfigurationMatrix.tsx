@@ -2,21 +2,23 @@ import { SlidersHorizontal } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { EmptyValue } from "@/components/EmptyValue";
+import { Snippet } from "@/components/Highlight";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { SortHeaderRow, useSort } from "@/components/SortableTable";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
 import { Badge, Checkbox } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import { matchesSearch } from "@/lib/key-search";
+import { matchValueRow } from "@/lib/key-search";
 import { links } from "@/lib/links";
-import { resourceId, valueForKey } from "@/lib/overview";
+import { resourceId, rowValueText, valueForKey } from "@/lib/overview";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { ApplicationConfigurationRow, EnvironmentOverview } from "@/lib/types";
 import { AddResourceButton } from "./AddResourceButton";
 import { ResourceLink } from "./ResourceLink";
 import { UnreleasedBadge } from "./ValueBadges";
+import type { ValueSnippet } from "./valueFilter";
 
 /** Tooltips are not scroll containers; a megabyte JSON value is not a tooltip. */
 const TITLE_MAX_CHARS = 200;
@@ -41,7 +43,7 @@ export interface ConfigurationMatrixProps {
   /** The overview's per-environment contract values, for alias and pin lookup. */
   overview?: EnvironmentOverview[];
   rows: ApplicationConfigurationRow[];
-  /** The application page's value filter; matches key or contract alias. */
+  /** The application page's value filter; matches key, contract alias or stored value. */
   filter?: string;
   onAddSecret: (environment: string, key: string) => void;
   onAddValue?: (environment: string, key: string) => void;
@@ -78,7 +80,12 @@ interface MatrixRow {
   row: ApplicationConfigurationRow;
   id: string;
   alias?: string;
+  /** Every distinct value the row holds across its environments, for searching. */
+  valueText: string;
 }
+
+/** A row that passed the filter, with the excerpt that explains a value-only hit. */
+type MatrixMatch = MatrixRow & { snippet?: ValueSnippet };
 
 export function ConfigurationMatrix({
   app,
@@ -107,6 +114,7 @@ export function ConfigurationMatrix({
         row,
         id: resourceId(row.kind, row.key),
         alias: aliasFor(row, overview ?? []),
+        valueText: rowValueText(row),
       })),
     [rows, overview],
   );
@@ -114,14 +122,25 @@ export function ConfigurationMatrix({
   // Filter, sort and count missing cells in one pass; the footer describes the
   // rows on screen, so it is derived from the same list they render from.
   const { visible, missing } = useMemo(() => {
-    const kept = matrixRows.filter(({ row, alias }) => {
-      if (incompleteOnly && !isIncomplete(row, environments)) return false;
-      // The same multi-token semantics the list pages search with.
-      return matchesSearch({ key: row.key, text: alias }, filter);
-    });
+    const kept: MatrixMatch[] = [];
+    for (const entry of matrixRows) {
+      if (incompleteOnly && !isIncomplete(entry.row, environments)) continue;
+      // The same multi-token semantics the list pages search with, over the
+      // key, the contract alias and the values stored behind the row.
+      const match = matchValueRow(
+        { key: entry.row.key, alias: entry.alias, value: entry.valueText },
+        filter,
+      );
+      if (!match) continue;
+      kept.push(
+        match.valueRanges.length > 0
+          ? { ...entry, snippet: { text: entry.valueText, ranges: match.valueRanges } }
+          : entry,
+      );
+    }
     const sorted = sort.apply(kept.map(({ row }) => row));
     const byId = new Map(kept.map((entry) => [entry.id, entry]));
-    const visible = sorted.map((row) => byId.get(resourceId(row.kind, row.key)) as MatrixRow);
+    const visible = sorted.map((row) => byId.get(resourceId(row.kind, row.key)) as MatrixMatch);
     const missing = environments.map(() => 0);
     for (const { row } of visible) {
       environments.forEach((env, index) => {
@@ -173,7 +192,7 @@ export function ConfigurationMatrix({
             />
           </thead>
           <tbody>
-            {visible.map(({ row, id, alias }) => {
+            {visible.map(({ row, id, alias, snippet }) => {
               return (
                 <tr key={id}>
                   <td className="mono matrix-key">
@@ -183,6 +202,9 @@ export function ConfigurationMatrix({
                         <Ident kind="alias" value={alias} tooltip={false} />
                       </span>
                     ) : null}
+                    {/* Only a stored value matched: show where, so a hit inside
+                        a large JSON is explainable from the key column. */}
+                    {snippet ? <Snippet text={snippet.text} ranges={snippet.ranges} /> : null}
                   </td>
                   <td>
                     {/* Kind is a classification, not a state: neutral either way so

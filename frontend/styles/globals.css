@@ -792,6 +792,20 @@
     color: var(--danger);
     margin-top: 0;
   }
+  /* Layout rule 2's text twin, and the same list again so the pair stays in
+     step with <Field>'s. A hint is prose someone else wrote: a schema's
+     `description` carries URLs, and describeConstraints() emits `Pattern: <re>`
+     and `Default: <json>` with no space anywhere in them. `anywhere`, not
+     `break-word` — only `anywhere` counts towards min-content, and min-content
+     is what a grid item reports upward. One `base_url` hint was enough to grow
+     every group of a Form-mode SchemaForm past the body of the dialog around
+     it, which clipped the right end of every line in the form. */
+  .field-hint,
+  .field-error,
+  [data-slot="field-description"],
+  [data-slot="field-error"] {
+    overflow-wrap: anywhere;
+  }
   /* Opt-in reservation of the validation line, the way .json-editor-status
      already reserves its own. Without it the message's arrival grows the field
      by one line: on /login the token input jumped up 10.9px and the submit
@@ -892,6 +906,17 @@
     gap: var(--space-1);
     flex-wrap: wrap;
   }
+  /* The root's and each group's `description`, which the schema author wrote and
+     the console cannot vet. Same rendering as the literal `faint text-sm` these
+     two paragraphs used to carry, plus the wrap the hints above needed for the
+     same reason: a URL in a group description overflowed just as readily as one
+     in a field hint, and only the hints were <Field>'s to fix. */
+  .schema-form-description {
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    color: var(--text-faint);
+    overflow-wrap: anywhere;
+  }
   .schema-form-fields {
     display: grid;
     gap: var(--space-3);
@@ -908,12 +933,17 @@
     background: var(--surface-2);
     min-width: 0;
   }
+  /* The wrap is .mono's, for .mono's reason: this is a property name straight
+     out of the schema, it is set in the mono family without carrying the class,
+     and a group called `oauth_device_authorization_endpoint` would otherwise
+     report its whole width upward and widen the form past its container. */
   .schema-form-legend {
     padding: 0 var(--space-1);
     font-family: var(--mono);
     font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text);
+    overflow-wrap: anywhere;
   }
   /* The legend's text is the disclosure button, so the group name stays the
      group's accessible name and clicking it folds the branch. */
@@ -2388,10 +2418,11 @@
     color: var(--text-faint);
     pointer-events: none;
   }
-  .search-field-input {
-    padding-left: calc(var(--space-2) * 2 + 15px);
-    padding-right: calc(var(--space-2) * 2 + 12px);
-  }
+  /* No .search-field-input padding rule: it set padding-left/-right on an
+     <Input>, whose px-3 is a utility and beats a component-layer rule (layout
+     rule 5), so the 15px icon overlapped the first characters typed. The two
+     insets are utilities on the element instead (components/SearchField.tsx).
+     The class stays for the pseudo-element below, which no utility can reach. */
   /* Chrome's own clear button would land under the hint; the box is cleared
      with Esc or by emptying it. */
   .search-field-input::-webkit-search-cancel-button {
@@ -2418,6 +2449,14 @@
     font-size: var(--text-xs);
     color: var(--text-faint);
     overflow-wrap: anywhere;
+  }
+  /* A value-match excerpt inside a pipeline row (ValuesSection.tsx): that row
+     is a wrapping flex line, so the snippet has to claim a line of its own
+     instead of squeezing in beside the chips, and the row's own 8px gap
+     already separates it from them. */
+  .pipeline-row .search-snippet {
+    flex: 1 0 100%;
+    margin-top: 0;
   }
 
   .filters {
