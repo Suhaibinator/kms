@@ -49,7 +49,7 @@ func (c *CLI) cmdReleasePin(args []string, unpin bool) int {
 	if err != nil {
 		return c.failErr("", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	rpc := kmsv1.NewConfigurationReleaseServiceClient(conn)

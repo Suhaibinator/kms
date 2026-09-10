@@ -200,12 +200,14 @@ func TestReleaseSessionMigrationPreservesBaseline3(t *testing.T) {
 	if e := verifyReleaseBaseline3(st.db); e != nil {
 		t.Fatal(e)
 	}
-	st.Close()
+	if e := st.Close(); e != nil {
+		t.Fatal(e)
+	}
 	st, e = Open(path)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	got, e := st.GetParameter(ctx, ref("prod", "app", "value"), 0, "")
 	if e != nil || got.Value != "retained" {
 		t.Fatalf("upgrade data: %+v %v", got, e)
@@ -297,7 +299,7 @@ func TestReleaseSessionConcurrentGuardsAndConnectionFencing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { st.Close() }()
+	defer func() { _ = st.Close() }()
 	seedNS(t, st, "prod", "app")
 	track := domain.ReleaseTrack{Namespace: nsRef("prod", "app"), Name: "runtime"}
 	for range 2 {
@@ -373,7 +375,9 @@ func TestReleaseSessionConcurrentGuardsAndConnectionFencing(t *testing.T) {
 		}
 	}
 	// Reopen SQLite, then perform the same liveness reset as a KMS restart.
-	st.Close()
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 	st, err = Open(path)
 	if err != nil {
 		t.Fatal(err)

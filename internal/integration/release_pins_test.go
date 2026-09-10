@@ -43,7 +43,7 @@ func TestProcessScopedReleasePinsOverRealKMS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sdk.Close()
+	defer func() { _ = sdk.Close() }()
 	start := func(instance string) (*atomic.Uint64, context.CancelFunc, <-chan error) {
 		loader, err := kmsclient.NewReleaseLoader(sdk, kmsclient.ReleaseLoaderConfig{Name: track.Name, SchemaVersion: &schema.Version, InstanceID: instance, ReconcileInterval: 20 * time.Millisecond})
 		if err != nil {
