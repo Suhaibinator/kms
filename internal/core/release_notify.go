@@ -82,7 +82,7 @@ func (s *Service) notifyReleaseSubscribers(track domain.ReleaseTrack) {
 func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, track domain.ReleaseTrack) (domain.SubscriberStreamSnapshot, error) {
 	ctx = withReleaseAuditTrack(ctx, track)
 	ns, name := track.Namespace, track.Name
-	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
+	if err := s.authorizeSubscriberInspection(ctx, pr, ns, name); err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
 	if err := validateReleaseAddress(ns, name); err != nil {

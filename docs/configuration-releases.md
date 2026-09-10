@@ -559,3 +559,57 @@ roughly two sequential reads of the source files. Concurrent changes cause
 bounded retries and then a retry error. A nonempty rollback journal requires
 operator recovery before inspection; KMS does not perform that recovery on the
 original files.
+
+## Pin one client process to a release
+
+**Pin to release** assigns one connected release subscriber an exact version
+within its existing `(environment, application, release name, schema version)`
+track. The version can be older than current or never activated fleet-wide.
+Other processes continue following the track's active release. Find the actions
+in the release workspace's rollout table or an application's rollout panel.
+Validate the selected release, review its schema/version, then assign it.
+Production environments require typing the environment name.
+
+A pin belongs to a random SDK loader session, independent of a configured
+instance name. Network reconnects and **KMS server restarts preserve the pin**.
+Restarting the **client application** creates a new session and follows the
+active track, even when it reuses the same instance name. Do not persist or
+copy session IDs in deployment configuration. Disconnected session history,
+including its pin, is retained using `watch.release_subscriber_retain_duration`
+(default 30 days). A client trying to resume an expired session receives an
+explicit failure and must restart; it never silently loses its pin.
+
+Assignment is separate from application. The console shows the desired target,
+last applied release, pin actor/time, and rejection state. A client that cannot
+prepare a pinned release retains its last working configuration and reports the
+failure; the pin remains until changed or removed. **Unpin** follows the track's
+current release immediately, or waits for its first activation when none exists.
+Disconnected sessions can be unpinned; creating or changing a pin requires a
+connected session. Successfully pinned processes are reported separately from
+processes updated to the fleet activation.
+
+Operators need `configuration-release:instance-manage` on the namespace, plus
+existing release list/read/validate and underlying resource permissions needed
+to select and validate releases. There is no implicit home-namespace grant for
+instance management. Namespace-scoped subscriber listing and its live stream
+accept this permission; the global subscriber inventory remains admin-only.
+`configuration-release:*` and `*` include the new operation, subject to denies.
+Pin and unpin writes are audited atomically with the assignment.
+
+Pinned manifests and their resource versions are protected from ordinary
+retention/deletion while the session is retained. Normal authorization,
+application preparation, secret expiry/disable rules, and emergency purge
+bypasses still apply. This does not revoke already-loaded values from process
+memory or force an application to accept configuration.
+
+All release loaders (Go, generated Go, Python sync/async, and TypeScript) support
+sessions automatically. Deploy the server first. Older SDKs remain functional
+but cannot be pinned; updated SDKs fall back to following active releases when
+an older server reports the session RPC as unimplemented. Direct parameter
+watchers and `exec` workloads are not release-loader sessions.
+
+`GetActiveRelease` continues reporting the fleet activation. `GetInstanceRelease`
+reports an effective target with a separate monotonic `target_revision`.
+Pinning does not create an activation: a pinned target's `activation_revision`
+is zero, and its manifest/digest is unchanged. Watch target events and lifecycle
+acknowledgements use the target revision for ordering, replay, and supersession.

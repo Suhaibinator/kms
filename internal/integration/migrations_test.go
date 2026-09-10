@@ -54,8 +54,10 @@ func TestV03GreenfieldBaselineAndExactReopen(t *testing.T) {
 		"parameter_versions",
 		"parameters",
 		"policies",
+		"release_sessions",
 		"release_subscriber_connections",
 		"release_subscriber_states",
+		"release_target_deliveries",
 		"schema_free_contracts",
 		"schema_migrations",
 		"secret_labels",
@@ -93,9 +95,9 @@ func TestV03GreenfieldBaselineAndExactReopen(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("close schema-version rows: %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{3}) {
+	if !reflect.DeepEqual(versions, []int{4}) {
 		_ = db.Close()
-		t.Fatalf("schema versions = %v, want [3]", versions)
+		t.Fatalf("schema versions = %v, want [4]", versions)
 	}
 	var changeLogDDL string
 	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'change_log'").Scan(&changeLogDDL); err != nil {

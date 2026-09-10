@@ -399,7 +399,55 @@ export interface SecretVersionSetResponse {
  * ReleaseEntrySelector is accepted only when creating a release. Exactly one
  * of version/label may be set; both empty resolves label "current". The server
  * persists the resolved exact version in ConfigurationReleaseEntry.
+ * Session identity is generated once by the client loader, independently of instance_id.
  */
+export interface ReleaseSessionRef {
+  namespace: NamespaceRef | undefined;
+  name: string;
+  schemaVersion?: bigint | undefined;
+  clientName: string;
+  instanceId: string;
+  sessionId: string;
+  /** Operator requests only; client identity comes from authentication. */
+  identity: string;
+}
+
+export interface RegisterReleaseSessionRequest {
+  session:
+    | ReleaseSessionRef
+    | undefined;
+  /** A missing resumed session is expired, never implicitly recreated. */
+  resume: boolean;
+}
+
+export interface ReleaseSessionResponse {
+  pinCapable: boolean;
+}
+
+export interface GetInstanceReleaseRequest {
+  session: ReleaseSessionRef | undefined;
+}
+
+export interface SetReleasePinRequest {
+  session:
+    | ReleaseSessionRef
+    | undefined;
+  /** Zero removes the pin and follows the track. */
+  version: bigint;
+  expectedPinRevision?: bigint | undefined;
+}
+
+export interface InstanceReleaseTarget {
+  /** Absent when following a track without activation. */
+  release: ConfigurationRelease | undefined;
+  targetRevision: bigint;
+  activationRevision: bigint;
+  pinned: boolean;
+  pinRevision: bigint;
+  pinnedBy: string;
+  pinnedAtUnixMs: bigint;
+}
+
 export interface ReleaseEntrySelector {
   alias: string;
   /** parameter | secret */
@@ -601,6 +649,8 @@ export interface ReleaseWatchRegistration {
   clientName: string;
   instanceId: string;
   lastSeenRevision: bigint;
+  /** Presence negotiates instance-target delivery. */
+  sessionId: string;
   /** Required; absence never means the newest schema. */
   schemaVersion?: bigint | undefined;
 }
@@ -631,6 +681,8 @@ export interface ReleaseAcknowledgement {
    * cannot discard a newer acknowledgement for the same lifecycle state.
    */
   sequence: bigint;
+  sessionId: string;
+  targetRevision: bigint;
 }
 
 export interface WatchReleaseRequest {
@@ -663,12 +715,15 @@ export interface ReleaseAcknowledgementRejectedEvent {
   instanceId: string;
   state: string;
   sequence: bigint;
-  /** activation_unavailable */
+  /** activation_unavailable | target_unavailable */
   reason: string;
+  sessionId: string;
+  targetRevision: bigint;
 }
 
 export interface WatchReleaseEvent {
   event:
+    | { $case: "target"; value: InstanceReleaseTarget }
     | { $case: "snapshot"; value: ReleaseSnapshotEvent }
     | { $case: "activation"; value: ReleaseActivationEvent }
     | { $case: "heartbeat"; value: Heartbeat }
@@ -1189,6 +1244,15 @@ export interface ListSubscribersResponse {
 }
 
 export interface ReleaseSubscriberState {
+  sessionId: string;
+  targetRevision: bigint;
+  pinVersion: bigint;
+  pinRevision: bigint;
+  pinnedBy: string;
+  pinnedAtUnixMs: bigint;
+  lastAppliedVersion: bigint;
+  desiredVersion: bigint;
+  desiredRevision: bigint;
   namespace: NamespaceRef | undefined;
   releaseName: string;
   clientName: string;
@@ -6518,6 +6582,761 @@ export const SecretVersionSetResponse: MessageFns<SecretVersionSetResponse> = {
   },
 };
 
+function createBaseReleaseSessionRef(): ReleaseSessionRef {
+  return {
+    namespace: undefined,
+    name: "",
+    schemaVersion: undefined,
+    clientName: "",
+    instanceId: "",
+    sessionId: "",
+    identity: "",
+  };
+}
+
+export const ReleaseSessionRef: MessageFns<ReleaseSessionRef> = {
+  encode(message: ReleaseSessionRef, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.schemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
+    }
+    if (message.clientName !== "") {
+      writer.uint32(34).string(message.clientName);
+    }
+    if (message.instanceId !== "") {
+      writer.uint32(42).string(message.instanceId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(50).string(message.sessionId);
+    }
+    if (message.identity !== "") {
+      writer.uint32(58).string(message.identity);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReleaseSessionRef {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReleaseSessionRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.clientName = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.instanceId = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.identity = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ReleaseSessionRef {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : undefined,
+      clientName: isSet(object.clientName)
+        ? globalThis.String(object.clientName)
+        : isSet(object.client_name)
+        ? globalThis.String(object.client_name)
+        : "",
+      instanceId: isSet(object.instanceId)
+        ? globalThis.String(object.instanceId)
+        : isSet(object.instance_id)
+        ? globalThis.String(object.instance_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      identity: isSet(object.identity) ? globalThis.String(object.identity) : "",
+    };
+  },
+
+  toJSON(message: ReleaseSessionRef): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.schemaVersion !== undefined) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.clientName !== "") {
+      obj.clientName = message.clientName;
+    }
+    if (message.instanceId !== "") {
+      obj.instanceId = message.instanceId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.identity !== "") {
+      obj.identity = message.identity;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ReleaseSessionRef>): ReleaseSessionRef {
+    return ReleaseSessionRef.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ReleaseSessionRef>): ReleaseSessionRef {
+    const message = createBaseReleaseSessionRef();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.name = object.name ?? "";
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : undefined;
+    message.clientName = object.clientName ?? "";
+    message.instanceId = object.instanceId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.identity = object.identity ?? "";
+    return message;
+  },
+};
+
+function createBaseRegisterReleaseSessionRequest(): RegisterReleaseSessionRequest {
+  return { session: undefined, resume: false };
+}
+
+export const RegisterReleaseSessionRequest: MessageFns<RegisterReleaseSessionRequest> = {
+  encode(message: RegisterReleaseSessionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session !== undefined) {
+      ReleaseSessionRef.encode(message.session, writer.uint32(10).fork()).join();
+    }
+    if (message.resume !== false) {
+      writer.uint32(16).bool(message.resume);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RegisterReleaseSessionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRegisterReleaseSessionRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.session = ReleaseSessionRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.resume = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RegisterReleaseSessionRequest {
+    return {
+      session: isSet(object.session) ? ReleaseSessionRef.fromJSON(object.session) : undefined,
+      resume: isSet(object.resume) ? globalThis.Boolean(object.resume) : false,
+    };
+  },
+
+  toJSON(message: RegisterReleaseSessionRequest): unknown {
+    const obj: any = {};
+    if (message.session !== undefined) {
+      obj.session = ReleaseSessionRef.toJSON(message.session);
+    }
+    if (message.resume !== false) {
+      obj.resume = message.resume;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<RegisterReleaseSessionRequest>): RegisterReleaseSessionRequest {
+    return RegisterReleaseSessionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<RegisterReleaseSessionRequest>): RegisterReleaseSessionRequest {
+    const message = createBaseRegisterReleaseSessionRequest();
+    message.session = (object.session !== undefined && object.session !== null)
+      ? ReleaseSessionRef.fromPartial(object.session)
+      : undefined;
+    message.resume = object.resume ?? false;
+    return message;
+  },
+};
+
+function createBaseReleaseSessionResponse(): ReleaseSessionResponse {
+  return { pinCapable: false };
+}
+
+export const ReleaseSessionResponse: MessageFns<ReleaseSessionResponse> = {
+  encode(message: ReleaseSessionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.pinCapable !== false) {
+      writer.uint32(8).bool(message.pinCapable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReleaseSessionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReleaseSessionResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.pinCapable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ReleaseSessionResponse {
+    return {
+      pinCapable: isSet(object.pinCapable)
+        ? globalThis.Boolean(object.pinCapable)
+        : isSet(object.pin_capable)
+        ? globalThis.Boolean(object.pin_capable)
+        : false,
+    };
+  },
+
+  toJSON(message: ReleaseSessionResponse): unknown {
+    const obj: any = {};
+    if (message.pinCapable !== false) {
+      obj.pinCapable = message.pinCapable;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ReleaseSessionResponse>): ReleaseSessionResponse {
+    return ReleaseSessionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ReleaseSessionResponse>): ReleaseSessionResponse {
+    const message = createBaseReleaseSessionResponse();
+    message.pinCapable = object.pinCapable ?? false;
+    return message;
+  },
+};
+
+function createBaseGetInstanceReleaseRequest(): GetInstanceReleaseRequest {
+  return { session: undefined };
+}
+
+export const GetInstanceReleaseRequest: MessageFns<GetInstanceReleaseRequest> = {
+  encode(message: GetInstanceReleaseRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session !== undefined) {
+      ReleaseSessionRef.encode(message.session, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetInstanceReleaseRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGetInstanceReleaseRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.session = ReleaseSessionRef.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GetInstanceReleaseRequest {
+    return { session: isSet(object.session) ? ReleaseSessionRef.fromJSON(object.session) : undefined };
+  },
+
+  toJSON(message: GetInstanceReleaseRequest): unknown {
+    const obj: any = {};
+    if (message.session !== undefined) {
+      obj.session = ReleaseSessionRef.toJSON(message.session);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetInstanceReleaseRequest>): GetInstanceReleaseRequest {
+    return GetInstanceReleaseRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetInstanceReleaseRequest>): GetInstanceReleaseRequest {
+    const message = createBaseGetInstanceReleaseRequest();
+    message.session = (object.session !== undefined && object.session !== null)
+      ? ReleaseSessionRef.fromPartial(object.session)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSetReleasePinRequest(): SetReleasePinRequest {
+  return { session: undefined, version: 0n, expectedPinRevision: undefined };
+}
+
+export const SetReleasePinRequest: MessageFns<SetReleasePinRequest> = {
+  encode(message: SetReleasePinRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session !== undefined) {
+      ReleaseSessionRef.encode(message.session, writer.uint32(10).fork()).join();
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    if (message.expectedPinRevision !== undefined) {
+      if (BigInt.asUintN(64, message.expectedPinRevision) !== message.expectedPinRevision) {
+        throw new globalThis.Error("value provided for field message.expectedPinRevision of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.expectedPinRevision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetReleasePinRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetReleasePinRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.session = ReleaseSessionRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.expectedPinRevision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SetReleasePinRequest {
+    return {
+      session: isSet(object.session) ? ReleaseSessionRef.fromJSON(object.session) : undefined,
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      expectedPinRevision: isSet(object.expectedPinRevision)
+        ? BigInt(object.expectedPinRevision)
+        : isSet(object.expected_pin_revision)
+        ? BigInt(object.expected_pin_revision)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SetReleasePinRequest): unknown {
+    const obj: any = {};
+    if (message.session !== undefined) {
+      obj.session = ReleaseSessionRef.toJSON(message.session);
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.expectedPinRevision !== undefined) {
+      obj.expectedPinRevision = message.expectedPinRevision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetReleasePinRequest>): SetReleasePinRequest {
+    return SetReleasePinRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetReleasePinRequest>): SetReleasePinRequest {
+    const message = createBaseSetReleasePinRequest();
+    message.session = (object.session !== undefined && object.session !== null)
+      ? ReleaseSessionRef.fromPartial(object.session)
+      : undefined;
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.expectedPinRevision = (object.expectedPinRevision !== undefined && object.expectedPinRevision !== null)
+      ? BigInt(object.expectedPinRevision)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseInstanceReleaseTarget(): InstanceReleaseTarget {
+  return {
+    release: undefined,
+    targetRevision: 0n,
+    activationRevision: 0n,
+    pinned: false,
+    pinRevision: 0n,
+    pinnedBy: "",
+    pinnedAtUnixMs: 0n,
+  };
+}
+
+export const InstanceReleaseTarget: MessageFns<InstanceReleaseTarget> = {
+  encode(message: InstanceReleaseTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.release !== undefined) {
+      ConfigurationRelease.encode(message.release, writer.uint32(10).fork()).join();
+    }
+    if (message.targetRevision !== 0n) {
+      if (BigInt.asUintN(64, message.targetRevision) !== message.targetRevision) {
+        throw new globalThis.Error("value provided for field message.targetRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.targetRevision);
+    }
+    if (message.activationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.activationRevision) !== message.activationRevision) {
+        throw new globalThis.Error("value provided for field message.activationRevision of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.activationRevision);
+    }
+    if (message.pinned !== false) {
+      writer.uint32(32).bool(message.pinned);
+    }
+    if (message.pinRevision !== 0n) {
+      if (BigInt.asUintN(64, message.pinRevision) !== message.pinRevision) {
+        throw new globalThis.Error("value provided for field message.pinRevision of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.pinRevision);
+    }
+    if (message.pinnedBy !== "") {
+      writer.uint32(50).string(message.pinnedBy);
+    }
+    if (message.pinnedAtUnixMs !== 0n) {
+      if (BigInt.asIntN(64, message.pinnedAtUnixMs) !== message.pinnedAtUnixMs) {
+        throw new globalThis.Error("value provided for field message.pinnedAtUnixMs of type int64 too large");
+      }
+      writer.uint32(56).int64(message.pinnedAtUnixMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InstanceReleaseTarget {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseInstanceReleaseTarget();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.release = ConfigurationRelease.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.targetRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.activationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.pinned = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.pinRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.pinnedBy = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.pinnedAtUnixMs = reader.int64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): InstanceReleaseTarget {
+    return {
+      release: isSet(object.release) ? ConfigurationRelease.fromJSON(object.release) : undefined,
+      targetRevision: isSet(object.targetRevision)
+        ? BigInt(object.targetRevision)
+        : isSet(object.target_revision)
+        ? BigInt(object.target_revision)
+        : 0n,
+      activationRevision: isSet(object.activationRevision)
+        ? BigInt(object.activationRevision)
+        : isSet(object.activation_revision)
+        ? BigInt(object.activation_revision)
+        : 0n,
+      pinned: isSet(object.pinned) ? globalThis.Boolean(object.pinned) : false,
+      pinRevision: isSet(object.pinRevision)
+        ? BigInt(object.pinRevision)
+        : isSet(object.pin_revision)
+        ? BigInt(object.pin_revision)
+        : 0n,
+      pinnedBy: isSet(object.pinnedBy)
+        ? globalThis.String(object.pinnedBy)
+        : isSet(object.pinned_by)
+        ? globalThis.String(object.pinned_by)
+        : "",
+      pinnedAtUnixMs: isSet(object.pinnedAtUnixMs)
+        ? BigInt(object.pinnedAtUnixMs)
+        : isSet(object.pinned_at_unix_ms)
+        ? BigInt(object.pinned_at_unix_ms)
+        : 0n,
+    };
+  },
+
+  toJSON(message: InstanceReleaseTarget): unknown {
+    const obj: any = {};
+    if (message.release !== undefined) {
+      obj.release = ConfigurationRelease.toJSON(message.release);
+    }
+    if (message.targetRevision !== 0n) {
+      obj.targetRevision = message.targetRevision.toString();
+    }
+    if (message.activationRevision !== 0n) {
+      obj.activationRevision = message.activationRevision.toString();
+    }
+    if (message.pinned !== false) {
+      obj.pinned = message.pinned;
+    }
+    if (message.pinRevision !== 0n) {
+      obj.pinRevision = message.pinRevision.toString();
+    }
+    if (message.pinnedBy !== "") {
+      obj.pinnedBy = message.pinnedBy;
+    }
+    if (message.pinnedAtUnixMs !== 0n) {
+      obj.pinnedAtUnixMs = message.pinnedAtUnixMs.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<InstanceReleaseTarget>): InstanceReleaseTarget {
+    return InstanceReleaseTarget.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<InstanceReleaseTarget>): InstanceReleaseTarget {
+    const message = createBaseInstanceReleaseTarget();
+    message.release = (object.release !== undefined && object.release !== null)
+      ? ConfigurationRelease.fromPartial(object.release)
+      : undefined;
+    message.targetRevision = (object.targetRevision !== undefined && object.targetRevision !== null)
+      ? BigInt(object.targetRevision)
+      : 0n;
+    message.activationRevision = (object.activationRevision !== undefined && object.activationRevision !== null)
+      ? BigInt(object.activationRevision)
+      : 0n;
+    message.pinned = object.pinned ?? false;
+    message.pinRevision = (object.pinRevision !== undefined && object.pinRevision !== null)
+      ? BigInt(object.pinRevision)
+      : 0n;
+    message.pinnedBy = object.pinnedBy ?? "";
+    message.pinnedAtUnixMs = (object.pinnedAtUnixMs !== undefined && object.pinnedAtUnixMs !== null)
+      ? BigInt(object.pinnedAtUnixMs)
+      : 0n;
+    return message;
+  },
+};
+
 function createBaseReleaseEntrySelector(): ReleaseEntrySelector {
   return { alias: "", kind: "", ref: undefined, version: 0n, label: "" };
 }
@@ -9631,6 +10450,7 @@ function createBaseReleaseWatchRegistration(): ReleaseWatchRegistration {
     clientName: "",
     instanceId: "",
     lastSeenRevision: 0n,
+    sessionId: "",
     schemaVersion: undefined,
   };
 }
@@ -9654,6 +10474,9 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
         throw new globalThis.Error("value provided for field message.lastSeenRevision of type uint64 too large");
       }
       writer.uint32(40).uint64(message.lastSeenRevision);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(58).string(message.sessionId);
     }
     if (message.schemaVersion !== undefined) {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
@@ -9717,6 +10540,14 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
             message.lastSeenRevision = reader.uint64() as bigint;
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
           case 6: {
             if (tag !== 48) {
               break;
@@ -9756,6 +10587,11 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
         : isSet(object.last_seen_revision)
         ? BigInt(object.last_seen_revision)
         : 0n,
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
       schemaVersion: isSet(object.schemaVersion)
         ? BigInt(object.schemaVersion)
         : isSet(object.schema_version)
@@ -9781,6 +10617,9 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
     if (message.lastSeenRevision !== 0n) {
       obj.lastSeenRevision = message.lastSeenRevision.toString();
     }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
     if (message.schemaVersion !== undefined) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
@@ -9801,6 +10640,7 @@ export const ReleaseWatchRegistration: MessageFns<ReleaseWatchRegistration> = {
     message.lastSeenRevision = (object.lastSeenRevision !== undefined && object.lastSeenRevision !== null)
       ? BigInt(object.lastSeenRevision)
       : 0n;
+    message.sessionId = object.sessionId ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
       : undefined;
@@ -9824,6 +10664,8 @@ function createBaseReleaseAcknowledgement(): ReleaseAcknowledgement {
     divergentFieldCount: 0,
     schemaVersion: 0n,
     sequence: 0n,
+    sessionId: "",
+    targetRevision: 0n,
   };
 }
 
@@ -9885,6 +10727,15 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
       }
       writer.uint32(112).uint64(message.sequence);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(122).string(message.sessionId);
+    }
+    if (message.targetRevision !== 0n) {
+      if (BigInt.asUintN(64, message.targetRevision) !== message.targetRevision) {
+        throw new globalThis.Error("value provided for field message.targetRevision of type uint64 too large");
+      }
+      writer.uint32(128).uint64(message.targetRevision);
     }
     return writer;
   },
@@ -10014,6 +10865,22 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
             message.sequence = reader.uint64() as bigint;
             continue;
           }
+          case 15: {
+            if (tag !== 122) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.targetRevision = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -10074,6 +10941,16 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         ? BigInt(object.schema_version)
         : 0n,
       sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      targetRevision: isSet(object.targetRevision)
+        ? BigInt(object.targetRevision)
+        : isSet(object.target_revision)
+        ? BigInt(object.target_revision)
+        : 0n,
     };
   },
 
@@ -10121,6 +10998,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     if (message.sequence !== 0n) {
       obj.sequence = message.sequence.toString();
     }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.targetRevision !== 0n) {
+      obj.targetRevision = message.targetRevision.toString();
+    }
     return obj;
   },
 
@@ -10151,6 +11034,10 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
       ? BigInt(object.schemaVersion)
       : 0n;
     message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
+    message.sessionId = object.sessionId ?? "";
+    message.targetRevision = (object.targetRevision !== undefined && object.targetRevision !== null)
+      ? BigInt(object.targetRevision)
+      : 0n;
     return message;
   },
 };
@@ -10412,6 +11299,8 @@ function createBaseReleaseAcknowledgementRejectedEvent(): ReleaseAcknowledgement
     state: "",
     sequence: 0n,
     reason: "",
+    sessionId: "",
+    targetRevision: 0n,
   };
 }
 
@@ -10458,6 +11347,15 @@ export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgem
     }
     if (message.reason !== "") {
       writer.uint32(82).string(message.reason);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(90).string(message.sessionId);
+    }
+    if (message.targetRevision !== 0n) {
+      if (BigInt.asUintN(64, message.targetRevision) !== message.targetRevision) {
+        throw new globalThis.Error("value provided for field message.targetRevision of type uint64 too large");
+      }
+      writer.uint32(96).uint64(message.targetRevision);
     }
     return writer;
   },
@@ -10555,6 +11453,22 @@ export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgem
             message.reason = reader.string();
             continue;
           }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.targetRevision = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -10595,6 +11509,16 @@ export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgem
       state: isSet(object.state) ? globalThis.String(object.state) : "",
       sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
       reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      targetRevision: isSet(object.targetRevision)
+        ? BigInt(object.targetRevision)
+        : isSet(object.target_revision)
+        ? BigInt(object.target_revision)
+        : 0n,
     };
   },
 
@@ -10630,6 +11554,12 @@ export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgem
     if (message.reason !== "") {
       obj.reason = message.reason;
     }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.targetRevision !== 0n) {
+      obj.targetRevision = message.targetRevision.toString();
+    }
     return obj;
   },
 
@@ -10654,6 +11584,10 @@ export const ReleaseAcknowledgementRejectedEvent: MessageFns<ReleaseAcknowledgem
     message.state = object.state ?? "";
     message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
     message.reason = object.reason ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.targetRevision = (object.targetRevision !== undefined && object.targetRevision !== null)
+      ? BigInt(object.targetRevision)
+      : 0n;
     return message;
   },
 };
@@ -10665,6 +11599,9 @@ function createBaseWatchReleaseEvent(): WatchReleaseEvent {
 export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
   encode(message: WatchReleaseEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     switch (message.event?.$case) {
+      case "target":
+        InstanceReleaseTarget.encode(message.event.value, writer.uint32(50).fork()).join();
+        break;
       case "snapshot":
         ReleaseSnapshotEvent.encode(message.event.value, writer.uint32(10).fork()).join();
         break;
@@ -10700,6 +11637,14 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.event = { $case: "target", value: InstanceReleaseTarget.decode(reader, reader.uint32()) };
+            continue;
+          }
           case 1: {
             if (tag !== 10) {
               break;
@@ -10757,7 +11702,9 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
 
   fromJSON(object: any): WatchReleaseEvent {
     return {
-      event: isSet(object.snapshot)
+      event: isSet(object.target)
+        ? { $case: "target", value: InstanceReleaseTarget.fromJSON(object.target) }
+        : isSet(object.snapshot)
         ? { $case: "snapshot", value: ReleaseSnapshotEvent.fromJSON(object.snapshot) }
         : isSet(object.activation)
         ? { $case: "activation", value: ReleaseActivationEvent.fromJSON(object.activation) }
@@ -10780,7 +11727,9 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
 
   toJSON(message: WatchReleaseEvent): unknown {
     const obj: any = {};
-    if (message.event?.$case === "snapshot") {
+    if (message.event?.$case === "target") {
+      obj.target = InstanceReleaseTarget.toJSON(message.event.value);
+    } else if (message.event?.$case === "snapshot") {
       obj.snapshot = ReleaseSnapshotEvent.toJSON(message.event.value);
     } else if (message.event?.$case === "activation") {
       obj.activation = ReleaseActivationEvent.toJSON(message.event.value);
@@ -10801,6 +11750,12 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
   fromPartial(object: DeepPartial<WatchReleaseEvent>): WatchReleaseEvent {
     const message = createBaseWatchReleaseEvent();
     switch (object.event?.$case) {
+      case "target": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = { $case: "target", value: InstanceReleaseTarget.fromPartial(object.event.value) };
+        }
+        break;
+      }
       case "snapshot": {
         if (object.event?.value !== undefined && object.event?.value !== null) {
           message.event = { $case: "snapshot", value: ReleaseSnapshotEvent.fromPartial(object.event.value) };
@@ -17843,6 +18798,15 @@ export const ListSubscribersResponse: MessageFns<ListSubscribersResponse> = {
 
 function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
   return {
+    sessionId: "",
+    targetRevision: 0n,
+    pinVersion: 0n,
+    pinRevision: 0n,
+    pinnedBy: "",
+    pinnedAtUnixMs: 0n,
+    lastAppliedVersion: 0n,
+    desiredVersion: 0n,
+    desiredRevision: 0n,
     namespace: undefined,
     releaseName: "",
     clientName: "",
@@ -17864,6 +18828,54 @@ function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
 
 export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
   encode(message: ReleaseSubscriberState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sessionId !== "") {
+      writer.uint32(138).string(message.sessionId);
+    }
+    if (message.targetRevision !== 0n) {
+      if (BigInt.asUintN(64, message.targetRevision) !== message.targetRevision) {
+        throw new globalThis.Error("value provided for field message.targetRevision of type uint64 too large");
+      }
+      writer.uint32(144).uint64(message.targetRevision);
+    }
+    if (message.pinVersion !== 0n) {
+      if (BigInt.asUintN(64, message.pinVersion) !== message.pinVersion) {
+        throw new globalThis.Error("value provided for field message.pinVersion of type uint64 too large");
+      }
+      writer.uint32(152).uint64(message.pinVersion);
+    }
+    if (message.pinRevision !== 0n) {
+      if (BigInt.asUintN(64, message.pinRevision) !== message.pinRevision) {
+        throw new globalThis.Error("value provided for field message.pinRevision of type uint64 too large");
+      }
+      writer.uint32(160).uint64(message.pinRevision);
+    }
+    if (message.pinnedBy !== "") {
+      writer.uint32(170).string(message.pinnedBy);
+    }
+    if (message.pinnedAtUnixMs !== 0n) {
+      if (BigInt.asIntN(64, message.pinnedAtUnixMs) !== message.pinnedAtUnixMs) {
+        throw new globalThis.Error("value provided for field message.pinnedAtUnixMs of type int64 too large");
+      }
+      writer.uint32(176).int64(message.pinnedAtUnixMs);
+    }
+    if (message.lastAppliedVersion !== 0n) {
+      if (BigInt.asUintN(64, message.lastAppliedVersion) !== message.lastAppliedVersion) {
+        throw new globalThis.Error("value provided for field message.lastAppliedVersion of type uint64 too large");
+      }
+      writer.uint32(184).uint64(message.lastAppliedVersion);
+    }
+    if (message.desiredVersion !== 0n) {
+      if (BigInt.asUintN(64, message.desiredVersion) !== message.desiredVersion) {
+        throw new globalThis.Error("value provided for field message.desiredVersion of type uint64 too large");
+      }
+      writer.uint32(192).uint64(message.desiredVersion);
+    }
+    if (message.desiredRevision !== 0n) {
+      if (BigInt.asUintN(64, message.desiredRevision) !== message.desiredRevision) {
+        throw new globalThis.Error("value provided for field message.desiredRevision of type uint64 too large");
+      }
+      writer.uint32(200).uint64(message.desiredRevision);
+    }
     if (message.namespace !== undefined) {
       NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
     }
@@ -17943,6 +18955,78 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 18: {
+            if (tag !== 144) {
+              break;
+            }
+
+            message.targetRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 19: {
+            if (tag !== 152) {
+              break;
+            }
+
+            message.pinVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 20: {
+            if (tag !== 160) {
+              break;
+            }
+
+            message.pinRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+
+            message.pinnedBy = reader.string();
+            continue;
+          }
+          case 22: {
+            if (tag !== 176) {
+              break;
+            }
+
+            message.pinnedAtUnixMs = reader.int64() as bigint;
+            continue;
+          }
+          case 23: {
+            if (tag !== 184) {
+              break;
+            }
+
+            message.lastAppliedVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 24: {
+            if (tag !== 192) {
+              break;
+            }
+
+            message.desiredVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 25: {
+            if (tag !== 200) {
+              break;
+            }
+
+            message.desiredRevision = reader.uint64() as bigint;
+            continue;
+          }
           case 1: {
             if (tag !== 10) {
               break;
@@ -18085,6 +19169,51 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
 
   fromJSON(object: any): ReleaseSubscriberState {
     return {
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      targetRevision: isSet(object.targetRevision)
+        ? BigInt(object.targetRevision)
+        : isSet(object.target_revision)
+        ? BigInt(object.target_revision)
+        : 0n,
+      pinVersion: isSet(object.pinVersion)
+        ? BigInt(object.pinVersion)
+        : isSet(object.pin_version)
+        ? BigInt(object.pin_version)
+        : 0n,
+      pinRevision: isSet(object.pinRevision)
+        ? BigInt(object.pinRevision)
+        : isSet(object.pin_revision)
+        ? BigInt(object.pin_revision)
+        : 0n,
+      pinnedBy: isSet(object.pinnedBy)
+        ? globalThis.String(object.pinnedBy)
+        : isSet(object.pinned_by)
+        ? globalThis.String(object.pinned_by)
+        : "",
+      pinnedAtUnixMs: isSet(object.pinnedAtUnixMs)
+        ? BigInt(object.pinnedAtUnixMs)
+        : isSet(object.pinned_at_unix_ms)
+        ? BigInt(object.pinned_at_unix_ms)
+        : 0n,
+      lastAppliedVersion: isSet(object.lastAppliedVersion)
+        ? BigInt(object.lastAppliedVersion)
+        : isSet(object.last_applied_version)
+        ? BigInt(object.last_applied_version)
+        : 0n,
+      desiredVersion: isSet(object.desiredVersion)
+        ? BigInt(object.desiredVersion)
+        : isSet(object.desired_version)
+        ? BigInt(object.desired_version)
+        : 0n,
+      desiredRevision: isSet(object.desiredRevision)
+        ? BigInt(object.desiredRevision)
+        : isSet(object.desired_revision)
+        ? BigInt(object.desired_revision)
+        : 0n,
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       releaseName: isSet(object.releaseName)
         ? globalThis.String(object.releaseName)
@@ -18150,6 +19279,33 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
 
   toJSON(message: ReleaseSubscriberState): unknown {
     const obj: any = {};
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.targetRevision !== 0n) {
+      obj.targetRevision = message.targetRevision.toString();
+    }
+    if (message.pinVersion !== 0n) {
+      obj.pinVersion = message.pinVersion.toString();
+    }
+    if (message.pinRevision !== 0n) {
+      obj.pinRevision = message.pinRevision.toString();
+    }
+    if (message.pinnedBy !== "") {
+      obj.pinnedBy = message.pinnedBy;
+    }
+    if (message.pinnedAtUnixMs !== 0n) {
+      obj.pinnedAtUnixMs = message.pinnedAtUnixMs.toString();
+    }
+    if (message.lastAppliedVersion !== 0n) {
+      obj.lastAppliedVersion = message.lastAppliedVersion.toString();
+    }
+    if (message.desiredVersion !== 0n) {
+      obj.desiredVersion = message.desiredVersion.toString();
+    }
+    if (message.desiredRevision !== 0n) {
+      obj.desiredRevision = message.desiredRevision.toString();
+    }
     if (message.namespace !== undefined) {
       obj.namespace = NamespaceRef.toJSON(message.namespace);
     }
@@ -18206,6 +19362,29 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
   },
   fromPartial(object: DeepPartial<ReleaseSubscriberState>): ReleaseSubscriberState {
     const message = createBaseReleaseSubscriberState();
+    message.sessionId = object.sessionId ?? "";
+    message.targetRevision = (object.targetRevision !== undefined && object.targetRevision !== null)
+      ? BigInt(object.targetRevision)
+      : 0n;
+    message.pinVersion = (object.pinVersion !== undefined && object.pinVersion !== null)
+      ? BigInt(object.pinVersion)
+      : 0n;
+    message.pinRevision = (object.pinRevision !== undefined && object.pinRevision !== null)
+      ? BigInt(object.pinRevision)
+      : 0n;
+    message.pinnedBy = object.pinnedBy ?? "";
+    message.pinnedAtUnixMs = (object.pinnedAtUnixMs !== undefined && object.pinnedAtUnixMs !== null)
+      ? BigInt(object.pinnedAtUnixMs)
+      : 0n;
+    message.lastAppliedVersion = (object.lastAppliedVersion !== undefined && object.lastAppliedVersion !== null)
+      ? BigInt(object.lastAppliedVersion)
+      : 0n;
+    message.desiredVersion = (object.desiredVersion !== undefined && object.desiredVersion !== null)
+      ? BigInt(object.desiredVersion)
+      : 0n;
+    message.desiredRevision = (object.desiredRevision !== undefined && object.desiredRevision !== null)
+      ? BigInt(object.desiredRevision)
+      : 0n;
     message.namespace = (object.namespace !== undefined && object.namespace !== null)
       ? NamespaceRef.fromPartial(object.namespace)
       : undefined;
@@ -19659,6 +20838,38 @@ export interface WatchServiceServer extends UntypedServiceImplementation {
  */
 export type ConfigurationReleaseServiceService = typeof ConfigurationReleaseServiceService;
 export const ConfigurationReleaseServiceService = {
+  registerReleaseSession: {
+    path: "/kms.v1.ConfigurationReleaseService/RegisterReleaseSession" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: RegisterReleaseSessionRequest): Buffer =>
+      Buffer.from(RegisterReleaseSessionRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): RegisterReleaseSessionRequest => RegisterReleaseSessionRequest.decode(value),
+    responseSerialize: (value: ReleaseSessionResponse): Buffer =>
+      Buffer.from(ReleaseSessionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ReleaseSessionResponse => ReleaseSessionResponse.decode(value),
+  },
+  getInstanceRelease: {
+    path: "/kms.v1.ConfigurationReleaseService/GetInstanceRelease" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: GetInstanceReleaseRequest): Buffer =>
+      Buffer.from(GetInstanceReleaseRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): GetInstanceReleaseRequest => GetInstanceReleaseRequest.decode(value),
+    responseSerialize: (value: InstanceReleaseTarget): Buffer =>
+      Buffer.from(InstanceReleaseTarget.encode(value).finish()),
+    responseDeserialize: (value: Buffer): InstanceReleaseTarget => InstanceReleaseTarget.decode(value),
+  },
+  setReleasePin: {
+    path: "/kms.v1.ConfigurationReleaseService/SetReleasePin" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SetReleasePinRequest): Buffer => Buffer.from(SetReleasePinRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SetReleasePinRequest => SetReleasePinRequest.decode(value),
+    responseSerialize: (value: InstanceReleaseTarget): Buffer =>
+      Buffer.from(InstanceReleaseTarget.encode(value).finish()),
+    responseDeserialize: (value: Buffer): InstanceReleaseTarget => InstanceReleaseTarget.decode(value),
+  },
   createRelease: {
     path: "/kms.v1.ConfigurationReleaseService/CreateRelease" as const,
     requestStream: false as const,
@@ -19766,6 +20977,9 @@ export const ConfigurationReleaseServiceService = {
 } as const;
 
 export interface ConfigurationReleaseServiceServer extends UntypedServiceImplementation {
+  registerReleaseSession: handleUnaryCall<RegisterReleaseSessionRequest, ReleaseSessionResponse>;
+  getInstanceRelease: handleUnaryCall<GetInstanceReleaseRequest, InstanceReleaseTarget>;
+  setReleasePin: handleUnaryCall<SetReleasePinRequest, InstanceReleaseTarget>;
   createRelease: handleUnaryCall<CreateReleaseRequest, CreateReleaseResponse>;
   validateRelease: handleUnaryCall<ValidateReleaseRequest, ValidateReleaseResponse>;
   activateRelease: handleUnaryCall<ActivateReleaseRequest, ActivateReleaseResponse>;
@@ -20132,5 +21346,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 130439f809827160f695d9f16e167ecc88fd929deaa337dc1a99ab667bdfb52e
+// source-sha256: 9c718f1aececd93cde98b74e582883709332a34e07f0986128dd0c20c130fa62
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

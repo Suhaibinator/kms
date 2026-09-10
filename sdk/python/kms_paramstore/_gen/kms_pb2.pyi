@@ -459,6 +459,72 @@ class SecretVersionSetResponse(_message.Message):
     revision: int
     def __init__(self, affected_versions: _Optional[_Iterable[int]] = ..., revision: _Optional[int] = ...) -> None: ...
 
+class ReleaseSessionRef(_message.Message):
+    __slots__ = ("namespace", "name", "schema_version", "client_name", "instance_id", "session_id", "identity")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    name: str
+    schema_version: int
+    client_name: str
+    instance_id: str
+    session_id: str
+    identity: str
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., session_id: _Optional[str] = ..., identity: _Optional[str] = ...) -> None: ...
+
+class RegisterReleaseSessionRequest(_message.Message):
+    __slots__ = ("session", "resume")
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    RESUME_FIELD_NUMBER: _ClassVar[int]
+    session: ReleaseSessionRef
+    resume: bool
+    def __init__(self, session: _Optional[_Union[ReleaseSessionRef, _Mapping]] = ..., resume: _Optional[bool] = ...) -> None: ...
+
+class ReleaseSessionResponse(_message.Message):
+    __slots__ = ("pin_capable",)
+    PIN_CAPABLE_FIELD_NUMBER: _ClassVar[int]
+    pin_capable: bool
+    def __init__(self, pin_capable: _Optional[bool] = ...) -> None: ...
+
+class GetInstanceReleaseRequest(_message.Message):
+    __slots__ = ("session",)
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    session: ReleaseSessionRef
+    def __init__(self, session: _Optional[_Union[ReleaseSessionRef, _Mapping]] = ...) -> None: ...
+
+class SetReleasePinRequest(_message.Message):
+    __slots__ = ("session", "version", "expected_pin_revision")
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_PIN_REVISION_FIELD_NUMBER: _ClassVar[int]
+    session: ReleaseSessionRef
+    version: int
+    expected_pin_revision: int
+    def __init__(self, session: _Optional[_Union[ReleaseSessionRef, _Mapping]] = ..., version: _Optional[int] = ..., expected_pin_revision: _Optional[int] = ...) -> None: ...
+
+class InstanceReleaseTarget(_message.Message):
+    __slots__ = ("release", "target_revision", "activation_revision", "pinned", "pin_revision", "pinned_by", "pinned_at_unix_ms")
+    RELEASE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PINNED_FIELD_NUMBER: _ClassVar[int]
+    PIN_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PINNED_BY_FIELD_NUMBER: _ClassVar[int]
+    PINNED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    release: ConfigurationRelease
+    target_revision: int
+    activation_revision: int
+    pinned: bool
+    pin_revision: int
+    pinned_by: str
+    pinned_at_unix_ms: int
+    def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ..., target_revision: _Optional[int] = ..., activation_revision: _Optional[int] = ..., pinned: _Optional[bool] = ..., pin_revision: _Optional[int] = ..., pinned_by: _Optional[str] = ..., pinned_at_unix_ms: _Optional[int] = ...) -> None: ...
+
 class ReleaseEntrySelector(_message.Message):
     __slots__ = ("alias", "kind", "ref", "version", "label")
     ALIAS_FIELD_NUMBER: _ClassVar[int]
@@ -746,23 +812,25 @@ class VerifyReleaseDefaultsResponse(_message.Message):
     def __init__(self, name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., schema_matches: _Optional[bool] = ..., entries: _Optional[_Iterable[_Union[VerifyEntryVerdict, _Mapping]]] = ..., match_count: _Optional[int] = ..., differs_count: _Optional[int] = ..., missing_in_release_count: _Optional[int] = ..., unknown_alias_count: _Optional[int] = ..., secret_alias_count: _Optional[int] = ..., unsupported_content_type_count: _Optional[int] = ..., unverified_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseWatchRegistration(_message.Message):
-    __slots__ = ("namespace", "name", "client_name", "instance_id", "last_seen_revision", "schema_version")
+    __slots__ = ("namespace", "name", "client_name", "instance_id", "last_seen_revision", "session_id", "schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     LAST_SEEN_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     client_name: str
     instance_id: str
     last_seen_revision: int
+    session_id: str
     schema_version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ..., session_id: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseAcknowledgement(_message.Message):
-    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence")
+    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count", "schema_version", "sequence", "session_id", "target_revision")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -777,6 +845,8 @@ class ReleaseAcknowledgement(_message.Message):
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_REVISION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
@@ -791,7 +861,9 @@ class ReleaseAcknowledgement(_message.Message):
     divergent_field_count: int
     schema_version: int
     sequence: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ..., sequence: _Optional[int] = ...) -> None: ...
+    session_id: str
+    target_revision: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ..., sequence: _Optional[int] = ..., session_id: _Optional[str] = ..., target_revision: _Optional[int] = ...) -> None: ...
 
 class WatchReleaseRequest(_message.Message):
     __slots__ = ("register", "acknowledgement")
@@ -814,7 +886,7 @@ class ReleaseActivationEvent(_message.Message):
     def __init__(self, release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
 
 class ReleaseAcknowledgementRejectedEvent(_message.Message):
-    __slots__ = ("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason")
+    __slots__ = ("namespace", "name", "schema_version", "version", "activation_revision", "client_name", "instance_id", "state", "sequence", "reason", "session_id", "target_revision")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -825,6 +897,8 @@ class ReleaseAcknowledgementRejectedEvent(_message.Message):
     STATE_FIELD_NUMBER: _ClassVar[int]
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_REVISION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     schema_version: int
@@ -835,21 +909,25 @@ class ReleaseAcknowledgementRejectedEvent(_message.Message):
     state: str
     sequence: int
     reason: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., sequence: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
+    session_id: str
+    target_revision: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., sequence: _Optional[int] = ..., reason: _Optional[str] = ..., session_id: _Optional[str] = ..., target_revision: _Optional[int] = ...) -> None: ...
 
 class WatchReleaseEvent(_message.Message):
-    __slots__ = ("snapshot", "activation", "heartbeat", "acknowledgement_rejected", "revision")
+    __slots__ = ("target", "snapshot", "activation", "heartbeat", "acknowledgement_rejected", "revision")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
     SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
     ACTIVATION_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_FIELD_NUMBER: _ClassVar[int]
     ACKNOWLEDGEMENT_REJECTED_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
+    target: InstanceReleaseTarget
     snapshot: ReleaseSnapshotEvent
     activation: ReleaseActivationEvent
     heartbeat: Heartbeat
     acknowledgement_rejected: ReleaseAcknowledgementRejectedEvent
     revision: int
-    def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., acknowledgement_rejected: _Optional[_Union[ReleaseAcknowledgementRejectedEvent, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, target: _Optional[_Union[InstanceReleaseTarget, _Mapping]] = ..., snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., acknowledgement_rejected: _Optional[_Union[ReleaseAcknowledgementRejectedEvent, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class ApplicationContractField(_message.Message):
     __slots__ = ("alias", "kind", "content_type")
@@ -1482,7 +1560,16 @@ class ListSubscribersResponse(_message.Message):
     def __init__(self, subscribers: _Optional[_Iterable[_Union[Subscriber, _Mapping]]] = ..., current_revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseSubscriberState(_message.Message):
-    __slots__ = ("namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count", "schema_version")
+    __slots__ = ("session_id", "target_revision", "pin_version", "pin_revision", "pinned_by", "pinned_at_unix_ms", "last_applied_version", "desired_version", "desired_revision", "namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count", "schema_version")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PIN_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PIN_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PINNED_BY_FIELD_NUMBER: _ClassVar[int]
+    PINNED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    LAST_APPLIED_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DESIRED_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DESIRED_REVISION_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -1499,6 +1586,15 @@ class ReleaseSubscriberState(_message.Message):
     APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    target_revision: int
+    pin_version: int
+    pin_revision: int
+    pinned_by: str
+    pinned_at_unix_ms: int
+    last_applied_version: int
+    desired_version: int
+    desired_revision: int
     namespace: NamespaceRef
     release_name: str
     client_name: str
@@ -1515,7 +1611,7 @@ class ReleaseSubscriberState(_message.Message):
     applied_divergent: bool
     divergent_field_count: int
     schema_version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., target_revision: _Optional[int] = ..., pin_version: _Optional[int] = ..., pin_revision: _Optional[int] = ..., pinned_by: _Optional[str] = ..., pinned_at_unix_ms: _Optional[int] = ..., last_applied_version: _Optional[int] = ..., desired_version: _Optional[int] = ..., desired_revision: _Optional[int] = ..., namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersRequest(_message.Message):
     __slots__ = ("namespace", "release_name", "page_size", "page_token", "schema_version")

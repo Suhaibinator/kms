@@ -1046,6 +1046,31 @@ export class KmsClient {
 
   #releaseTransport(): ReleaseTransport {
     return {
+      registerReleaseSession: async (session, resume, signal) => {
+        try {
+          const response = await this.#transport.unary(
+            ConfigurationReleaseServiceService.registerReleaseSession,
+            { session, resume },
+            this.#callOptions(signal ? { signal } : {}),
+          );
+          return response.pinCapable;
+        } catch (error) {
+          const mapped = mapGrpcError(error);
+          if (mapped instanceof KmsError && mapped.code === "unimplemented") return false;
+          throwMapped(error);
+        }
+      },
+      getInstanceRelease: async (session, signal) => {
+        try {
+          return await this.#transport.unary(
+            ConfigurationReleaseServiceService.getInstanceRelease,
+            { session },
+            this.#callOptions(signal ? { signal } : {}),
+          );
+        } catch (error) {
+          throwMapped(error);
+        }
+      },
       getActiveRelease: async (namespace, name, schemaVersion, signal) => {
         if (!namespace) throw new KmsError("invalid_argument", "release namespace is required");
         try {

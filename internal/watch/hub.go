@@ -385,6 +385,9 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) (uint64, error) {
 // namespace. Authorization is namespace-level and already enforced at subscribe
 // time, so there is no per-event access check here. Slow subscribers are dropped.
 func (h *Hub) dispatch(e domain.ChangeLogEntry) {
+	if e.ResourceType == domain.ResourceReleaseInstance {
+		return
+	}
 	h.mu.Lock()
 	if e.ResourceType == domain.ResourceConfigurationRelease {
 		subs := make([]*ReleaseSubscription, 0, len(h.releaseSubs))
@@ -626,7 +629,7 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				return nil, false, nil
 			}
 			cursor = e.Revision
-			if e.ResourceType == domain.ResourceConfigurationRelease {
+			if e.ResourceType == domain.ResourceConfigurationRelease || e.ResourceType == domain.ResourceReleaseInstance {
 				continue
 			}
 			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {

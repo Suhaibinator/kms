@@ -1816,3 +1816,50 @@ def test_terminal_watch_does_not_mask_lifecycle_contract_failure(monkeypatch, fa
     assert prepared.commits == (1 if failure == "commit" else 0)
     assert prepared.aborts == (1 if failure == "abort" else 0)
     assert loader.status().last_failure_category == "internal"
+
+
+def test_process_session_pin_targets_and_failed_pin_keep_last_applied(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10), instance_id="fixed")
+    target = kms_pb2.InstanceReleaseTarget(release=_release(1, 10)[0], target_revision=10, activation_revision=10)
+    sessions = []
+
+    def register(request, **_kwargs):
+        sessions.append(request.session.session_id)
+        return kms_pb2.ReleaseSessionResponse(pin_capable=True)
+
+    def get_target(request, **_kwargs):
+        assert request.session.session_id == sessions[0]
+        out = kms_pb2.InstanceReleaseTarget()
+        out.CopyFrom(target)
+        return out
+
+    stub.RegisterReleaseSession = register
+    stub.GetInstanceRelease = get_target
+    applied = []
+
+    def prepare(_cancel, snapshot):
+        if snapshot.version == 3:
+            raise ValueError("rejected pin")
+        applied.append(snapshot.version)
+        return _Prepared()
+
+    thread, raised = _run_in_thread(loader, prepare)
+    try:
+        assert wait_until(lambda: applied == [1] and bool(stub.calls))
+        target.CopyFrom(kms_pb2.InstanceReleaseTarget(release=_release(2, 20)[0], target_revision=20, pinned=True, pin_revision=20))
+        stub.calls[-1].push(kms_pb2.WatchReleaseEvent(target=target, revision=20))
+        assert wait_until(lambda: loader.status().applied_version == 2)
+        assert wait_until(lambda: any(a.state == "applied" and a.target_revision == 20 and a.activation_revision == 0 and a.session_id == sessions[0] for a in stub.acknowledgements))
+        target.CopyFrom(kms_pb2.InstanceReleaseTarget(release=_release(3, 30)[0], target_revision=30, pinned=True, pin_revision=30))
+        stub.calls[-1].push(kms_pb2.WatchReleaseEvent(target=target, revision=30))
+        assert wait_until(lambda: loader.status().state == "rejected")
+        assert loader.status().applied_version == 2
+        stub.calls[-1].disconnect()
+        assert wait_until(lambda: len(stub.registrations) >= 2)
+        assert all(r.session_id == sessions[0] for r in stub.registrations)
+    finally:
+        loader.stop()
+        thread.join(timeout=2)
+    assert not raised
+    replacement, _, _ = _loader(monkeypatch, _release(1, 10), instance_id="fixed")
+    assert replacement._session_id != loader._session_id

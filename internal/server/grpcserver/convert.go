@@ -336,7 +336,7 @@ func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.Configurati
 }
 
 func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {
-	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, SchemaVersion: a.SchemaVersion, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
+	return &kmsv1.ReleaseSubscriberState{SessionId: a.SessionID, TargetRevision: a.TargetRevision, PinVersion: a.PinVersion, PinRevision: a.PinRevision, PinnedBy: a.PinnedBy, PinnedAtUnixMs: unixMS(a.PinnedAt), LastAppliedVersion: a.LastAppliedVersion, DesiredVersion: a.DesiredVersion, DesiredRevision: a.DesiredRevision, Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, SchemaVersion: a.SchemaVersion, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
 }
 
 // toProtoVerifyReleaseDefaults renders the value-free verification result.

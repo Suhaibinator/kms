@@ -23,9 +23,8 @@ import (
 	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
-// schemaVersion 3 introduces independent schema tracks. Previous baselines
-// are rejected without mutation; this release requires a fresh database.
-const schemaVersion = 3
+// Baseline 4 adds process-scoped release sessions; baseline 3 upgrades atomically.
+const schemaVersion = 4
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has

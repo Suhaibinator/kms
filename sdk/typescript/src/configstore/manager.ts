@@ -198,13 +198,15 @@ export class ManagedConfigManager {
     let observed = this.#observed;
     if (
       observed.version !== loaderStatus.observedVersion ||
-      observed.activationRevision !== loaderStatus.observedRevision
+      observed.targetRevision !== loaderStatus.observedRevision
     ) {
       observed = new ReleaseIdentity({
         namespace: observed.namespace,
         name: this.#options.name,
         version: loaderStatus.observedVersion,
-        activationRevision: loaderStatus.observedRevision,
+        activationRevision:
+          loaderStatus.observedActivationRevision ?? loaderStatus.observedRevision,
+        targetRevision: loaderStatus.observedRevision,
         schemaVersion: observed.schemaVersion,
       });
     }

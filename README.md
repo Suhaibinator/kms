@@ -107,6 +107,11 @@ deployment, start at [Quickstart](#quickstart).
   last-known-good lifecycle for Node.js services. Optional immutable Draft 2020-12
   JSON Schemas validate the alias-keyed parameter object; secret values and
   per-secret credentials are never stored in a release or watch event.
+- **Per-process release pinning**: operators can pin a release-loader session to
+  any valid release in its schema track. Reconnects and KMS restarts preserve the
+  pin; restarting the client application follows active configuration again.
+  Console and CLI show target versus last-applied state, with namespace-scoped
+  operator permission and guarded, audited assignments.
 - **Generated managed Go configuration**: applications declare an ordinary
   validated root type with storage, reload-policy, and consumer-view tags.
   `kms-config-gen` emits strict decoders, immutable atomic snapshots and typed

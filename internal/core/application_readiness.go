@@ -377,17 +377,26 @@ var lifecycleRank = map[string]int{
 // any row is connected. Mirrors groupSubscriberInstances in
 // frontend/lib/subscribers.ts. Output is sorted by identity, client, instance.
 func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.SubscriberInstance {
-	type key struct{ identity, client, instance string }
+	type key struct{ identity, client, instance, session string }
 	grouped := map[key]*domain.SubscriberInstance{}
 	order := make([]key, 0)
 	for _, ack := range acks {
-		k := key{ack.Identity, ack.ClientName, ack.InstanceID}
+		k := key{ack.Identity, ack.ClientName, ack.InstanceID, ack.SessionID}
 		inst := grouped[k]
 		if inst == nil {
 			inst = &domain.SubscriberInstance{Identity: ack.Identity, ClientName: ack.ClientName, InstanceID: ack.InstanceID}
 			grouped[k] = inst
 			order = append(order, k)
 		}
+		inst.SessionID = ack.SessionID
+		inst.TargetRevision = ack.TargetRevision
+		inst.PinVersion = ack.PinVersion
+		inst.PinRevision = ack.PinRevision
+		inst.PinnedBy = ack.PinnedBy
+		inst.PinnedAt = ack.PinnedAt
+		inst.LastAppliedVersion = ack.LastAppliedVersion
+		inst.DesiredVersion = ack.DesiredVersion
+		inst.DesiredRevision = ack.DesiredRevision
 		inst.Connected = inst.Connected || ack.Connected
 		if ack.ServerTimestamp.After(inst.ServerTimestamp) {
 			inst.ServerTimestamp = ack.ServerTimestamp
@@ -397,7 +406,7 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 			continue
 		}
 		current := lifecycleRank[inst.State]
-		if ack.ActivationRevision > inst.ActivationRevision || (ack.ActivationRevision == inst.ActivationRevision && rank > current) {
+		if ack.SessionID != "" || ack.ActivationRevision > inst.ActivationRevision || (ack.ActivationRevision == inst.ActivationRevision && rank > current) {
 			inst.State = ack.State
 			inst.ReleaseVersion = ack.ReleaseVersion
 			inst.ActivationRevision = ack.ActivationRevision
@@ -435,12 +444,27 @@ const (
 	instanceRejected
 	instancePending
 	instanceStale
+	instancePinned
 )
 
 // classifyInstance places one instance relative to the current activation
 // revision. Below-applied instances are pending while connected (or only
 // briefly disconnected) and stale once disconnected for staleDisconnectAfter.
 func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64, now time.Time) instanceClass {
+	if inst.SessionID != "" {
+		if !inst.Connected {
+			return instanceStale
+		}
+		if inst.TargetRevision != inst.DesiredRevision || inst.ReleaseVersion != inst.DesiredVersion {
+			return instancePending
+		}
+		if inst.State == domain.ReleaseStateRejected {
+			return instanceRejected
+		}
+		if inst.State == domain.ReleaseStateApplied && inst.PinVersion > 0 {
+			return instancePinned
+		}
+	}
 	if currentRevision > 0 && inst.ActivationRevision == currentRevision {
 		switch inst.State {
 		case domain.ReleaseStateRejected:
@@ -476,6 +500,8 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 			summary.Connected++
 		}
 		switch classifyInstance(inst, currentRevision, now) {
+		case instancePinned:
+			summary.Pinned++
 		case instanceApplied:
 			summary.AppliedCurrent++
 			if inst.AppliedDivergent {
@@ -500,7 +526,7 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		state = domain.RolloutStateNoSubscribers
 	case summary.Rejected > 0:
 		state = domain.RolloutStateDegraded
-	case summary.Pending > 0:
+	case summary.Pending > 0 || summary.Pinned > 0:
 		state = domain.RolloutStateRolling
 	case summary.Stale > 0:
 		state = domain.RolloutStateStale

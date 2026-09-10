@@ -307,7 +307,7 @@ func (m *Manager) clearReported() {
 
 func (r ReleaseIdentity) dedupeKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s",
-		r.namespace, r.name, r.version, r.activationRevision, r.digest)
+		r.namespace, r.name, r.version, r.TargetRevision(), r.digest)
 }
 
 type managedPrepared struct {
@@ -388,7 +388,7 @@ func (m *Manager) Status() Status {
 	loaderStatus := m.loader.Status()
 	m.mu.RLock()
 	observed := m.observed
-	if loaderStatus.ObservedVersion != observed.version || loaderStatus.ObservedRevision != observed.activationRevision {
+	if loaderStatus.ObservedVersion != observed.version || loaderStatus.ObservedRevision != observed.TargetRevision() {
 		// Prefetch contract and resolution failures do not produce a resolved
 		// snapshot. Preserve the selected track from the last trusted manifest
 		// with the safe version/revision observed by ReleaseLoader, while leaving
@@ -397,7 +397,8 @@ func (m *Manager) Status() Status {
 			namespace:          observed.namespace,
 			name:               m.options.Release,
 			version:            loaderStatus.ObservedVersion,
-			activationRevision: loaderStatus.ObservedRevision,
+			activationRevision: loaderStatus.ObservedActivationRevision,
+			targetRevision:     loaderStatus.ObservedRevision,
 			schemaVersion:      observed.schemaVersion,
 		}
 	}

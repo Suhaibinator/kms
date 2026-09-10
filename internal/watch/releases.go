@@ -64,8 +64,8 @@ type ReleaseSubscription struct {
 func (s *ReleaseSubscription) RecordAcknowledgement(a domain.ReleaseAcknowledgement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if a.Namespace == s.reg.Namespace && a.ReleaseName == s.reg.Name && a.SchemaVersion == s.reg.SchemaVersion && a.ActivationRevision >= s.acknowledgement.ActivationRevision {
-		s.acknowledgement = domain.ReleaseAcknowledgement{State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision}
+	if a.Namespace == s.reg.Namespace && a.ReleaseName == s.reg.Name && a.SchemaVersion == s.reg.SchemaVersion && max(a.ActivationRevision, a.TargetRevision) >= max(s.acknowledgement.ActivationRevision, s.acknowledgement.TargetRevision) {
+		s.acknowledgement = domain.ReleaseAcknowledgement{State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, TargetRevision: a.TargetRevision}
 	}
 }
 

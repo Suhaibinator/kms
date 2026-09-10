@@ -245,6 +245,9 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if regp.SchemaVersion == nil {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "schema_version is required"))
 	}
+	if regp.GetSessionId() != "" {
+		return h.watchInstanceRelease(stream, pr, regp)
+	}
 	ns := nsRefFromProto(regp.GetNamespace())
 	if regp.GetClientName() == "" || regp.GetInstanceId() == "" || len(regp.GetClientName()) > 128 || len(regp.GetInstanceId()) > 128 {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "client_name and instance_id must be between 1 and 128 bytes"))

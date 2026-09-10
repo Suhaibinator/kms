@@ -77,6 +77,8 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
+      if (path.endsWith("/RegisterReleaseSession"))
+        throw new KmsError("unimplemented", "legacy server");
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
@@ -156,6 +158,8 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
+      if (path.endsWith("/RegisterReleaseSession"))
+        throw new KmsError("unimplemented", "legacy server");
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -211,6 +215,8 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
+      if (path.endsWith("/RegisterReleaseSession"))
+        throw new KmsError("unimplemented", "legacy server");
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -257,6 +263,8 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
+      if (path.endsWith("/RegisterReleaseSession"))
+        throw new KmsError("unimplemented", "legacy server");
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });

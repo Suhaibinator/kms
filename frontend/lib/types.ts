@@ -699,6 +699,16 @@ export interface ActivateReleaseResponse {
 }
 
 export interface ReleaseSubscriberState {
+  session_id?: string;
+  target_revision?: number;
+  pin_version?: number;
+  pin_revision?: number;
+  pinned_by?: string;
+  pinned_at_unix_ms?: number;
+  last_applied_version?: number;
+  desired_version?: number;
+  desired_revision?: number;
+
   namespace: NamespaceRef;
   release_name: string;
   schema_version?: number;
@@ -852,6 +862,16 @@ export interface OverviewActiveRelease {
 // The effective lifecycle row for one (identity, client, instance) triple —
 // see lib/subscribers.ts for how the raw state rows collapse into it.
 export interface SubscriberInstance {
+  session_id?: string;
+  target_revision?: number;
+  pin_version?: number;
+  pin_revision?: number;
+  pinned_by?: string;
+  pinned_at_unix_ms?: number;
+  last_applied_version?: number;
+  desired_version?: number;
+  desired_revision?: number;
+
   identity: string;
   client_name: string;
   instance_id: string;
@@ -867,6 +887,7 @@ export interface SubscriberInstance {
 }
 
 export interface OverviewRollout {
+  pinned?: number;
   total: number;
   connected: number;
   applied_current: number;

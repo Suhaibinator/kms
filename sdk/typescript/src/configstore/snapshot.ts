@@ -8,6 +8,7 @@ export interface ReleaseIdentityInit {
   readonly name?: string;
   readonly version?: bigint;
   readonly activationRevision?: bigint;
+  readonly targetRevision?: bigint;
   readonly schemaVersion?: bigint;
   readonly digest?: string;
 }
@@ -18,6 +19,7 @@ export class ReleaseIdentity {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
+  readonly targetRevision: bigint;
   readonly schemaVersion: bigint;
   readonly digest: string;
 
@@ -35,6 +37,7 @@ export class ReleaseIdentity {
     this.name = init.name ?? "";
     this.version = version;
     this.activationRevision = activationRevision;
+    this.targetRevision = assertUint64(init.targetRevision ?? activationRevision, "targetRevision");
     this.schemaVersion = schemaVersion;
     this.digest = init.digest ?? "";
     Object.freeze(this);
@@ -46,6 +49,7 @@ export class ReleaseIdentity {
       name: candidate.name,
       version: candidate.version,
       activationRevision: candidate.activationRevision,
+      targetRevision: candidate.targetRevision,
       schemaVersion: candidate.schemaVersion,
       digest: candidate.digest,
     });
@@ -74,6 +78,9 @@ export class ReleaseIdentity {
       name: this.name,
       version: this.version.toString(),
       activationRevision: this.activationRevision.toString(),
+      ...(this.targetRevision !== this.activationRevision
+        ? { targetRevision: this.targetRevision.toString() }
+        : {}),
       schemaVersion: this.schemaVersion.toString(),
       digest: this.digest,
     });
@@ -81,7 +88,7 @@ export class ReleaseIdentity {
 
   /** @internal Stable candidate-report deduplication key. */
   dedupeKey(): string {
-    return `${this.namespace}\0${this.name}\0${this.version}\0${this.activationRevision}\0${this.digest}`;
+    return `${this.namespace}\0${this.name}\0${this.version}\0${this.targetRevision}\0${this.digest}`;
   }
 }
 

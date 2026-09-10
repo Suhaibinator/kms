@@ -136,6 +136,7 @@ interface ReleaseIdentityInit {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
+  readonly targetRevision?: bigint;
   readonly schemaVersion?: bigint;
   readonly digest: string;
   readonly metadataJson?: string;
@@ -157,6 +158,7 @@ abstract class ReleaseIdentity {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
+  readonly targetRevision: bigint;
   readonly schemaVersion: bigint;
   readonly digest: string;
   readonly metadataJson: string;
@@ -171,6 +173,7 @@ abstract class ReleaseIdentity {
     this.name = init.name;
     this.version = init.version;
     this.activationRevision = init.activationRevision;
+    this.targetRevision = init.targetRevision ?? init.activationRevision;
     this.schemaVersion = schemaVersion;
     this.digest = init.digest;
     this.metadataJson = init.metadataJson ?? "";
@@ -301,8 +304,10 @@ export interface ReleaseLoaderStatus {
   readonly state: ReleaseState | "idle";
   readonly observedVersion: bigint;
   readonly observedRevision: bigint;
+  readonly observedActivationRevision?: bigint;
   readonly appliedVersion: bigint;
   readonly appliedRevision: bigint;
+  readonly appliedActivationRevision?: bigint;
   readonly lastFailureCategory?: ReleaseRejectionCategory;
   readonly lastFailureAt?: Date;
   readonly lastResolutionDurationMs: number;

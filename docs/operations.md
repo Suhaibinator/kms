@@ -2572,3 +2572,30 @@ Disconnected per-instance lifecycle state is pruned after 30 days by default
 (`watch.release_subscriber_retain_duration`). These three settings must be
 positive. Release activation rows are filtered out of the existing namespace
 resource stream; release loaders use their dedicated stream.
+
+### Pin and unpin one release subscriber
+
+Inspect `parameter-store release subscribers ENV/APP NAME --schema-version N`
+(or its JSON output) for the exact identity, client name, instance, session, and
+pin revision. A session appears only for a compatible release SDK. Use all of
+those identifiers so a replacement process cannot receive an old operator action:
+
+```sh
+parameter-store release pin prod/payments runtime 7 --schema-version 2 \
+  --identity payments --client api --instance replica-a --session SESSION_ID \
+  --expected-pin-revision 0
+parameter-store release unpin prod/payments runtime --schema-version 2 \
+  --identity payments --client api --instance replica-a --session SESSION_ID \
+  --expected-pin-revision PIN_REVISION
+```
+
+Both commands use the usual connection/authentication flags and confirmation
+handling (`--yes` for explicitly reviewed scripts). A changed pin returns a
+conflict: refresh subscriber state before retrying. Pin validates before
+confirmation and again on the server; application acknowledgement remains
+asynchronous. A zero **pin revision** means never assigned; zero **version** on
+the wire means unpin. CLI `pin` requires a positive release version.
+
+A KMS restart preserves pins. A client application restart creates a new session
+and follows active configuration. Retained disconnected sessions remain visible
+until subscriber retention removes them; they cannot affect new processes.

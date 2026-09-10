@@ -176,6 +176,8 @@ class ReleaseManifest:
     metadata_json: str
     entries: Mapping[str, ReleaseEntry]
 
+    target_revision: int = 0
+
     def entry(self, alias: str) -> Optional[ReleaseEntry]:
         return self.entries.get(alias)
 
@@ -209,6 +211,8 @@ class ReleaseSnapshot:
     parameters: Mapping[str, str]
     secrets: Mapping[str, Secret]
 
+    target_revision: int = 0
+
     def __repr__(self) -> str:
         # Keep resolved values out of routine diagnostics. Parameter documents
         # are not secrets, but excluding both maps mirrors the Go SDK and makes
@@ -241,6 +245,8 @@ class ReleaseStatus:
     last_failure_unix_ms: int = 0
     last_resolution_duration_ms: int = 0
     reconnects: int = 0
+    observed_activation_revision: int = 0
+    applied_activation_revision: int = 0
 
     @property
     def active_version(self) -> int:
@@ -326,6 +332,11 @@ class ReleaseLoaderConfig:
 class _Candidate:
     release: kms_pb2.ConfigurationRelease
     revision: int
+    activation_revision: Optional[int] = None
+
+    @property
+    def fleet_revision(self) -> int:
+        return self.revision if self.activation_revision is None else self.activation_revision
 
     @property
     def identity(self) -> Tuple[int, int, str, str]:
@@ -393,6 +404,9 @@ class ReleaseLoader:
         self._namespace = client._resolve_namespace_arg(config.namespace)
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
+        self._session_id = str(uuid.uuid4())
+        self._session_registered = False
+        self._legacy_session = False
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
         self._schema_version = config.schema_version
 
@@ -520,6 +534,7 @@ class ReleaseLoader:
         initial: Optional[_Candidate] = None
         try:
             self._ensure_schema_version()
+            self._register_session()
             try:
                 initial = self._read_active()
             except errors.NotFoundError:
@@ -664,16 +679,53 @@ class ReleaseLoader:
             raise ReleaseLoaderError("release schema has not been resolved")
         return self._schema_version
 
-    def _read_active(self) -> _Candidate:
+    def _session_ref(self):
+        return kms_pb2.ReleaseSessionRef(
+            namespace=to_proto_namespace(self._namespace), name=self._config.name,
+            schema_version=self._require_schema_version(), client_name=self._client_name,
+            instance_id=self._instance_id, session_id=self._session_id,
+        )
+
+    def _register_session(self):
+        if self._legacy_session:
+            return
+        if not hasattr(self._stub, "RegisterReleaseSession"):
+            self._legacy_session = True
+            return
         try:
-            response = self._stub.GetActiveRelease(
-                kms_pb2.GetActiveReleaseRequest(
-                    namespace=to_proto_namespace(self._namespace), name=self._config.name,
-                    schema_version=self._require_schema_version(),
-                ),
+            response = self._stub.RegisterReleaseSession(
+                kms_pb2.RegisterReleaseSessionRequest(session=self._session_ref(), resume=self._session_registered),
                 metadata=self._client._auth_metadata(),
                 timeout=self._client._call_timeout(self._config.request_timeout),
             )
+        except grpc.RpcError as exc:
+            if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                self._legacy_session = True
+                return
+            raise errors.map_grpc_error(exc) from None
+        if not response.pin_capable:
+            raise ReleaseLoaderError("server did not negotiate instance targets")
+        self._session_registered = True
+
+    def _read_active(self) -> _Candidate:
+        try:
+            if self._session_registered and not self._legacy_session:
+                response = self._stub.GetInstanceRelease(
+                    kms_pb2.GetInstanceReleaseRequest(session=self._session_ref()),
+                    metadata=self._client._auth_metadata(),
+                    timeout=self._client._call_timeout(self._config.request_timeout),
+                )
+                if not response.HasField("release"):
+                    raise errors.NotFoundError("release track has no active target")
+            else:
+                response = self._stub.GetActiveRelease(
+                    kms_pb2.GetActiveReleaseRequest(
+                        namespace=to_proto_namespace(self._namespace), name=self._config.name,
+                        schema_version=self._require_schema_version(),
+                    ),
+                    metadata=self._client._auth_metadata(),
+                    timeout=self._client._call_timeout(self._config.request_timeout),
+                )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
         if not response.HasField("release") or not response.release.name:
@@ -687,7 +739,9 @@ class ReleaseLoader:
             response.release, self._namespace, self._config.name, schema_version
         ):
             raise ReleaseLoaderError("active release response has the wrong release track")
-        return _Candidate(_clone_release(response.release), response.activation_revision)
+        return _Candidate(_clone_release(response.release),
+                          response.target_revision if self._session_registered and not self._legacy_session else response.activation_revision,
+                          activation_revision=response.activation_revision)
 
     def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
         if not _release_matches_track(
@@ -723,6 +777,7 @@ class ReleaseLoader:
                     self._status,
                     observed_version=candidate.release.version,  # type: ignore[attr-defined]
                     observed_revision=candidate.revision,
+                    observed_activation_revision=candidate.fleet_revision,
                 )
 
     def _record_retry_eligibility(self, candidate: _Candidate, outcome: str) -> None:
@@ -834,8 +889,10 @@ class ReleaseLoader:
                     state="applied",
                     observed_version=candidate.release.version,  # type: ignore[attr-defined]
                     observed_revision=candidate.revision,
+                    observed_activation_revision=candidate.fleet_revision,
                     applied_version=candidate.release.version,  # type: ignore[attr-defined]
                     applied_revision=candidate.revision,
+                    applied_activation_revision=candidate.fleet_revision,
                     last_failure_category="",
                     last_failure_unix_ms=0,
                 )
@@ -904,7 +961,8 @@ class ReleaseLoader:
             namespace=f"{release.namespace.env}/{release.namespace.app}",
             name=release.name,
             version=release.version,
-            activation_revision=candidate.revision,
+            activation_revision=candidate.activation_revision if candidate.activation_revision is not None else candidate.revision,
+            target_revision=candidate.revision,
             schema_version=release.schema_version,
             digest=release.digest,
             metadata_json=release.metadata_json,
@@ -961,6 +1019,7 @@ class ReleaseLoader:
             name=manifest.name,
             version=manifest.version,
             activation_revision=manifest.activation_revision,
+            target_revision=manifest.target_revision,
             schema_version=manifest.schema_version,
             digest=manifest.digest,
             metadata_json=manifest.metadata_json,
@@ -1098,7 +1157,12 @@ class ReleaseLoader:
                 if self._stop_event.is_set():
                     return received_event
                 kind = event.WhichOneof("event")
-                if kind == "snapshot":
+                if kind == "target":
+                    target = event.target
+                    if target.HasField("release") and _release_matches_track(target.release, self._namespace, self._config.name, self._require_schema_version()):
+                        received_event = True
+                        self._offer_candidate(_Candidate(_clone_release(target.release), target.target_revision, activation_revision=target.activation_revision), source="reconciliation")
+                elif kind == "snapshot":
                     if event.snapshot.HasField("release") and _release_matches_track(
                         event.snapshot.release,
                         self._namespace,
@@ -1159,7 +1223,8 @@ class ReleaseLoader:
         self, rejection: kms_pb2.ReleaseAcknowledgementRejectedEvent
     ) -> bool:
         if (
-            rejection.reason != "activation_unavailable"
+            rejection.session_id != (self._session_id if self._session_registered and not self._legacy_session else "")
+            or rejection.reason not in ("activation_unavailable", "target_unavailable")
             or rejection.namespace.env != self._namespace.env
             or rejection.namespace.app != self._namespace.app
             or rejection.name != self._config.name
@@ -1177,7 +1242,7 @@ class ReleaseLoader:
                 generation == rejection.sequence
                 and acknowledgement.sequence == rejection.sequence
                 and acknowledgement.version == rejection.version
-                and acknowledgement.activation_revision == rejection.activation_revision
+                and max(acknowledgement.target_revision, acknowledgement.activation_revision) == max(rejection.target_revision, rejection.activation_revision)
                 and acknowledgement.state == rejection.state
             ):
                 del self._ack_latest[rejection.state]
@@ -1193,6 +1258,7 @@ class ReleaseLoader:
                 name=self._config.name,
                 client_name=self._client_name,
                 instance_id=self._instance_id,
+                session_id=self._session_id if self._session_registered and not self._legacy_session else "",
                 last_seen_revision=last_seen,
                 schema_version=self._require_schema_version(),
             )
@@ -1267,10 +1333,12 @@ class ReleaseLoader:
         acknowledgement = kms_pb2.ReleaseAcknowledgement(
             namespace=to_proto_namespace(self._namespace),
             name=self._config.name,
-            version=candidate.release.version,  # type: ignore[attr-defined]
-            activation_revision=candidate.revision,
+            version=candidate.release.version,
+            target_revision=candidate.revision if self._session_registered and not self._legacy_session else 0,  # type: ignore[attr-defined]
+            activation_revision=candidate.activation_revision if candidate.activation_revision is not None else candidate.revision,
             client_name=self._client_name,
             instance_id=self._instance_id,
+                session_id=self._session_id if self._session_registered and not self._legacy_session else "",
             state=state,
             rejection_category=category,
             # Local errors can contain resolved values. Categories are the
@@ -1283,7 +1351,7 @@ class ReleaseLoader:
         )
         with self._ack_cond:
             current = self._ack_latest.get(state)
-            if current is None or current[1].activation_revision <= candidate.revision:
+            if current is None or max(current[1].target_revision, current[1].activation_revision) <= candidate.revision:
                 self._ack_sequence += 1
                 generation = self._ack_sequence
                 acknowledgement.sequence = generation
@@ -1321,6 +1389,7 @@ class ReleaseLoader:
                     self._status,
                     observed_version=candidate.release.version,  # type: ignore[attr-defined]
                     observed_revision=candidate.revision,
+                    observed_activation_revision=candidate.fleet_revision,
                 )
             else:
                 self._status = replace(
@@ -1328,6 +1397,7 @@ class ReleaseLoader:
                     state=state,
                     observed_version=candidate.release.version,  # type: ignore[attr-defined]
                     observed_revision=candidate.revision,
+                    observed_activation_revision=candidate.fleet_revision,
                 )
 
     def _record_resolution(self, elapsed_ms: int) -> None:

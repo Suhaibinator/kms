@@ -209,3 +209,45 @@ describe("groupSubscriberLifecycles", () => {
     expect(Object.keys(groups[0]?.states ?? {}).sort()).toEqual(["applied", "received"]);
   });
 });
+
+it("distinguishes process sessions and intentional pins from fleet progress", () => {
+  const instances = groupSubscriberInstances([
+    row({
+      session_id: "old",
+      pin_version: 2,
+      pin_revision: 60,
+      target_revision: 60,
+      desired_revision: 60,
+      release_version: 2,
+      desired_version: 2,
+      last_applied_version: 2,
+      activation_revision: 0,
+    }),
+    row({
+      session_id: "replacement",
+      desired_version: 12,
+      desired_revision: 41,
+      target_revision: 41,
+    }),
+    row({
+      session_id: "rejected",
+      pin_version: 3,
+      target_revision: 70,
+      desired_revision: 70,
+      desired_version: 3,
+      release_version: 3,
+      last_applied_version: 2,
+      activation_revision: 0,
+      state: "rejected",
+    }),
+  ]);
+  expect(instances).toHaveLength(3);
+  expect(countSubscribers(instances, 41)).toMatchObject({
+    total: 3,
+    applied_current: 1,
+    pinned: 1,
+    rejected: 1,
+    pending: 0,
+  });
+  expect(instances.find((item) => item.session_id === "rejected")?.last_applied_version).toBe(2);
+});

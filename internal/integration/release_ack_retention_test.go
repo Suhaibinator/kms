@@ -10,8 +10,11 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // This interceptor only resets real TLS streams and observes their traffic.
@@ -83,8 +86,32 @@ func (s *retentionWatchStream) RecvMsg(message any) error {
 	return nil
 }
 
+// retentionAcknowledgementStore observes completed real SQLite writes. The test
+// must prune after the newer acknowledgement commits, not merely after the SDK
+// publishes its configuration or after an unrelated subscriber poll succeeds.
+type retentionAcknowledgementStore struct {
+	*storage.SQLStore
+	fourthApplied chan struct{}
+}
+
+func (s *retentionAcknowledgementStore) AcknowledgeReleaseSession(ctx context.Context, ref domain.ReleaseSessionRef, ack domain.ReleaseAcknowledgement) error {
+	if err := s.SQLStore.AcknowledgeReleaseSession(ctx, ref, ack); err != nil {
+		return err
+	}
+	if ack.State == domain.ReleaseStateApplied && ack.ReleaseVersion == 4 {
+		select {
+		case s.fourthApplied <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
 func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T) {
-	env := newLoopbackTLSEnv(t)
+	fourthApplied := make(chan struct{}, 1)
+	env := newLoopbackTLSEnvWithStoreWrapper(t, func(st *storage.SQLStore) storage.Store {
+		return &retentionAcknowledgementStore{SQLStore: st, fourthApplied: fourthApplied}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	principal := core.Principal{Identity: domain.Identity{Name: "network-root", Kind: domain.IdentityKindAdmin}, Method: domain.AuthMethodToken}
@@ -165,6 +192,21 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	waitForManagedState(t, func() bool { return applied.Load() == 3 }, "third release")
 	activate()
 	waitForManagedState(t, func() bool { return applied.Load() == 4 }, "fourth release")
+	// Await the transaction itself under the test's overall deadline. Repeated
+	// admin polls contend with the watch's SQLite writes under race/coverage
+	// instrumentation and add a separate five-second scheduling deadline.
+	select {
+	case <-fourthApplied:
+	case <-ctx.Done():
+		t.Fatalf("server did not persist the fourth applied acknowledgement: %v (loader status: %+v)", ctx.Err(), loader.Status())
+	}
+	rows, err := admin.ListReleaseSubscribers(networkAuthContext(ctx, env.adminToken), &kmsv1.ListReleaseSubscribersRequest{Namespace: networkNS(ns.Env, ns.App), ReleaseName: track.Name, SchemaVersion: &schema.Version})
+	if err != nil {
+		t.Fatalf("read acknowledged subscriber before pruning: %v", err)
+	}
+	if len(rows.Subscribers) != 1 || rows.Subscribers[0].State != "applied" || rows.Subscribers[0].ReleaseVersion != 4 || rows.Subscribers[0].LastAppliedVersion != 4 {
+		t.Fatalf("fourth applied acknowledgement did not remain current: %v", rows.Subscribers)
+	}
 	beforeReconnect := probe.rejectedSends.Load()
 	if _, err := env.store.PruneConfigurationReleases(ctx, time.Nanosecond, 100); err != nil {
 		t.Fatal(err)
@@ -180,7 +222,7 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	}
 	select {
 	case event := <-probe.rejections:
-		if event.GetReason() != "activation_unavailable" || event.GetVersion() != 2 || event.GetSchemaVersion() != schema.Version || event.GetSequence() == 0 {
+		if event.GetReason() != "target_unavailable" || event.GetVersion() != 2 || event.GetSchemaVersion() != schema.Version || event.GetSequence() == 0 {
 			t.Fatalf("invalid ACK rejection: %v", event)
 		}
 	case <-ctx.Done():
@@ -207,4 +249,12 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 			t.Fatal("SDK did not continue after its second reconnect")
 		}
 	}
+}
+
+// Retain coverage of old SDK activation delivery after session support is added.
+func legacyReleaseProtocol(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	if method == "/kms.v1.ConfigurationReleaseService/RegisterReleaseSession" {
+		return status.Error(codes.Unimplemented, "legacy release protocol")
+	}
+	return invoker(ctx, method, req, reply, cc, opts...)
 }

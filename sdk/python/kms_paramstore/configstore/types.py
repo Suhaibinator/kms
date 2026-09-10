@@ -32,6 +32,11 @@ class ReleaseIdentity:
     activation_revision: int = 0
     schema_version: int = 0
     digest: str = ""
+    target_revision: int = 0
+
+    def __post_init__(self) -> None:
+        if self.target_revision == 0:
+            object.__setattr__(self, "target_revision", self.activation_revision)
 
     @classmethod
     def from_candidate(cls, candidate: object) -> "ReleaseIdentity":
@@ -40,6 +45,7 @@ class ReleaseIdentity:
             name=str(getattr(candidate, "name", "")),
             version=int(getattr(candidate, "version", 0)),
             activation_revision=int(getattr(candidate, "activation_revision", 0)),
+            target_revision=int(getattr(candidate, "target_revision", 0) or getattr(candidate, "activation_revision", 0)),
             schema_version=int(getattr(candidate, "schema_version", 0)),
             digest=str(getattr(candidate, "digest", "")),
         )

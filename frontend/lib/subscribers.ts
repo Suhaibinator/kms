@@ -23,8 +23,15 @@ export function instanceKey(row: {
   client_name: string;
   instance_id: string;
   schema_version?: number;
+  session_id?: string;
 }): string {
-  return JSON.stringify([row.identity, row.client_name, row.instance_id, row.schema_version ?? 0]);
+  return JSON.stringify([
+    row.identity,
+    row.client_name,
+    row.instance_id,
+    row.schema_version ?? 0,
+    row.session_id ?? "",
+  ]);
 }
 
 function byIdentity(
@@ -72,6 +79,7 @@ export function groupSubscriberInstances(
   }
   return [...chosen.values()]
     .map(({ row, connected }) => ({
+      ...row,
       identity: row.identity,
       client_name: row.client_name,
       instance_id: row.instance_id,
@@ -91,7 +99,7 @@ export function groupSubscriberInstances(
 export type SubscriberCounts = Pick<
   OverviewRollout,
   "total" | "connected" | "applied_current" | "applied_divergent" | "rejected" | "pending" | "stale"
->;
+> & { pinned?: number };
 
 /**
  * Rollout counts over grouped instances, matching the server's summary:
@@ -113,6 +121,28 @@ export function countSubscribers(
     stale: 0,
   };
   for (const instance of instances) {
+    if (instance.session_id) {
+      if (!instance.connected) {
+        counts.stale++;
+        continue;
+      }
+      counts.connected++;
+      const atTarget =
+        instance.target_revision === instance.desired_revision &&
+        instance.release_version === instance.desired_version;
+      if (atTarget && instance.state === "rejected") counts.rejected++;
+      else if (atTarget && instance.state === "applied" && instance.pin_version)
+        counts.pinned = (counts.pinned ?? 0) + 1;
+      else if (
+        atTarget &&
+        instance.state === "applied" &&
+        instance.activation_revision === currentRevision
+      ) {
+        counts.applied_current++;
+        if (instance.applied_divergent) counts.applied_divergent++;
+      } else counts.pending++;
+      continue;
+    }
     const atCurrent = instance.activation_revision >= currentRevision;
     const applied = instance.state === "applied" && atCurrent;
     if (!instance.connected) {

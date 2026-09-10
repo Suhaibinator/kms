@@ -1064,15 +1064,18 @@ var WatchService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ConfigurationReleaseService_CreateRelease_FullMethodName         = "/kms.v1.ConfigurationReleaseService/CreateRelease"
-	ConfigurationReleaseService_ValidateRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/ValidateRelease"
-	ConfigurationReleaseService_ActivateRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
-	ConfigurationReleaseService_GetRelease_FullMethodName            = "/kms.v1.ConfigurationReleaseService/GetRelease"
-	ConfigurationReleaseService_GetActiveRelease_FullMethodName      = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
-	ConfigurationReleaseService_ResolveReleaseSchema_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema"
-	ConfigurationReleaseService_ListReleases_FullMethodName          = "/kms.v1.ConfigurationReleaseService/ListReleases"
-	ConfigurationReleaseService_WatchRelease_FullMethodName          = "/kms.v1.ConfigurationReleaseService/WatchRelease"
-	ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName = "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults"
+	ConfigurationReleaseService_RegisterReleaseSession_FullMethodName = "/kms.v1.ConfigurationReleaseService/RegisterReleaseSession"
+	ConfigurationReleaseService_GetInstanceRelease_FullMethodName     = "/kms.v1.ConfigurationReleaseService/GetInstanceRelease"
+	ConfigurationReleaseService_SetReleasePin_FullMethodName          = "/kms.v1.ConfigurationReleaseService/SetReleasePin"
+	ConfigurationReleaseService_CreateRelease_FullMethodName          = "/kms.v1.ConfigurationReleaseService/CreateRelease"
+	ConfigurationReleaseService_ValidateRelease_FullMethodName        = "/kms.v1.ConfigurationReleaseService/ValidateRelease"
+	ConfigurationReleaseService_ActivateRelease_FullMethodName        = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
+	ConfigurationReleaseService_GetRelease_FullMethodName             = "/kms.v1.ConfigurationReleaseService/GetRelease"
+	ConfigurationReleaseService_GetActiveRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
+	ConfigurationReleaseService_ResolveReleaseSchema_FullMethodName   = "/kms.v1.ConfigurationReleaseService/ResolveReleaseSchema"
+	ConfigurationReleaseService_ListReleases_FullMethodName           = "/kms.v1.ConfigurationReleaseService/ListReleases"
+	ConfigurationReleaseService_WatchRelease_FullMethodName           = "/kms.v1.ConfigurationReleaseService/WatchRelease"
+	ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName  = "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults"
 )
 
 // ConfigurationReleaseServiceClient is the client API for ConfigurationReleaseService service.
@@ -1083,6 +1086,9 @@ const (
 // contain exact parameter/secret version references and non-sensitive
 // metadata only; values and binding keys are never embedded.
 type ConfigurationReleaseServiceClient interface {
+	RegisterReleaseSession(ctx context.Context, in *RegisterReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error)
+	GetInstanceRelease(ctx context.Context, in *GetInstanceReleaseRequest, opts ...grpc.CallOption) (*InstanceReleaseTarget, error)
+	SetReleasePin(ctx context.Context, in *SetReleasePinRequest, opts ...grpc.CallOption) (*InstanceReleaseTarget, error)
 	CreateRelease(ctx context.Context, in *CreateReleaseRequest, opts ...grpc.CallOption) (*CreateReleaseResponse, error)
 	ValidateRelease(ctx context.Context, in *ValidateReleaseRequest, opts ...grpc.CallOption) (*ValidateReleaseResponse, error)
 	ActivateRelease(ctx context.Context, in *ActivateReleaseRequest, opts ...grpc.CallOption) (*ActivateReleaseResponse, error)
@@ -1109,6 +1115,36 @@ type configurationReleaseServiceClient struct {
 
 func NewConfigurationReleaseServiceClient(cc grpc.ClientConnInterface) ConfigurationReleaseServiceClient {
 	return &configurationReleaseServiceClient{cc}
+}
+
+func (c *configurationReleaseServiceClient) RegisterReleaseSession(ctx context.Context, in *RegisterReleaseSessionRequest, opts ...grpc.CallOption) (*ReleaseSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseSessionResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_RegisterReleaseSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) GetInstanceRelease(ctx context.Context, in *GetInstanceReleaseRequest, opts ...grpc.CallOption) (*InstanceReleaseTarget, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstanceReleaseTarget)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_GetInstanceRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) SetReleasePin(ctx context.Context, in *SetReleasePinRequest, opts ...grpc.CallOption) (*InstanceReleaseTarget, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstanceReleaseTarget)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_SetReleasePin_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *configurationReleaseServiceClient) CreateRelease(ctx context.Context, in *CreateReleaseRequest, opts ...grpc.CallOption) (*CreateReleaseResponse, error) {
@@ -1212,6 +1248,9 @@ func (c *configurationReleaseServiceClient) VerifyReleaseDefaults(ctx context.Co
 // contain exact parameter/secret version references and non-sensitive
 // metadata only; values and binding keys are never embedded.
 type ConfigurationReleaseServiceServer interface {
+	RegisterReleaseSession(context.Context, *RegisterReleaseSessionRequest) (*ReleaseSessionResponse, error)
+	GetInstanceRelease(context.Context, *GetInstanceReleaseRequest) (*InstanceReleaseTarget, error)
+	SetReleasePin(context.Context, *SetReleasePinRequest) (*InstanceReleaseTarget, error)
 	CreateRelease(context.Context, *CreateReleaseRequest) (*CreateReleaseResponse, error)
 	ValidateRelease(context.Context, *ValidateReleaseRequest) (*ValidateReleaseResponse, error)
 	ActivateRelease(context.Context, *ActivateReleaseRequest) (*ActivateReleaseResponse, error)
@@ -1240,6 +1279,15 @@ type ConfigurationReleaseServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedConfigurationReleaseServiceServer struct{}
 
+func (UnimplementedConfigurationReleaseServiceServer) RegisterReleaseSession(context.Context, *RegisterReleaseSessionRequest) (*ReleaseSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterReleaseSession not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) GetInstanceRelease(context.Context, *GetInstanceReleaseRequest) (*InstanceReleaseTarget, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetInstanceRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) SetReleasePin(context.Context, *SetReleasePinRequest) (*InstanceReleaseTarget, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetReleasePin not implemented")
+}
 func (UnimplementedConfigurationReleaseServiceServer) CreateRelease(context.Context, *CreateReleaseRequest) (*CreateReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateRelease not implemented")
 }
@@ -1287,6 +1335,60 @@ func RegisterConfigurationReleaseServiceServer(s grpc.ServiceRegistrar, srv Conf
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ConfigurationReleaseService_ServiceDesc, srv)
+}
+
+func _ConfigurationReleaseService_RegisterReleaseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterReleaseSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).RegisterReleaseSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_RegisterReleaseSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).RegisterReleaseSession(ctx, req.(*RegisterReleaseSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_GetInstanceRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetInstanceReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).GetInstanceRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_GetInstanceRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).GetInstanceRelease(ctx, req.(*GetInstanceReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_SetReleasePin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetReleasePinRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).SetReleasePin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_SetReleasePin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).SetReleasePin(ctx, req.(*SetReleasePinRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ConfigurationReleaseService_CreateRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1447,6 +1549,18 @@ var ConfigurationReleaseService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "kms.v1.ConfigurationReleaseService",
 	HandlerType: (*ConfigurationReleaseServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "RegisterReleaseSession",
+			Handler:    _ConfigurationReleaseService_RegisterReleaseSession_Handler,
+		},
+		{
+			MethodName: "GetInstanceRelease",
+			Handler:    _ConfigurationReleaseService_GetInstanceRelease_Handler,
+		},
+		{
+			MethodName: "SetReleasePin",
+			Handler:    _ConfigurationReleaseService_SetReleasePin_Handler,
+		},
 		{
 			MethodName: "CreateRelease",
 			Handler:    _ConfigurationReleaseService_CreateRelease_Handler,
