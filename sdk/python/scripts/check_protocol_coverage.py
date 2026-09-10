@@ -44,6 +44,9 @@ CLASSIFIED = {
     "kms.v1.SecretService": {"PutSecret": "stale-client-rejection-only"},
     "kms.v1.WatchService": {"Subscribe": "internal-watch"},
     "kms.v1.ConfigurationReleaseService": {
+        "RegisterReleaseSession": "release-loader",
+        "GetInstanceRelease": "release-loader",
+        "SetReleasePin": "release-tooling-out-of-scope",
         "CreateRelease": "release-tooling-out-of-scope",
         "ValidateRelease": "release-tooling-out-of-scope",
         "ActivateRelease": "release-tooling-out-of-scope",

@@ -345,7 +345,10 @@ export function sortForRollout(
   activationRevision: number,
 ): SubscriberInstance[] {
   const rank = (instance: SubscriberInstance): number => {
-    const atCurrent = instance.activation_revision >= activationRevision;
+    const atCurrent = instance.session_id
+      ? instance.target_revision === instance.desired_revision &&
+        instance.release_version === instance.desired_version
+      : instance.activation_revision >= activationRevision;
     if (instance.state === "rejected" && atCurrent) return 0;
     if (instance.state === "applied" && atCurrent) return 4;
     // Applied to an older activation counts as pending for this one.

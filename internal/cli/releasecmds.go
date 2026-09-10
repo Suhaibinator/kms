@@ -29,6 +29,10 @@ func (c *CLI) cmdRelease(args []string) int {
 		return 2
 	}
 	switch args[0] {
+	case "pin":
+		return c.cmdReleasePin(args[1:], false)
+	case "unpin":
+		return c.cmdReleasePin(args[1:], true)
 	case "create":
 		return c.cmdReleaseCreate(args[1:])
 	case "validate":
@@ -70,6 +74,8 @@ Commands:
   diff ENV/APP NAME FROM TO           Diff aliases, pins, and parameter digests.
   activate ENV/APP NAME VERSION       Atomically activate a version.
   rollback ENV/APP NAME [VERSION]     Reactivate previous or explicit version.
+  pin ENV/APP NAME VERSION            Assign a release to a connected client process.
+  unpin ENV/APP NAME                  Return a client process to following active.
   subscribers ENV/APP NAME            Show per-instance lifecycle state and lag.
   schema create|show|list              Manage immutable JSON Schemas.
 `)
@@ -1078,6 +1084,8 @@ func releaseSubscriberTrackRevisions(ctx context.Context, client kmsv1.Configura
 
 type releaseSubscriberInstanceStatus struct {
 	identity, client, instance string
+	session                    string
+	latest                     *kmsv1.ReleaseSubscriberState
 	schemaVersion              uint64
 	connected                  bool
 	latestRevision             uint64
@@ -1085,6 +1093,7 @@ type releaseSubscriberInstanceStatus struct {
 }
 
 type releaseSubscriberInstanceKey struct {
+	session       string
 	identity      string
 	client        string
 	instance      string
@@ -1093,7 +1102,7 @@ type releaseSubscriberInstanceKey struct {
 
 func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, subscribers []*kmsv1.ReleaseSubscriberState) {
 	for _, subscriber := range subscribers {
-		key := releaseSubscriberInstanceKey{
+		key := releaseSubscriberInstanceKey{session: subscriber.GetSessionId(),
 			identity:      subscriber.GetIdentity(),
 			client:        subscriber.GetClientName(),
 			instance:      subscriber.GetInstanceId(),
@@ -1110,6 +1119,8 @@ func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*re
 			}
 			instances[key] = instance
 		}
+		instance.session = subscriber.GetSessionId()
+		instance.latest = subscriber
 		instance.states[subscriber.GetState()] = subscriber
 		instance.connected = instance.connected || subscriber.GetConnected()
 		instance.latestRevision = max(instance.latestRevision, subscriber.GetActivationRevision())
@@ -1159,16 +1170,22 @@ type releaseSubscriberStateJSON struct {
 // releaseSubscriberJSON is one row of `release subscribers`. A state the
 // instance never reported is null, the JSON form of the table's "-".
 type releaseSubscriberJSON struct {
-	Identity      string                      `json:"identity"`
-	Client        string                      `json:"client"`
-	Instance      string                      `json:"instance"`
-	Received      *releaseSubscriberStateJSON `json:"received"`
-	Prepared      *releaseSubscriberStateJSON `json:"prepared"`
-	Applied       *releaseSubscriberStateJSON `json:"applied"`
-	Rejected      *releaseSubscriberStateJSON `json:"rejected"`
-	Lag           uint64                      `json:"lag"`
-	Connected     bool                        `json:"connected"`
-	SchemaVersion uint64                      `json:"schema_version"`
+	SessionID          string                      `json:"session_id,omitempty"`
+	PinVersion         uint64                      `json:"pin_version,omitempty"`
+	PinRevision        uint64                      `json:"pin_revision"`
+	DesiredVersion     uint64                      `json:"desired_version,omitempty"`
+	LastAppliedVersion uint64                      `json:"last_applied_version,omitempty"`
+	PinnedBy           string                      `json:"pinned_by,omitempty"`
+	Identity           string                      `json:"identity"`
+	Client             string                      `json:"client"`
+	Instance           string                      `json:"instance"`
+	Received           *releaseSubscriberStateJSON `json:"received"`
+	Prepared           *releaseSubscriberStateJSON `json:"prepared"`
+	Applied            *releaseSubscriberStateJSON `json:"applied"`
+	Rejected           *releaseSubscriberStateJSON `json:"rejected"`
+	Lag                uint64                      `json:"lag"`
+	Connected          bool                        `json:"connected"`
+	SchemaVersion      uint64                      `json:"schema_version"`
 }
 
 func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseSubscriberStateJSON {
@@ -1186,7 +1203,7 @@ func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*
 	items := make([]releaseSubscriberJSON, 0, len(instances))
 	for _, key := range sortedReleaseSubscriberKeys(instances) {
 		instance := instances[key]
-		items = append(items, releaseSubscriberJSON{
+		items = append(items, releaseSubscriberJSON{SessionID: instance.session, PinVersion: instance.latest.GetPinVersion(), PinRevision: instance.latest.GetPinRevision(), DesiredVersion: instance.latest.GetDesiredVersion(), LastAppliedVersion: instance.latest.GetLastAppliedVersion(), PinnedBy: instance.latest.GetPinnedBy(),
 			Identity:      instance.identity,
 			Client:        instance.client,
 			Instance:      instance.instance,
@@ -1205,9 +1222,15 @@ func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*
 func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) {
 	keys := sortedReleaseSubscriberKeys(instances)
 	rows := make([][]string, 0, len(keys))
+	hasSessions := false
+	for _, key := range keys {
+		if instances[key].session != "" {
+			hasSessions = true
+		}
+	}
 	for _, key := range keys {
 		instance := instances[key]
-		rows = append(rows, []string{
+		row := []string{
 			instance.identity, instance.client, instance.instance, strconv.FormatUint(instance.schemaVersion, 10),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateReceived]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
@@ -1215,9 +1238,17 @@ func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscribe
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateRejected]),
 			strconv.FormatUint(releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]), 10),
 			strconv.FormatBool(instance.connected),
-		})
+		}
+		if hasSessions {
+			row = append(row, instance.session, strconv.FormatUint(instance.latest.GetPinVersion(), 10), strconv.FormatUint(instance.latest.GetPinRevision(), 10))
+		}
+		rows = append(rows, row)
 	}
-	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "REVISION LAG", "CONNECTED"}, rows)
+	headers := []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "REVISION LAG", "CONNECTED"}
+	if hasSessions {
+		headers = append(headers, "SESSION", "PIN", "PIN REVISION")
+	}
+	writeAlignedTable(w, headers, rows)
 }
 
 func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {

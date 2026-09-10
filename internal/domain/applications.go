@@ -147,6 +147,15 @@ type OverviewActiveRelease struct {
 // (identity, client, instance) triple, folded from the per-state
 // acknowledgement rows.
 type SubscriberInstance struct {
+	SessionID          string
+	TargetRevision     uint64
+	PinVersion         uint64
+	PinRevision        uint64
+	PinnedBy           string
+	PinnedAt           time.Time
+	LastAppliedVersion uint64
+	DesiredVersion     uint64
+	DesiredRevision    uint64
 	Identity           string
 	ClientName         string
 	InstanceID         string
@@ -166,6 +175,7 @@ type SubscriberInstance struct {
 // RolloutSummary aggregates subscriber instances against the current
 // activation revision.
 type RolloutSummary struct {
+	Pinned         int
 	Total          int
 	Connected      int
 	AppliedCurrent int

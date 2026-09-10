@@ -12,6 +12,8 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // This interceptor only resets real TLS streams and observes their traffic.
@@ -165,6 +167,18 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	waitForManagedState(t, func() bool { return applied.Load() == 3 }, "third release")
 	activate()
 	waitForManagedState(t, func() bool { return applied.Load() == 4 }, "fourth release")
+	waitForManagedState(t, func() bool {
+		rows, err := admin.ListReleaseSubscribers(networkAuthContext(ctx, env.adminToken), &kmsv1.ListReleaseSubscribersRequest{Namespace: networkNS(ns.Env, ns.App), ReleaseName: track.Name, SchemaVersion: &schema.Version})
+		if err != nil {
+			return false
+		}
+		for _, row := range rows.Subscribers {
+			if row.ClientName == "retention-sdk" && row.State == "applied" && row.ReleaseVersion == 4 {
+				return true
+			}
+		}
+		return false
+	}, "server acknowledged fourth release before pruning older delivery evidence")
 	beforeReconnect := probe.rejectedSends.Load()
 	if _, err := env.store.PruneConfigurationReleases(ctx, time.Nanosecond, 100); err != nil {
 		t.Fatal(err)
@@ -180,7 +194,7 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	}
 	select {
 	case event := <-probe.rejections:
-		if event.GetReason() != "activation_unavailable" || event.GetVersion() != 2 || event.GetSchemaVersion() != schema.Version || event.GetSequence() == 0 {
+		if event.GetReason() != "target_unavailable" || event.GetVersion() != 2 || event.GetSchemaVersion() != schema.Version || event.GetSequence() == 0 {
 			t.Fatalf("invalid ACK rejection: %v", event)
 		}
 	case <-ctx.Done():
@@ -207,4 +221,12 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 			t.Fatal("SDK did not continue after its second reconnect")
 		}
 	}
+}
+
+// Retain coverage of old SDK activation delivery after session support is added.
+func legacyReleaseProtocol(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	if method == "/kms.v1.ConfigurationReleaseService/RegisterReleaseSession" {
+		return status.Error(codes.Unimplemented, "legacy release protocol")
+	}
+	return invoker(ctx, method, req, reply, cc, opts...)
 }

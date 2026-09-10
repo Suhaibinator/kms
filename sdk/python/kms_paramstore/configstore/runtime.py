@@ -388,12 +388,13 @@ class ManagedConfigManager(Generic[T]):
         observed = self._observed
         version = getattr(status, "observed_version", observed.version)
         revision = getattr(status, "observed_revision", observed.activation_revision)
-        if not observed.is_zero and (version, revision) != (observed.version, observed.activation_revision):
+        if not observed.is_zero and (version, revision) != (observed.version, observed.target_revision or observed.activation_revision):
             # Queued or unresolved candidates have a known track, but their
             # digest must not be borrowed from the previous resolved snapshot.
             observed = ReleaseIdentity(
                 namespace=observed.namespace, name=observed.name,
-                version=version, activation_revision=revision,
+                version=version, activation_revision=getattr(status, "observed_activation_revision", revision),
+                target_revision=revision,
                 schema_version=observed.schema_version,
             )
         return ManagedConfigStatus(
@@ -709,5 +710,5 @@ def _safe_call(callback: Callable[[Any], None], value: Any) -> None:
 def _identity_key(identity: ReleaseIdentity) -> str:
     return "\0".join((
         identity.namespace, identity.name, str(identity.version),
-        str(identity.activation_revision), identity.digest,
+        str(identity.target_revision or identity.activation_revision), identity.digest,
     ))

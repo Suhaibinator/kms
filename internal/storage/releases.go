@@ -926,6 +926,15 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		return nil, "", err
 	}
 	type acknowledgementRow struct {
+		SessionID           string
+		TargetRevision      uint64
+		PinVersion          uint64
+		PinRevision         uint64
+		PinnedBy            string
+		PinnedAt            string
+		LastAppliedVersion  uint64
+		DesiredVersion      uint64
+		DesiredRevision     uint64
 		SchemaVersion       int64
 		ReleaseName         string
 		ReleaseVersion      int64
@@ -947,7 +956,8 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 			s.client_name, s.instance_id, s.identity, s.state,
 			s.rejection_category, s.diagnostic, s.client_timestamp,
 			s.server_timestamp, COALESCE(c.connected, s.connected) AS connected,
-			s.applied_divergent, s.divergent_field_count
+			s.applied_divergent, s.divergent_field_count,
+ '' AS session_id, 0 AS target_revision, 0 AS pin_version, 0 AS pin_revision, '' AS pinned_by, '' AS pinned_at, 0 AS last_applied_version, 0 AS desired_version, 0 AS desired_revision
 		FROM release_subscriber_states s
 		LEFT JOIN release_subscriber_connections c
 			ON c.namespace_id = s.namespace_id
@@ -959,7 +969,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		WHERE s.namespace_id = ? AND (? = '' OR s.release_name = ?) AND (? IS NULL OR s.schema_version = ?)
 		UNION ALL
 		SELECT c.schema_version, c.release_name, 0, 0, c.client_name, c.instance_id,
-			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0
+			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0, '', 0, 0, 0, '', '', 0, 0, 0
 		FROM release_subscriber_connections c
 		WHERE c.namespace_id = ? AND (? = '' OR c.release_name = ?) AND (? IS NULL OR c.schema_version = ?)
 			AND NOT EXISTS (
@@ -971,8 +981,16 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 					AND s.instance_id = c.instance_id
 					AND s.identity = c.identity
 			)
-	)
-	SELECT * FROM subscriber_rows`
+ UNION ALL
+ SELECT p.schema_version,p.release_name,p.release_version,p.activation_revision,p.client_name,p.instance_id,p.identity,p.state,p.rejection_category,'','',p.server_timestamp,p.connected,p.applied_divergent,p.divergent_field_count,
+ p.session_id,p.target_revision,p.pin_version,p.pin_revision,p.pinned_by,p.pinned_at,p.last_applied_version,
+ CASE WHEN p.pin_version > 0 THEN p.pin_version ELSE COALESCE(l.version_number,0) END,
+ CASE WHEN p.pin_version > 0 THEN p.pin_revision ELSE MAX(p.pin_revision,COALESCE(l.activation_revision,0)) END
+ FROM release_sessions p
+ LEFT JOIN configuration_release_labels l ON l.namespace_id=p.namespace_id AND l.release_name=p.release_name AND l.schema_version=p.schema_version AND l.label='current'
+ WHERE p.namespace_id = ? AND (? = '' OR p.release_name = ?) AND (? IS NULL OR p.schema_version = ?)
+ )
+ SELECT * FROM subscriber_rows`
 	var out []domain.ReleaseAcknowledgement
 	next := ""
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -981,13 +999,13 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 			return err
 		}
 		queryText := query
-		args := []any{nsID, name, name, filter.SchemaVersion, filter.SchemaVersion, nsID, name, name, filter.SchemaVersion, filter.SchemaVersion}
+		args := []any{nsID, name, name, filter.SchemaVersion, filter.SchemaVersion, nsID, name, name, filter.SchemaVersion, filter.SchemaVersion, nsID, name, name, filter.SchemaVersion, filter.SchemaVersion}
 		if cursor.ServerTimestamp != "" {
 			queryText += ` WHERE server_timestamp < ? OR
-			(server_timestamp = ? AND (release_name, schema_version, client_name, instance_id, identity, state) > (?, ?, ?, ?, ?, ?))`
-			args = append(args, cursor.ServerTimestamp, cursor.ServerTimestamp, cursor.ReleaseName, cursor.SchemaVersion, cursor.ClientName, cursor.InstanceID, cursor.Identity, cursor.State)
+			(server_timestamp = ? AND (release_name, schema_version, client_name, instance_id, identity, state, session_id) > (?, ?, ?, ?, ?, ?, ?))`
+			args = append(args, cursor.ServerTimestamp, cursor.ServerTimestamp, cursor.ReleaseName, cursor.SchemaVersion, cursor.ClientName, cursor.InstanceID, cursor.Identity, cursor.State, cursor.SessionID)
 		}
-		queryText += ` ORDER BY server_timestamp DESC, release_name ASC, schema_version ASC, client_name ASC, instance_id ASC, identity ASC, state ASC LIMIT ?`
+		queryText += ` ORDER BY server_timestamp DESC, release_name ASC, schema_version ASC, client_name ASC, instance_id ASC, identity ASC, state ASC, session_id ASC LIMIT ?`
 		args = append(args, limit+1)
 		var rows []acknowledgementRow
 		if err := tx.Raw(queryText, args...).Scan(&rows).Error; err != nil {
@@ -999,11 +1017,11 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		}
 		out = make([]domain.ReleaseAcknowledgement, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, domain.ReleaseAcknowledgement{SchemaVersion: uint64(row.SchemaVersion), Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
+			out = append(out, domain.ReleaseAcknowledgement{SessionID: row.SessionID, TargetRevision: row.TargetRevision, PinVersion: row.PinVersion, PinRevision: row.PinRevision, PinnedBy: row.PinnedBy, PinnedAt: parseTime(row.PinnedAt), LastAppliedVersion: row.LastAppliedVersion, DesiredVersion: row.DesiredVersion, DesiredRevision: row.DesiredRevision, SchemaVersion: uint64(row.SchemaVersion), Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
 		}
 		if hasMore {
 			last := rows[len(rows)-1]
-			next, err = encodeReleaseAcknowledgementCursor(releaseAcknowledgementCursor{SchemaVersion: last.SchemaVersion, ServerTimestamp: last.ServerTimestamp, ReleaseName: last.ReleaseName, ClientName: last.ClientName, InstanceID: last.InstanceID, Identity: last.Identity, State: last.State})
+			next, err = encodeReleaseAcknowledgementCursor(releaseAcknowledgementCursor{SessionID: last.SessionID, SchemaVersion: last.SchemaVersion, ServerTimestamp: last.ServerTimestamp, ReleaseName: last.ReleaseName, ClientName: last.ClientName, InstanceID: last.InstanceID, Identity: last.Identity, State: last.State})
 			return err
 		}
 		return nil
@@ -1012,6 +1030,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 }
 
 type releaseAcknowledgementCursor struct {
+	SessionID       string `json:"session_id,omitempty"`
 	SchemaVersion   int64  `json:"schema_version"`
 	Version         int    `json:"v"`
 	ServerTimestamp string `json:"server_timestamp"`
@@ -1069,6 +1088,9 @@ func (s *SQLStore) SetReleaseInstanceConnected(ctx context.Context, connection d
 func (s *SQLStore) ResetReleaseInstanceConnections(ctx context.Context, at time.Time) error {
 	stamp := fmtTime(at)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&releaseSessionModel{}).Where("connected = 1").Updates(map[string]any{"connected": 0, "disconnected_at": stamp, "server_timestamp": stamp}).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&releaseSubscriberConnectionModel{}).Where("connected = 1").Updates(map[string]any{"connected": 0, "disconnected_at": stamp, "server_timestamp": stamp}).Error; err != nil {
 			return err
 		}
@@ -1085,7 +1107,7 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 	if err != nil {
 		return ReleaseReference{}, err
 	}
-	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.schema_version,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
+	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.schema_version,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Where("EXISTS (SELECT 1 FROM configuration_release_labels l WHERE l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number AND l.label IN (?,?)) OR EXISTS (SELECT 1 FROM release_sessions p WHERE p.namespace_id=r.namespace_id AND p.release_name=r.name AND p.schema_version=r.schema_version AND p.pin_version=r.version_number)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
 	if version > 0 {
 		q = q.Where("e.resource_version=?", version)
 	}
@@ -1094,7 +1116,7 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 		VersionNumber                int64
 		SchemaVersion                int64
 	}
-	res := q.Order("CASE l.label WHEN 'current' THEN 0 ELSE 1 END").Limit(1).Scan(&row)
+	res := q.Order("r.version_number DESC").Limit(1).Scan(&row)
 	if res.Error != nil {
 		return ReleaseReference{}, res.Error
 	}
@@ -1126,6 +1148,14 @@ func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuratio
 	cutoff := fmtTime(time.Now().Add(-retainDuration))
 	var deleted int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`DELETE FROM release_target_deliveries
+ WHERE created_at < ? AND NOT EXISTS (
+ SELECT 1 FROM release_sessions p WHERE p.session_id=release_target_deliveries.session_id AND
+ (p.pin_revision=release_target_deliveries.revision OR p.target_revision=release_target_deliveries.revision
+ OR EXISTS (SELECT 1 FROM configuration_release_labels l WHERE l.namespace_id=p.namespace_id AND l.release_name=p.release_name AND l.schema_version=p.schema_version AND l.activation_revision=release_target_deliveries.revision)))`, cutoff).Error; err != nil {
+			return err
+		}
+
 		// Activation identities outlive the shorter generic changelog retention so
 		// reconnecting clients can retry acknowledgements. Bound them to the same
 		// retention window as immutable release history, while always preserving
@@ -1143,6 +1173,7 @@ func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuratio
 		}
 		res := tx.Exec(`DELETE FROM configuration_releases
 			WHERE created_at < ?
+ AND NOT EXISTS (SELECT 1 FROM release_sessions p WHERE p.namespace_id=configuration_releases.namespace_id AND p.release_name=configuration_releases.name AND p.schema_version=configuration_releases.schema_version AND p.pin_version=configuration_releases.version_number)
 			AND id NOT IN (SELECT r.id FROM configuration_releases r JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.schema_version=r.schema_version AND l.version_number=r.version_number)
 			AND id NOT IN (
 				SELECT id FROM (
@@ -1165,6 +1196,9 @@ func (s *SQLStore) PruneConfigurationReleases(ctx context.Context, retainDuratio
 func (s *SQLStore) PruneReleaseAcknowledgements(ctx context.Context, disconnectedBefore time.Time) (int, error) {
 	removed := int64(0)
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := pruneReleaseSessions(tx, disconnectedBefore); err != nil {
+			return err
+		}
 		res := tx.Where("connected = 0 AND disconnected_at IS NOT NULL AND disconnected_at < ?", fmtTime(disconnectedBefore)).Delete(&releaseSubscriberStateModel{})
 		if res.Error != nil {
 			return res.Error

@@ -1290,3 +1290,47 @@ def test_async_terminal_watch_does_not_mask_abort_contract_failure(monkeypatch):
         assert loader.status().last_failure_category == "internal"
 
     asyncio.run(scenario())
+
+
+def test_async_process_session_targets_keep_last_applied_on_rejection(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10), instance_id="fixed")
+        target = kms_pb2.InstanceReleaseTarget(release=_release(1, 10)[0], target_revision=10, activation_revision=10)
+        sessions = []
+
+        async def register(request, **_kwargs):
+            sessions.append(request.session.session_id)
+            return kms_pb2.ReleaseSessionResponse(pin_capable=True)
+
+        async def get_target(request, **_kwargs):
+            assert request.session.session_id == sessions[0]
+            out = kms_pb2.InstanceReleaseTarget()
+            out.CopyFrom(target)
+            return out
+
+        stub.RegisterReleaseSession = register
+        stub.GetInstanceRelease = get_target
+
+        def prepare(_cancel, snapshot):
+            if snapshot.version == 3:
+                raise ValueError("rejected pin")
+            return _Prepared()
+
+        task = asyncio.create_task(loader.run(prepare))
+        try:
+            await _wait_for(lambda: loader.status().applied_version == 1 and bool(stub.calls))
+            target.CopyFrom(kms_pb2.InstanceReleaseTarget(release=_release(2, 20)[0], target_revision=20, pinned=True, pin_revision=20))
+            stub.calls[-1].push(kms_pb2.WatchReleaseEvent(target=target, revision=20))
+            await _wait_for(lambda: loader.status().applied_version == 2)
+            await _wait_for(lambda: any(a.state == "applied" and a.target_revision == 20 and a.activation_revision == 0 and a.session_id == sessions[0] for a in stub.acknowledgements))
+            target.CopyFrom(kms_pb2.InstanceReleaseTarget(release=_release(3, 30)[0], target_revision=30, pinned=True, pin_revision=30))
+            stub.calls[-1].push(kms_pb2.WatchReleaseEvent(target=target, revision=30))
+            await _wait_for(lambda: loader.status().state == "rejected")
+            assert loader.status().applied_version == 2
+        finally:
+            loader.stop()
+            await task
+        replacement, _, _ = _loader(monkeypatch, _release(1, 10), instance_id="fixed")
+        assert replacement._session_id != loader._session_id
+
+    asyncio.run(scenario())

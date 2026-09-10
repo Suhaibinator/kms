@@ -1452,3 +1452,34 @@ or untrusted certificates can fail during the TLS handshake before HTTP reaches
 the application. A TLS-terminating proxy can hide the browser certificate; if it
 connects upstream using its own certificate, diagnostics describe that certificate.
 When the upstream request is plain HTTP, certificate information is unavailable.
+
+### Process-scoped release pins
+
+`POST /api/v1/release-subscribers/pin` requires
+`configuration-release:instance-manage` for the namespace. Request:
+
+```json
+{
+  "namespace": {"env": "prod", "app": "payments"},
+  "name": "runtime", "schema_version": 2,
+  "identity": "payments", "client_name": "api", "instance_id": "replica-a",
+  "session_id": "CLIENT_PROCESS_SESSION", "version": 7,
+  "expected_pin_revision": 0
+}
+```
+
+`schema_version` and `expected_pin_revision` require explicit presence. A
+positive `version` pins a connected session; zero unpins even while disconnected.
+The response contains `target_version`, `target_revision`, `activation_revision`,
+`pinned`, `pin_revision`, `pinned_by`, and `pinned_at_unix_ms`. A stale guard
+returns a conflict; invalid releases and unavailable sessions fail precondition.
+The operation preserves the fleet's current/previous labels.
+
+Scoped subscriber list/stream rows add `session_id`, `target_revision`,
+`pin_version`, `pin_revision`, `pinned_by`, `pinned_at_unix_ms`,
+`last_applied_version`, `desired_version`, and `desired_revision`. A missing
+session ID means the client cannot be pinned. A rollout's `pinned` count denotes
+connected instances successfully applied to their pinned target. Rejected and
+disconnected pins remain failures/pending connectivity, rather than counting as
+applied to the fleet. Namespace-scoped list/stream inspection accepts the new
+management permission; global subscriber listing remains admin-only.

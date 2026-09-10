@@ -600,6 +600,7 @@ type ReleaseIdentity struct {
 	name               string
 	version            uint64
 	activationRevision uint64
+	targetRevision     uint64
 	schemaVersion      uint64
 	digest             string
 }
@@ -611,6 +612,7 @@ func ReleaseIdentityFromSnapshot(snapshot kmsclient.ReleaseSnapshot) ReleaseIden
 		name:               snapshot.Name(),
 		version:            snapshot.Version(),
 		activationRevision: snapshot.ActivationRevision(),
+		targetRevision:     snapshot.TargetRevision(),
 		schemaVersion:      snapshot.SchemaVersion(),
 		digest:             snapshot.Digest(),
 	}
@@ -622,6 +624,7 @@ func releaseIdentityFromManifest(manifest kmsclient.ReleaseManifest) ReleaseIden
 		name:               manifest.Name(),
 		version:            manifest.Version(),
 		activationRevision: manifest.ActivationRevision(),
+		targetRevision:     manifest.TargetRevision(),
 		schemaVersion:      manifest.SchemaVersion(),
 		digest:             manifest.Digest(),
 	}
@@ -631,6 +634,7 @@ func (r ReleaseIdentity) Namespace() string          { return r.namespace }
 func (r ReleaseIdentity) Name() string               { return r.name }
 func (r ReleaseIdentity) Version() uint64            { return r.version }
 func (r ReleaseIdentity) ActivationRevision() uint64 { return r.activationRevision }
+func (r ReleaseIdentity) TargetRevision() uint64     { return max(r.targetRevision, r.activationRevision) }
 func (r ReleaseIdentity) SchemaVersion() uint64      { return r.schemaVersion }
 func (r ReleaseIdentity) Digest() string             { return r.digest }
 
@@ -655,6 +659,7 @@ type releaseIdentityJSON struct {
 	Name               string `json:"name"`
 	Version            uint64 `json:"version"`
 	ActivationRevision uint64 `json:"activation_revision"`
+	TargetRevision     uint64 `json:"target_revision,omitempty"`
 	SchemaVersion      uint64 `json:"schema_version,omitempty"`
 	Digest             string `json:"digest"`
 }
@@ -665,6 +670,7 @@ func (r ReleaseIdentity) jsonProjection() releaseIdentityJSON {
 		Name:               r.name,
 		Version:            r.version,
 		ActivationRevision: r.activationRevision,
+		TargetRevision:     r.targetRevision,
 		SchemaVersion:      r.schemaVersion,
 		Digest:             r.digest,
 	}

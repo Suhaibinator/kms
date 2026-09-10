@@ -1,13 +1,15 @@
 import { RefreshCw } from "lucide-react";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Ident } from "@/components/Ident";
 import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, Button } from "@/components/ui";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { api } from "@/lib/api";
 import { rejectionGuidance } from "@/lib/glossary";
 import { countSubscribers } from "@/lib/subscribers";
 import type { NamespaceRef, SubscriberInstance } from "@/lib/types";
 import { useReleaseSubscribers } from "@/lib/useReleaseSubscribers";
+import { ReleasePinDialog } from "./ReleasePinDialog";
 import { sortForRollout } from "./model";
 
 export interface RolloutPanelProps {
@@ -42,6 +44,10 @@ function stateTone(
 }
 
 function stateLabel(instance: SubscriberInstance, atCurrent: boolean): string {
+  if (instance.pin_version)
+    return atCurrent && instance.state === "applied"
+      ? "pinned · applied"
+      : `pinned · ${instance.state || "pending"}`;
   if (!atCurrent) {
     return instance.state === "applied" ? "pending" : instance.state || "connected";
   }
@@ -66,8 +72,16 @@ export function RolloutPanel({
   rollbackDisabled,
   refreshToken,
 }: RolloutPanelProps) {
+  const [pinDialog, setPinDialog] = useState<{ session: string; unpin: boolean } | null>(null);
   const live = useReleaseSubscribers(namespace, releaseName, { enabled, schemaVersion });
   const refresh = live.refresh;
+  const selectedInstance = pinDialog
+    ? live.instances.find((item) => item.session_id === pinDialog.session)
+    : undefined;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: changing tracks invalidates the selected process.
+  useEffect(() => {
+    setPinDialog(null);
+  }, [namespace.env, namespace.app, releaseName, schemaVersion]);
   useEffect(() => {
     if (refreshToken) void refresh();
   }, [refreshToken, refresh]);
@@ -77,6 +91,40 @@ export function RolloutPanel({
     followCurrentActivation && live.lastUpdatedAt !== null
       ? live.currentRevision
       : activationRevision;
+  const activeScope = JSON.stringify([
+    namespace.env,
+    namespace.app,
+    releaseName,
+    schemaVersion,
+    rolloutRevision,
+  ]);
+  const [activeRelease, setActiveRelease] = useState<{ scope: string; version: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!enabled || !rolloutRevision) return;
+    const controller = new AbortController();
+    void api
+      .getActiveRelease({ env: namespace.env, app: namespace.app }, releaseName, schemaVersion, {
+        signal: controller.signal,
+      })
+      .then((result) => {
+        if (!controller.signal.aborted)
+          setActiveRelease({ scope: activeScope, version: result.release.version });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setActiveRelease({ scope: activeScope, version: 0 });
+      });
+    return () => controller.abort();
+  }, [
+    enabled,
+    namespace.env,
+    namespace.app,
+    releaseName,
+    schemaVersion,
+    rolloutRevision,
+    activeScope,
+  ]);
   const counts = countSubscribers(live.instances, rolloutRevision);
   const ordered = sortForRollout(live.instances, rolloutRevision);
   const divergentGuidance = rejectionGuidance("default_mismatch");
@@ -92,6 +140,9 @@ export function RolloutPanel({
               <strong>
                 {counts.applied_current}/{counts.total} applied
               </strong>
+              {(counts.pinned ?? 0) > 0 ? (
+                <Badge kind="warning">{counts.pinned} pinned</Badge>
+              ) : null}
               {counts.rejected > 0 ? <Badge kind="danger">{counts.rejected} rejected</Badge> : null}
               {counts.applied_divergent > 0 ? (
                 <Badge kind="warning">{counts.applied_divergent} divergent</Badge>
@@ -101,7 +152,15 @@ export function RolloutPanel({
             </>
           )}
           <span className="faint text-sm">
-            at <Ident kind="revision" value={String(rolloutRevision)} />
+            Track active: schema {schemaVersion},{" "}
+            {rolloutRevision === 0
+              ? "awaiting first activation"
+              : activeRelease?.scope === activeScope
+                ? activeRelease.version
+                  ? `v${activeRelease.version}`
+                  : "unavailable"
+                : "loading release"}{" "}
+            · at <Ident kind="revision" value={String(rolloutRevision)} />
           </span>
         </div>
         <div className="rollout-tools">
@@ -154,7 +213,10 @@ export function RolloutPanel({
             </thead>
             <tbody>
               {ordered.map((instance) => {
-                const atCurrent = instance.activation_revision >= rolloutRevision;
+                const atCurrent = instance.session_id
+                  ? instance.target_revision === instance.desired_revision &&
+                    instance.release_version === instance.desired_version
+                  : instance.activation_revision >= rolloutRevision;
                 const rejected = instance.state === "rejected" && atCurrent;
                 const guidance = rejected ? rejectionGuidance(instance.rejection_category) : null;
                 return (
@@ -163,6 +225,7 @@ export function RolloutPanel({
                       instance.identity,
                       instance.client_name,
                       instance.instance_id,
+                      instance.session_id,
                     ])}
                     className={rejected ? "rollout-rejected" : undefined}
                     data-testid="rollout-instance"
@@ -202,13 +265,59 @@ export function RolloutPanel({
                       </div>
                     </td>
                     <td data-label="Serving" className="mono">
-                      {rejected
-                        ? `still serving v${instance.release_version}`
-                        : instance.release_version > 0
-                          ? `v${instance.release_version}`
-                          : "—"}
+                      {instance.session_id
+                        ? instance.last_applied_version
+                          ? `v${instance.last_applied_version}`
+                          : "—"
+                        : rejected
+                          ? `still serving v${instance.release_version}`
+                          : instance.release_version > 0
+                            ? `v${instance.release_version}`
+                            : "—"}
+                      <span className="faint text-sm"> · schema {schemaVersion}</span>
                     </td>
                     <td data-label="Detail">
+                      {instance.session_id ? (
+                        <div>
+                          <p>
+                            Schema {schemaVersion} · target{" "}
+                            {instance.desired_version
+                              ? `v${instance.desired_version}`
+                              : "waiting for activation"}
+                          </p>
+                          {instance.pin_version ? (
+                            <p>
+                              Pinned by {instance.pinned_by} ·{" "}
+                              {instance.pinned_at_unix_ms
+                                ? new Date(instance.pinned_at_unix_ms).toLocaleString()
+                                : ""}
+                            </p>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!instance.connected}
+                            onClick={() =>
+                              setPinDialog({ session: instance.session_id ?? "", unpin: false })
+                            }
+                          >
+                            {instance.pin_version ? "Change pin" : "Pin to release"}
+                          </Button>
+                          {instance.pin_version ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                setPinDialog({ session: instance.session_id ?? "", unpin: true })
+                              }
+                            >
+                              Unpin
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="faint text-sm">Upgrade SDK to enable pinning.</span>
+                      )}
                       {rejected ? (
                         <div className="rollout-remedy">
                           <div className="text-sm">{guidance?.response}</div>
@@ -240,6 +349,18 @@ export function RolloutPanel({
           </table>
         </div>
       )}
+      {selectedInstance && pinDialog ? (
+        <ReleasePinDialog
+          key={`${namespace.env}/${namespace.app}/${releaseName}/${schemaVersion}/${selectedInstance.session_id}/${pinDialog.unpin}`}
+          namespace={namespace}
+          name={releaseName}
+          schemaVersion={schemaVersion}
+          instance={selectedInstance}
+          unpin={pinDialog.unpin}
+          onClose={() => setPinDialog(null)}
+          onSaved={() => void refresh()}
+        />
+      ) : null}
     </section>
   );
 }

@@ -601,6 +601,15 @@ func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
 }
 
 type releaseSubscriberDTO struct {
+	SessionID             string          `json:"session_id,omitempty"`
+	TargetRevision        uint64          `json:"target_revision"`
+	PinVersion            uint64          `json:"pin_version"`
+	PinRevision           uint64          `json:"pin_revision"`
+	PinnedBy              string          `json:"pinned_by"`
+	PinnedAt              int64           `json:"pinned_at_unix_ms"`
+	LastAppliedVersion    uint64          `json:"last_applied_version"`
+	DesiredVersion        uint64          `json:"desired_version"`
+	DesiredRevision       uint64          `json:"desired_revision"`
 	Namespace             namespaceRefDTO `json:"namespace"`
 	ReleaseName           string          `json:"release_name"`
 	SchemaVersion         uint64          `json:"schema_version"`
@@ -623,7 +632,7 @@ type releaseSubscriberDTO struct {
 }
 
 func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDTO {
-	return releaseSubscriberDTO{
+	return releaseSubscriberDTO{SessionID: s.SessionID, TargetRevision: s.TargetRevision, PinVersion: s.PinVersion, PinRevision: s.PinRevision, PinnedBy: s.PinnedBy, PinnedAt: unixMS(s.PinnedAt), LastAppliedVersion: s.LastAppliedVersion, DesiredVersion: s.DesiredVersion, DesiredRevision: s.DesiredRevision,
 		Namespace:   namespaceRefDTO{Env: s.Namespace.Env, App: s.Namespace.App},
 		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ClientName: s.ClientName, InstanceID: s.InstanceID,
 		Identity: s.Identity, State: s.State, ReleaseVersion: s.ReleaseVersion,

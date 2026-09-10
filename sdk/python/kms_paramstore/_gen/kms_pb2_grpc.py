@@ -1135,6 +1135,21 @@ class ConfigurationReleaseServiceStub:
         Args:
             channel: A grpc.Channel.
         """
+        self.RegisterReleaseSession = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/RegisterReleaseSession',
+                request_serializer=kms_dot_v1_dot_kms__pb2.RegisterReleaseSessionRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ReleaseSessionResponse.FromString,
+                _registered_method=True)
+        self.GetInstanceRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/GetInstanceRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.GetInstanceReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.FromString,
+                _registered_method=True)
+        self.SetReleasePin = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/SetReleasePin',
+                request_serializer=kms_dot_v1_dot_kms__pb2.SetReleasePinRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.FromString,
+                _registered_method=True)
         self.CreateRelease = channel.unary_unary(
                 '/kms.v1.ConfigurationReleaseService/CreateRelease',
                 request_serializer=kms_dot_v1_dot_kms__pb2.CreateReleaseRequest.SerializeToString,
@@ -1191,6 +1206,24 @@ class ConfigurationReleaseServiceServicer:
     contain exact parameter/secret version references and non-sensitive
     metadata only; values and binding keys are never embedded.
     """
+
+    def RegisterReleaseSession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetInstanceRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetReleasePin(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def CreateRelease(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -1258,6 +1291,21 @@ class ConfigurationReleaseServiceServicer:
 
 def add_ConfigurationReleaseServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'RegisterReleaseSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.RegisterReleaseSession,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.RegisterReleaseSessionRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ReleaseSessionResponse.SerializeToString,
+            ),
+            'GetInstanceRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetInstanceRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.GetInstanceReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.SerializeToString,
+            ),
+            'SetReleasePin': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetReleasePin,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.SetReleasePinRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.SerializeToString,
+            ),
             'CreateRelease': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateRelease,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.CreateReleaseRequest.FromString,
@@ -1320,6 +1368,87 @@ class ConfigurationReleaseService:
     contain exact parameter/secret version references and non-sensitive
     metadata only; values and binding keys are never embedded.
     """
+
+    @staticmethod
+    def RegisterReleaseSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/RegisterReleaseSession',
+            kms_dot_v1_dot_kms__pb2.RegisterReleaseSessionRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ReleaseSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetInstanceRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/GetInstanceRelease',
+            kms_dot_v1_dot_kms__pb2.GetInstanceReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetReleasePin(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/SetReleasePin',
+            kms_dot_v1_dot_kms__pb2.SetReleasePinRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.InstanceReleaseTarget.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def CreateRelease(request,

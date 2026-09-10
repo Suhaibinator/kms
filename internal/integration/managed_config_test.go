@@ -339,6 +339,40 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 		t.Fatalf("restoration emitted further mismatch reports: %#v", restartReporter.snapshot())
 	}
 
+	// Generated integrations use the same process targets, including older and
+	// never-activated releases. A rejected pin must preserve their atomic store.
+	session := &kmsv1.ReleaseSessionRef{Namespace: namespace, Name: managedRelease, SchemaVersion: &schemaVersion,
+		ClientName: restartRow.ClientName, InstanceId: restartRow.InstanceId, Identity: restartRow.Identity, SessionId: restartRow.SessionId}
+	assigned, err := releases.SetReleasePin(authCtx, &kmsv1.SetReleasePinRequest{Session: session, Version: initialRelease.Version, ExpectedPinRevision: new(uint64(0))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForManagedState(t, func() bool { return restartStore.Current().Release().Version() == initialRelease.Version }, "generated client applies older pin")
+	pinnedIdentity := restartStore.Current().Release()
+	if pinnedIdentity.TargetRevision() != assigned.TargetRevision || pinnedIdentity.ActivationRevision() != 0 || restartStore.Status().Observed.Digest() == "" {
+		t.Fatalf("generated client lost pinned target identity: %+v", restartStore.Status())
+	}
+	neverActivated := createRelease(restartPins, true)
+	failedPin, err := releases.SetReleasePin(authCtx, &kmsv1.SetReleasePinRequest{Session: session, Version: neverActivated.Version, ExpectedPinRevision: &assigned.PinRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForManagedState(t, func() bool {
+		status := restartStore.Status()
+		return status.Observed.TargetRevision() == failedPin.TargetRevision && status.LastRejectionCategory == configstore.RejectRestartRequired
+	}, "generated client rejects restart-required pin")
+	if restartStore.Current().Release().Version() != initialRelease.Version {
+		t.Fatal("rejected pin replaced generated last-known-good")
+	}
+	effective, err := releases.GetInstanceRelease(authCtx, &kmsv1.GetInstanceReleaseRequest{Session: session})
+	if err != nil || !effective.Pinned || effective.Release.Version != neverActivated.Version {
+		t.Fatalf("failed pin was lost: %v %v", effective, err)
+	}
+	if _, err := releases.SetReleasePin(authCtx, &kmsv1.SetReleasePinRequest{Session: session, ExpectedPinRevision: &failedPin.PinRevision}); err != nil {
+		t.Fatal(err)
+	}
+	waitForManagedState(t, func() bool { return restartStore.Current().Release().Version() == restoreRelease.Version }, "generated client unpins to current")
+
 	stopRestart()
 	if err := restartStore.Wait(); err != nil {
 		t.Fatalf("divergent-restart store Wait after cancellation: %v", err)

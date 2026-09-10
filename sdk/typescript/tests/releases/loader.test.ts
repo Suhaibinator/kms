@@ -5,6 +5,8 @@ import {
   type ConfigurationReleaseEntry,
   type GetActiveReleaseResponse,
   type NamespaceRef,
+  type InstanceReleaseTarget,
+  type ReleaseSessionRef,
   type Parameter,
   type ReleaseWatchRegistration,
   type ResourceRef,
@@ -1743,6 +1745,8 @@ function acknowledgementRejectedEvent(
         state: acknowledgement.state,
         sequence: acknowledgement.sequence,
         reason: "activation_unavailable",
+        sessionId: acknowledgement.sessionId,
+        targetRevision: acknowledgement.targetRevision,
         ...overrides,
       },
     },
@@ -1807,3 +1811,94 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
+
+describe("process session targets", () => {
+  it("applies unpublished targets, retains failures, and reuses the session on reconnect", async () => {
+    const base = new FakeTransport(makeRelease(1n, []));
+    base.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let target: InstanceReleaseTarget = {
+      release: makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]),
+      targetRevision: 10n,
+      activationRevision: 10n,
+      pinned: false,
+      pinRevision: 0n,
+      pinnedBy: "",
+      pinnedAtUnixMs: 0n,
+    };
+    const sessions: ReleaseSessionRef[] = [];
+    const transport = Object.assign(base, {
+      registerReleaseSession: async (session: ReleaseSessionRef) => {
+        sessions.push(session);
+        return true;
+      },
+      getInstanceRelease: async () => target,
+    });
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+      instanceId: "fixed",
+      reconcileIntervalMs: 10,
+      random: () => 0,
+    });
+    const stop = new AbortController();
+    const applied: bigint[] = [];
+    const run = loader.run((snapshot) => {
+      if (snapshot.version === 3n) throw new Error("reject pin");
+      return {
+        commit() {
+          applied.push(snapshot.version);
+        },
+        abort() {},
+      };
+    }, stop.signal);
+    await waitFor(() => applied.includes(1n) && !!base.stream);
+    target = {
+      ...target,
+      release: makeRelease(2n, [parameterEntry("value", "value", 1n, "one")]),
+      targetRevision: 20n,
+      activationRevision: 0n,
+      pinned: true,
+      pinRevision: 20n,
+    };
+    base.stream?.push({ event: { $case: "target", value: target }, revision: 20n });
+    await waitFor(() => applied.includes(2n));
+    await waitFor(() =>
+      base.stream!.sent.some(
+        (r) =>
+          r.request?.$case === "acknowledgement" &&
+          r.request.value.state === "applied" &&
+          r.request.value.targetRevision === 20n &&
+          r.request.value.activationRevision === 0n,
+      ),
+    );
+    target = {
+      ...target,
+      release: makeRelease(3n, [parameterEntry("value", "value", 1n, "one")]),
+      targetRevision: 30n,
+      pinRevision: 30n,
+    };
+    base.stream?.push({ event: { $case: "target", value: target }, revision: 30n });
+    await waitFor(() => loader.status().state === "rejected");
+    expect(loader.status().appliedVersion).toBe(2n);
+    const session = base.registration?.sessionId;
+    const oldStream = base.stream;
+    oldStream?.close();
+    await waitFor(() => base.stream !== oldStream);
+    expect(base.registration?.sessionId).toBe(session);
+    expect(session).toBe(sessions[0]?.sessionId);
+    target = {
+      ...target,
+      release: makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]),
+      targetRevision: 40n,
+      activationRevision: 10n,
+      pinned: false,
+      pinRevision: 40n,
+    };
+    base.stream?.push({ event: { $case: "target", value: target }, revision: 40n });
+    await waitFor(() => loader.status().appliedVersion === 1n);
+    stop.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+});

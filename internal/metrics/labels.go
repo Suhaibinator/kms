@@ -134,6 +134,7 @@ var RouteLabels = []string{
 	"GET /api/v1/posture",
 	"GET /api/v1/subscribers",
 	"GET /api/v1/release-subscribers",
+	"POST /api/v1/release-subscribers/pin",
 	"GET /api/v1/release-subscribers/stream",
 
 	"GET /api/v1/releases",
@@ -250,6 +251,8 @@ var AuditEventTypes = []string{
 	"authz.method_denied",
 	"configuration_release.acknowledge",
 	"configuration_release.activate",
+	"configuration_release.pin",
+	"configuration_release.unpin",
 	"configuration_release.cas_conflict",
 	"configuration_release.create",
 	"configuration_release.reference_blocked",

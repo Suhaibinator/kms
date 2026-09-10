@@ -8,12 +8,26 @@ when gradethis builds and runs with no dependency on
 > in-place upgrade from a `0.2.x` SQLite database and no compatibility path for
 > its client-bound tokens or release digests.
 
-> **Schema-track cutover:** independent release tracks use a new database
-> baseline. Existing KMS databases, including earlier `0.3.x` baselines, are not
-> upgraded in place. Provision a fresh database and deploy the updated server,
-> SDKs, and regenerated configuration bindings together. Existing databases
-> are rejected without being converted or deleted. See
-> [schema selection and deployment cutover](configuration-releases.md#schema-selection-and-deployment-cutover).
+> **Schema-track cutover:** baselines before the independent schema-track
+> baseline (3) still require a fresh database. Process-scoped release pinning
+> introduces baseline 4 and supports a transactional, data-preserving upgrade
+> from exact baseline 3. Other physical schemas and stamps are rejected without
+> mutation.
+
+## Upgrade baseline 3 for instance pinning
+
+Stop KMS and take a backup with the previous binary. Start the updated server
+against that database: it verifies the full baseline, adds the session and
+assignment-delivery tables, and updates the baseline stamp in one transaction.
+Existing releases, digests, resources, identities, policies, and audit history
+remain unchanged. Failure rolls back the schema and stamp together. Normal
+existing-database inspection still uses a private copy of the database and WAL.
+
+Deploy updated SDKs after the server. Older SDKs continue following active
+tracks but cannot be pinned. To roll back the server, stop it and restore the
+pre-upgrade backup with the previous binary; older binaries cannot open baseline
+4. Retain the upgraded database separately if it contains subsequent writes.
+
 
 The versioned protection-transition update within this greenfield `0.3.x`
 contract changes SecretService and SDK signatures, but not the SQLite table

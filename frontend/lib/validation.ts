@@ -336,6 +336,7 @@ export const KNOWN_OPERATIONS = [
   "configuration-release:activate",
   "configuration-release:list",
   "configuration-release:watch",
+  "configuration-release:instance-manage",
   "admin:namespace:create",
   "admin:namespace:update",
   "admin:namespace:delete",

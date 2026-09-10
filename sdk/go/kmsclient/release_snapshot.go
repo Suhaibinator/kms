@@ -47,15 +47,18 @@ type ReleaseManifest struct {
 	name               string
 	version            uint64
 	activationRevision uint64
+	targetRevision     uint64
 	schemaVersion      uint64
 	digest             string
 	metadataJSON       string
 	entries            map[string]ReleaseEntryMetadata
 }
 
-func (m ReleaseManifest) Namespace() string          { return m.namespace }
-func (m ReleaseManifest) Name() string               { return m.name }
-func (m ReleaseManifest) Version() uint64            { return m.version }
+func (m ReleaseManifest) Namespace() string      { return m.namespace }
+func (m ReleaseManifest) Name() string           { return m.name }
+func (m ReleaseManifest) Version() uint64        { return m.version }
+func (m ReleaseManifest) TargetRevision() uint64 { return m.targetRevision }
+
 func (m ReleaseManifest) ActivationRevision() uint64 { return m.activationRevision }
 func (m ReleaseManifest) SchemaVersion() uint64      { return m.schemaVersion }
 func (m ReleaseManifest) Digest() string             { return m.digest }
@@ -124,6 +127,7 @@ type ReleaseSnapshot struct {
 	name               string
 	version            uint64
 	activationRevision uint64
+	targetRevision     uint64
 	schemaVersion      uint64
 	digest             string
 	metadataJSON       string
@@ -132,9 +136,11 @@ type ReleaseSnapshot struct {
 	secrets            map[string]Secret
 }
 
-func (s ReleaseSnapshot) Namespace() string          { return s.namespace }
-func (s ReleaseSnapshot) Name() string               { return s.name }
-func (s ReleaseSnapshot) Version() uint64            { return s.version }
+func (s ReleaseSnapshot) Namespace() string      { return s.namespace }
+func (s ReleaseSnapshot) Name() string           { return s.name }
+func (s ReleaseSnapshot) Version() uint64        { return s.version }
+func (s ReleaseSnapshot) TargetRevision() uint64 { return s.targetRevision }
+
 func (s ReleaseSnapshot) ActivationRevision() uint64 { return s.activationRevision }
 func (s ReleaseSnapshot) SchemaVersion() uint64      { return s.schemaVersion }
 func (s ReleaseSnapshot) Digest() string             { return s.digest }
@@ -220,40 +226,46 @@ func (s ReleaseSnapshot) jsonProjection() releaseSnapshotJSON {
 
 // ReleaseLoaderStatus is a redacted point-in-time view of loader progress.
 type ReleaseLoaderStatus struct {
-	State                  string
-	ObservedVersion        uint64
-	ObservedRevision       uint64
-	AppliedVersion         uint64
-	AppliedRevision        uint64
-	LastFailureCategory    string
-	LastFailureAt          time.Time
-	LastResolutionDuration time.Duration
-	Reconnects             uint64
+	State                      string
+	ObservedVersion            uint64
+	ObservedRevision           uint64 // Effective target revision.
+	ObservedActivationRevision uint64 `json:",omitempty"`
+	AppliedVersion             uint64
+	AppliedRevision            uint64 // Effective target revision.
+	AppliedActivationRevision  uint64 `json:",omitempty"`
+	LastFailureCategory        string
+	LastFailureAt              time.Time
+	LastResolutionDuration     time.Duration
+	Reconnects                 uint64
 }
 
 type releaseLoaderStatusJSON struct {
-	State                  string
-	ObservedVersion        uint64
-	ObservedRevision       uint64
-	AppliedVersion         uint64
-	AppliedRevision        uint64
-	LastFailureCategory    string
-	LastFailureAt          time.Time
-	LastResolutionDuration string
-	Reconnects             uint64
+	State                      string
+	ObservedVersion            uint64
+	ObservedRevision           uint64 // Effective target revision.
+	ObservedActivationRevision uint64 `json:",omitempty"`
+	AppliedVersion             uint64
+	AppliedRevision            uint64 // Effective target revision.
+	AppliedActivationRevision  uint64 `json:",omitempty"`
+	LastFailureCategory        string
+	LastFailureAt              time.Time
+	LastResolutionDuration     string
+	Reconnects                 uint64
 }
 
 func (s ReleaseLoaderStatus) jsonProjection() releaseLoaderStatusJSON {
 	return releaseLoaderStatusJSON{
-		State:                  s.State,
-		ObservedVersion:        s.ObservedVersion,
-		ObservedRevision:       s.ObservedRevision,
-		AppliedVersion:         s.AppliedVersion,
-		AppliedRevision:        s.AppliedRevision,
-		LastFailureCategory:    s.LastFailureCategory,
-		LastFailureAt:          s.LastFailureAt,
-		LastResolutionDuration: s.LastResolutionDuration.String(),
-		Reconnects:             s.Reconnects,
+		State:                      s.State,
+		ObservedVersion:            s.ObservedVersion,
+		ObservedRevision:           s.ObservedRevision,
+		ObservedActivationRevision: s.ObservedActivationRevision,
+		AppliedVersion:             s.AppliedVersion,
+		AppliedRevision:            s.AppliedRevision,
+		AppliedActivationRevision:  s.AppliedActivationRevision,
+		LastFailureCategory:        s.LastFailureCategory,
+		LastFailureAt:              s.LastFailureAt,
+		LastResolutionDuration:     s.LastResolutionDuration.String(),
+		Reconnects:                 s.Reconnects,
 	}
 }
 

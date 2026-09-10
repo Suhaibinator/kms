@@ -406,6 +406,9 @@ service WatchService {
 // contain exact parameter/secret version references and non-sensitive
 // metadata only; values and binding keys are never embedded.
 service ConfigurationReleaseService {
+  rpc RegisterReleaseSession(RegisterReleaseSessionRequest) returns (ReleaseSessionResponse);
+  rpc GetInstanceRelease(GetInstanceReleaseRequest) returns (InstanceReleaseTarget);
+  rpc SetReleasePin(SetReleasePinRequest) returns (InstanceReleaseTarget);
   rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse);
   rpc ValidateRelease(ValidateReleaseRequest) returns (ValidateReleaseResponse);
   rpc ActivateRelease(ActivateReleaseRequest) returns (ActivateReleaseResponse);
@@ -429,6 +432,37 @@ service ConfigurationReleaseService {
 // ReleaseEntrySelector is accepted only when creating a release. Exactly one
 // of version/label may be set; both empty resolves label "current". The server
 // persists the resolved exact version in ConfigurationReleaseEntry.
+// Session identity is generated once by the client loader, independently of instance_id.
+message ReleaseSessionRef {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  optional uint64 schema_version = 3;
+  string client_name = 4;
+  string instance_id = 5;
+  string session_id = 6;
+  string identity = 7; // Operator requests only; client identity comes from authentication.
+}
+message RegisterReleaseSessionRequest {
+  ReleaseSessionRef session = 1;
+  bool resume = 2; // A missing resumed session is expired, never implicitly recreated.
+}
+message ReleaseSessionResponse { bool pin_capable = 1; }
+message GetInstanceReleaseRequest { ReleaseSessionRef session = 1; }
+message SetReleasePinRequest {
+  ReleaseSessionRef session = 1;
+  uint64 version = 2; // Zero removes the pin and follows the track.
+  optional uint64 expected_pin_revision = 3;
+}
+message InstanceReleaseTarget {
+  ConfigurationRelease release = 1; // Absent when following a track without activation.
+  uint64 target_revision = 2;
+  uint64 activation_revision = 3;
+  bool pinned = 4;
+  uint64 pin_revision = 5;
+  string pinned_by = 6;
+  int64 pinned_at_unix_ms = 7;
+}
+
 message ReleaseEntrySelector {
   string alias = 1;
   string kind = 2; // parameter | secret
@@ -613,6 +647,7 @@ message ReleaseWatchRegistration {
   string client_name = 3;
   string instance_id = 4;
   uint64 last_seen_revision = 5;
+  string session_id = 7; // Presence negotiates instance-target delivery.
   // Required; absence never means the newest schema.
   optional uint64 schema_version = 6;
 }
@@ -637,6 +672,8 @@ message ReleaseAcknowledgement {
   // echoes it when rejecting an unavailable activation so a delayed response
   // cannot discard a newer acknowledgement for the same lifecycle state.
   uint64 sequence = 14;
+  string session_id = 15;
+  uint64 target_revision = 16;
 }
 
 message WatchReleaseRequest {
@@ -667,11 +704,14 @@ message ReleaseAcknowledgementRejectedEvent {
   string instance_id = 7;
   string state = 8;
   uint64 sequence = 9;
-  string reason = 10; // activation_unavailable
+  string reason = 10; // activation_unavailable | target_unavailable
+  string session_id = 11;
+  uint64 target_revision = 12;
 }
 
 message WatchReleaseEvent {
   oneof event {
+    InstanceReleaseTarget target = 6;
     ReleaseSnapshotEvent snapshot = 1;
     ReleaseActivationEvent activation = 2;
     Heartbeat heartbeat = 3;
@@ -1141,6 +1181,15 @@ message ListSubscribersResponse {
 }
 
 message ReleaseSubscriberState {
+ string session_id = 17;
+ uint64 target_revision = 18;
+ uint64 pin_version = 19;
+ uint64 pin_revision = 20;
+ string pinned_by = 21;
+ int64 pinned_at_unix_ms = 22;
+ uint64 last_applied_version = 23;
+ uint64 desired_version = 24;
+ uint64 desired_revision = 25;
   NamespaceRef namespace = 1;
   string release_name = 2;
   string client_name = 3;

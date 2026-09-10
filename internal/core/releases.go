@@ -720,7 +720,7 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err != nil {
 		return err
 	}
-	if ack.ReleaseVersion == 0 || ack.ActivationRevision == 0 || ack.ClientName == "" || ack.InstanceID == "" || ack.ConnectionID == "" {
+	if ack.ReleaseVersion == 0 || (ack.ActivationRevision == 0 && ack.TargetRevision == 0) || ack.ClientName == "" || ack.InstanceID == "" || ack.ConnectionID == "" {
 		return domain.Errorf(domain.ErrInvalidArgument, "release acknowledgement is incomplete")
 	}
 	if len(ack.ClientName) > maxReleaseClientIDBytes || len(ack.InstanceID) > maxReleaseClientIDBytes {
@@ -764,7 +764,17 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	// Storage checks activation identity and stream ownership atomically with
 	// persistence, so retention or a disconnect cannot invalidate either proof
 	// between validation and the write.
-	if err := rs.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
+	var persistErr error
+	if ack.SessionID != "" {
+		st, err := s.sessionStore()
+		if err != nil {
+			return err
+		}
+		persistErr = st.AcknowledgeReleaseSession(ctx, domain.ReleaseSessionRef{Track: ack.Track(), ClientName: ack.ClientName, InstanceID: ack.InstanceID, Identity: pr.Identity.Name, SessionID: ack.SessionID}, ack)
+	} else {
+		persistErr = rs.UpsertReleaseAcknowledgement(ctx, ack)
+	}
+	if err := persistErr; err != nil {
 		return err
 	}
 	s.notifyReleaseSubscribers(ack.Track())
@@ -800,7 +810,7 @@ func (s *Service) ResetReleaseSubscriberConnections(ctx context.Context) error {
 func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, filter domain.ReleaseFilter, page storage.ListPage) ([]domain.ReleaseAcknowledgement, string, uint64, error) {
 	ctx = withReleaseAuditFilter(ctx, filter)
 	ns, name := filter.Namespace, filter.Name
-	if err := s.requireAdmin(ctx, pr, "configuration_release.subscribers", domain.ResourceConfigurationRelease, name); err != nil {
+	if err := s.authorizeSubscriberInspection(ctx, pr, ns, name); err != nil {
 		return nil, "", 0, err
 	}
 	if err := keyutil.ValidateNamespace(ns); err != nil {

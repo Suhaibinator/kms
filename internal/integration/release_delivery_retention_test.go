@@ -95,7 +95,7 @@ func TestSDKRecoversWhenRetentionPrunesQueuedRelease(t *testing.T) {
 	sdk, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: env.endpoint(), Namespace: ns.Env + "/" + ns.App, Token: env.adminToken,
 		TLS: env.clientTLS(nil), ClientName: "delivery-retention-sdk", Timeout: 2 * time.Second,
-		DialOptions: []grpc.DialOption{grpc.WithStreamInterceptor(probe.intercept)},
+		DialOptions: []grpc.DialOption{grpc.WithStreamInterceptor(probe.intercept), grpc.WithUnaryInterceptor(legacyReleaseProtocol)},
 	})
 	if err != nil {
 		t.Fatal(err)

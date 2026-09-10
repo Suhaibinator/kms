@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isKmsError, mapGrpcError } from "../errors.js";
 import {
+  type ReleaseSessionRef,
+  type InstanceReleaseTarget,
   type ConfigurationRelease,
   ConfigurationRelease as ConfigurationReleaseMessage,
   type GetActiveReleaseResponse,
@@ -83,6 +85,15 @@ export interface ReleaseWatchStream extends AsyncIterable<WatchReleaseEvent> {
 
 /** @internal Transport boundary implemented by the main KMS client. */
 export interface ReleaseTransport {
+  registerReleaseSession?(
+    session: ReleaseSessionRef,
+    resume: boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
+  getInstanceRelease?(
+    session: ReleaseSessionRef,
+    signal?: AbortSignal,
+  ): Promise<InstanceReleaseTarget>;
   getActiveRelease(
     namespace: NamespaceRef,
     name: string,
@@ -150,6 +161,7 @@ interface NormalizedOptions {
 type CandidateSource = "activation" | "reconciliation";
 
 interface Candidate {
+  readonly fleetRevision: bigint;
   readonly release: ConfigurationRelease;
   readonly revision: bigint;
   readonly source: CandidateSource;
@@ -168,8 +180,10 @@ interface MutableStatus {
   state: ReleaseState | "idle";
   observedVersion: bigint;
   observedRevision: bigint;
+  observedActivationRevision: bigint;
   appliedVersion: bigint;
   appliedRevision: bigint;
+  appliedActivationRevision: bigint;
   lastFailureCategory?: ReleaseRejectionCategory;
   lastFailureAt?: Date;
   lastResolutionDurationMs: number;
@@ -205,14 +219,19 @@ class ResolutionError extends Error {
  * the single pending slot. After the first commit, failures preserve LKG.
  */
 export class ReleaseLoader {
+  readonly #sessionId = randomUUID();
+  #sessionRegistered = false;
+  #legacySession = false;
   readonly #transport: ReleaseTransport;
   readonly #options: NormalizedOptions;
   readonly #status: MutableStatus = {
     state: "idle",
     observedVersion: 0n,
     observedRevision: 0n,
+    observedActivationRevision: 0n,
     appliedVersion: 0n,
     appliedRevision: 0n,
+    appliedActivationRevision: 0n,
     lastResolutionDurationMs: 0,
     reconnects: 0n,
   };
@@ -251,8 +270,10 @@ export class ReleaseLoader {
       state: status.state,
       observedVersion: status.observedVersion,
       observedRevision: status.observedRevision,
+      observedActivationRevision: status.observedActivationRevision,
       appliedVersion: status.appliedVersion,
       appliedRevision: status.appliedRevision,
+      appliedActivationRevision: status.appliedActivationRevision,
       ...(status.lastFailureCategory ? { lastFailureCategory: status.lastFailureCategory } : {}),
       ...(status.lastFailureAt ? { lastFailureAt: new Date(status.lastFailureAt) } : {}),
       lastResolutionDurationMs: status.lastResolutionDurationMs,
@@ -288,6 +309,7 @@ export class ReleaseLoader {
     const candidateTasks = new Set<Promise<void>>();
 
     try {
+      await this.#registerSession(runController.signal);
       const initial = await this.#getActive(runController.signal);
       this.#lastSeenRevision = initial.activationRevision;
 
@@ -332,6 +354,7 @@ export class ReleaseLoader {
                     fresh.activationRevision,
                     "reconciliation",
                     0n,
+                    fresh.fleetRevision,
                   );
                   if (!sameActiveCandidate(result.candidate, freshCandidate)) {
                     offer(freshCandidate);
@@ -418,7 +441,15 @@ export class ReleaseLoader {
       );
       reconcileTask = this.#reconcileLoop(runController.signal, offer);
       if (initial.release) {
-        offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
+        offer(
+          makeCandidate(
+            initial.release,
+            initial.activationRevision,
+            "reconciliation",
+            0n,
+            initial.fleetRevision,
+          ),
+        );
       }
 
       await Promise.race([finished.promise, aborted(runController.signal)]);
@@ -500,7 +531,13 @@ export class ReleaseLoader {
     try {
       const response = await this.#getActive(signal);
       if (!response.release) throw new Error("empty active release");
-      active = makeCandidate(response.release, response.activationRevision, "reconciliation", 0n);
+      active = makeCandidate(
+        response.release,
+        response.activationRevision,
+        "reconciliation",
+        0n,
+        response.fleetRevision,
+      );
     } catch {
       const category: ReleaseRejectionCategory = signal.aborted
         ? "superseded"
@@ -537,6 +574,7 @@ export class ReleaseLoader {
     this.#status.state = "applied";
     this.#status.appliedVersion = candidate.release.version;
     this.#status.appliedRevision = candidate.revision;
+    this.#status.appliedActivationRevision = candidate.fleetRevision;
     delete this.#status.lastFailureCategory;
     this.#stats.applied += 1n;
     return { candidate, applied: true };
@@ -571,7 +609,8 @@ export class ReleaseLoader {
       namespace: namespacePath(namespace),
       name: release.name,
       version: release.version,
-      activationRevision: candidate.revision,
+      activationRevision: candidate.fleetRevision,
+      targetRevision: candidate.revision,
       schemaVersion: release.schemaVersion,
       digest: release.digest,
       metadataJson: release.metadataJson,
@@ -681,7 +720,49 @@ export class ReleaseLoader {
     throw new ResolutionError("resolution_failed");
   }
 
-  async #getActive(signal: AbortSignal): Promise<GetActiveReleaseResponse> {
+  #sessionRef(): ReleaseSessionRef {
+    return {
+      namespace: { ...this.#options.namespace },
+      name: this.#options.name,
+      schemaVersion: this.#options.schemaVersion,
+      clientName: this.#options.clientName,
+      instanceId: this.#options.instanceId,
+      sessionId: this.#sessionId,
+      identity: "",
+    };
+  }
+  async #registerSession(signal: AbortSignal): Promise<void> {
+    if (this.#legacySession) return;
+    if (!this.#transport.registerReleaseSession || !this.#transport.getInstanceRelease) {
+      this.#legacySession = true;
+      return;
+    }
+    const capable = await this.#transport.registerReleaseSession(
+      this.#sessionRef(),
+      this.#sessionRegistered,
+      signal,
+    );
+    if (!capable) {
+      this.#legacySession = true;
+      return;
+    }
+    this.#sessionRegistered = true;
+  }
+
+  async #getActive(
+    signal: AbortSignal,
+  ): Promise<GetActiveReleaseResponse & { fleetRevision: bigint }> {
+    if (this.#sessionRegistered && this.#transport.getInstanceRelease) {
+      const target = await this.#transport.getInstanceRelease(this.#sessionRef(), signal);
+      if (target.release && !releaseMatchesTrack(target.release, this.#options))
+        throw new Error("instance target track mismatch");
+      return {
+        release: target.release,
+        activationRevision: target.targetRevision,
+        previousVersion: 0n,
+        fleetRevision: target.activationRevision,
+      };
+    }
     throwIfAborted(signal);
     const response = await this.#transport.getActiveRelease(
       { ...this.#options.namespace },
@@ -696,6 +777,7 @@ export class ReleaseLoader {
     return {
       release,
       activationRevision: response.activationRevision,
+      fleetRevision: response.activationRevision,
       previousVersion: response.previousVersion,
     };
   }
@@ -715,6 +797,7 @@ export class ReleaseLoader {
           name: this.#options.name,
           clientName: this.#options.clientName,
           instanceId: this.#options.instanceId,
+          sessionId: this.#sessionRegistered ? this.#sessionId : "",
           lastSeenRevision: this.#lastSeenRevision,
           schemaVersion: this.#options.schemaVersion,
         };
@@ -733,6 +816,22 @@ export class ReleaseLoader {
           if (payload?.$case === "heartbeat") {
             receivedEvent = true;
             if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
+            continue;
+          }
+          if (payload?.$case === "target" && this.#sessionRegistered) {
+            const target = payload.value;
+            if (target.release && releaseMatchesTrack(target.release, this.#options)) {
+              receivedEvent = true;
+              offer(
+                makeCandidate(
+                  target.release,
+                  target.targetRevision,
+                  "reconciliation",
+                  0n,
+                  target.activationRevision,
+                ),
+              );
+            }
             continue;
           }
           if (payload?.$case === "snapshot" || payload?.$case === "activation") {
@@ -774,7 +873,15 @@ export class ReleaseLoader {
       try {
         const active = await this.#getActive(signal);
         if (active.release) {
-          offer(makeCandidate(active.release, active.activationRevision, "reconciliation", 0n));
+          offer(
+            makeCandidate(
+              active.release,
+              active.activationRevision,
+              "reconciliation",
+              0n,
+              active.fleetRevision,
+            ),
+          );
         }
       } catch {
         // A failed safety read never displaces last-known-good state.
@@ -785,6 +892,7 @@ export class ReleaseLoader {
   #observe(candidate: Candidate): void {
     this.#status.observedVersion = candidate.release.version;
     this.#status.observedRevision = candidate.revision;
+    this.#status.observedActivationRevision = candidate.fleetRevision;
     this.#stats.candidates += 1n;
   }
 
@@ -812,6 +920,8 @@ export class ReleaseLoader {
     schemaVersion: bigint;
     version: bigint;
     activationRevision: bigint;
+    targetRevision?: bigint;
+    sessionId?: string;
     clientName: string;
     instanceId: string;
     state: string;
@@ -819,7 +929,8 @@ export class ReleaseLoader {
     reason: string;
   }): void {
     if (
-      event.reason !== "activation_unavailable" ||
+      (event.sessionId ?? "") !== (this.#sessionRegistered ? this.#sessionId : "") ||
+      (event.reason !== "activation_unavailable" && event.reason !== "target_unavailable") ||
       event.sequence === 0n ||
       !isReleaseState(event.state) ||
       !sameNamespace(event.namespace, this.#options.namespace) ||
@@ -835,7 +946,8 @@ export class ReleaseLoader {
       retained?.generation !== event.sequence ||
       retained.acknowledgement.sequence !== event.sequence ||
       retained.acknowledgement.version !== event.version ||
-      retained.acknowledgement.activationRevision !== event.activationRevision ||
+      (retained.acknowledgement.targetRevision || retained.acknowledgement.activationRevision) !==
+        (event.targetRevision || event.activationRevision) ||
       retained.acknowledgement.state !== event.state
     ) {
       return;
@@ -856,9 +968,11 @@ export class ReleaseLoader {
       namespace: { ...this.#options.namespace },
       name: this.#options.name,
       version: candidate.release.version,
-      activationRevision: candidate.revision,
+      activationRevision: candidate.fleetRevision,
       clientName: this.#options.clientName,
       instanceId: this.#options.instanceId,
+      sessionId: this.#sessionRegistered ? this.#sessionId : "",
+      targetRevision: this.#sessionRegistered ? candidate.revision : 0n,
       state,
       rejectionCategory,
       diagnostic: "",
@@ -869,7 +983,11 @@ export class ReleaseLoader {
       sequence,
     };
     const current = this.#pendingAcknowledgements.get(state);
-    if (!current || current.acknowledgement.activationRevision <= candidate.revision) {
+    if (
+      !current ||
+      (current.acknowledgement.targetRevision || current.acknowledgement.activationRevision) <=
+        candidate.revision
+    ) {
       this.#pendingAcknowledgements.set(state, {
         acknowledgement,
         generation: sequence,
@@ -1099,8 +1217,9 @@ function makeCandidate(
   revision: bigint,
   source: CandidateSource,
   sequence: bigint,
+  fleetRevision = revision,
 ): Candidate {
-  return { release: cloneRelease(release), revision, source, sequence };
+  return { release: cloneRelease(release), revision, source, sequence, fleetRevision };
 }
 
 function cloneRelease(release: ConfigurationRelease): ConfigurationRelease {

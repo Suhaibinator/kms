@@ -421,7 +421,7 @@ func TestCrossTrackListDenialsDoNotInventSchema(t *testing.T) {
 		}
 	}
 	events, _, err := st.ListAudit(ctx, domain.AuditFilter{Decision: "deny", ActorIdentity: pr.Identity.Name}, storage.ListPage{Limit: 100})
-	if err != nil || len(events) != 6 {
+	if err != nil || len(events) != 7 {
 		t.Fatalf("cross-track denials: %+v %v", events, err)
 	}
 	for _, event := range events {

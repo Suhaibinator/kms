@@ -421,6 +421,8 @@ var autoMigrateModels = []any{
 	&configurationSchemaModel{},
 	&releaseSubscriberStateModel{},
 	&releaseSubscriberConnectionModel{},
+	&releaseSessionModel{},
+	&releaseTargetDeliveryModel{},
 }
 
 // ---- model <-> domain conversions ----------------------------------------
