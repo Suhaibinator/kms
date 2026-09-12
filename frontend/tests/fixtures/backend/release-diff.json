@@ -1,0 +1,175 @@
+{
+  "counts": {
+    "added": 0,
+    "attention": 0,
+    "changed": 1,
+    "removed": 0,
+    "secrets_changed": 0,
+    "unchanged": 2
+  },
+  "cross_environment": false,
+  "from": {
+    "activation_revision": 0,
+    "created_at_unix_ms": 1755000000000,
+    "created_by": "admin",
+    "current": false,
+    "digest": "d8940768705b480b88414000a19f81d35bdc8cf91ef14cfae82eb45caa01ed14",
+    "name": "runtime",
+    "namespace": {
+      "app": "gradethis",
+      "env": "prod"
+    },
+    "previous": true,
+    "previous_version": 1,
+    "schema_version": 1,
+    "version": 1
+  },
+  "identical": false,
+  "rows": [
+    {
+      "alias": "database",
+      "change": "unchanged",
+      "from": {
+        "content_type": "json",
+        "created_at_unix_ms": 0,
+        "created_by": "",
+        "metadata_json": "{}",
+        "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
+        "ref": {
+          "key": "database",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value_bytes": 0,
+        "value_state": "omitted_unchanged",
+        "version": 1
+      },
+      "kind": "parameter",
+      "reasons": [],
+      "to": {
+        "content_type": "json",
+        "created_at_unix_ms": 0,
+        "created_by": "",
+        "metadata_json": "{}",
+        "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
+        "ref": {
+          "key": "database",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value_bytes": 0,
+        "value_state": "omitted_unchanged",
+        "version": 1
+      }
+    },
+    {
+      "alias": "db_password",
+      "change": "unchanged",
+      "from": {
+        "bound": false,
+        "content_type": "text/plain",
+        "created_at_unix_ms": 0,
+        "created_by": "",
+        "metadata_json": "{}",
+        "parameter_digest": "",
+        "ref": {
+          "key": "db_password",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value_bytes": 0,
+        "value_state": "secret",
+        "version": 1
+      },
+      "kind": "secret",
+      "reasons": [],
+      "to": {
+        "bound": false,
+        "content_type": "text/plain",
+        "created_at_unix_ms": 0,
+        "created_by": "",
+        "metadata_json": "{}",
+        "parameter_digest": "",
+        "ref": {
+          "key": "db_password",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value_bytes": 0,
+        "value_state": "secret",
+        "version": 1
+      }
+    },
+    {
+      "alias": "rate_limits",
+      "change": "changed",
+      "from": {
+        "content_type": "integer",
+        "created_at_unix_ms": 1755000000000,
+        "created_by": "admin",
+        "metadata_json": "{}",
+        "parameter_digest": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
+        "ref": {
+          "key": "rate_limits",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value": "7",
+        "value_bytes": 1,
+        "value_state": "present",
+        "version": 2
+      },
+      "kind": "parameter",
+      "reasons": [
+        "value"
+      ],
+      "to": {
+        "content_type": "integer",
+        "created_at_unix_ms": 1755000000000,
+        "created_by": "admin",
+        "metadata_json": "{}",
+        "parameter_digest": "6b51d431df5d7f141cbececcf79edf3dd861c3b4069f0b11661a3eefacbba918",
+        "ref": {
+          "key": "rate_limits",
+          "namespace": {
+            "app": "gradethis",
+            "env": "prod"
+          }
+        },
+        "value": "12",
+        "value_bytes": 2,
+        "value_state": "present",
+        "version": 3
+      }
+    }
+  ],
+  "schema_changed": false,
+  "to": {
+    "activation_revision": 12,
+    "created_at_unix_ms": 1755000000000,
+    "created_by": "admin",
+    "current": true,
+    "digest": "1ebc665cc60ba49933b4697512cc74beda5e869d75d6927e7442636fea565559",
+    "name": "runtime",
+    "namespace": {
+      "app": "gradethis",
+      "env": "prod"
+    },
+    "previous": false,
+    "previous_version": 1,
+    "schema_version": 1,
+    "version": 2
+  },
+  "value_cap_bytes": 262144,
+  "values_included": true
+}

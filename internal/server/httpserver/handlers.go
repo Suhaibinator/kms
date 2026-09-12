@@ -89,6 +89,7 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/releases/validate", s.handleValidateRelease)
 	mux.HandleFunc("POST /api/v1/releases/activate", s.handleActivateRelease)
 	mux.HandleFunc("POST /api/v1/releases/rollback", s.handleRollbackRelease)
+	mux.HandleFunc("GET /api/v1/releases/diff", s.handleDiffReleases)
 	mux.HandleFunc("GET /api/v1/configuration-schemas", s.handleListConfigurationSchemas)
 	mux.HandleFunc("POST /api/v1/configuration-schemas", s.handleCreateConfigurationSchema)
 	mux.HandleFunc("GET /api/v1/keys", s.handleListKeys)

@@ -723,6 +723,73 @@ active and no revision was allocated. The activation is audited as
 operator sees violations before confirming; to activate any other retained
 version use `POST /api/v1/releases/activate`.
 
+#### Release diff
+
+`GET /api/v1/releases/diff?env=&app=&name=&schema_version=&from=&to=[&to_env=][&to_schema_version=][&values=1]`
+compares two releases for the console's comparison page: entries paired by
+alias, parameter values on the rows that differ, per-version authorship, and
+secret metadata. It requires `configuration-release:read` on each track and
+then `parameter:read` / `secret:read` per pinned resource; a resource the
+caller may not read degrades its pin to `value_state: "unavailable"` instead
+of failing the request. Reads are not audited, like `GET /api/v1/parameters/get`.
+
+- `env`, `app`, `name`, `schema_version` address the **from** track
+  (`schema_version` is required; `0` is the schema-free track). `to_env` and
+  `to_schema_version` default to the from side; a different `to_env` is the
+  cross-environment mode (same application).
+- `from` and `to` are each a positive version number or the label `current` /
+  `previous`, resolved through the track's labels at read time. `previous` on
+  a track with no previous label is `failed_precondition` (412, message
+  starts with `no previous release`); `current` with nothing active is
+  `not_found` (404). A missing version is 404 with the side named:
+  `to release runtime@1:9 not found`. Both sides resolving to the same release
+  is `invalid_argument` (400).
+- `values=0` returns the entry-only diff (parameter pins carry
+  `value_state: "omitted_request"`); the default `values=1` includes values.
+
+```json
+{ "from": ReleaseDiffSide, "to": ReleaseDiffSide,
+  "identical": false, "schema_changed": false, "cross_environment": false,
+  "counts": { "added": 0, "removed": 0, "changed": 1, "unchanged": 2,
+              "secrets_changed": 0, "attention": 0 },
+  "rows": [ { "alias": "rate_limits", "kind": "parameter", "change": "changed",
+              "reasons": ["value"], "from": ReleaseDiffPin, "to": ReleaseDiffPin } ],
+  "value_cap_bytes": 262144, "values_included": true }
+```
+
+`ReleaseDiffSide` is `{ namespace, name, version, schema_version, digest,
+created_by, created_at_unix_ms, current, previous, activation_revision,
+previous_version }`: the release's own facts plus the track's labels at read
+time (`activation_revision` is 0 unless `current`; `previous_version` is the
+track's `previous` label, 0 when none).
+
+Rows are sorted by alias. `change` is `added` / `removed` (one side only)
+/ `changed` / `unchanged`; `kind` is the to side's kind (from when removed).
+`reasons` is empty unless `changed`: `kind`, `key` (the ref differs), `content_type`,
+`value` (parameter digests differ), `pin` (versions differ with an equal
+digest, or a secret pinned at a different version). Across environments the
+`key` reason compares the relative key only and a parameter version change
+with an equal digest is not a change.
+
+`ReleaseDiffPin` is `{ ref, version, content_type, parameter_digest,
+metadata_json, created_by, created_at_unix_ms, value_state, value?,
+value_bytes, secret_state?, bound?, expires_at_unix_ms? }`. `created_by` and
+`created_at_unix_ms` are the resource version's author, distinct from the
+release author (empty on rows that were not loaded). `value_state` is one of
+`present` (parameter, `value` set), `omitted_size` (over the 256 KiB per-side
+cap or past the 4 MiB per-response budget; `value_bytes` still reports the
+stored size and rows are filled in alias order, so the cut is
+deterministic), `omitted_unchanged` (unchanged rows are entry-only), `omitted_request`
+(`values=0`), `secret` (never a value; `secret_state`, `bound` and
+`expires_at_unix_ms` describe that version), or `unavailable` (the caller
+may not read it, or the version is gone). The DTO has no field that can
+carry secret material.
+
+`counts.attention` is the server's share of the console's "needs attention"
+group: rows with a `kind` or `content_type` reason, a to-side secret that is
+not `enabled`, or a changed parameter whose value is `unavailable`.
+`counts.secrets_changed` is the secret rows that are not `unchanged`.
+
 #### Subscriber stream
 
 `GET /api/v1/release-subscribers/stream?env=&app=&name=&schema_version=` pushes the
@@ -1387,6 +1454,10 @@ schema.
 - `POST /api/v1/releases/rollback` re-activates the `previous` version with
   the same CAS and validation-failure semantics as activate; see
   [Rollback](#rollback) under Console aggregates.
+- `GET /api/v1/releases/diff?env=&app=&name=&schema_version=&from=&to=[&to_env=][&to_schema_version=][&values=1]`
+  compares two releases of a track (or the same track across two
+  environments) with values, authorship and secret metadata; see
+  [Release diff](#release-diff) under Console aggregates.
 - `GET /api/v1/release-subscribers/stream?env=&app=&name=&schema_version=` is the
   server-sent-events form of the subscriber list; see
   [Subscriber stream](#subscriber-stream).
