@@ -62,14 +62,14 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
                     </span>
                   ) : null}
                 </Link>
-                <span className="fleet-env-release">
+                <span
+                  className="fleet-env-release"
+                  title={active ? `schema v${active.schema_version}` : undefined}
+                >
                   {active ? (
-                    <ReleaseIdent
-                      name={active.name}
-                      version={active.version}
-                      schemaVersion={active.schema_version}
-                      tooltip={false}
-                    />
+                    // The schema version is a card's least useful 70px: it sits
+                    // in the title here and in full on the environment page.
+                    <ReleaseIdent name={active.name} version={active.version} tooltip={false} />
                   ) : overview === undefined ? (
                     <span className="faint">—</span>
                   ) : (

@@ -3627,6 +3627,17 @@
     min-width: 0;
     max-width: 100%;
   }
+  /* A chip plus its suffix (`runtime@4  schema v4`) as one flex item, so the
+     pair keeps a fixed 6px between them and shares a line, and the chip inside
+     can still ellipsise: it inherits the min-width: 0 chain through here. */
+  .ident-group {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--spacing) * 1.5);
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+  }
 
   /* ---------- Breadcrumbs (components/Breadcrumbs.tsx) ---------- */
 

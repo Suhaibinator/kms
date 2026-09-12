@@ -127,6 +127,32 @@ test("pipeline row actions stay inside their column and the matrix inside its wr
   expect(await scrollsSideways(matrix)).toBe(false);
 });
 
+// A fleet card's environment row let only the name shrink: the release cell
+// was flex-shrink: 0, the prod pill and dot flex: 0 0 auto, so in a 300px
+// track "prod" rendered as "p…" beside a pill that said PROD. The name is the
+// fixed part now and the release cell yields, and the track floor is what the
+// row actually needs.
+test("fleet card environment names and release chips are never ellipsised at 1280", async ({
+  page,
+}) => {
+  await desktop(page);
+  await mockConsole(page, incidentState());
+  await page.goto("/");
+  const rows = page.locator(".fleet-env");
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.first().locator(".fleet-env-release .ident")).toBeVisible();
+  for (const row of await rows.all()) {
+    const name = row.locator(".fleet-env-name");
+    expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5)).toBe(true);
+    const value = row.locator(".fleet-env-release .ident-value");
+    expect(await value.evaluate((el) => el.scrollWidth <= el.clientWidth + 0.5)).toBe(true);
+    // The chip and its cell end together: nothing spills past the row.
+    const rowRect = await box(row);
+    const chip = await box(row.locator(".fleet-env-release .ident"));
+    expect(chip.x + chip.width).toBeLessThanOrEqual(rowRect.x + rowRect.width + 0.5);
+  }
+});
+
 // The hand-written mobile block used to be inclusive (`max-width: 768px`) while
 // Tailwind's `max-md:`, which gates the drawer trigger, compiles to
 // `width < 48rem` against the initial 16px root — exclusive. At exactly 768.0

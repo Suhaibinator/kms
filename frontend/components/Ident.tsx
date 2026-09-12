@@ -88,19 +88,24 @@ export function ReleaseIdent({
   tooltip?: ReactNode | false;
   className?: string;
 }) {
+  const chip = (
+    <Ident
+      kind="release"
+      value={`${name}@${version}`}
+      href={href}
+      tooltip={tooltip}
+      className={className}
+    />
+  );
+  if (schemaVersion === undefined) return chip;
+  // One inline-flex box owns the gap between the chip and its schema suffix:
+  // as a bare fragment the two touched in any parent that was not itself a
+  // flex row with a gap (the fleet card's release cell, dialog prose).
   return (
-    <>
-      <Ident
-        kind="release"
-        value={`${name}@${version}`}
-        href={href}
-        tooltip={tooltip}
-        className={className}
-      />
-      {schemaVersion === undefined ? null : (
-        <span className="faint text-sm mono">schema v{schemaVersion}</span>
-      )}
-    </>
+    <span className="ident-group">
+      {chip}
+      <span className="faint text-sm mono">schema v{schemaVersion}</span>
+    </span>
   );
 }
 

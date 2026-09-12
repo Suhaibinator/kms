@@ -427,7 +427,9 @@ describe("DashboardPage", () => {
         expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
       }
     });
-    expect(within(gradethis).getAllByText("schema v1")).toHaveLength(2);
+    // The schema version is not rendered in a card; it rides on the cell's title.
+    expect(within(gradethis).queryByText(/schema v/)).toBeNull();
+    expect(within(gradethis).getAllByTitle("schema v1")).toHaveLength(2);
     expect(within(gradethis).getByText("2 rejected")).toHaveClass("fleet-card-rejected-some");
     expect(within(gradethis).getByText(/^activated /)).toBeVisible();
 
@@ -496,7 +498,7 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
     const card = await screen.findByRole("article");
-    await waitFor(() => expect(within(card).getAllByText("schema v0")).toHaveLength(2));
+    await waitFor(() => expect(within(card).getAllByTitle("schema v0")).toHaveLength(2));
   });
 
   it("paints the grid from the fleet overview before any per-app overview resolves", async () => {
