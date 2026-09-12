@@ -372,13 +372,14 @@ var lifecycleRank = map[string]int{
 }
 
 // groupSubscriberInstances folds the per-state acknowledgement rows into one
-// effective row per (identity, client, instance): the highest-ranked
-// lifecycle state at the instance's newest activation revision, connected if
-// any row is connected. Mirrors groupSubscriberInstances in
-// frontend/lib/subscribers.ts. Output is sorted by identity, client, instance.
+// effective row per (identity, client, instance, session). Legacy rows select
+// the newest activation revision, then server timestamp, then lifecycle rank,
+// matching frontend/lib/subscribers.ts. Liveness and freshness aggregate across
+// all rows independently of the selected lifecycle state.
 func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.SubscriberInstance {
 	type key struct{ identity, client, instance, session string }
 	grouped := map[key]*domain.SubscriberInstance{}
+	selectedAt := map[key]time.Time{}
 	order := make([]key, 0)
 	for _, ack := range acks {
 		k := key{ack.Identity, ack.ClientName, ack.InstanceID, ack.SessionID}
@@ -406,7 +407,9 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 			continue
 		}
 		current := lifecycleRank[inst.State]
-		if ack.SessionID != "" || ack.ActivationRevision > inst.ActivationRevision || (ack.ActivationRevision == inst.ActivationRevision && rank > current) {
+		newerAtRevision := ack.ServerTimestamp.After(selectedAt[k]) || (ack.ServerTimestamp.Equal(selectedAt[k]) && rank > current)
+		if ack.SessionID != "" || current == 0 || ack.ActivationRevision > inst.ActivationRevision || (ack.ActivationRevision == inst.ActivationRevision && newerAtRevision) {
+			selectedAt[k] = ack.ServerTimestamp
 			inst.State = ack.State
 			inst.ReleaseVersion = ack.ReleaseVersion
 			inst.ActivationRevision = ack.ActivationRevision
