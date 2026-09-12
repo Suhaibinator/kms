@@ -10,6 +10,13 @@
     gap: var(--space-4);
     min-width: 0;
   }
+  /* The previous comparison while the next one loads: visibly stale and inert,
+     so a click cannot land on a row that is about to change under it. */
+  .release-diff[aria-busy="true"] {
+    opacity: 0.55;
+    pointer-events: none;
+    transition: opacity 120ms ease-out;
+  }
   .release-diff-banners {
     display: grid;
     gap: var(--space-2);

@@ -129,7 +129,7 @@ export function ReleaseDiffView({
     typeof query.to === "number" &&
     query.from === query.to &&
     !query.toEnv;
-  const { diff, loading, error, reload } = useReleaseDiff(sameVersion ? null : query);
+  const { diff, loading, stale, error, reload } = useReleaseDiff(sameVersion ? null : query);
   const now = useNow();
   const ids = useId();
   const [mode, setMode] = useValueViewMode();
@@ -227,7 +227,7 @@ export function ReleaseDiffView({
       </div>
     );
   }
-  if (loading || (!diff && !error)) return <Skeletons />;
+  if (!diff && (loading || !error)) return <Skeletons />;
   if (error || !patched) {
     return (
       <div className="release-diff" data-testid="release-diff">
@@ -247,6 +247,7 @@ export function ReleaseDiffView({
       className={cn("release-diff", compact && "release-diff-compact")}
       data-testid="release-diff"
       data-identical={patched.identical ? "true" : undefined}
+      aria-busy={stale || undefined}
     >
       <div className="release-diff-banners">
         {rolledBack ? (

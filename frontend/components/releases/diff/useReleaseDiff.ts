@@ -8,8 +8,11 @@ import { useLatestRequest } from "@/lib/hooks";
 import type { ReleaseDiffResponse } from "@/lib/types";
 
 export interface ReleaseDiffState {
+  /** The current response, or the previous one while a new query loads (`stale`). */
   diff: ReleaseDiffResponse | null;
   loading: boolean;
+  /** True while `diff` belongs to the previous query and the new one is in flight. */
+  stale: boolean;
   error: unknown;
   reload: () => void;
 }
@@ -43,13 +46,19 @@ export function useReleaseDiff(query: ReleaseDiffQuery | null): ReleaseDiffState
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
   const settled = state.key === key;
+  // Keep the previous comparison on screen while the next one loads (a swap,
+  // a step, a picker change): the toolbar, filter and expanded rows stay
+  // mounted instead of collapsing to a skeleton and back. The view dims and
+  // disables the stale body; the first load still shows the skeleton.
+  const stale = Boolean(key) && !settled && state.diff !== null;
   return useMemo(
     () => ({
-      diff: settled ? state.diff : null,
+      diff: settled || stale ? state.diff : null,
       loading: Boolean(key) && !settled,
+      stale,
       error: settled ? state.error : null,
       reload,
     }),
-    [key, settled, state.diff, state.error, reload],
+    [key, settled, stale, state.diff, state.error, reload],
   );
 }

@@ -87,7 +87,9 @@ test("what changed: environment page → compare page → filter, swap, unchange
   await expect(rate.locator(".release-diff-old")).toHaveText("7");
 
   // Unchanged rows are behind a toggle; the secret row shows a version, never a value.
-  await page.getByRole("checkbox", { name: /Show unchanged/ }).click();
+  const showUnchanged = page.getByRole("checkbox", { name: /Show unchanged/ });
+  await showUnchanged.click();
+  await expect(showUnchanged).toBeChecked();
   await expect(page).toHaveURL(/view=all/);
   await expect(rows).toHaveCount(3);
   const secret = page.locator('[data-testid="release-diff-row"][data-alias="db_password"]');
