@@ -30,6 +30,46 @@ const row = (patch: Partial<ReleaseSubscriberState>): ReleaseSubscriberState => 
 });
 
 describe("groupSubscriberInstances", () => {
+  it.each([
+    ["recovered", 41, 999, "applied"],
+    ["new rejection", 41, 1001, "rejected"],
+    ["older revision", 40, 1001, "applied"],
+    ["newer revision", 42, 999, "rejected"],
+    ["timestamp tie", 41, 1000, "rejected"],
+  ] as const)("selects %s independently of row order", (_name, revision, timestamp, state) => {
+    const applied = row({
+      state: "applied",
+      activation_revision: 41,
+      server_timestamp_unix_ms: 1000,
+      applied_divergent: true,
+      divergent_field_count: 2,
+      connected: false,
+    });
+    const rejected = row({
+      state: "rejected",
+      activation_revision: revision,
+      server_timestamp_unix_ms: timestamp,
+      rejection_category: "restart_required",
+      diagnostic: "old rejection",
+      connected: true,
+    });
+    for (const rows of [
+      [rejected, applied],
+      [applied, rejected],
+    ]) {
+      expect(groupSubscriberInstances(rows)[0]).toEqual(
+        expect.objectContaining({
+          state,
+          connected: true,
+          rejection_category: state === "applied" ? "" : "restart_required",
+          diagnostic: state === "applied" ? "" : "old rejection",
+          applied_divergent: state === "applied",
+          divergent_field_count: state === "applied" ? 2 : 0,
+        }),
+      );
+    }
+  });
+
   it("collapses lifecycle rows to the highest revision, then latest, then strongest state", () => {
     const instances = groupSubscriberInstances([
       row({ state: "received", activation_revision: 41, server_timestamp_unix_ms: 1 }),

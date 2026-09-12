@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -126,6 +127,53 @@ func TestGetApplicationHTTP(t *testing.T) {
 	}
 	w = e.admin(http.MethodGet, "/api/v1/applications/get?name=nope", nil)
 	mustStatus(t, w, http.StatusNotFound)
+}
+
+func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.seedConsoleApp("prod")
+	e.ship("prod", "rate_limits", "7", false)
+	e.ackInstance("prod", "replica", domain.ReleaseStateRejected, "restart_required")
+	read := func() map[string]any {
+		w := e.admin(http.MethodGet, "/api/v1/applications/overview?name=gradethis", nil)
+		mustStatus(t, w, http.StatusOK)
+		return envOverview(t, decodeBody(t, w), "prod")
+	}
+	if before := read(); before["status"] != "degraded" {
+		t.Fatalf("before restart = %v", before)
+	}
+	ctx := context.Background()
+	track := domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Name: "runtime", SchemaVersion: 1}
+	pr := consoleAdmin()
+	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", "replica", pr.Identity.Name, "conn-replica", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", "replica", pr.Identity.Name, "restarted-replica", true); err != nil {
+		t.Fatal(err)
+	}
+	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, track)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cross the timestamp precision boundary before recording recovery.
+	time.Sleep(2 * time.Millisecond)
+	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
+		Namespace: track.Namespace, ReleaseName: track.Name, SchemaVersion: track.SchemaVersion,
+		ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
+		ClientName: "api", InstanceID: "replica", ConnectionID: "restarted-replica", State: domain.ReleaseStateApplied,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := read()
+	rollout := after["rollout"].(map[string]any)
+	if after["status"] != "ready" || rollout["connected"] != float64(1) || rollout["applied_current"] != float64(1) || rollout["rejected"] != float64(0) || len(rollout["rejected_instances"].([]any)) != 0 {
+		t.Fatalf("after restart = %v", after)
+	}
+	for _, code := range findingCodesOf(after["findings"]) {
+		if code == "instance_rejected" {
+			t.Fatalf("obsolete rejection finding: %v", after)
+		}
+	}
 }
 
 func TestApplicationArchiveHTTP(t *testing.T) {

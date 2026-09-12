@@ -450,6 +450,45 @@ func TestGroupSubscriberInstances(t *testing.T) {
 	}
 }
 
+func TestGroupSubscriberInstancesReapplication(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		rejectedRevision uint64
+		rejectedOffset   time.Duration
+		want             string
+	}{
+		{"recovered", 40, -time.Second, domain.ReleaseStateApplied},
+		{"new rejection", 40, time.Second, domain.ReleaseStateRejected},
+		{"older revision", 39, time.Second, domain.ReleaseStateApplied},
+		{"newer revision", 41, -time.Second, domain.ReleaseStateRejected},
+		{"timestamp tie", 40, 0, domain.ReleaseStateRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			applied := ack("replica", domain.ReleaseStateApplied, 4, 40, false, readinessNow)
+			applied.AppliedDivergent, applied.DivergentFieldCount = true, 2
+			rejected := ack("replica", domain.ReleaseStateRejected, 4, tc.rejectedRevision, true, readinessNow.Add(tc.rejectedOffset))
+			rejected.RejectionCategory, rejected.Diagnostic = "restart_required", "old rejection"
+			// A newer non-lifecycle row must affect freshness, not selection.
+			connection := ack("replica", "", 0, 0, true, readinessNow.Add(time.Hour))
+			for _, rows := range [][]domain.ReleaseAcknowledgement{
+				{connection, rejected, applied}, {applied, connection, rejected}, {rejected, applied, connection},
+			} {
+				got := groupSubscriberInstances(rows)[0]
+				if got.State != tc.want || !got.Connected || !got.ServerTimestamp.Equal(connection.ServerTimestamp) {
+					t.Fatalf("grouped = %+v, want %s and aggregated freshness", got, tc.want)
+				}
+				if tc.want == domain.ReleaseStateApplied {
+					if got.RejectionCategory != "" || got.Diagnostic != "" || !got.AppliedDivergent || got.DivergentFieldCount != 2 {
+						t.Fatalf("recovered metadata = %+v", got)
+					}
+				} else if got.RejectionCategory != rejected.RejectionCategory || got.Diagnostic != rejected.Diagnostic || got.AppliedDivergent || got.DivergentFieldCount != 0 {
+					t.Fatalf("rejection metadata = %+v", got)
+				}
+			}
+		})
+	}
+}
+
 func TestIsProductionEnvironment(t *testing.T) {
 	cases := map[string]bool{"prod": true, "prod-eu": true, "production": true, "prod_eu": false, "reproduction": false, "non-prod": false, "dev": false, "preprod": false}
 	for env, want := range cases {
