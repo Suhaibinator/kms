@@ -55,6 +55,21 @@ describe("crumbs", () => {
 });
 
 describe("Breadcrumbs", () => {
+  it("walks a comparison back through the track's release list", () => {
+    expect(
+      crumbs.releaseCompare({ env: "prod", app: "gradethis" }, "runtime", 7, 9, 1).slice(3),
+    ).toEqual([
+      { label: "Releases", href: "/releases?app=gradethis&env=prod&name=runtime&schema_version=1" },
+      {
+        label: "Compare v7 → v9",
+        href: "/releases/compare?app=gradethis&env=prod&name=runtime&schema_version=1&from=7&to=9",
+      },
+    ]);
+    expect(
+      crumbs.releaseCompare({ env: "prod", app: "gradethis" }, "runtime", 7, 9, 1)[2].href,
+    ).toBe("/applications/environment?app=gradethis&env=prod&schema_version=1");
+  });
+
   it("renders a labelled nav with typed chips, linking every crumb but the last", () => {
     render(<Breadcrumbs items={crumbs.environment({ env: "prod", app: "gradethis" })} />);
     const nav = screen.getByRole("navigation", { name: "Breadcrumb" });

@@ -1,0 +1,410 @@
+/* Release comparison (components/releases/diff/*). Tokens only; the change
+   tone of a row is two custom properties (--rail, --fill) set from its
+   data-change / data-attention attributes, so every rule below reads the
+   same pair and a new tone is one selector. Layout rules from the
+   globals.css header apply: min-width: 0 on every grid child that holds
+   mono text, min-height not height, --space-* only. */
+@layer features {
+  .release-diff {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .release-diff-banners {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .release-diff-banners:empty {
+    display: none;
+  }
+
+  /* ---------- Summary strip ---------- */
+  .release-diff-strip .stat-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .release-diff-stat-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--tone, var(--text-faint));
+  }
+  .release-diff-stat-dot[data-tone="changed"] {
+    --tone: var(--warning);
+  }
+  .release-diff-stat-dot[data-tone="added"] {
+    --tone: var(--success);
+  }
+  .release-diff-stat-dot[data-tone="removed"] {
+    --tone: var(--danger);
+  }
+  .release-diff-strip .stat-sub {
+    margin-top: var(--space-0-5);
+    font-size: var(--stat-sub);
+    color: var(--text-faint);
+  }
+
+  /* ---------- Toolbar ---------- */
+  .release-diff-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-3);
+  }
+  .release-diff-toolbar > * {
+    min-width: 0;
+  }
+  .release-diff-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h-sm);
+  }
+  .release-diff-toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .release-diff-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
+  /* ---------- Groups ---------- */
+  .release-diff-group-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    font-size: var(--text-base);
+    font-weight: 600;
+  }
+  .release-diff-group-title > * {
+    min-width: 0;
+  }
+  .release-diff-group-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .release-diff-group-count {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+  .release-diff-group-note {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+  }
+  .release-diff-compact .release-diff-group {
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  .release-diff-compact .release-diff-group + .release-diff-group {
+    margin-top: var(--space-4);
+  }
+  .release-diff-compact .release-diff-group-title {
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: var(--space-2);
+  }
+  .release-diff-rows {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* ---------- Rows ---------- */
+  .release-diff-row {
+    --rail: transparent;
+    --fill: transparent;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: inset 3px 0 0 var(--rail);
+  }
+  .release-diff-row[data-change="changed"] {
+    --rail: var(--primary);
+    --fill: var(--accent-soft);
+  }
+  .release-diff-row[data-change="added"] {
+    --rail: var(--success);
+    --fill: var(--success-soft);
+  }
+  .release-diff-row[data-change="removed"] {
+    --rail: var(--danger);
+    --fill: var(--danger-soft);
+  }
+  .release-diff-row[data-attention="true"] {
+    --rail: var(--warning);
+    --fill: var(--warning-soft);
+  }
+  .release-diff-row-head {
+    display: grid;
+    grid-template-columns: minmax(0, 220px) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h-touch);
+    padding: var(--space-2) var(--space-3);
+    padding-left: calc(var(--space-3) + 3px); /* the 3px rail is inside the box */
+    background: var(--fill);
+    border-radius: var(--radius-sm);
+  }
+  .release-diff-row-head > * {
+    min-width: 0;
+  }
+  .release-diff-row-ident {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .release-diff-row-change {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .release-diff-row-change mark,
+  .release-diff-row-ident mark {
+    background: var(--accent-soft);
+    color: inherit;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+  }
+  .release-diff-row-aside {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-1);
+  }
+  .release-diff-row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + 3px);
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+  }
+  .release-diff-row-meta .mono {
+    font-family: var(--mono);
+  }
+  .release-diff-row-body {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    padding-left: calc(var(--space-3) + 3px);
+    border-top: 1px solid var(--border);
+  }
+  .release-diff-row-body > * {
+    min-width: 0;
+  }
+  .release-diff-arrow {
+    color: var(--text-faint);
+    user-select: none;
+  }
+  .release-diff-missing {
+    color: var(--text-faint);
+  }
+
+  /* An old/new token in the head: the same tints the line diff uses, on one
+     word rather than one line. Background and weight only, never padding. */
+  .release-diff-old,
+  .release-diff-new {
+    border-radius: var(--radius-sm);
+    padding-inline: var(--space-0-5);
+  }
+  .release-diff-old {
+    background: var(--danger-soft);
+    box-shadow: inset 2px 0 0 var(--danger);
+  }
+  .release-diff-new {
+    background: var(--success-soft);
+    box-shadow: inset 2px 0 0 var(--success);
+  }
+  .release-diff-delta {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .release-diff-str-common {
+    color: var(--text-faint);
+  }
+  .release-diff-str-diff {
+    background: var(--warning-soft);
+    font-weight: 600;
+  }
+  .release-diff-secret-sides {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  /* ---------- Expanded body ---------- */
+  .release-diff-mode {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .release-diff-mode > * {
+    min-width: 0;
+  }
+  .release-diff-leaves {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+  }
+  .release-diff-leaf {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
+    overflow-wrap: anywhere;
+  }
+  .release-diff-leaf > * {
+    min-width: 0;
+  }
+  .release-diff-leaf + .release-diff-leaf {
+    border-top: 1px solid var(--border);
+  }
+  .release-diff-leaf-path {
+    color: var(--syntax-key);
+  }
+  .release-diff-leaf-values {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-2);
+    white-space: pre-wrap;
+  }
+  .release-diff-fold {
+    padding: var(--space-1) var(--space-3);
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+    font-family: var(--sans);
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+    text-align: center;
+  }
+  .release-diff-pre {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    max-height: 40vh;
+    overflow: auto;
+    position: relative;
+    min-width: 0;
+    contain: inline-size;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .release-diff-pre[data-op="del"] {
+    box-shadow: inset 2px 0 0 var(--danger);
+  }
+  .release-diff-pre[data-op="add"] {
+    box-shadow: inset 2px 0 0 var(--success);
+  }
+  .release-diff-sides {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+  .release-diff-side-label {
+    display: block;
+    margin-bottom: var(--space-1);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* ---------- Summary line (dialogs, audit rows) ---------- */
+  .release-diff-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .release-diff-summary > * {
+    min-width: 0;
+  }
+  .release-diff-summary-counts {
+    display: inline-flex;
+    gap: var(--space-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .release-diff-summary-aliases {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  /* ---------- Loading ---------- */
+  .release-diff-skeleton-rows {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .release-diff-skeleton-row {
+    min-height: var(--control-h-touch);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, var(--surface), var(--bg-elev), var(--surface));
+  }
+
+  /* ---------- Phones ---------- */
+  @media (width < 640px) {
+    .release-diff-row-head {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+    }
+    .release-diff-row-aside {
+      justify-content: flex-start;
+    }
+    .release-diff-leaf {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+      padding-block: var(--space-1);
+    }
+    .release-diff-sides {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .release-diff-actions {
+      margin-left: 0;
+    }
+  }
+}

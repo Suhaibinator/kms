@@ -211,3 +211,44 @@ it("release audits with unknown identity never invent a schema or ambiguous work
     ).toBe("/releases?app=billing&env=prod&name=runtime&schema_version=0");
   }
 });
+
+it("releaseCompare emits the ten params in a fixed order and accepts track labels", () => {
+  expect(
+    links.releaseCompare({
+      app: "gradethis",
+      env: "prod",
+      name: "runtime",
+      schemaVersion: 1,
+      from: 7,
+      to: 9,
+    }),
+  ).toBe("/releases/compare?app=gradethis&env=prod&name=runtime&schema_version=1&from=7&to=9");
+  expect(
+    links.releaseCompare({
+      app: "billing api",
+      env: "prod",
+      name: "run time",
+      schemaVersion: 0,
+      from: "previous",
+      to: "current",
+      toEnv: "staging",
+      toSchemaVersion: 2,
+      view: "all",
+      q: "rate limit",
+    }),
+  ).toBe(
+    "/releases/compare?app=billing%20api&env=prod&name=run%20time&schema_version=0&from=previous&to=current&to_env=staging&to_schema_version=2&view=all&q=rate%20limit",
+  );
+  // The default view is changed-only, so it is never written; an empty q is dropped.
+  expect(
+    links.releaseCompare({
+      app: "a",
+      env: "e",
+      name: "n",
+      schemaVersion: 3,
+      from: 1,
+      to: 2,
+      q: "",
+    }),
+  ).toBe("/releases/compare?app=a&env=e&name=n&schema_version=3&from=1&to=2");
+});

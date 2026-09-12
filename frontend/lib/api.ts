@@ -47,6 +47,7 @@ import type {
   PromoteSecretResponse,
   PutParameterRequest,
   PutParameterResponse,
+  ReleaseDiffResponse,
   ReleaseSubscriberState,
   ReleaseSummary,
   ReleaseValidationError,
@@ -407,6 +408,21 @@ export interface ResourceRef {
   env: string;
   app: string;
   key: string;
+}
+
+/** Selectors for `api.releaseDiff`; `from`/`to` take a version or a track label. */
+export interface ReleaseDiffQuery {
+  env: string;
+  app: string;
+  name: string;
+  schemaVersion: number;
+  from: number | "current" | "previous";
+  to: number | "current" | "previous";
+  /** Cross-environment comparison: the `to` side lives in this environment (same app). */
+  toEnv?: string;
+  toSchemaVersion?: number;
+  /** `false` returns the entry-only diff without parameter values. */
+  values?: boolean;
 }
 
 export const api = {
@@ -952,6 +968,24 @@ export const api = {
   ): Promise<{ releases: ReleaseSummary[]; next_page_token: string }> {
     return apiFetch(
       `/releases${qs({ env: ns.env, app: ns.app, name, schema_version: schemaVersion, page_size: pageSize, page_token: pageToken })}`,
+      request,
+    );
+  },
+  // The console's release comparison: both sides, per-alias rows, values on
+  // changed rows under the server's size cap, never a secret value.
+  releaseDiff(req: ReleaseDiffQuery, request?: ApiRequestOptions): Promise<ReleaseDiffResponse> {
+    return apiFetch<ReleaseDiffResponse>(
+      `/releases/diff${qs({
+        env: req.env,
+        app: req.app,
+        name: req.name,
+        schema_version: req.schemaVersion,
+        from: req.from,
+        to: req.to,
+        to_env: req.toEnv,
+        to_schema_version: req.toSchemaVersion,
+        values: req.values === false ? 0 : undefined,
+      })}`,
       request,
     );
   },
