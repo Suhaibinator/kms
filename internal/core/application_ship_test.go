@@ -218,7 +218,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 		t.Fatalf("ship audit events = %d err=%v", len(events), err)
 	}
 	for _, ev := range events {
-		if ev.Decision != "allow" || !strings.Contains(ev.Metadata, `"activated":"true"`) || strings.Contains(ev.Metadata, "db2") {
+		if ev.Decision != "allow" || !strings.Contains(ev.Metadata, `"activated":"true"`) || !strings.Contains(ev.Metadata, `"release_name":"`) || strings.Contains(ev.Metadata, "db2") {
 			t.Fatalf("audit event = %+v", ev)
 		}
 	}

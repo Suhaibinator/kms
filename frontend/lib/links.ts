@@ -46,6 +46,22 @@ export interface ApplicationLinkOptions {
   migrate?: number;
 }
 
+export interface ReleaseCompareLinkOptions {
+  app: string;
+  env: string;
+  name: string;
+  schemaVersion: number;
+  /** A version number, or the track labels `current` / `previous`. */
+  from: number | "current" | "previous";
+  to: number | "current" | "previous";
+  /** Cross-environment comparison: the `to` side lives in this environment (same app). */
+  toEnv?: string;
+  toSchemaVersion?: number;
+  /** The default is changed-only, so only "all" is emitted. */
+  view?: "all";
+  q?: string;
+}
+
 export const links = {
   overview: (): string => "/",
   applications: (): string => "/applications",
@@ -166,5 +182,24 @@ export const links = {
     if (opts?.section) params.push(`section=${opts.section}`);
     if (opts?.compare) params.push(`compare=${encodeURIComponent(opts.compare)}`);
     return params.length > 0 ? `/releases?${params.join("&")}` : "/releases";
+  },
+  // Param order is app, env, name, schema_version, from, to, to_env,
+  // to_schema_version, view, q — the compare page reads all ten.
+  releaseCompare: (opts: ReleaseCompareLinkOptions): string => {
+    const params = [
+      `app=${encodeURIComponent(opts.app)}`,
+      `env=${encodeURIComponent(opts.env)}`,
+      `name=${encodeURIComponent(opts.name)}`,
+      `schema_version=${opts.schemaVersion}`,
+      `from=${opts.from}`,
+      `to=${opts.to}`,
+    ];
+    if (opts.toEnv) params.push(`to_env=${encodeURIComponent(opts.toEnv)}`);
+    if (opts.toSchemaVersion !== undefined) {
+      params.push(`to_schema_version=${opts.toSchemaVersion}`);
+    }
+    if (opts.view) params.push(`view=${opts.view}`);
+    if (opts.q) params.push(`q=${encodeURIComponent(opts.q)}`);
+    return `/releases/compare?${params.join("&")}`;
   },
 };

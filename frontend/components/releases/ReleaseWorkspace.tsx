@@ -5,9 +5,12 @@ import { Modal } from "@/components/Modal";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { Badge, Button, Field, JsonView } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatUnixMs } from "@/lib/format";
+import { links } from "@/lib/links";
 import type { ConfigurationRelease, ReleaseSummary } from "@/lib/types";
+import { ReleaseDiffView } from "./diff/ReleaseDiffView";
 import { refText, releaseKey } from "./utils";
 import {
   type ActivationFailure,
@@ -99,24 +102,6 @@ export function ReleaseWorkspace({
   const comparison = sameNameReleases.find(
     (candidate) => releaseKey(candidate.release) === effectiveCompareKey,
   )?.release;
-  const diff = useMemo(() => {
-    if (!release || !comparison) return [];
-    const fromByAlias = new Map(comparison.entries.map((entry) => [entry.alias, entry]));
-    const toByAlias = new Map(release.entries.map((entry) => [entry.alias, entry]));
-    const aliases = new Set([...fromByAlias.keys(), ...toByAlias.keys()]);
-    return [...aliases].sort().flatMap((alias) => {
-      const from = fromByAlias.get(alias);
-      const to = toByAlias.get(alias);
-      const left = from
-        ? `${from.kind} ${refText(from)}@${from.version}${from.parameter_digest ? ` ${from.parameter_digest.slice(0, 12)}` : ""}`
-        : "—";
-      const right = to
-        ? `${to.kind} ${refText(to)}@${to.version}${to.parameter_digest ? ` ${to.parameter_digest.slice(0, 12)}` : ""}`
-        : "—";
-      return left === right ? [] : [{ alias, left, right }];
-    });
-  }, [comparison, release]);
-
   const previousSummary = summary?.current
     ? sameNameReleases.find((candidate) => candidate.previous)
     : undefined;
@@ -302,35 +287,43 @@ export function ReleaseWorkspace({
               <div role="alert">{comparisonError}</div>
             ) : !comparison ? (
               <div className="faint">No other loaded version is available for comparison.</div>
-            ) : diff.length === 0 ? (
-              <div className="info-panel">No manifest differences.</div>
             ) : (
-              <div className="table-wrap card-table">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Alias</th>
-                      <th>{releaseKey(comparison)}</th>
-                      <th>{releaseKey(release)}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {diff.map((item) => (
-                      <tr key={item.alias}>
-                        <td data-label="Alias" className="mono">
-                          {item.alias}
-                        </td>
-                        <td data-label={releaseKey(comparison)} className="mono">
-                          {item.left}
-                        </td>
-                        <td data-label={releaseKey(release)} className="mono">
-                          {item.right}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="between mb-3">
+                  <span className="faint text-sm">
+                    {releaseKey(comparison)} → {releaseKey(release)}
+                  </span>
+                  <ButtonLink
+                    variant="outline"
+                    size="sm"
+                    href={links.releaseCompare({
+                      app: release.namespace.app,
+                      env: release.namespace.env,
+                      name: release.name,
+                      schemaVersion: release.schema_version,
+                      from: comparison.version,
+                      to: release.version,
+                    })}
+                  >
+                    Open full comparison
+                  </ButtonLink>
+                </div>
+                {/* Values and authorship come from the diff endpoint; the
+                    manifest-only table this replaced could not show why an
+                    alias changed. */}
+                <ReleaseDiffView
+                  compact
+                  query={{
+                    env: release.namespace.env,
+                    app: release.namespace.app,
+                    name: release.name,
+                    schemaVersion: release.schema_version,
+                    from: comparison.version,
+                    to: release.version,
+                  }}
+                  resolveHref={resolveHref}
+                />
+              </>
             )}
           </TabsContent>
 

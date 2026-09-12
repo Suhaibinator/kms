@@ -180,6 +180,9 @@ func TestConsoleFixtures(t *testing.T) {
 		w = e.admin(http.MethodPost, "/api/v1/applications/ship", map[string]any{"schema_version": 0, "application": "reports", "environment": "dev", "changes": []map[string]any{{"alias": "bucket", "value": "reports-nightly-v2"}}})
 		mustStatus(t, w, http.StatusOK)
 		capture("overview-incident", e.admin(http.MethodGet, "/api/v1/applications/overview?name=gradethis", nil))
+		// prod v1 pinned rate_limits=7 and v2 pinned 12: one changed row, the
+		// other two unchanged, and the secret pin carries no value.
+		capture("release-diff", e.admin(http.MethodGet, "/api/v1/releases/diff?env=prod&app=gradethis&name=runtime&schema_version=1&from=previous&to=current", nil))
 		fixtures["fleet"] = fixtureFromResponse(t, e.admin(http.MethodGet, "/api/v1/applications/overview", nil))
 	}
 

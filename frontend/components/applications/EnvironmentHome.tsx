@@ -2,6 +2,7 @@ import {
   Cable,
   Copy,
   FileUp,
+  GitCompare,
   MoreHorizontal,
   Pencil,
   RefreshCw,
@@ -204,6 +205,62 @@ export function EnvironmentHome({
     { key: "parameters", label: "Parameters", href: links.parameters(ns) },
     { key: "secrets", label: "Secrets", href: links.secrets(ns) },
     { key: "releases", label: "Releases", href: releaseHref },
+    ...(active
+      ? [
+          {
+            key: "compare-releases",
+            label: (
+              <>
+                <GitCompare size={15} aria-hidden />
+                Compare releases…
+              </>
+            ),
+            // Labels, not numbers: the compare page resolves them and says so
+            // when there is no previous release yet.
+            href: links.releaseCompare({
+              app: ns.app,
+              env,
+              name: active.name,
+              schemaVersion: active.schema_version,
+              from: "previous",
+              to: "current",
+            }),
+          },
+          // A submenu of the other environments, like Connect SDK: the
+          // comparison is one click, not a dialog.
+          {
+            key: "compare-environment",
+            label: (
+              <>
+                <GitCompare size={15} aria-hidden />
+                Compare with another environment
+              </>
+            ),
+            children: orderEnvironments(overview.environments)
+              .filter((candidate) => candidate.namespace.env !== env)
+              .map((candidate) => ({
+                key: `compare-environment-${candidate.namespace.env}`,
+                label: candidate.production
+                  ? `${candidate.namespace.env} · production`
+                  : candidate.namespace.env,
+                href: links.releaseCompare({
+                  app: ns.app,
+                  env,
+                  name: active.name,
+                  schemaVersion: active.schema_version,
+                  from: "current",
+                  to: "current",
+                  toEnv: candidate.namespace.env,
+                  toSchemaVersion:
+                    candidate.release.active &&
+                    candidate.release.active.schema_version !== active.schema_version
+                      ? candidate.release.active.schema_version
+                      : undefined,
+                }),
+              })),
+          },
+        ]
+      : []),
     {
       key: "edit-settings",
       label: (

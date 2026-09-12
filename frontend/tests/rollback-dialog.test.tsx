@@ -4,13 +4,15 @@ import type { RollbackDialogProps } from "@/components/applications/contracts";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
-import type { ApplicationOverview, OverviewActiveRelease } from "@/lib/types";
+import type { ApplicationOverview, OverviewActiveRelease, ReleaseDiffResponse } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
+import releaseDiffJson from "./fixtures/backend/release-diff.json";
 
 const mocks = vi.hoisted(() => ({
   validateRelease: vi.fn(),
   rollbackRelease: vi.fn(),
   getActiveRelease: vi.fn(),
+  releaseDiff: vi.fn(),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -22,11 +24,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
       validateRelease: mocks.validateRelease,
       rollbackRelease: mocks.rollbackRelease,
       getActiveRelease: mocks.getActiveRelease,
+      releaseDiff: mocks.releaseDiff,
     },
   };
 });
 
 const incident = incidentJson as unknown as ApplicationOverview;
+const releaseDiff = releaseDiffJson as unknown as ReleaseDiffResponse;
 const prod = incident.environments.find((env) => env.namespace.env === "prod");
 const active = prod?.release.active as OverviewActiveRelease;
 const name = incident.application.release_name;
@@ -68,6 +72,7 @@ describe("RollbackDialog", () => {
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
     mocks.rollbackRelease.mockResolvedValue(rolledBack);
+    mocks.releaseDiff.mockResolvedValue(releaseDiff);
   });
 
   it("validates the previous release on open and rolls back with the CAS guard", async () => {
@@ -100,26 +105,56 @@ describe("RollbackDialog", () => {
     expect(props.onDone).toHaveBeenCalledWith(rolledBack);
   });
 
-  it("links to the previous release so the operator can compare before confirming", async () => {
+  it("links to the comparison so the operator can see what changes before confirming", async () => {
     const props = renderDialog();
+    const compareHref = links.releaseCompare({
+      app: incident.application.name,
+      env: "prod",
+      name,
+      schemaVersion: active.schema_version,
+      from: active.version,
+      to: active.previous_version,
+    });
     expect(
       within(dialog()).getByRole("link", {
         name: `See what changes (v${active.version} → v${active.previous_version})`,
       }),
-    ).toHaveAttribute(
+    ).toHaveAttribute("href", compareHref);
+    fireEvent.click(within(dialog()).getByRole("link", { name: /^See what changes/ }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("summarises the entry-level diff inline without fetching values", async () => {
+    renderDialog();
+    const summary = await within(dialog()).findByTestId("release-diff-summary");
+    await waitFor(() => expect(summary).toHaveTextContent(`${releaseDiff.counts.changed} changed`));
+    expect(mocks.releaseDiff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "prod",
+        app: incident.application.name,
+        name,
+        schemaVersion: active.schema_version,
+        from: active.version,
+        to: active.previous_version,
+        values: false,
+      }),
+      expect.anything(),
+    );
+    const changed = releaseDiff.rows.filter((row) => row.change !== "unchanged");
+    for (const row of changed) {
+      expect(within(summary).getByText(row.alias)).toBeVisible();
+    }
+    expect(within(summary).getByRole("link", { name: "See all →" })).toHaveAttribute(
       "href",
-      links.releases({
+      links.releaseCompare({
         app: incident.application.name,
         env: "prod",
         name,
         schemaVersion: active.schema_version,
-        release: `${name}@${active.schema_version}:${active.previous_version}`,
-        section: "compare",
-        compare: `${name}@${active.schema_version}:${active.version}`,
+        from: active.version,
+        to: active.previous_version,
       }),
     );
-    fireEvent.click(within(dialog()).getByRole("link", { name: /^See what changes/ }));
-    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("calls a rollback of a rollback a re-activation", async () => {

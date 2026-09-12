@@ -23,12 +23,31 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
   const rejected = overview
     ? overview.environments.reduce((sum, env) => sum + env.rollout.rejected, 0)
     : null;
-  const lastActivation = overview
-    ? overview.environments.reduce(
-        (latest, env) => Math.max(latest, env.release.active?.created_at_unix_ms ?? 0),
-        0,
+  // The environment with the newest activation; its pair is the card's
+  // "what changed" when it has a previous release to compare against.
+  const latestEnv = overview
+    ? overview.environments.reduce<(typeof overview.environments)[number] | null>(
+        (latest, env) =>
+          (env.release.active?.created_at_unix_ms ?? 0) >
+          (latest?.release.active?.created_at_unix_ms ?? 0)
+            ? env
+            : latest,
+        null,
       )
-    : 0;
+    : null;
+  const latestActive = latestEnv?.release.active;
+  const lastActivation = latestActive?.created_at_unix_ms ?? 0;
+  const compareHref =
+    latestEnv && latestActive && latestActive.previous_version > 0
+      ? links.releaseCompare({
+          app: name,
+          env: latestEnv.namespace.env,
+          name: latestActive.name,
+          schemaVersion: latestActive.schema_version,
+          from: latestActive.previous_version,
+          to: latestActive.version,
+        })
+      : null;
 
   return (
     <article className={`fleet-card fleet-card-${fleet.status}`} data-app={name}>
@@ -89,12 +108,24 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
         >
           {rejected === null ? "—" : `${rejected} rejected`}
         </span>
-        <span
-          className="fleet-card-activated"
-          title={lastActivation ? formatUnixMs(lastActivation) : undefined}
-        >
-          {lastActivation ? `activated ${formatRelative(lastActivation, now)}` : "never activated"}
-        </span>
+        {compareHref && latestEnv ? (
+          <Link
+            href={compareHref}
+            className="fleet-card-activated"
+            title={`${formatUnixMs(lastActivation)} in ${latestEnv.namespace.env} · what changed`}
+          >
+            activated {formatRelative(lastActivation, now)}
+          </Link>
+        ) : (
+          <span
+            className="fleet-card-activated"
+            title={lastActivation ? formatUnixMs(lastActivation) : undefined}
+          >
+            {lastActivation
+              ? `activated ${formatRelative(lastActivation, now)}`
+              : "never activated"}
+          </span>
+        )}
       </footer>
     </article>
   );

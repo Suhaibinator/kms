@@ -19,6 +19,11 @@ import type {
   IdentityCert,
   Namespace,
   OverviewRollout,
+  ReleaseDiffPin,
+  ReleaseDiffResponse,
+  ReleaseDiffRow,
+  ReleaseDiffSide,
+  ReleaseDiffValueState,
   ReleaseSubscriberState,
   ReleaseSummary,
   ReleaseValidationError,
@@ -131,6 +136,270 @@ function digestOf(entries: ConfigurationReleaseEntry[]): string {
   let hash = 0;
   for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   return `sha256:${hash.toString(16).padStart(8, "0")}${"0".repeat(56)}`;
+}
+
+/** A stable 64-hex digest of a stored value, standing in for the server's sha256. */
+function valueDigest(value: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (const ch of value) {
+    a = ((a ^ ch.charCodeAt(0)) * 0x01000193) >>> 0;
+    b = ((b + ch.charCodeAt(0)) * 0x9e3779b1) >>> 0;
+  }
+  return `${a.toString(16).padStart(8, "0")}${b.toString(16).padStart(8, "0")}`.repeat(4);
+}
+
+/** `GET /releases/diff`: the console's value-level comparison, mirroring internal/core/release_diff.go. */
+const RELEASE_DIFF_VALUE_CAP = 262_144;
+
+function releaseDiffSide(ns: FakeNamespace, release: ConfigurationRelease): ReleaseDiffSide {
+  const current = release.version === ns.active;
+  return {
+    namespace: { env: ns.namespace.env, app: ns.namespace.app },
+    name: release.name,
+    version: release.version,
+    schema_version: release.schema_version,
+    digest: release.digest,
+    created_by: release.created_by,
+    created_at_unix_ms: release.created_at_unix_ms,
+    current,
+    previous: release.version === ns.previous && ns.previous !== ns.active,
+    activation_revision: current ? ns.activationRevision : 0,
+    previous_version: ns.previous,
+  };
+}
+
+/** The entry with its parameter digest taken from the stored value, as the server computes it. */
+function diffEntry(ns: FakeNamespace, entry: ConfigurationReleaseEntry): ConfigurationReleaseEntry {
+  if (entry.kind !== "parameter") return entry;
+  const parameter = ns.parameters[entry.ref.key];
+  const value = parameter?.versions[entry.version - 1];
+  return value === undefined ? entry : { ...entry, parameter_digest: valueDigest(value) };
+}
+
+function diffReasons(
+  before: ConfigurationReleaseEntry,
+  after: ConfigurationReleaseEntry,
+  crossEnvironment: boolean,
+): ReleaseDiffRow["reasons"] {
+  const reasons: ReleaseDiffRow["reasons"] = [];
+  if (before.kind !== after.kind) reasons.push("kind");
+  const sameRef = crossEnvironment
+    ? before.ref.key === after.ref.key
+    : before.ref.key === after.ref.key &&
+      before.ref.namespace.env === after.ref.namespace.env &&
+      before.ref.namespace.app === after.ref.namespace.app;
+  if (!sameRef) reasons.push("key");
+  if (before.content_type !== after.content_type) reasons.push("content_type");
+  const parameter = before.kind === "parameter" && after.kind === "parameter";
+  if (parameter && before.parameter_digest !== after.parameter_digest) reasons.push("value");
+  else if (parameter && before.version !== after.version && !crossEnvironment) reasons.push("pin");
+  else if (!parameter && before.version !== after.version) reasons.push("pin");
+  return reasons;
+}
+
+function diffPin(
+  ns: FakeNamespace,
+  entry: ConfigurationReleaseEntry,
+  change: ReleaseDiffRow["change"],
+  includeValues: boolean,
+): ReleaseDiffPin {
+  const pin: ReleaseDiffPin = {
+    ref: entry.ref,
+    version: entry.version,
+    content_type: entry.content_type,
+    parameter_digest: entry.parameter_digest,
+    metadata_json: entry.metadata_json,
+    created_by: "",
+    created_at_unix_ms: 0,
+    value_state: "omitted_unchanged",
+    value_bytes: 0,
+  };
+  if (entry.kind === "secret") {
+    const secret = ns.secrets[entry.ref.key];
+    const version = secret
+      ? secretVersions(secret).find((candidate) => candidate.version === entry.version)
+      : undefined;
+    pin.value_state = "secret";
+    pin.bound = version?.bound ?? secret?.bound ?? false;
+    if (version) {
+      pin.secret_state = version.state;
+      pin.created_by = "admin";
+      pin.created_at_unix_ms = version.createdAtUnixMs;
+      if (version.expiresAtUnixMs) pin.expires_at_unix_ms = version.expiresAtUnixMs;
+    }
+    return pin;
+  }
+  if (change === "unchanged") return pin;
+  const parameter = ns.parameters[entry.ref.key];
+  const value = parameter?.versions[entry.version - 1];
+  if (value === undefined) {
+    pin.value_state = "unavailable";
+    return pin;
+  }
+  pin.created_by = "admin";
+  pin.created_at_unix_ms = entry.version;
+  pin.value_bytes = Buffer.byteLength(value);
+  let state: ReleaseDiffValueState = "present";
+  if (!includeValues) state = "omitted_request";
+  else if (pin.value_bytes > RELEASE_DIFF_VALUE_CAP) state = "omitted_size";
+  pin.value_state = state;
+  if (state === "present") pin.value = value;
+  return pin;
+}
+
+function releaseDiffRows(
+  fromNs: FakeNamespace,
+  from: ConfigurationRelease,
+  toNs: FakeNamespace,
+  to: ConfigurationRelease,
+  includeValues: boolean,
+): ReleaseDiffRow[] {
+  const crossEnvironment = fromNs !== toNs;
+  const before = new Map(from.entries.map((entry) => [entry.alias, diffEntry(fromNs, entry)]));
+  const after = new Map(to.entries.map((entry) => [entry.alias, diffEntry(toNs, entry)]));
+  const aliases = [...new Set([...before.keys(), ...after.keys()])].sort();
+  return aliases.map((alias) => {
+    const a = before.get(alias);
+    const b = after.get(alias);
+    if (!a && b) {
+      return {
+        alias,
+        kind: b.kind,
+        change: "added",
+        reasons: [],
+        to: diffPin(toNs, b, "added", includeValues),
+      };
+    }
+    if (a && !b) {
+      return {
+        alias,
+        kind: a.kind,
+        change: "removed",
+        reasons: [],
+        from: diffPin(fromNs, a, "removed", includeValues),
+      };
+    }
+    if (!a || !b) throw new Error("unreachable");
+    const reasons = diffReasons(a, b, crossEnvironment);
+    const change = reasons.length ? "changed" : "unchanged";
+    return {
+      alias,
+      kind: b.kind,
+      change,
+      reasons,
+      from: diffPin(fromNs, a, change, includeValues),
+      to: diffPin(toNs, b, change, includeValues),
+    };
+  });
+}
+
+function releaseDiff(
+  state: ConsoleState,
+  params: URLSearchParams,
+): { status: number; body: unknown } {
+  const env = params.get("env") ?? "";
+  const app = params.get("app") ?? "";
+  const name = params.get("name") ?? "";
+  const schemaRaw = params.get("schema_version");
+  const fromRaw = params.get("from") ?? "";
+  const toRaw = params.get("to") ?? "";
+  if (!env || !app || !name || schemaRaw === null || !fromRaw || !toRaw) {
+    return error(
+      400,
+      "invalid_argument",
+      "env, app, name, schema_version, from and to are required",
+    );
+  }
+  const valuesRaw = params.get("values");
+  if (valuesRaw !== null && valuesRaw !== "0" && valuesRaw !== "1") {
+    return error(400, "invalid_argument", "values must be 0 or 1");
+  }
+  const includeValues = valuesRaw !== "0";
+  const toEnv = params.get("to_env") ?? env;
+  const fromSchema = Number(schemaRaw);
+  const toSchema = Number(params.get("to_schema_version") ?? schemaRaw);
+  const fromNs = state.namespaces[env];
+  const toNs = state.namespaces[toEnv];
+  if (!fromNs || fromNs.namespace.app !== app) {
+    return error(404, "not_found", `namespace ${env}/${app} not found`);
+  }
+  if (!toNs || toNs.namespace.app !== app) {
+    return error(404, "not_found", `namespace ${toEnv}/${app} not found`);
+  }
+  const resolve = (
+    side: "from" | "to",
+    ns: FakeNamespace,
+    raw: string,
+    schema: number,
+  ): ConfigurationRelease | { status: number; body: unknown } => {
+    let version: number;
+    if (raw === "current") {
+      if (!ns.active) return error(404, "not_found", `${side}: no active release`);
+      version = ns.active;
+    } else if (raw === "previous") {
+      if (!ns.previous) return error(412, "failed_precondition", "no previous release");
+      version = ns.previous;
+    } else {
+      version = Number(raw);
+      if (!Number.isInteger(version) || version <= 0) {
+        return error(400, "invalid_argument", `${side} must be a version or current/previous`);
+      }
+    }
+    const release = ns.releases.find(
+      (candidate) =>
+        candidate.name === name &&
+        candidate.version === version &&
+        candidate.schema_version === schema,
+    );
+    return (
+      release ?? error(404, "not_found", `${side} release ${name}@${schema}:${version} not found`)
+    );
+  };
+  const from = resolve("from", fromNs, fromRaw, fromSchema);
+  if ("status" in from) return from;
+  const to = resolve("to", toNs, toRaw, toSchema);
+  if ("status" in to) return to;
+  if (fromNs === toNs && from.version === to.version && from.schema_version === to.schema_version) {
+    return error(400, "invalid_argument", "from and to are the same release");
+  }
+  const rows = releaseDiffRows(fromNs, from, toNs, to, includeValues);
+  const counts = {
+    added: 0,
+    removed: 0,
+    changed: 0,
+    unchanged: 0,
+    secrets_changed: 0,
+    attention: 0,
+  };
+  for (const row of rows) {
+    counts[row.change] += 1;
+    if (row.kind === "secret" && row.change !== "unchanged") counts.secrets_changed += 1;
+    const toSecretOff =
+      row.kind === "secret" && row.to?.secret_state && row.to.secret_state !== "enabled";
+    const unreadable =
+      row.change === "changed" && row.kind === "parameter" && row.to?.value_state === "unavailable";
+    if (
+      row.reasons.includes("kind") ||
+      row.reasons.includes("content_type") ||
+      toSecretOff ||
+      unreadable
+    ) {
+      counts.attention += 1;
+    }
+  }
+  const body: ReleaseDiffResponse = {
+    from: releaseDiffSide(fromNs, from),
+    to: releaseDiffSide(toNs, to),
+    identical: rows.every((row) => row.change === "unchanged"),
+    schema_changed: from.schema_version !== to.schema_version,
+    cross_environment: fromNs !== toNs,
+    counts,
+    rows,
+    value_cap_bytes: RELEASE_DIFF_VALUE_CAP,
+    values_included: includeValues,
+  };
+  return { status: 200, body };
 }
 
 /** The incident fixture (prod degraded, one rejected instance, unreleased rate_limits) as live state. */
@@ -868,7 +1137,7 @@ function bumpRevision(state: ConsoleState): number {
   return state.revision;
 }
 
-function handle(
+export function handle(
   state: ConsoleState,
   method: string,
   path: string,
@@ -1422,6 +1691,8 @@ function handle(
         },
       };
     }
+    case "GET /releases/diff":
+      return releaseDiff(state, params);
     case "POST /releases/validate":
     case "POST /releases/activate":
     case "POST /releases/rollback": {

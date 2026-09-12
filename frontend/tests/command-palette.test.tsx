@@ -109,8 +109,10 @@ describe("palette index", () => {
     expect(ids).toContain("page:/identities");
     expect(ids).toContain("action:new-application");
     expect(ids).toContain("action:rollback:prod/gradethis");
-    // A namespace without an application gets no alias or rollback items.
+    expect(ids).toContain("action:compare:prod/gradethis");
+    // A namespace without an application gets no alias, compare or rollback items.
     expect(ids).not.toContain("action:rollback:prod/legacy");
+    expect(ids).not.toContain("action:compare:prod/legacy");
     expect(ids.filter((id) => id.startsWith("alias:prod/legacy"))).toEqual([]);
 
     // The environment item drills into the environment page when the
@@ -134,6 +136,19 @@ describe("palette index", () => {
     expect(index.find((item) => item.id === "action:rollback:prod/gradethis")?.href).toBe(
       links.application("gradethis", { env: "prod", rollback: true }),
     );
+    // "What changed" links by label so the palette never needs version numbers.
+    expect(index.find((item) => item.id === "action:compare:prod/gradethis")).toMatchObject({
+      group: "Actions",
+      title: "What changed in prod/gradethis",
+      href: links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: "previous",
+        to: "current",
+      }),
+    });
   });
 
   it("filters admin-only items for a client identity", () => {

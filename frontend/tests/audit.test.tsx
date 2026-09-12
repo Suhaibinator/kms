@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
-import type { AuditEvent, Namespace } from "@/lib/types";
+import type { AuditEvent, Namespace, ReleaseDiffResponse } from "@/lib/types";
 import AuditPage from "@/pages/audit";
+import releaseDiffJson from "./fixtures/backend/release-diff.json";
 
 const mocks = vi.hoisted(() => ({
   namespaces: [] as Namespace[],
@@ -609,4 +610,159 @@ it("renders malformed and legacy release audit metadata without guessing a track
     const link = await screen.findByRole("link", { name: `/prod/billing/runtime-${index} · v1` });
     expect(link).toHaveAttribute("href", `/releases?app=billing&env=prod&name=runtime-${index}`);
   }
+});
+
+describe("release comparison links", () => {
+  const activation = (overrides: Partial<AuditEvent> = {}) =>
+    event(41, {
+      event_type: "configuration_release.activate",
+      resource_type: "configuration_release",
+      resource_env: "prod",
+      resource_app: "gradethis",
+      resource_key: "runtime",
+      resource_version: 9,
+      metadata_json: JSON.stringify({
+        schema_version: "1",
+        activation_revision: "53",
+        previous_version: "7",
+      }),
+      ...overrides,
+    });
+
+  it("links an activation to the comparison of the pair it swapped", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({ events: [activation()], next_page_token: "" });
+    render(<AuditPage />);
+    expect(await screen.findByRole("link", { name: "What changed (v7 → v9)" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 7,
+        to: 9,
+      }),
+    );
+  });
+
+  it("reads a rollback as newer → older and skips first activations", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({
+      events: [
+        activation({
+          id: 42,
+          event_type: "configuration_release.rollback",
+          resource_version: 7,
+          metadata_json: JSON.stringify({ schema_version: "1", previous_version: "9" }),
+        }),
+        activation({
+          id: 43,
+          resource_version: 1,
+          metadata_json: JSON.stringify({ schema_version: "1", previous_version: "0" }),
+        }),
+      ],
+      next_page_token: "",
+    });
+    render(<AuditPage />);
+    expect(await screen.findByRole("link", { name: "What changed (v9 → v7)" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 9,
+        to: 7,
+      }),
+    );
+    expect(screen.getAllByRole("link", { name: /^What changed/ })).toHaveLength(1);
+  });
+
+  it("links an activated ship event from previous_version to release_version", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({
+      events: [
+        event(45, {
+          event_type: "application.ship",
+          resource_type: "application",
+          resource_env: "prod",
+          resource_app: "gradethis",
+          resource_key: "gradethis",
+          resource_version: 0,
+          metadata_json: JSON.stringify({
+            schema_version: "1",
+            environment: "prod",
+            release_name: "runtime",
+            aliases: "rate_limits",
+            activated: "true",
+            previous_version: "7",
+            release_version: "9",
+          }),
+        }),
+      ],
+      next_page_token: "",
+    });
+    render(<AuditPage />);
+    expect(await screen.findByRole("link", { name: "What changed (v7 → v9)" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 7,
+        to: 9,
+      }),
+    );
+  });
+
+  it("does not guess a release name for a ship event that did not record one", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({
+      events: [
+        event(44, {
+          event_type: "application.ship",
+          resource_type: "application",
+          resource_env: "prod",
+          resource_app: "gradethis",
+          resource_key: "gradethis",
+          resource_version: 0,
+          metadata_json: JSON.stringify({
+            schema_version: "1",
+            environment: "prod",
+            activated: "true",
+            previous_version: "7",
+            release_version: "9",
+          }),
+        }),
+      ],
+      next_page_token: "",
+    });
+    render(<AuditPage />);
+    expect(await screen.findByText("application.ship")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /^What changed/ })).toBeNull();
+  });
+
+  it("summarises the diff under the expanded metadata without fetching values", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({ events: [activation()], next_page_token: "" });
+    const releaseDiff = vi
+      .spyOn(api, "releaseDiff")
+      .mockResolvedValue(releaseDiffJson as unknown as ReleaseDiffResponse);
+    render(<AuditPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const summary = await screen.findByTestId("release-diff-summary");
+    await waitFor(() => expect(summary).toHaveTextContent("1 changed"));
+    expect(releaseDiff).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "runtime", from: 7, to: 9, values: false }),
+      expect.anything(),
+    );
+    expect(within(summary).getByRole("link", { name: "See all →" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 7,
+        to: 9,
+      }),
+    );
+  });
 });

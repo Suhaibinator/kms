@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -228,4 +229,69 @@ func (s *server) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 		"release": toReleaseDTO(result.Active.Release), "activation_revision": result.Active.ActivationRevision,
 		"previous_version": result.Active.PreviousVersion, "rolled_back_from": result.RolledBackFrom, "changed": result.Changed,
 	})
+}
+
+// parseReleaseDiffSelector accepts a positive version number or one of the
+// movable labels; the value is required.
+func parseReleaseDiffSelector(name, raw string) (domain.ReleaseDiffSelector, error) {
+	switch raw {
+	case "":
+		return domain.ReleaseDiffSelector{}, invalidArg(name + " is required")
+	case domain.LabelCurrent, domain.LabelPrevious:
+		return domain.ReleaseDiffSelector{Label: raw}, nil
+	}
+	version, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || version == 0 {
+		return domain.ReleaseDiffSelector{}, invalidArg(name + " must be a positive version number, current, or previous")
+	}
+	return domain.ReleaseDiffSelector{Version: version}, nil
+}
+
+func (s *server) handleDiffReleases(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	schemaVersion, err := parseSchemaVersion(r, true)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	from, err := parseReleaseDiffSelector("from", q.Get("from"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	to, err := parseReleaseDiffSelector("to", q.Get("to"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	includeValues := true
+	switch q.Get("values") {
+	case "", "1", "true":
+	case "0", "false":
+		includeValues = false
+	default:
+		s.writeError(w, r, invalidArg("values must be 0 or 1"))
+		return
+	}
+	fromTrack := domain.ReleaseTrack{Namespace: nsRefFromQuery(r), Name: q.Get("name"), SchemaVersion: *schemaVersion}
+	toTrack := fromTrack
+	if env := q.Get("to_env"); env != "" {
+		toTrack.Namespace.Env = env
+	}
+	if raw := q.Get("to_schema_version"); raw != "" {
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			s.writeError(w, r, invalidArg("to_schema_version must be a non-negative integer"))
+			return
+		}
+		toTrack.SchemaVersion = value
+	}
+	diff, err := s.svc.DiffConfigurationReleases(r.Context(), principalFrom(r.Context()), domain.ReleaseDiffInput{
+		From: fromTrack, To: toTrack, FromSelector: from, ToSelector: to, IncludeValues: includeValues,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toReleaseDiffDTO(diff))
 }

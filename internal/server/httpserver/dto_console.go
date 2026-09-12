@@ -361,3 +361,126 @@ func toSubscriberStreamSnapshotDTO(s domain.SubscriberStreamSnapshot) subscriber
 	}
 	return subscriberStreamSnapshotDTO{Summary: toRolloutDTO(s.Summary), Subscribers: subscribers, CurrentRevision: s.CurrentRevision, ServerTimeUnixMS: unixMS(s.ServerTime)}
 }
+
+// --- Release diff -----------------------------------------------------------
+
+type releaseDiffSideDTO struct {
+	Namespace          namespaceRefDTO `json:"namespace"`
+	Name               string          `json:"name"`
+	Version            uint64          `json:"version"`
+	SchemaVersion      uint64          `json:"schema_version"`
+	Digest             string          `json:"digest"`
+	CreatedBy          string          `json:"created_by"`
+	CreatedAtUnixMS    int64           `json:"created_at_unix_ms"`
+	Current            bool            `json:"current"`
+	Previous           bool            `json:"previous"`
+	ActivationRevision uint64          `json:"activation_revision"`
+	PreviousVersion    uint64          `json:"previous_version"`
+}
+
+func toReleaseDiffSideDTO(side domain.ReleaseDiffSide) releaseDiffSideDTO {
+	r := side.Release
+	return releaseDiffSideDTO{
+		Namespace: namespaceRefDTO{Env: r.Namespace.Env, App: r.Namespace.App},
+		Name:      r.Name, Version: r.Version, SchemaVersion: r.SchemaVersion, Digest: r.Digest,
+		CreatedBy: r.CreatedBy, CreatedAtUnixMS: unixMS(r.CreatedAt),
+		Current: side.Current, Previous: side.Previous,
+		ActivationRevision: side.ActivationRevision, PreviousVersion: side.PreviousVersion,
+	}
+}
+
+// releaseDiffPinDTO has no field that could carry secret material: Value is
+// set for parameters only, and a secret pin describes its version's state.
+type releaseDiffPinDTO struct {
+	Ref             resourceRefDTO `json:"ref"`
+	Version         uint64         `json:"version"`
+	ContentType     string         `json:"content_type"`
+	ParameterDigest string         `json:"parameter_digest"`
+	MetadataJSON    string         `json:"metadata_json"`
+	CreatedBy       string         `json:"created_by"`
+	CreatedAtUnixMS int64          `json:"created_at_unix_ms"`
+	ValueState      string         `json:"value_state"`
+	Value           *string        `json:"value,omitempty"`
+	ValueBytes      int            `json:"value_bytes"`
+	SecretState     string         `json:"secret_state,omitempty"`
+	Bound           *bool          `json:"bound,omitempty"`
+	ExpiresAtUnixMS int64          `json:"expires_at_unix_ms,omitzero"`
+}
+
+func toReleaseDiffPinDTO(pin *domain.ReleaseDiffPin) *releaseDiffPinDTO {
+	if pin == nil {
+		return nil
+	}
+	e := pin.Entry
+	out := &releaseDiffPinDTO{
+		Ref: refDTO(e.Ref), Version: e.Version, ContentType: e.ContentType,
+		ParameterDigest: e.ParameterDigest, MetadataJSON: rawJSON(e.Metadata),
+		CreatedBy: pin.CreatedBy, CreatedAtUnixMS: unixMS(pin.CreatedAt),
+		ValueState: pin.ValueState, ValueBytes: pin.ValueBytes,
+	}
+	if e.Kind == domain.ReleaseEntrySecret {
+		bound := pin.Bound
+		out.Bound = &bound
+		out.SecretState = pin.SecretState
+		out.ExpiresAtUnixMS = unixMS(pin.ExpiresAt)
+		return out
+	}
+	if pin.ValueState == domain.ReleaseDiffValuePresent {
+		value := pin.Value
+		out.Value = &value
+	}
+	return out
+}
+
+type releaseDiffRowDTO struct {
+	Alias   string             `json:"alias"`
+	Kind    string             `json:"kind"`
+	Change  string             `json:"change"`
+	Reasons []string           `json:"reasons"`
+	From    *releaseDiffPinDTO `json:"from,omitempty"`
+	To      *releaseDiffPinDTO `json:"to,omitempty"`
+}
+
+type releaseDiffCountsDTO struct {
+	Added          int `json:"added"`
+	Removed        int `json:"removed"`
+	Changed        int `json:"changed"`
+	Unchanged      int `json:"unchanged"`
+	SecretsChanged int `json:"secrets_changed"`
+	Attention      int `json:"attention"`
+}
+
+type releaseDiffResponseDTO struct {
+	From             releaseDiffSideDTO   `json:"from"`
+	To               releaseDiffSideDTO   `json:"to"`
+	Identical        bool                 `json:"identical"`
+	SchemaChanged    bool                 `json:"schema_changed"`
+	CrossEnvironment bool                 `json:"cross_environment"`
+	Counts           releaseDiffCountsDTO `json:"counts"`
+	Rows             []releaseDiffRowDTO  `json:"rows"`
+	ValueCapBytes    int                  `json:"value_cap_bytes"`
+	ValuesIncluded   bool                 `json:"values_included"`
+}
+
+func toReleaseDiffDTO(d domain.ReleaseDiff) releaseDiffResponseDTO {
+	rows := make([]releaseDiffRowDTO, 0, len(d.Rows))
+	for _, row := range d.Rows {
+		reasons := row.Reasons
+		if reasons == nil {
+			reasons = []string{}
+		}
+		rows = append(rows, releaseDiffRowDTO{
+			Alias: row.Alias, Kind: row.Kind, Change: row.Change, Reasons: reasons,
+			From: toReleaseDiffPinDTO(row.From), To: toReleaseDiffPinDTO(row.To),
+		})
+	}
+	return releaseDiffResponseDTO{
+		From: toReleaseDiffSideDTO(d.From), To: toReleaseDiffSideDTO(d.To),
+		Identical: d.Identical, SchemaChanged: d.SchemaChanged, CrossEnvironment: d.CrossEnvironment,
+		Counts: releaseDiffCountsDTO{
+			Added: d.Counts.Added, Removed: d.Counts.Removed, Changed: d.Counts.Changed,
+			Unchanged: d.Counts.Unchanged, SecretsChanged: d.Counts.SecretsChanged, Attention: d.Counts.Attention,
+		},
+		Rows: rows, ValueCapBytes: d.ValueCapBytes, ValuesIncluded: d.ValuesIncluded,
+	}
+}

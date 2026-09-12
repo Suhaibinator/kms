@@ -1,8 +1,9 @@
+import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ShipModalProps } from "@/components/applications/contracts";
-import { releaseKey } from "@/components/releases/utils";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
+import { releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
@@ -896,7 +897,22 @@ export default function ShipModal({
                         name={application.release_name}
                         version={activation.version}
                         schemaVersion={application.schema_version}
-                      />
+                      />{" "}
+                      ·{" "}
+                      <Link
+                        href={links.releaseCompare({
+                          app: application.name,
+                          env: environment,
+                          name: application.release_name,
+                          schemaVersion: preview?.schema_version ?? application.schema_version,
+                          from: activation.previousVersion,
+                          to: activation.version,
+                        })}
+                        className="text-link"
+                        data-testid="ship-what-changed"
+                      >
+                        See what changed
+                      </Link>
                     </>
                   ) : (
                     <>

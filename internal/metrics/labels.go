@@ -145,6 +145,7 @@ var RouteLabels = []string{
 	"POST /api/v1/releases/validate",
 	"POST /api/v1/releases/activate",
 	"POST /api/v1/releases/rollback",
+	"GET /api/v1/releases/diff",
 
 	"GET /api/v1/configuration-schemas",
 	"POST /api/v1/configuration-schemas",

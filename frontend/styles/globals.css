@@ -19,6 +19,7 @@
 @import "./ship.css";
 @import "./onboarding.css";
 @import "./palette.css";
+@import "./release-diff.css";
 
 @custom-variant dark (&:is(.dark *));
 

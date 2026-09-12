@@ -65,4 +65,29 @@ function release(ns: NamespaceRef, name: string, version: number, schemaVersion:
   ];
 }
 
-export const crumbs = { applications, application, environment, parameter, secret, release };
+function releaseCompare(
+  ns: NamespaceRef,
+  name: string,
+  from: number,
+  to: number,
+  schemaVersion: number,
+): Crumb[] {
+  return [
+    ...environment(ns, schemaVersion),
+    { label: "Releases", href: links.releases({ app: ns.app, env: ns.env, name, schemaVersion }) },
+    {
+      label: `Compare v${from} → v${to}`,
+      href: links.releaseCompare({ app: ns.app, env: ns.env, name, schemaVersion, from, to }),
+    },
+  ];
+}
+
+export const crumbs = {
+  applications,
+  application,
+  environment,
+  parameter,
+  secret,
+  release,
+  releaseCompare,
+};

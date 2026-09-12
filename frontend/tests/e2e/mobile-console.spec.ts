@@ -12,6 +12,7 @@ const routes = [
   "/parameters?app=gradethis&env=prod",
   "/parameters/detail?app=gradethis&env=prod&key=rate_limits",
   "/releases?app=gradethis&env=prod",
+  "/releases/compare?app=gradethis&env=prod&name=runtime&schema_version=1&from=1&to=2",
   "/policies",
   "/identities",
   "/subscribers",

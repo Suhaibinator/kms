@@ -153,6 +153,92 @@ test("fleet card environment names and release chips are never ellipsised at 128
   }
 });
 
+// The release comparison's rows expand to nested content (a structural leaf
+// list or the side-by-side JSON diff). Each head is a touch target, and a
+// 60-line JSON value must scroll inside its own pane, never widen the row,
+// the page or, at phone width, the document.
+test("release comparison rows keep a 44px head and never scroll sideways with JSON expanded", async ({
+  page,
+}) => {
+  await desktop(page);
+  const state = incidentState();
+  const prod = state.namespaces.prod;
+  const json = (max: number) =>
+    JSON.stringify(
+      {
+        pool: { max, idle: 10, timeout: "30s" },
+        hosts: Array.from({ length: 24 }, (_, i) => ({
+          name: `db-${i}.internal.example.com`,
+          port: 5432 + i,
+          weight: i % 3,
+        })),
+        features: { read_replicas: max > 10, sharding: false },
+      },
+      null,
+      2,
+    );
+  prod.parameters.features = {
+    key: "features",
+    content_type: "json",
+    versions: [json(50), json(5)],
+  };
+  for (const release of prod.releases) {
+    release.entries.push({
+      alias: "features",
+      kind: "parameter",
+      ref: { namespace: { env: "prod", app: "gradethis" }, key: "features" },
+      version: release.version >= 2 ? 2 : 1,
+      content_type: "json",
+      metadata_json: "{}",
+      parameter_digest: "",
+    });
+  }
+  await mockConsole(page, state);
+  await page.goto(
+    "/releases/compare?app=gradethis&env=prod&name=runtime&schema_version=1&from=1&to=2",
+  );
+  const features = page.locator('[data-testid="release-diff-row"][data-alias="features"]');
+  await expect(features).toBeVisible();
+  const main = page.locator("main");
+
+  const check = async (label: string) => {
+    for (const head of await page.locator(".release-diff-row-head").all()) {
+      const rect = await box(head);
+      expect(rect.height, `${label}: row head height`).toBeGreaterThanOrEqual(44);
+    }
+    expect(await scrollsSideways(main), `${label}: main scrolls sideways`).toBe(false);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      ),
+      `${label}: document scrolls sideways`,
+    ).toBe(false);
+    const body = features.locator(".release-diff-row-body");
+    if ((await body.count()) > 0) {
+      expect(await scrollsSideways(body), `${label}: row body scrolls sideways`).toBe(false);
+      const rowRect = await box(features);
+      const bodyRect = await box(body);
+      expect(bodyRect.x + bodyRect.width, `${label}: body inside row`).toBeLessThanOrEqual(
+        rowRect.x + rowRect.width + 0.5,
+      );
+    }
+  };
+
+  for (const width of [1280, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await check(`${width} collapsed`);
+    if (!(await features.getByRole("button", { name: "Collapse features" }).isVisible())) {
+      await features.getByRole("button", { name: "Expand features" }).click();
+    }
+    await expect(features.getByTestId("release-diff-structural")).toBeVisible();
+    await check(`${width} structural`);
+    await features.getByRole("tab", { name: "Side-by-side" }).click();
+    await expect(features.getByTestId("json-diff")).toBeVisible();
+    await check(`${width} side-by-side`);
+    await features.getByRole("tab", { name: "Structural" }).click();
+  }
+});
+
 // The hand-written mobile block used to be inclusive (`max-width: 768px`) while
 // Tailwind's `max-md:`, which gates the drawer trigger, compiles to
 // `width < 48rem` against the initial 16px root — exclusive. At exactly 768.0

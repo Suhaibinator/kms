@@ -199,8 +199,15 @@ describe("globals.css stays out of Tailwind's way", () => {
       "./ship.css",
       "./onboarding.css",
       "./palette.css",
+      "./release-diff.css",
     ]);
-    for (const file of ["applications.css", "ship.css", "onboarding.css", "palette.css"]) {
+    for (const file of [
+      "applications.css",
+      "ship.css",
+      "onboarding.css",
+      "palette.css",
+      "release-diff.css",
+    ]) {
       expect(sheets.map((sheet) => sheet.file)).toContain(file);
     }
   });

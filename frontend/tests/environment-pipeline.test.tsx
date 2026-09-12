@@ -135,6 +135,18 @@ describe("EnvironmentPipeline", () => {
     expect(prod.querySelector(".ident-revision")).toHaveTextContent(
       `rev${active.activation_revision}`,
     );
+    // The previous → active pair is one click away from the previous chip.
+    expect(within(prod).getByRole("link", { name: "What changed" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: incident.application.name,
+        env: "prod",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: active.previous_version,
+        to: active.version,
+      }),
+    );
     fireEvent.click(within(prod).getByRole("button", { name: "Roll back" }));
     expect(callbacks.onRollback).toHaveBeenCalledWith("prod");
     // dev has no previous version, so there is nothing to roll back to.
@@ -154,6 +166,19 @@ describe("EnvironmentPipeline", () => {
     const prod = screen.getByRole("region", { name: "prod environment" });
     expect(within(prod).getByRole("button", { name: "Re-activate v2" })).toBeEnabled();
     expect(within(prod).getByText(/Rolled back\./)).toBeVisible();
+    // The pair is offered in the direction being decided: running → newer.
+    expect(within(prod).getByRole("link", { name: "See what v2 changed" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: overview.application.name,
+        env: "prod",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: 1,
+        to: 2,
+      }),
+    );
+    expect(within(prod).queryByRole("link", { name: "What changed" })).toBeNull();
   });
 
   it("phrases the call to action from the release and values state", () => {
@@ -422,6 +447,17 @@ describe("EnvironmentPipeline", () => {
     );
     expect(meta).toHaveAttribute("title", formatUnixMs(active.created_at_unix_ms));
     const latest = `${active.name}@${active.schema_version}:${active.version + 3}`;
+    expect(within(column).getByRole("link", { name: "Compare with latest" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: overview.application.name,
+        env: "prod",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: active.version,
+        to: active.version + 3,
+      }),
+    );
     expect(
       within(column).getByRole("link", { name: `latest v${active.version + 3} not active` }),
     ).toHaveAttribute(

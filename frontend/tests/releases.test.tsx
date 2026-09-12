@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   subscriberStream: vi.fn(),
   getRelease: vi.fn(),
   rollbackRelease: vi.fn(),
+  releaseDiff: vi.fn(),
   applicationOverview: vi.fn(),
   parameterMetadata: vi.fn(),
   secretMetadata: vi.fn(),
@@ -91,6 +92,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       subscriberStream: mocks.subscriberStream,
       getRelease: mocks.getRelease,
       rollbackRelease: mocks.rollbackRelease,
+      releaseDiff: mocks.releaseDiff,
       applicationOverview: mocks.applicationOverview,
       parameterMetadata: mocks.parameterMetadata,
       secretMetadata: mocks.secretMetadata,
@@ -166,6 +168,55 @@ const dashboardWithoutContract = {
   rows: [],
 };
 
+/** What `GET /releases/diff` answers for two runtime versions in the page's namespace. */
+function diffResponse(from: number, to: number, namespace = { env: "prod", app: "payments" }) {
+  const side = (version: number) => ({
+    namespace,
+    name: "runtime",
+    version,
+    schema_version: 1,
+    digest: `digest-${version}`,
+    created_by: "admin",
+    created_at_unix_ms: 1,
+    current: false,
+    previous: false,
+    activation_revision: 0,
+    previous_version: 0,
+  });
+  const pin = (version: number, digest: string, value: string) => ({
+    ref: { namespace, key: "runtime" },
+    version,
+    content_type: "json",
+    parameter_digest: digest,
+    metadata_json: "{}",
+    created_by: "admin",
+    created_at_unix_ms: 1,
+    value_state: "present" as const,
+    value,
+    value_bytes: value.length,
+  });
+  return {
+    from: side(from),
+    to: side(to),
+    identical: false,
+    schema_changed: false,
+    cross_environment: false,
+    counts: { added: 0, removed: 0, changed: 1, unchanged: 0, secrets_changed: 0, attention: 0 },
+    rows: [
+      {
+        alias: "runtime",
+        kind: "parameter" as const,
+        change: "changed" as const,
+        reasons: ["value" as const],
+        from: pin(from, `digest-${from}`, `{"limit":${from}}`),
+        to: pin(to, `digest-${to}`, `{"limit":${to}}`),
+      },
+    ],
+    value_cap_bytes: 262144,
+    values_included: true,
+  };
+}
+
 describe("ReleasesPage", () => {
   beforeEach(() => {
     mocks.query = {};
@@ -174,6 +225,10 @@ describe("ReleasesPage", () => {
     }
     for (const mock of Object.values(mocks.toast)) mock.mockReset();
     mocks.listReleases.mockResolvedValue({ releases: [], next_page_token: "" });
+    // The workspace's Compare tab and the rollback dialog both ask the diff endpoint.
+    mocks.releaseDiff.mockImplementation(async (query: { from: number; to: number }) =>
+      diffResponse(query.from, query.to),
+    );
     mocks.releaseSchemaVersions.mockResolvedValue({ schema_versions: [1], next_page_token: "" });
     mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "none", 404));
     mocks.listApplications.mockResolvedValue({
@@ -734,14 +789,32 @@ describe("ReleasesPage", () => {
       next_page_token: "",
     });
 
+    mocks.releaseDiff.mockResolvedValue(diffResponse(1, 2));
+
     render(<ReleasesPage />);
     expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
     fireEvent.click(screen.getAllByRole("button", { name: "View" })[0]);
     const dialog = screen.getByRole("dialog", { name: "Release runtime@2 · schema v1" });
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Compare" }));
-    expect(await within(dialog).findByText(/old-digest/)).toBeVisible();
-    expect(within(dialog).getByText(/new-digest/)).toBeVisible();
+    // The Compare tab is the diff view against the version below, in compact form.
+    const row = await within(dialog).findByTestId("release-diff-row");
+    expect(row).toHaveAttribute("data-alias", "runtime");
+    expect(mocks.releaseDiff).toHaveBeenCalledWith(
+      { env: "prod", app: "payments", name: "runtime", schemaVersion: 1, from: 1, to: 2 },
+      expect.anything(),
+    );
+    expect(within(dialog).getByRole("link", { name: "Open full comparison" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "payments",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 1,
+        to: 2,
+      }),
+    );
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
     expect(await within(dialog).findByText("api/api-1")).toBeVisible();
@@ -961,16 +1034,21 @@ describe("ReleasesPage", () => {
       next_page_token: "",
     });
     mocks.getRelease.mockResolvedValue({ release: releaseV3 });
+    mocks.releaseDiff.mockImplementation(async (query: { from: number; to: number }) =>
+      diffResponse(query.from, query.to),
+    );
     const { rerender } = render(<ReleasesPage />);
     let workspace = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
     expect(within(workspace).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
       "runtime@1:3",
     );
-    expect(
-      within(workspace)
-        .getAllByRole("columnheader")
-        .map((cell) => cell.textContent),
-    ).toEqual(["Alias", "runtime@1:3", "runtime@1:1"]);
+    // v1 is the release open in the workspace, so it is the `to` side.
+    await waitFor(() =>
+      expect(mocks.releaseDiff).toHaveBeenCalledWith(
+        expect.objectContaining({ from: 3, to: 1 }),
+        expect.anything(),
+      ),
+    );
     // The inverse reactivation link works on the same mounted route too.
     mocks.query = { ...mocks.query, release: "runtime@1:3", compare: "runtime@1:1" };
     rerender(<ReleasesPage />);
@@ -995,6 +1073,7 @@ describe("ReleasesPage", () => {
       next_page_token: "older",
     });
     mocks.getRelease.mockResolvedValue({ release: releaseV3 });
+    mocks.releaseDiff.mockResolvedValue(diffResponse(3, 1));
     render(<ReleasesPage />);
     const workspace = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
     await waitFor(() =>
@@ -1009,7 +1088,12 @@ describe("ReleasesPage", () => {
       1,
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-    expect(within(workspace).getByText(/new-digest/)).toBeVisible();
+    // The off-page release is fetched to fill the picker; the diff itself is
+    // served by the endpoint.
+    expect(await within(workspace).findByTestId("release-diff-row")).toHaveAttribute(
+      "data-alias",
+      "runtime",
+    );
   });
 
   it("refetches an off-page comparison after namespace history navigation", async () => {
@@ -1065,6 +1149,46 @@ describe("ReleasesPage", () => {
       .map((call) => call[0]);
     expect(comparisonNamespaces).toContainEqual({ env: "prod", app: "payments" });
     expect(comparisonNamespaces).toContainEqual({ env: "dev", app: "payments" });
+  });
+
+  it("links each row and the status strip to the comparison page", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    const releaseV3 = { ...releaseV2, version: 3 };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV3, current: false, previous: false, activation_revision: 0 },
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    render(<ReleasesPage />);
+    expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
+    const compare = (from: number, to: number) =>
+      links.releaseCompare({
+        app: "payments",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from,
+        to,
+      });
+    // The strip: what the current activation changed.
+    expect(screen.getByRole("link", { name: "What changed" })).toHaveAttribute(
+      "href",
+      compare(1, 2),
+    );
+    // The current row compares against the release it replaced; the others
+    // compare themselves against the current release.
+    expect(
+      screen.getByRole("link", { name: "Compare runtime@1:2 with runtime@1:1" }),
+    ).toHaveAttribute("href", compare(1, 2));
+    expect(
+      screen.getByRole("link", { name: "Compare runtime@1:3 with runtime@1:2" }),
+    ).toHaveAttribute("href", compare(3, 2));
+    expect(
+      screen.getByRole("link", { name: "Compare runtime@1:1 with runtime@1:2" }),
+    ).toHaveAttribute("href", compare(1, 2));
   });
 
   it("renders validation failures in the workspace violations table", async () => {

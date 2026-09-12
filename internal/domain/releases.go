@@ -287,3 +287,101 @@ type ReleaseSubscriberConnection struct {
 	DisconnectedAt  time.Time
 	ServerTimestamp time.Time
 }
+
+// --- Release diff (console aggregate) --------------------------------------
+
+// Release diff row change kinds, change reasons and value states. The
+// strings are the wire vocabulary of GET /api/v1/releases/diff.
+const (
+	ReleaseDiffAdded     = "added"
+	ReleaseDiffRemoved   = "removed"
+	ReleaseDiffChanged   = "changed"
+	ReleaseDiffUnchanged = "unchanged"
+
+	ReleaseDiffReasonValue       = "value"
+	ReleaseDiffReasonPin         = "pin"
+	ReleaseDiffReasonKey         = "key"
+	ReleaseDiffReasonKind        = "kind"
+	ReleaseDiffReasonContentType = "content_type"
+
+	ReleaseDiffValuePresent          = "present"
+	ReleaseDiffValueOmittedSize      = "omitted_size"
+	ReleaseDiffValueOmittedUnchanged = "omitted_unchanged"
+	ReleaseDiffValueOmittedRequest   = "omitted_request"
+	ReleaseDiffValueSecret           = "secret"
+	ReleaseDiffValueUnavailable      = "unavailable"
+)
+
+// ReleaseDiffSelector picks one release of a track: an exact version, or the
+// movable label "current" / "previous".
+type ReleaseDiffSelector struct {
+	Version uint64
+	Label   string
+}
+
+// ReleaseDiffInput addresses the two sides of a comparison. To defaults to
+// From's track on the transport; a different environment is the
+// cross-environment mode.
+type ReleaseDiffInput struct {
+	From          ReleaseTrack
+	To            ReleaseTrack
+	FromSelector  ReleaseDiffSelector
+	ToSelector    ReleaseDiffSelector
+	IncludeValues bool
+}
+
+// ReleaseDiffSide is one compared release plus its label facts at read time.
+type ReleaseDiffSide struct {
+	Release            ConfigurationRelease
+	Current            bool
+	Previous           bool
+	ActivationRevision uint64
+	PreviousVersion    uint64
+}
+
+// ReleaseDiffPin is one side of a row: the entry as pinned, the authorship of
+// that resource version, and (parameters only) the stored value under the
+// size rules. Secrets carry state and binding metadata, never a value.
+type ReleaseDiffPin struct {
+	Entry       ConfigurationReleaseEntry
+	CreatedBy   string
+	CreatedAt   time.Time
+	ValueState  string
+	Value       string
+	ValueBytes  int
+	SecretState string
+	Bound       bool
+	ExpiresAt   time.Time
+}
+
+// ReleaseDiffRow is one alias across both releases.
+type ReleaseDiffRow struct {
+	Alias   string
+	Kind    string
+	Change  string
+	Reasons []string
+	From    *ReleaseDiffPin
+	To      *ReleaseDiffPin
+}
+
+type ReleaseDiffCounts struct {
+	Added          int
+	Removed        int
+	Changed        int
+	Unchanged      int
+	SecretsChanged int
+	Attention      int
+}
+
+// ReleaseDiff is the console's comparison of two releases.
+type ReleaseDiff struct {
+	From             ReleaseDiffSide
+	To               ReleaseDiffSide
+	Identical        bool
+	SchemaChanged    bool
+	CrossEnvironment bool
+	Counts           ReleaseDiffCounts
+	Rows             []ReleaseDiffRow
+	ValueCapBytes    int
+	ValuesIncluded   bool
+}

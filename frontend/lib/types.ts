@@ -1104,3 +1104,94 @@ export interface ConnectionResponse {
     not_after: string;
   } | null;
 }
+
+// --- Release diff ---
+// Mirrors internal/server/httpserver/dto_console.go field for field; see
+// docs/plans/release-diff-visualization.md §D3.
+
+export type ReleaseDiffChange = "added" | "removed" | "changed" | "unchanged";
+export type ReleaseDiffReason = "value" | "pin" | "key" | "kind" | "content_type";
+export type ReleaseDiffValueState =
+  | "present"
+  | "omitted_size"
+  | "omitted_unchanged"
+  /** The request used values=0; the value exists and can be fetched. */
+  | "omitted_request"
+  | "secret"
+  | "unavailable";
+
+export interface ReleaseDiffSide {
+  namespace: NamespaceRef;
+  name: string;
+  version: number;
+  schema_version: number;
+  digest: string;
+  created_by: string;
+  created_at_unix_ms: number;
+  current: boolean;
+  previous: boolean;
+  /** 0 unless current. */
+  activation_revision: number;
+  /** The track's previous label at read time; 0 when none. */
+  previous_version: number;
+}
+
+export interface ReleaseDiffPin {
+  ref: ResourceReference;
+  version: number;
+  content_type: string;
+  /** "" for secrets. */
+  parameter_digest: string;
+  /** The entry's captured metadata. */
+  metadata_json: string;
+  /** Author of that resource version ("" when unavailable). */
+  created_by: string;
+  created_at_unix_ms: number;
+  value_state: ReleaseDiffValueState;
+  /** Parameters only, only when value_state === "present". */
+  value?: string;
+  /** Size of the stored value, even when omitted. */
+  value_bytes: number;
+  // Secrets only.
+  secret_state?: SecretVersionState;
+  bound?: boolean;
+  expires_at_unix_ms?: number;
+}
+
+export interface ReleaseDiffRow {
+  alias: string;
+  /** The `to` side's kind, or `from` when removed. */
+  kind: ReleaseEntryKind;
+  change: ReleaseDiffChange;
+  /** Empty for unchanged/added/removed. */
+  reasons: ReleaseDiffReason[];
+  from?: ReleaseDiffPin;
+  to?: ReleaseDiffPin;
+}
+
+export interface ReleaseDiffCounts {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  secrets_changed: number;
+  attention: number;
+}
+
+export interface ReleaseDiffResponse {
+  from: ReleaseDiffSide;
+  to: ReleaseDiffSide;
+  /** No row has change !== "unchanged". */
+  identical: boolean;
+  /** from.schema_version !== to.schema_version. */
+  schema_changed: boolean;
+  /** Namespaces differ. */
+  cross_environment: boolean;
+  counts: ReleaseDiffCounts;
+  /** Sorted by alias. */
+  rows: ReleaseDiffRow[];
+  /** 262144 */
+  value_cap_bytes: number;
+  /** false when values=0 */
+  values_included: boolean;
+}

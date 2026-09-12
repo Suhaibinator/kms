@@ -28,6 +28,7 @@ import {
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
+import { ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
@@ -897,6 +898,21 @@ export default function ReleasesPage() {
                   <strong className="mono">—</strong>
                 )}
               </div>
+              {previousNamedRelease ? (
+                <ButtonLink
+                  variant="outline"
+                  href={links.releaseCompare({
+                    app: ns.app,
+                    env: ns.env,
+                    name,
+                    schemaVersion: currentNamedRelease.release.schema_version,
+                    from: previousNamedRelease.release.version,
+                    to: currentNamedRelease.release.version,
+                  })}
+                >
+                  What changed
+                </ButtonLink>
+              ) : null}
               <Button
                 variant="outline"
                 disabled={!previousNamedRelease || Boolean(busyAction)}
@@ -974,6 +990,21 @@ export default function ReleasesPage() {
                 <tbody>
                   {sort.apply(releases).map((summary) => {
                     const release = summary.release;
+                    // The row's natural counterpart: the release it replaced when
+                    // it is current, otherwise the current release of its track.
+                    const counterpart = summary.current
+                      ? releases.find(
+                          (candidate) =>
+                            candidate.previous &&
+                            candidate.release.name === release.name &&
+                            candidate.release.schema_version === release.schema_version,
+                        )
+                      : releases.find(
+                          (candidate) =>
+                            candidate.current &&
+                            candidate.release.name === release.name &&
+                            candidate.release.schema_version === release.schema_version,
+                        );
                     return (
                       <tr key={releaseKey(release)}>
                         <td data-label="Release">
@@ -1033,6 +1064,27 @@ export default function ReleasesPage() {
                             >
                               Activate
                             </Button>
+                            {counterpart ? (
+                              <ButtonLink
+                                variant="outline"
+                                size="sm"
+                                href={links.releaseCompare({
+                                  app: release.namespace.app,
+                                  env: release.namespace.env,
+                                  name: release.name,
+                                  schemaVersion: release.schema_version,
+                                  from: summary.current
+                                    ? counterpart.release.version
+                                    : release.version,
+                                  to: summary.current
+                                    ? release.version
+                                    : counterpart.release.version,
+                                })}
+                                aria-label={`Compare ${releaseKey(release)} with ${releaseKey(counterpart.release)}`}
+                              >
+                                Compare
+                              </ButtonLink>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
