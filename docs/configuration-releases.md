@@ -402,9 +402,13 @@ retained for 30 days by default. Configure these with
 
 The gRPC CLI provides `parameter-store release` commands for `create`,
 `validate`, `show`, `list`, `diff`, `activate`, `rollback`, `subscribers`, and
-`verify-defaults`, plus `release schema create|show|list`. The embedded Releases page exposes
-creation, validation, diff, activation, rollback, schema registration/listing,
-and per-instance subscriber status. Secret rows show metadata only. See
+`verify-defaults`, plus `release schema create|show|list`. The CLI `diff` is
+entry-only: it reports which aliases were added, removed, or pinned
+differently, without reading any value. The embedded Releases page exposes
+creation, validation, activation, rollback, schema registration/listing, and
+per-instance subscriber status, and a value-level comparison (see **Compare
+releases** below) that shows old and new parameter values and who wrote each
+version. Secret rows show metadata only on every surface. See
 [`operations.md`](operations.md#configuration-release-commands) and
 [`http-api.md`](http-api.md#configuration-releases-and-schemas).
 
@@ -462,6 +466,33 @@ renders readiness state and never recomputes it.
   contract) is shown as violations rather than discovered on confirm. It uses
   `POST /api/v1/releases/rollback` with the CAS guard, reports a concurrent
   change as "changed meanwhile", and applies production type-to-confirm.
+- **Compare releases** (`/releases/compare`). One page answers "what changed
+  between these two releases" from a single server read
+  ([Release diff](http-api.md#release-diff)). A counts strip shows added,
+  removed, changed, and unchanged aliases plus the number of secrets that
+  moved and the rows that need attention. Rows are grouped with *Needs
+  attention* first (a kind or content-type change, a secret that is not
+  enabled, a value the operator may not read), then secrets, then changed,
+  added, removed, and unchanged; each row shows the old and new value side by
+  side with the author of each pinned version. JSON values get a structural
+  leaf-by-leaf diff (`database.pool.max 50 → 5`) rather than a text diff.
+  Secrets are compared by pinned version and metadata only (state, bound,
+  expiry); the response has no field that can carry a secret value. The page
+  is reachable from the environment page's Release section and More menu,
+  the releases list and the release workspace, the Ship modal's success step,
+  the Rollback dialog (which shows the same summary inline), activation and
+  rollback audit rows, and the command palette ("What changed in env/app").
+  The URL is
+  `/releases/compare?app&env&name&schema_version&from&to[&to_env]`, where
+  `from` and `to` are version numbers or the labels `current` / `previous`,
+  so a link can be built from an activation alone; the page resolves labels
+  through the endpoint and then shows the numeric versions. With `to_env` set
+  the page compares one application's release across two environments.
+  Entries are matched by alias, and because keys, versions, and secrets are
+  per environment, version numbers are expected to differ: a parameter pinned
+  at a different version with the same digest is not a change, and the key is
+  compared without its namespace. A different value, kind, or content type
+  still is.
 - **Add environment / clone**. A new environment can start empty or copy
   parameter values from an existing environment. Clone never overwrites a key
   that already exists in the target and never copies a secret value; each

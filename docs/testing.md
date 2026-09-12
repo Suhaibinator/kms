@@ -215,8 +215,12 @@ go test ./internal/core ./internal/server/httpserver -run TestConsoleFixtures -u
 
 `TestConsoleFixtures` in `internal/server/httpserver/fixtures_test.go` drives a
 real in-process server and writes the fleet, application-overview, Ship
-preview, and Ship conflict fixtures under
-`frontend/tests/fixtures/backend/`. `TestConsoleFixturesReadiness` in
+preview, Ship conflict, and release diff fixtures under
+`frontend/tests/fixtures/backend/`. `release-diff.json` captures
+`GET /api/v1/releases/diff` for `prod/gradethis` in the incident state with
+`from=previous&to=current`: one parameter row changed by value (`rate_limits`
+7 → 12, both values present), one parameter row unchanged and entry-only, and
+one secret row unchanged with a value-free pin. `TestConsoleFixturesReadiness` in
 `internal/core/consolefixtures_test.go` writes `readiness-cases.json`, including
 the named readiness cases and the schema-type/content-type mapping shared by
 both implementations. Without `-update`, both tests compare their output

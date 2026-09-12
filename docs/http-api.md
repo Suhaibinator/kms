@@ -720,8 +720,10 @@ or the contract was edited); `changed: false` means the target was already
 active and no revision was allocated. The activation is audited as
 `configuration_release.rollback`. The console's Rollback dialog calls
 `POST /api/v1/releases/validate` on the previous version first so the
-operator sees violations before confirming; to activate any other retained
-version use `POST /api/v1/releases/activate`.
+operator sees violations before confirming, and summarises what the rollback
+would change from [Release diff](#release-diff) between the current and
+previous versions; to activate any other retained version use
+`POST /api/v1/releases/activate`.
 
 #### Release diff
 
