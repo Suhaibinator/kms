@@ -174,7 +174,12 @@ export function ReleaseDiffView({
         (pin): pin is ReleaseDiffPin =>
           Boolean(pin) && model.kind === "parameter" && pin?.value_state !== "present",
       );
-      const wanted = pins.filter((pin) => !values.has(valueKey(pin)));
+      // Both pins of an unchanged row name the same version: fetch it once.
+      const wanted = [
+        ...new Map(
+          pins.filter((pin) => !values.has(valueKey(pin))).map((pin) => [valueKey(pin), pin]),
+        ).values(),
+      ];
       if (wanted.length === 0) return;
       setLoadingValues((current) => new Set([...current, model.alias]));
       try {

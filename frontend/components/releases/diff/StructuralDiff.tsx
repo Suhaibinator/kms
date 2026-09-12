@@ -44,8 +44,8 @@ export function StructuralDiff({ structural }: { structural: StructuralDiffResul
         })}
         {structural.unchangedLeaves > 0 ? (
           <li className="release-diff-fold">
-            {countNoun(structural.unchangedLeaves, "unchanged fields")} hidden · side-by-side shows
-            everything
+            {structural.unchangedLeaves} {countNoun(structural.unchangedLeaves, "unchanged fields")}{" "}
+            hidden · side-by-side shows everything
           </li>
         ) : null}
         {structural.truncated ? (

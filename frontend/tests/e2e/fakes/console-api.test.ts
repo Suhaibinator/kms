@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type FakeSecret, handleFakeConsoleRequest, incidentState } from "./console-api";
+import type { ReleaseDiffResponse } from "../../../lib/types";
+import { type FakeSecret, handle, handleFakeConsoleRequest, incidentState } from "./console-api";
 
 const keyA = "binding-key-a-0123456789-0123456789";
 const keyB = "binding-key-b-0123456789-0123456789";
@@ -185,4 +186,122 @@ it("isolates application contract mutations between console fixtures", () => {
   });
   first.application.contract[0].alias = "changed";
   expect(incidentState().application.contract).toEqual(original);
+});
+
+describe("console API fake release diff", () => {
+  const diff = (state: ReturnType<typeof incidentState>, query: string) =>
+    handle(state, "GET", "/releases/diff", new URLSearchParams(query), null);
+
+  it("compares previous to current with values on the changed row and none on the secret", () => {
+    const state = incidentState();
+    const result = diff(
+      state,
+      "env=prod&app=gradethis&name=runtime&schema_version=1&from=previous&to=current",
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as ReleaseDiffResponse;
+    expect(body.from).toMatchObject({ version: 1, previous: true, current: false });
+    expect(body.to).toMatchObject({ version: 2, current: true, activation_revision: 12 });
+    expect(body.identical).toBe(false);
+    expect(body.cross_environment).toBe(false);
+    expect(body.values_included).toBe(true);
+    expect(body.rows.map((row) => row.alias)).toEqual(["database", "db_password", "rate_limits"]);
+
+    const changed = body.rows.find((row) => row.alias === "rate_limits");
+    expect(changed).toMatchObject({ change: "changed", kind: "parameter", reasons: ["value"] });
+    // v1 pins rate_limits@2, v2 pins rate_limits@3: the fake's sample values.
+    expect(changed?.from).toMatchObject({ version: 2, value_state: "present", value: "200" });
+    expect(changed?.to).toMatchObject({ version: 3, value_state: "present", value: "300" });
+    expect(changed?.from?.parameter_digest).not.toBe(changed?.to?.parameter_digest);
+
+    const secret = body.rows.find((row) => row.alias === "db_password");
+    expect(secret).toMatchObject({ change: "unchanged", kind: "secret" });
+    expect(secret?.to).toMatchObject({
+      value_state: "secret",
+      bound: false,
+      secret_state: "enabled",
+    });
+    expect(secret?.to).not.toHaveProperty("value");
+
+    const unchanged = body.rows.find((row) => row.alias === "database");
+    expect(unchanged?.to).toMatchObject({ value_state: "omitted_unchanged", value_bytes: 0 });
+    expect(body.counts).toEqual({
+      added: 0,
+      removed: 0,
+      changed: 1,
+      unchanged: 2,
+      secrets_changed: 0,
+      attention: 0,
+    });
+  });
+
+  it("returns entries only for values=0 and rejects other values", () => {
+    const state = incidentState();
+    const result = diff(
+      state,
+      "env=prod&app=gradethis&name=runtime&schema_version=1&from=1&to=2&values=0",
+    );
+    const body = result.body as ReleaseDiffResponse;
+    expect(body.values_included).toBe(false);
+    const changed = body.rows.find((row) => row.alias === "rate_limits");
+    expect(changed?.to).toMatchObject({ value_state: "omitted_request" });
+    expect(changed?.to).not.toHaveProperty("value");
+    expect(
+      diff(state, "env=prod&app=gradethis&name=runtime&schema_version=1&from=1&to=2&values=2")
+        .status,
+    ).toBe(400);
+  });
+
+  it("names the missing side, fails the previous label before any rollback, and refuses equal sides", () => {
+    const state = incidentState();
+    const missing = diff(state, "env=prod&app=gradethis&name=runtime&schema_version=1&from=9&to=2");
+    expect(missing).toMatchObject({
+      status: 404,
+      body: { error: { code: "not_found", message: "from release runtime@1:9 not found" } },
+    });
+    const noPrevious = diff(
+      state,
+      "env=dev&app=gradethis&name=runtime&schema_version=1&from=previous&to=current",
+    );
+    expect(noPrevious).toMatchObject({
+      status: 412,
+      body: { error: { code: "failed_precondition", message: "no previous release" } },
+    });
+    expect(
+      diff(state, "env=prod&app=gradethis&name=runtime&schema_version=1&from=2&to=2").status,
+    ).toBe(400);
+    expect(diff(state, "env=prod&app=gradethis&name=runtime&from=1&to=2").status).toBe(400);
+  });
+
+  it("compares across environments by alias and does not count equal-digest repins", () => {
+    const state = incidentState();
+    // dev's active v1 pins rate_limits@2 with a different stored value than prod's v2 pins.
+    const result = diff(
+      state,
+      "env=prod&app=gradethis&name=runtime&schema_version=1&from=current&to=current&to_env=dev",
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as ReleaseDiffResponse;
+    expect(body.cross_environment).toBe(true);
+    expect(body.to.namespace).toEqual({ env: "dev", app: "gradethis" });
+    const rate = body.rows.find((row) => row.alias === "rate_limits");
+    expect(rate).toMatchObject({ change: "changed", reasons: ["value"] });
+    // Same pinned versions and stored values on both sides: not a change.
+    const database = body.rows.find((row) => row.alias === "database");
+    expect(database?.change).toBe("unchanged");
+    const secret = body.rows.find((row) => row.alias === "db_password");
+    expect(secret?.change).toBe("unchanged");
+  });
+
+  it("omits a value over the cap and reports its size", () => {
+    const state = incidentState();
+    const prod = state.namespaces.prod;
+    prod.parameters.rate_limits.versions[2] = "x".repeat(300 * 1024);
+    const result = diff(state, "env=prod&app=gradethis&name=runtime&schema_version=1&from=1&to=2");
+    const body = result.body as ReleaseDiffResponse;
+    const changed = body.rows.find((row) => row.alias === "rate_limits");
+    expect(changed?.to).toMatchObject({ value_state: "omitted_size", value_bytes: 300 * 1024 });
+    expect(changed?.to).not.toHaveProperty("value");
+    expect(changed?.from).toMatchObject({ value_state: "present" });
+  });
 });

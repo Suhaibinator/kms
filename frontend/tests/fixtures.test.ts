@@ -16,6 +16,10 @@ import type {
   Finding,
   FindingCode,
   FleetOverview,
+  ReleaseDiffChange,
+  ReleaseDiffReason,
+  ReleaseDiffResponse,
+  ReleaseDiffValueState,
   ReleaseState,
   RolloutState,
   ShipResult,
@@ -27,6 +31,7 @@ import incidentJson from "./fixtures/backend/overview-incident.json";
 import readyJson from "./fixtures/backend/overview-ready.json";
 import setupJson from "./fixtures/backend/overview-setup.json";
 import readinessJson from "./fixtures/backend/readiness-cases.json";
+import releaseDiffJson from "./fixtures/backend/release-diff.json";
 import conflictJson from "./fixtures/backend/ship-conflict.json";
 import previewJson from "./fixtures/backend/ship-preview.json";
 
@@ -51,6 +56,16 @@ const ROLLOUT_STATES: RolloutState[] = [
   "stale",
 ];
 const FINDING_CODES = Object.keys(FINDING_COPY) as FindingCode[];
+const DIFF_CHANGES: ReleaseDiffChange[] = ["added", "removed", "changed", "unchanged"];
+const DIFF_REASONS: ReleaseDiffReason[] = ["value", "pin", "key", "kind", "content_type"];
+const DIFF_VALUE_STATES: ReleaseDiffValueState[] = [
+  "present",
+  "omitted_size",
+  "omitted_unchanged",
+  "omitted_request",
+  "secret",
+  "unavailable",
+];
 const SUBSCRIBER_STATES = ["", "received", "prepared", "applied", "rejected"];
 
 type Json = Record<string, unknown>;
@@ -280,6 +295,60 @@ describe("backend fixtures", () => {
     for (const [jsonType, contentType] of Object.entries(readinessJson.type_mapping)) {
       expect(jsonTypeToContentType(property(jsonType))).toBe(contentType);
     }
+  });
+
+  it("release-diff: previous → current for prod/gradethis, values on the changed row, none on secrets", () => {
+    const diff = releaseDiffJson as unknown as ReleaseDiffResponse;
+    expect(diff.from.namespace).toEqual({ env: "prod", app: "gradethis" });
+    expect(diff.to.namespace).toEqual(diff.from.namespace);
+    expect(diff.from.previous).toBe(true);
+    expect(diff.to.current).toBe(true);
+    expect(diff.to.version).toBeGreaterThan(diff.from.version);
+    expect(diff.identical).toBe(false);
+    expect(diff.schema_changed).toBe(diff.from.schema_version !== diff.to.schema_version);
+    expect(diff.cross_environment).toBe(false);
+    expect(diff.values_included).toBe(true);
+    expect(diff.value_cap_bytes).toBe(262144);
+
+    const counted = { added: 0, removed: 0, changed: 0, unchanged: 0, secrets_changed: 0 };
+    const aliases = diff.rows.map((row) => row.alias);
+    expect(aliases).toEqual([...aliases].sort());
+    for (const row of diff.rows) {
+      expect(DIFF_CHANGES).toContain(row.change);
+      expect(["parameter", "secret"]).toContain(row.kind);
+      for (const reason of row.reasons) expect(DIFF_REASONS).toContain(reason);
+      if (row.change !== "changed") expect(row.reasons).toEqual([]);
+      else expect(row.reasons.length).toBeGreaterThan(0);
+      counted[row.change] += 1;
+      if (row.kind === "secret" && row.change !== "unchanged") counted.secrets_changed += 1;
+      for (const pin of [row.from, row.to]) {
+        if (!pin) continue;
+        expect(DIFF_VALUE_STATES).toContain(pin.value_state);
+        expect(pin.ref.key).toBeTruthy();
+        expect(typeof pin.value_bytes).toBe("number");
+        if (row.kind === "secret") {
+          // Secret values never cross the wire, in any state.
+          expect(pin.value_state).toBe("secret");
+          expect(pin).not.toHaveProperty("value");
+          expect(typeof pin.bound).toBe("boolean");
+          expect(pin.parameter_digest).toBe("");
+        } else {
+          expect(pin).not.toHaveProperty("bound");
+          expect(pin).not.toHaveProperty("secret_state");
+          expect("value" in pin).toBe(pin.value_state === "present");
+        }
+      }
+      if (row.change === "changed" && row.kind === "parameter") {
+        expect(row.from?.value_state).toBe("present");
+        expect(row.to?.value_state).toBe("present");
+        expect(row.from?.value).not.toBe(row.to?.value);
+      }
+      if (row.change === "unchanged" && row.kind === "parameter") {
+        expect(row.from?.value_state).toBe("omitted_unchanged");
+      }
+    }
+    expect(diff.counts).toMatchObject(counted);
+    expect(diff.counts.changed).toBeGreaterThan(0);
   });
 
   it("every finding code has copy, a fix decision and every status a label", () => {
