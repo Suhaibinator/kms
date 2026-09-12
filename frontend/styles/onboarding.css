@@ -301,7 +301,13 @@
   }
   .fleet-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    /* The floor is what one environment row needs before its name gets a
+       character: 42px of card chrome, 16px of row padding, the 10px dot, a
+       34px prod pill, a 105px release chip and three 8px gaps is 215px, so
+       360px leaves ~145px (18 characters) for the name. The old 300px floor
+       left 16px and rendered "prod" as "p…". min() keeps a 320px phone at one
+       column instead of overflowing the track. */
+    grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
     gap: var(--space-4);
   }
   .fleet-card {
@@ -377,11 +383,16 @@
     background: var(--surface-hover);
     --dot-halo: var(--surface-hover);
   }
+  /* The name is the row's required content, so it never shrinks: the release
+     cell on the right yields first (min-width: 0 there, none here). A very
+     long name is capped rather than allowed to push the release off the card. */
   .fleet-env-link {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
+    max-width: 100%;
     color: var(--text);
     font-size: var(--text-sm);
     font-weight: 500;
@@ -392,9 +403,16 @@
     text-underline-offset: 3px;
   }
   .fleet-env-name {
+    max-width: 16ch;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* The pill is the production marker inside a card; the dot's amber ring
+     beside it was a second, fainter copy of the same fact. The ring stays
+     where the dot is on its own (the dashboard's filter buttons). */
+  .fleet-env .status-dot.status-prod {
+    outline: none;
   }
   /* A sibling of .fleet-env-name, never inside it: as a pseudo-element it was
      part of the truncating box and the ellipsis ate the marker exactly when
@@ -412,7 +430,10 @@
     text-transform: uppercase;
   }
   .fleet-env-release {
-    flex-shrink: 0;
+    display: inline-flex;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    min-width: 0;
     font-size: var(--text-sm);
   }
   .fleet-card-foot {
