@@ -166,5 +166,9 @@ describe("shortcut helpers", () => {
     expect(all.some((s) => s.keys.length === 1 && s.keys[0] === "Esc")).toBe(true);
     // No group ships without a scope line saying where its keys apply.
     expect(SHORTCUT_GROUPS.every((group) => group.scope.length > 0)).toBe(true);
+    // The comparison page documents its filter shortcut where the page's
+    // SearchField answers to it.
+    const comparison = SHORTCUT_GROUPS.find((group) => group.title === "Release comparison");
+    expect(comparison?.shortcuts.some((s) => s.keys.length === 1 && s.keys[0] === "/")).toBe(true);
   });
 });

@@ -61,6 +61,15 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: ["Esc"], description: "Clear the search box" },
     ],
   },
+  {
+    title: "Release comparison",
+    scope: "On the release comparison page.",
+    shortcuts: [
+      { keys: ["/"], description: "Focus the filter" },
+      { keys: ["Esc"], description: "Clear the filter" },
+      { keys: ["Tab"], description: "Move between rows; ↵ or Space expands the focused row" },
+    ],
+  },
 ];
 
 /** True on macOS and iOS, where the modifier is the Command key. */

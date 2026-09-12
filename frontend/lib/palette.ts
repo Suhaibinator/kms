@@ -175,6 +175,24 @@ export function buildPaletteIndex({
   });
   for (const ns of namespaces) {
     if (!byName.has(ns.app)) continue;
+    const application = byName.get(ns.app);
+    if (application?.release_name) {
+      items.push({
+        id: `action:compare:${ns.env}/${ns.app}`,
+        group: "Actions",
+        title: `What changed in ${nsLabel(ns)}`,
+        subtitle: "Compare the active release with the previous one",
+        href: links.releaseCompare({
+          app: ns.app,
+          env: ns.env,
+          name: application.release_name,
+          schemaVersion: application.schema_version,
+          from: "previous",
+          to: "current",
+        }),
+        keywords: ["diff", "compare", "changed", "release", ns.env, ns.app],
+      });
+    }
     items.push({
       id: `action:rollback:${ns.env}/${ns.app}`,
       group: "Actions",
