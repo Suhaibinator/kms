@@ -272,6 +272,9 @@
      clamp or a long release name paints past the column border. */
   .pipeline-previous {
     display: inline-flex;
+    /* Wrap whole items: in a 300px column the unwrapped row squeezed the
+       "previous" label until it broke mid-word ("previou / s"). */
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-1);
     min-width: 0;

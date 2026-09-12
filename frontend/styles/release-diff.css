@@ -63,6 +63,13 @@
     gap: var(--space-3);
     min-height: var(--control-h-sm);
   }
+  /* Expand all / Collapse all travel as one unit when the toolbar wraps. */
+  .release-diff-expand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
   .release-diff-toggle-row {
     display: inline-flex;
     align-items: center;
@@ -235,13 +242,13 @@
     border-radius: var(--radius-sm);
     padding-inline: var(--space-0-5);
   }
+  /* Tint only: the line diff's 2px inset rail follows the rounded corner on
+     an inline word and reads as a "(" glyph before every value. */
   .release-diff-old {
     background: var(--danger-soft);
-    box-shadow: inset 2px 0 0 var(--danger);
   }
   .release-diff-new {
     background: var(--success-soft);
-    box-shadow: inset 2px 0 0 var(--success);
   }
   .release-diff-delta {
     font-size: var(--text-xs);
@@ -272,6 +279,22 @@
   }
   .release-diff-mode > * {
     min-width: 0;
+  }
+  /* The From/To pickers live in the page header's action row: label beside a
+     fixed-width select, no block margin, so the row stays one line of
+     controls at 1280 (the block Field stretched each select to the full
+     980px page and pushed Roll back onto a third line). */
+  .release-diff-pick {
+    display: inline-grid;
+    grid-template-columns: auto minmax(0, 13.5rem);
+    align-items: center;
+    gap: calc(var(--spacing) * 1.5);
+    min-width: 0;
+  }
+  .release-diff-pick > label {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-muted);
   }
   .release-diff-leaves {
     margin: 0;

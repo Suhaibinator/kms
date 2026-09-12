@@ -357,7 +357,11 @@ export function ValueChangeBody({
             >
               <TabsList variant="line" aria-label="Value comparison mode">
                 <TabsTrigger value="structural">Structural</TabsTrigger>
-                <TabsTrigger value="side">Side-by-side</TabsTrigger>
+                <TabsTrigger value="side">
+                  {/* The ≤768px tab reset allows wrapping; the label breaks at its
+                      hyphens in a 360px row body without its own nowrap. */}
+                  <span className="whitespace-nowrap">Side-by-side</span>
+                </TabsTrigger>
               </TabsList>
             </Tabs>
           ) : (

@@ -1,11 +1,11 @@
 import { ArrowLeft, ArrowLeftRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { ReleaseDiffView } from "@/components/releases/diff/ReleaseDiffView";
 import RollbackDialog from "@/components/ship/RollbackDialog";
-import { Badge, EmptyState, Field, PageHeader } from "@/components/ui";
+import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
@@ -73,6 +73,7 @@ function SideBadge({ side }: { side: ReleaseDiffSide }) {
  */
 export default function ReleaseComparePage() {
   const router = useRouter();
+  const pickId = useId();
   const toast = useToast();
   const now = useNow();
   const { values: query, ready } = useQueryParams([
@@ -482,24 +483,30 @@ export default function ReleaseComparePage() {
                 >
                   <ChevronLeft size={16} aria-hidden />
                 </Button>
-                <Field label="From" className="min-w-44">
+                {/* Not a Field: its w-full utility stretched each select across the
+                    whole page and stacked the action row three lines tall. */}
+                <span className="release-diff-pick">
+                  <label htmlFor={`${pickId}-from`}>From</label>
                   <AppSelect
+                    id={`${pickId}-from`}
                     value={resolvedFrom === undefined ? "" : String(resolvedFrom)}
                     onValueChange={(value) => pick("from", value)}
                     options={options}
                     disabled={options.length === 0}
                     placeholder={String(from)}
                   />
-                </Field>
-                <Field label="To" className="min-w-44">
+                </span>
+                <span className="release-diff-pick">
+                  <label htmlFor={`${pickId}-to`}>To</label>
                   <AppSelect
+                    id={`${pickId}-to`}
                     value={resolvedTo === undefined ? "" : String(resolvedTo)}
                     onValueChange={(value) => pick("to", value)}
                     options={options}
                     disabled={options.length === 0}
                     placeholder={String(to)}
                   />
-                </Field>
+                </span>
                 <Button
                   variant="outline"
                   size="icon-sm"

@@ -38,6 +38,11 @@ import { ReleaseDiffStrip } from "./ReleaseDiffStrip";
 import { useReleaseDiff } from "./useReleaseDiff";
 import { useValueViewMode } from "./ValueChange";
 
+/** The server's error message as a sentence, so prose can follow it. */
+function sentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 export interface ReleaseDiffViewProps {
   /** What to fetch; the view owns the request (useLatestRequest). */
   query: ReleaseDiffQuery;
@@ -332,16 +337,18 @@ export function ReleaseDiffView({
                 />
                 <label htmlFor={`${ids}-prefix`}>Group by prefix</label>
               </span>
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setExpanded(new Set(filtered.map((model) => model.alias)))}
-              >
-                Expand all
-              </Button>
-              <Button variant="ghost" size="xs" onClick={() => setExpanded(new Set())}>
-                Collapse all
-              </Button>
+              <span className="release-diff-expand">
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => setExpanded(new Set(filtered.map((model) => model.alias)))}
+                >
+                  Expand all
+                </Button>
+                <Button variant="ghost" size="xs" onClick={() => setExpanded(new Set())}>
+                  Collapse all
+                </Button>
+              </span>
             </div>
             <div className="release-diff-actions">
               {!compact ? (
@@ -464,8 +471,8 @@ function ErrorPanel({
     return (
       <div className="warn-panel" role="alert">
         <p>
-          {error.message || "One side of the comparison is not retained any more."} Release history
-          keeps a bounded number of versions and days (see{" "}
+          {sentence(error.message || "One side of the comparison is not retained any more.")}{" "}
+          Release history keeps a bounded number of versions and days (see{" "}
           <span className="mono">watch.release_retain_versions</span>); the audit log still records
           every activation.
         </p>
