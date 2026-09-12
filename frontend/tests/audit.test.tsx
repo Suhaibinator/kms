@@ -677,6 +677,43 @@ describe("release comparison links", () => {
     expect(screen.getAllByRole("link", { name: /^What changed/ })).toHaveLength(1);
   });
 
+  it("links an activated ship event from previous_version to release_version", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({
+      events: [
+        event(45, {
+          event_type: "application.ship",
+          resource_type: "application",
+          resource_env: "prod",
+          resource_app: "gradethis",
+          resource_key: "gradethis",
+          resource_version: 0,
+          metadata_json: JSON.stringify({
+            schema_version: "1",
+            environment: "prod",
+            release_name: "runtime",
+            aliases: "rate_limits",
+            activated: "true",
+            previous_version: "7",
+            release_version: "9",
+          }),
+        }),
+      ],
+      next_page_token: "",
+    });
+    render(<AuditPage />);
+    expect(await screen.findByRole("link", { name: "What changed (v7 → v9)" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "prod",
+        name: "runtime",
+        schemaVersion: 1,
+        from: 7,
+        to: 9,
+      }),
+    );
+  });
+
   it("does not guess a release name for a ship event that did not record one", async () => {
     vi.mocked(api.listAudit).mockResolvedValue({
       events: [

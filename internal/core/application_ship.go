@@ -196,7 +196,9 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	sort.Strings(aliases)
 	auditMeta := func(extra map[string]string) map[string]string {
-		meta := map[string]string{"schema_version": strconv.FormatUint(app.SchemaVersion, 10), "environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
+		// release_name lets the console link a ship event to the comparison of
+		// previous_version → release_version without guessing the track.
+		meta := map[string]string{"schema_version": strconv.FormatUint(app.SchemaVersion, 10), "environment": ns.Env, "release_name": app.ReleaseName, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
 		maps.Copy(meta, extra)
 		return meta
 	}

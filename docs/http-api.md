@@ -550,8 +550,10 @@ application in the target namespace: `allow` when activated, `deny` for
 `rejected` (`reason: validation_failed`, nothing written),
 `release_created_not_activated` (`activation_validation_failed`) and
 `conflict` (`cas_conflict`), or `error` when a step failed; metadata carries
-`environment`, `aliases` (comma-joined, sorted), `activated`,
-`previous_version`, `release_version` once one exists, and `reason`. The
+`environment`, `release_name`, `aliases` (comma-joined, sorted), `activated`,
+`previous_version`, `release_version` once one exists, and `reason`; the
+console's audit log turns an activated ship into a "What changed" link from
+`previous_version` to `release_version`. The
 ordinary per-step events for the parameter writes,
 `configuration_release.create`, and `configuration_release.activate` are
 recorded as well.

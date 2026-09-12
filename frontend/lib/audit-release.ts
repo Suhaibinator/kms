@@ -56,7 +56,7 @@ export interface AuditShipVersions {
   releaseVersion: number;
   schemaVersion: number | undefined;
   environment: string | undefined;
-  /** Not recorded by the server today; present only when a future ship event carries it. */
+  /** The track shipped; older events written before the server recorded it lack it. */
   releaseName: string | undefined;
 }
 
