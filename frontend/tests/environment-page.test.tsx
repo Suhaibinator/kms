@@ -172,6 +172,48 @@ describe("EnvironmentPage", () => {
     );
   });
 
+  it("offers release comparisons from the More menu, including against another environment", async () => {
+    const overview = clone(incident);
+    await renderPage(overview);
+    const dev = overview.environments.find((candidate) => candidate.namespace.env === "dev");
+    const active = dev?.release.active;
+    if (!active) throw new Error("fixture has no active release in dev");
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = await screen.findByRole("menu", { name: "More actions" });
+    // Labels, not numbers: the page resolves them and explains a missing previous.
+    expect(within(menu).getByRole("menuitem", { name: "Compare releases…" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "dev",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: "previous",
+        to: "current",
+      }),
+    );
+    const trigger = within(menu).getByRole("menuitem", {
+      name: "Compare with another environment",
+    });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.click(trigger);
+    const submenu = await screen.findByRole("menu", { name: "Compare with another environment" });
+    // Only the other environments are offered, production labelled as such.
+    expect(within(submenu).queryByRole("menuitem", { name: /^dev/ })).toBeNull();
+    expect(within(submenu).getByRole("menuitem", { name: "prod · production" })).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: "gradethis",
+        env: "dev",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: "current",
+        to: "current",
+        toEnv: "prod",
+      }),
+    );
+  });
+
   it("ships from the header for this environment", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("button", { name: /Ship to dev/ }));

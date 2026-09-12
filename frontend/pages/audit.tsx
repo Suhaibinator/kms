@@ -2,6 +2,7 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { ReleaseDiffSummary } from "@/components/releases/diff/ReleaseDiffSummary";
 import {
   headerLabels,
   MobileListToolbar,
@@ -23,7 +24,13 @@ import {
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
-import { api, isAbortError } from "@/lib/api";
+import { api, isAbortError, type ReleaseDiffQuery } from "@/lib/api";
+import {
+  auditReleasePreviousVersion,
+  auditReleaseSchemaVersion,
+  auditReleaseVersion,
+  auditShipReleaseVersions,
+} from "@/lib/audit-release";
 import {
   datetimeLocalToUnixMs,
   displayAuditResource,
@@ -54,6 +61,58 @@ interface FilterForm {
   event_type: string;
   from: string;
   to: string;
+}
+
+/**
+ * The from → to pair an activation event describes, or null when the event
+ * did not activate anything, was a first activation, or does not record the
+ * selectors needed to address both releases. A rollback's `previous_version`
+ * is the newer release it rolled back from, so the pair reads newer → older.
+ */
+function auditCompareQuery(event: AuditEvent): ReleaseDiffQuery | null {
+  if (!event.resource_env || !event.resource_app) return null;
+  if (
+    event.event_type === "configuration_release.activate" ||
+    event.event_type === "configuration_release.rollback"
+  ) {
+    const schemaVersion = auditReleaseSchemaVersion(event);
+    const to = auditReleaseVersion(event);
+    const from = auditReleasePreviousVersion(event);
+    if (
+      schemaVersion === undefined ||
+      to === undefined ||
+      from === undefined ||
+      !event.resource_key
+    )
+      return null;
+    return {
+      env: event.resource_env,
+      app: event.resource_app,
+      name: event.resource_key,
+      schemaVersion,
+      from,
+      to,
+    };
+  }
+  if (event.event_type === "application.ship") {
+    const ship = auditShipReleaseVersions(event);
+    if (
+      !ship ||
+      ship.previousVersion === undefined ||
+      ship.schemaVersion === undefined ||
+      !ship.releaseName
+    )
+      return null;
+    return {
+      env: ship.environment ?? event.resource_env,
+      app: event.resource_app,
+      name: ship.releaseName,
+      schemaVersion: ship.schemaVersion,
+      from: ship.previousVersion,
+      to: ship.releaseVersion,
+    };
+  }
+  return null;
 }
 
 const EMPTY_FORM: FilterForm = {
@@ -571,6 +630,8 @@ function AuditLog({
                 const hasMeta = !isEmptyJson(e.metadata_json);
                 const resource = displayAuditResource(e);
                 const resourceHref = links.auditResource(e);
+                const compareQuery = auditCompareQuery(e);
+                const compareHref = compareQuery ? links.releaseCompare(compareQuery) : null;
                 const metaId = `audit-meta-${e.id}`;
                 return (
                   <Fragment key={e.id}>
@@ -605,6 +666,18 @@ function AuditLog({
                             e.resource_version > 0 ? (
                               <span className="faint"> · v{e.resource_version}</span>
                             ) : null}
+                            {compareHref && compareQuery ? (
+                              <>
+                                {" "}
+                                <Link
+                                  href={compareHref}
+                                  className="text-sm"
+                                  title="Compare the two releases this activation swapped"
+                                >
+                                  What changed (v{compareQuery.from} → v{compareQuery.to})
+                                </Link>
+                              </>
+                            ) : null}
                           </span>
                         ) : (
                           <span className="faint">{e.resource_type || "—"}</span>
@@ -634,6 +707,14 @@ function AuditLog({
                       <tr id={metaId}>
                         <td data-label="Metadata" colSpan={7}>
                           <JsonView raw={prettyJson(e.metadata_json)} />
+                          {compareQuery ? (
+                            <div className="mt-2">
+                              <ReleaseDiffSummary
+                                query={compareQuery}
+                                href={compareHref ?? undefined}
+                              />
+                            </div>
+                          ) : null}
                           {e.request_id ? (
                             <div className="faint text-sm mt-2">
                               request id: <span className="mono">{e.request_id}</span>

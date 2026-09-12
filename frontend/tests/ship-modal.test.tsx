@@ -463,6 +463,16 @@ describe("ShipModal", () => {
     expect(await within(dialog()).findByTestId("ship-rollout")).toBeVisible();
     expect(props.onShipped).toHaveBeenCalledWith(activated, "dev");
     expect(within(dialog()).getByTestId("ship-modal")).toHaveAttribute("data-phase", "rollout");
+    // The success line offers the comparison of the pair it just swapped.
+    const whatChanged = within(dialog()).getByTestId("ship-what-changed");
+    expect(whatChanged).toHaveTextContent("See what changed");
+    const url = new URL(whatChanged.getAttribute("href") ?? "", "https://kms.example");
+    expect(url.pathname).toBe("/releases/compare");
+    expect(url.searchParams.get("app")).toBe(app.name);
+    expect(url.searchParams.get("env")).toBe("dev");
+    expect(url.searchParams.get("name")).toBe(releaseName);
+    expect(url.searchParams.get("from")).toBe(String(base));
+    expect(url.searchParams.get("to")).toBe(String(next));
   });
 
   it("marks the preview stale on every edit and re-enables Ship only after the next dry run", async () => {

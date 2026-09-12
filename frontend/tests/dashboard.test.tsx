@@ -501,6 +501,66 @@ describe("DashboardPage", () => {
     await waitFor(() => expect(within(card).getAllByTitle("schema v0")).toHaveLength(2));
   });
 
+  it("links the latest activation to what it changed when there is a previous release", async () => {
+    const compared = {
+      ...ready,
+      environments: ready.environments.map((environment) =>
+        environment.namespace.env === "prod" && environment.release.active
+          ? {
+              ...environment,
+              release: {
+                ...environment.release,
+                active: {
+                  ...environment.release.active,
+                  version: 4,
+                  previous_version: 3,
+                  created_at_unix_ms: environment.release.active.created_at_unix_ms + 60_000,
+                },
+              },
+            }
+          : environment,
+      ),
+    };
+    mocks.listApplications.mockResolvedValue({
+      applications: [compared.application],
+      next_page_token: "",
+    });
+    mocks.fleetOverview.mockResolvedValue({
+      applications: [
+        {
+          application: compared.application,
+          status: "ready",
+          environments: compared.environments.map((environment) => ({
+            env: environment.namespace.env,
+            status: "ready",
+            production: environment.namespace.env === "prod",
+          })),
+        },
+      ],
+    });
+    mocks.applicationOverview.mockResolvedValue(compared);
+
+    render(<DashboardPage />);
+    const card = await screen.findByRole("article");
+    const prod = compared.environments.find((environment) => environment.namespace.env === "prod");
+    const active = prod?.release.active;
+    if (!active) throw new Error("fixture has no active release in prod");
+    const link = await within(card).findByRole("link", { name: /^activated / });
+    expect(link).toHaveAttribute(
+      "href",
+      links.releaseCompare({
+        app: compared.application.name,
+        env: "prod",
+        name: active.name,
+        schemaVersion: active.schema_version,
+        from: 3,
+        to: 4,
+      }),
+    );
+    // The row geometry the layout guard measures is untouched: no link in .fleet-env.
+    expect(card.querySelector(".fleet-env a.fleet-card-activated")).toBeNull();
+  });
+
   it("paints the grid from the fleet overview before any per-app overview resolves", async () => {
     mocks.listApplications.mockResolvedValue({
       applications: fleet.applications.map((entry) => entry.application),

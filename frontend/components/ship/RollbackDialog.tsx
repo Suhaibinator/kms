@@ -3,10 +3,10 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { RollbackDialogProps } from "@/components/applications/contracts";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
-import { releaseKey } from "@/components/releases/utils";
+import { ReleaseDiffSummary } from "@/components/releases/diff/ReleaseDiffSummary";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Field, Input, Spinner } from "@/components/ui";
-import { ApiError, api, isAbortError, isConflict } from "@/lib/api";
+import { ApiError, api, isAbortError, isConflict, type ReleaseDiffQuery } from "@/lib/api";
 import { useFocusOnAppear } from "@/lib/forms";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
@@ -179,20 +179,21 @@ export default function RollbackDialog({
     name,
     schemaVersion: active?.schema_version,
   });
-  // Compare the actual activation pair; inactive intermediate versions are unrelated.
-  const compareHref = links.releases({
-    app: namespace.app,
-    env: namespace.env,
-    name,
-    schemaVersion: active?.schema_version,
-    release: releaseKey({ name, version: previous, schema_version: active?.schema_version }),
-    section: "compare",
-    compare: releaseKey({
-      name,
-      version: target?.version ?? 0,
-      schema_version: active?.schema_version,
-    }),
-  });
+  // Compare the actual activation pair; inactive intermediate versions are
+  // unrelated. The direction is the one being decided: what is running now
+  // → what re-activating the previous release would put back.
+  const compareQuery: ReleaseDiffQuery | null =
+    target && previous > 0
+      ? {
+          env: namespace.env,
+          app: namespace.app,
+          name,
+          schemaVersion: active?.schema_version ?? 0,
+          from: target.version,
+          to: previous,
+        }
+      : null;
+  const compareHref = compareQuery ? links.releaseCompare(compareQuery) : releasesHref;
   const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
   // Rolling back a rollback is a re-activation; the title says which.
   const title =
@@ -280,6 +281,7 @@ export default function RollbackDialog({
             </>
           )}
         </div>
+        {compareQuery ? <ReleaseDiffSummary query={compareQuery} href={compareHref} /> : null}
 
         <div className="rollback-check" data-testid="rollback-check" aria-live="polite">
           {check.kind === "loading" ? (

@@ -101,18 +101,33 @@ export function ReleaseSection({
               {active.created_by ? ` by ${active.created_by}` : ""}
             </span>
             {latest > active.version ? (
-              <Link
-                className="pipeline-release-meta"
-                href={links.releases({
-                  app: ns.app,
-                  env: ns.env,
-                  name: active.name,
-                  release: releaseKey({ ...active, version: latest }),
-                  schemaVersion: active.schema_version,
-                })}
-              >
-                latest v{latest} not active
-              </Link>
+              <>
+                <Link
+                  className="pipeline-release-meta"
+                  href={links.releases({
+                    app: ns.app,
+                    env: ns.env,
+                    name: active.name,
+                    release: releaseKey({ ...active, version: latest }),
+                    schemaVersion: active.schema_version,
+                  })}
+                >
+                  latest v{latest} not active
+                </Link>
+                <Link
+                  className="pipeline-release-meta"
+                  href={links.releaseCompare({
+                    app: ns.app,
+                    env: ns.env,
+                    name: active.name,
+                    schemaVersion: active.schema_version,
+                    from: active.version,
+                    to: latest,
+                  })}
+                >
+                  Compare with latest
+                </Link>
+              </>
             ) : null}
             {active.previous_version > 0 ? (
               <span className="pipeline-previous faint text-sm">
@@ -130,13 +145,42 @@ export function ReleaseSection({
                     schemaVersion: active.schema_version,
                   })}
                 />
+                {/* After a rollback the pair is offered from the warning below,
+                    in the direction the operator is deciding about. */}
+                {active.is_rolled_back ? null : (
+                  <Link
+                    className="pipeline-release-meta"
+                    href={links.releaseCompare({
+                      app: ns.app,
+                      env: ns.env,
+                      name: active.name,
+                      schemaVersion: active.schema_version,
+                      from: active.previous_version,
+                      to: active.version,
+                    })}
+                  >
+                    What changed
+                  </Link>
+                )}
               </span>
             ) : null}
           </div>
           {active.is_rolled_back ? (
             <div className="warn-panel text-sm">
               Rolled back. {active.name}@{active.previous_version} is newer and still available to
-              re-activate.
+              re-activate.{" "}
+              <Link
+                href={links.releaseCompare({
+                  app: ns.app,
+                  env: ns.env,
+                  name: active.name,
+                  schemaVersion: active.schema_version,
+                  from: active.version,
+                  to: active.previous_version,
+                })}
+              >
+                See what v{active.previous_version} changed
+              </Link>
             </div>
           ) : null}
           {active.previous_version > 0 ? (
