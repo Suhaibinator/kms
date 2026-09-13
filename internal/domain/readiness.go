@@ -44,7 +44,6 @@ const (
 	RolloutStateApplied       = "applied"
 	RolloutStateRolling       = "rolling"
 	RolloutStateDegraded      = "degraded"
-	RolloutStateStale         = "stale"
 )
 
 const (
@@ -77,7 +76,6 @@ const (
 	FindingInstanceRejected           = "instance_rejected"
 	FindingInstanceDivergent          = "instance_divergent"
 	FindingInstancePending            = "instance_pending"
-	FindingInstanceStale              = "instance_stale"
 	FindingRolledBack                 = "rolled_back"
 	FindingPreviousUnavailable        = "previous_unavailable"
 	FindingProduction                 = "production"

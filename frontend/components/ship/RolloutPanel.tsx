@@ -148,7 +148,6 @@ export function RolloutPanel({
                 <Badge kind="warning">{counts.applied_divergent} divergent</Badge>
               ) : null}
               {counts.pending > 0 ? <Badge kind="accent">{counts.pending} pending</Badge> : null}
-              {counts.stale > 0 ? <Badge>{counts.stale} stale</Badge> : null}
             </>
           )}
           <span className="faint text-sm">

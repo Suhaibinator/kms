@@ -829,11 +829,11 @@
       "expected": {
         "values_state": "complete",
         "release_state": "active",
-        "rollout_state": "stale",
+        "rollout_state": "no_subscribers",
         "env_status": "ready",
         "app_status": "ready",
         "finding_codes": [
-          "instance_stale"
+          "no_subscribers"
         ]
       }
     },

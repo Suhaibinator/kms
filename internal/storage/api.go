@@ -258,6 +258,11 @@ type IdentityCertRecord struct {
 type ListPage struct {
 	Limit int    // implementation clamps to [1, 1000]; 0 means default (100)
 	Token string // "" = first page
+	// DepartedBefore, when set, makes ListReleaseAcknowledgements omit
+	// disconnected, unpinned rows whose disconnect is older than this time:
+	// a restarted process never resumes its session, so such rows are retained
+	// only for a late reconnect and are not part of the live fleet.
+	DepartedBefore time.Time
 }
 
 // ApplicationStore is the application-first management surface. It remains a

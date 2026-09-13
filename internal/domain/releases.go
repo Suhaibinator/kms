@@ -263,7 +263,11 @@ type ReleaseAcknowledgement struct {
 	Diagnostic        string
 	ClientTimestamp   time.Time
 	ServerTimestamp   time.Time
-	Connected         bool
+	// LiveTimestamp is when the instance was last connected or acknowledged:
+	// the disconnect time once it has disconnected. Legacy rows keep their
+	// last acknowledgement in ServerTimestamp, so liveness needs its own field.
+	LiveTimestamp time.Time
+	Connected     bool
 	// AppliedDivergent reports that the applied generation differs from the
 	// application's source-owned defaults; DivergentFieldCount is the number of
 	// differing canonical fields. Both are only meaningful for applied state.

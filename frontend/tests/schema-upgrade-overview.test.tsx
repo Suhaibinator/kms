@@ -26,10 +26,10 @@ it("keeps the contract collapsed and exposes current/latest schema with an upgra
   fireEvent.click(screen.getByRole("button", { name: "Upgrade schema…" }));
   expect(upgrade).toHaveBeenCalledOnce();
 });
-it("groups stale instances without hiding other findings", () => {
+it("lists every instance finding inline instead of folding them into a disclosure", () => {
   const environment = structuredClone(overview.environments[0]);
   environment.findings = [1, 2, 3].map((n) => ({
-    code: "instance_stale",
+    code: "instance_pending",
     severity: "info",
     scope: { env: environment.namespace.env, instance: `instance-${n}` },
     params: {},
@@ -50,6 +50,8 @@ it("groups stale instances without hiding other findings", () => {
       }}
     />,
   );
-  expect(screen.getByText("3 stale instances · View details")).toBeVisible();
-  expect(container.querySelector("details")).not.toHaveAttribute("open");
+  const list = container.querySelector(".finding-list.pipeline-findings");
+  expect(list?.querySelectorAll('li[data-code="instance_pending"]')).toHaveLength(3);
+  expect(screen.queryByText(/stale instances/)).toBeNull();
+  expect(list?.closest("details")).toBeNull();
 });

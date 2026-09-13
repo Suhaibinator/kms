@@ -145,21 +145,23 @@ describe("countSubscribers", () => {
         connected: false,
       }),
       row({
-        instance_id: "gone-stale",
+        instance_id: "gone-behind",
         state: "applied",
         activation_revision: 40,
         connected: false,
       }),
       row({ instance_id: "gone-fresh", state: "", activation_revision: 0, connected: false }),
     ]);
+    // A disconnected row is still within the server's grace period (departed
+    // rows never arrive), so it keeps its last state: gone-applied counts as
+    // applied, gone-behind and gone-fresh as pending.
     expect(countSubscribers(instances, 41)).toEqual({
       total: 9,
       connected: 6,
-      applied_current: 1,
+      applied_current: 2,
       applied_divergent: 0,
       rejected: 1,
-      pending: 4,
-      stale: 2,
+      pending: 6,
     });
   });
 
@@ -171,7 +173,6 @@ describe("countSubscribers", () => {
       applied_divergent: 0,
       rejected: 0,
       pending: 0,
-      stale: 0,
     });
   });
 });
@@ -214,7 +215,6 @@ describe("divergent applied instances", () => {
       applied_divergent: 1,
       rejected: 1,
       pending: 0,
-      stale: 0,
     });
   });
 

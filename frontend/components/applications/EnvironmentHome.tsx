@@ -82,7 +82,6 @@ export function EnvironmentHome({
   const env = ns.env;
   const active = environment.release.active;
   const findings = useMemo(() => columnFindings(environment), [environment]);
-  const staleFindings = findings.filter((finding) => finding.code === "instance_stale");
   const otherKeys = useMemo(
     () => countOtherKeys(environment, overview.rows),
     [environment, overview.rows],
@@ -395,19 +394,7 @@ export function EnvironmentHome({
         </div>
       ) : null}
 
-      <FindingList
-        findings={findings.filter((finding) => finding.code !== "instance_stale")}
-        onFix={actions.onFix}
-        className="application-findings"
-      />
-      {staleFindings.length > 0 ? (
-        <details className="info-panel text-sm">
-          <summary className="cursor-pointer">
-            {staleFindings.length} stale instances · View details
-          </summary>
-          <FindingList findings={staleFindings} onFix={actions.onFix} />
-        </details>
-      ) : null}
+      <FindingList findings={findings} onFix={actions.onFix} className="application-findings" />
 
       <EnvironmentValuesTable
         environment={environment}

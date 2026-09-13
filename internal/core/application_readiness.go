@@ -13,10 +13,11 @@ import (
 // overview endpoint has already fetched, so the rules are unit-testable
 // without storage and the frontend never re-derives them.
 
-// staleDisconnectAfter is how long a disconnected instance that has not
-// applied the current activation may be missing before it counts as stale
-// rather than pending.
-const staleDisconnectAfter = 90 * time.Second
+// departAfter is how long a disconnected, unpinned instance may be missing
+// before it leaves the fleet. A restarted process never resumes its session,
+// so departed instances are dropped from the rollout summary and findings
+// rather than reported; pinned sessions stay visible so the pin can be removed.
+const departAfter = 90 * time.Second
 
 // maxRolloutInstanceFindings caps per-instance findings and the
 // rejected_instances list so a large fleet cannot bloat one response.
@@ -254,14 +255,14 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			add(finding(domain.FindingNoSubscribers, domain.FindingInfo, envScope, nil))
 		}
 		if n := len(out.Rollout.OtherReleaseNames); n > 0 {
-			add(finding(domain.FindingSubscriberOtherRelease, domain.FindingWarning, envScope, map[string]any{"count": otherReleaseInstanceCount(in.Acks, in.App.ReleaseName), "names": strings.Join(out.Rollout.OtherReleaseNames, ",")}))
+			add(finding(domain.FindingSubscriberOtherRelease, domain.FindingWarning, envScope, map[string]any{"count": otherReleaseInstanceCount(in.Acks, in.App.ReleaseName, in.Now), "names": strings.Join(out.Rollout.OtherReleaseNames, ",")}))
 		}
 		emitted := 0
-		for _, inst := range groupSubscriberInstances(filterAcks(in.Acks, in.App.ReleaseName)) {
+		for _, inst := range liveInstances(filterAcks(in.Acks, in.App.ReleaseName), in.Now) {
 			if emitted >= maxRolloutInstanceFindings {
 				break
 			}
-			class := classifyInstance(inst, currentRevision, in.Now)
+			class := classifyInstance(inst, currentRevision)
 			scope := domain.FindingScope{Env: env, Instance: inst.InstanceID}
 			params := map[string]any{"client_name": inst.ClientName, "instance_id": inst.InstanceID, "identity": inst.Identity}
 			switch class {
@@ -278,8 +279,6 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 				add(finding(domain.FindingInstanceRejected, domain.FindingWarning, scope, params))
 			case instancePending:
 				add(finding(domain.FindingInstancePending, domain.FindingInfo, scope, params))
-			case instanceStale:
-				add(finding(domain.FindingInstanceStale, domain.FindingInfo, scope, params))
 			default:
 				continue
 			}
@@ -354,14 +353,39 @@ func filterAcks(acks []domain.ReleaseAcknowledgement, releaseName string) []doma
 	return out
 }
 
-func otherReleaseInstanceCount(acks []domain.ReleaseAcknowledgement, releaseName string) int {
+func otherReleaseInstanceCount(acks []domain.ReleaseAcknowledgement, releaseName string, now time.Time) int {
 	others := make([]domain.ReleaseAcknowledgement, 0)
 	for _, ack := range acks {
 		if ack.ReleaseName != releaseName {
 			others = append(others, ack)
 		}
 	}
-	return len(groupSubscriberInstances(others))
+	return len(liveInstances(others, now))
+}
+
+// liveInstances folds acks into instances and drops the departed ones.
+func liveInstances(acks []domain.ReleaseAcknowledgement, now time.Time) []domain.SubscriberInstance {
+	out := make([]domain.SubscriberInstance, 0)
+	for _, inst := range groupSubscriberInstances(acks) {
+		if !departed(inst, now) {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// departed reports whether a disconnected, unpinned instance has been gone
+// long enough to leave the fleet. LiveTimestamp is the disconnect time; rows
+// built without one fall back to ServerTimestamp.
+func departed(inst domain.SubscriberInstance, now time.Time) bool {
+	if inst.Connected || inst.PinVersion > 0 {
+		return false
+	}
+	seen := inst.LiveTimestamp
+	if seen.IsZero() {
+		seen = inst.ServerTimestamp
+	}
+	return now.Sub(seen) > departAfter
 }
 
 var lifecycleRank = map[string]int{
@@ -401,6 +425,9 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 		inst.Connected = inst.Connected || ack.Connected
 		if ack.ServerTimestamp.After(inst.ServerTimestamp) {
 			inst.ServerTimestamp = ack.ServerTimestamp
+		}
+		if ack.LiveTimestamp.After(inst.LiveTimestamp) {
+			inst.LiveTimestamp = ack.LiveTimestamp
 		}
 		rank, lifecycle := lifecycleRank[ack.State]
 		if !lifecycle {
@@ -446,17 +473,18 @@ const (
 	instanceApplied instanceClass = iota
 	instanceRejected
 	instancePending
-	instanceStale
 	instancePinned
 )
 
-// classifyInstance places one instance relative to the current activation
-// revision. Below-applied instances are pending while connected (or only
-// briefly disconnected) and stale once disconnected for staleDisconnectAfter.
-func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64, now time.Time) instanceClass {
+// classifyInstance places one live instance relative to the current
+// activation revision. Departed instances are filtered out before this runs;
+// a briefly disconnected instance keeps classifying by its last reported
+// state so a reconnect does not flap the counts. A disconnected pinned
+// session reports as pinned until an operator removes the pin.
+func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64) instanceClass {
 	if inst.SessionID != "" {
-		if !inst.Connected {
-			return instanceStale
+		if !inst.Connected && inst.PinVersion > 0 {
+			return instancePinned
 		}
 		if inst.TargetRevision != inst.DesiredRevision || inst.ReleaseVersion != inst.DesiredVersion {
 			return instancePending
@@ -476,10 +504,7 @@ func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64, no
 			return instanceApplied
 		}
 	}
-	if inst.Connected || now.Sub(inst.ServerTimestamp) <= staleDisconnectAfter {
-		return instancePending
-	}
-	return instanceStale
+	return instancePending
 }
 
 // computeRollout summarises the namespace's subscriber instances for
@@ -494,15 +519,17 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		}
 	}
 	for name := range otherNames {
-		summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
+		if len(liveInstances(filterAcks(acks, name), now)) > 0 {
+			summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
+		}
 	}
 	sort.Strings(summary.OtherReleaseNames)
-	for _, inst := range groupSubscriberInstances(filterAcks(acks, releaseName)) {
+	for _, inst := range liveInstances(filterAcks(acks, releaseName), now) {
 		summary.Total++
 		if inst.Connected {
 			summary.Connected++
 		}
-		switch classifyInstance(inst, currentRevision, now) {
+		switch classifyInstance(inst, currentRevision) {
 		case instancePinned:
 			summary.Pinned++
 		case instanceApplied:
@@ -519,8 +546,6 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 			}
 		case instancePending:
 			summary.Pending++
-		case instanceStale:
-			summary.Stale++
 		}
 	}
 	state := domain.RolloutStateApplied
@@ -531,8 +556,6 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		state = domain.RolloutStateDegraded
 	case summary.Pending > 0 || summary.Pinned > 0:
 		state = domain.RolloutStateRolling
-	case summary.Stale > 0:
-		state = domain.RolloutStateStale
 	}
 	return summary, state
 }
