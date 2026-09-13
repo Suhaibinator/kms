@@ -25,6 +25,7 @@ export function SearchableAppSelect({
   ref,
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
+  "aria-label": ariaLabel,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -41,6 +42,7 @@ export function SearchableAppSelect({
   ref?: Ref<HTMLButtonElement>;
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
+  "aria-label"?: string;
 }) {
   const selected = options.find((option) => option.value === value) ?? null;
 
@@ -82,6 +84,7 @@ export function SearchableAppSelect({
         }}
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid}
+        aria-label={ariaLabel}
       >
         <Combobox.Value>
           {(option: SearchableAppSelectOption | null) => (

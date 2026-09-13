@@ -279,8 +279,7 @@ describe("ReleasesPage", () => {
       ),
     );
     expect(mocks.listSchemas).not.toHaveBeenCalled();
-    expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("3");
-    expect(screen.getByRole("option", { name: "v0 · schema-free" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveTextContent("v3");
     expect(mocks.replace).toHaveBeenCalledWith(
       expect.objectContaining({ query: expect.objectContaining({ schema_version: "3" }) }),
       undefined,
@@ -358,7 +357,7 @@ describe("ReleasesPage", () => {
     mocks.query = { ...mocks.query, name: "runtime" };
     rerender(<ReleasesPage />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveTextContent("v2"),
     );
     expect(mocks.releaseSchemaVersions).toHaveBeenLastCalledWith(
       { env: "prod", app: "payments" },
@@ -403,7 +402,7 @@ describe("ReleasesPage", () => {
     expect(mocks.listReleases.mock.calls.some((call) => call[1] === "runtime")).toBe(false);
     await act(async () => resolveNamed({ schema_versions: [2, 1], next_page_token: "" }));
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveValue("2"),
+      expect(screen.getByRole("combobox", { name: "Schema version" })).toHaveTextContent("v2"),
     );
     expect(mocks.replace).toHaveBeenLastCalledWith(
       expect.objectContaining({

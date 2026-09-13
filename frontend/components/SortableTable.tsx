@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { type ReactNode, useCallback, useId, useMemo } from "react";
 import type { BulkSelection } from "@/components/BulkSelection";
 import { Checkbox } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useQueryParams } from "@/lib/hooks";
 import {
   ariaSort,
@@ -162,44 +163,41 @@ export function MobileListToolbar<T>({
   const selectionId = useId();
   return (
     <fieldset className="mobile-list-toolbar" aria-label="List controls">
-      <label className="mobile-sort-field">
+      <label className="mobile-sort-field" htmlFor={`${selectionId}-sort`}>
         Sort by
-        <select
+        <AppSelect
+          id={`${selectionId}-sort`}
           value={controller.sort?.column ?? ""}
-          onChange={(event) =>
+          onValueChange={(value) =>
             controller.setSort(
-              event.target.value
-                ? { column: event.target.value, direction: controller.sort?.direction ?? "asc" }
-                : null,
+              value ? { column: value, direction: controller.sort?.direction ?? "asc" } : null,
             )
           }
-        >
-          <option value="">Default order</option>
-          {controller.columns
+          placeholder="Default order"
+          emptyOptionLabel="Default order"
+          options={controller.columns
             .filter((column) => column.value)
-            .map((column) => (
-              <option key={column.id} value={column.id}>
-                {column.label}
-              </option>
-            ))}
-        </select>
+            .map((column) => ({ value: column.id, label: column.label }))}
+        />
       </label>
-      <label className="mobile-sort-field">
+      <label className="mobile-sort-field" htmlFor={`${selectionId}-direction`}>
         Direction
-        <select
+        <AppSelect
+          id={`${selectionId}-direction`}
           disabled={!controller.sort}
           value={controller.sort?.direction ?? "asc"}
-          onChange={(event) =>
+          onValueChange={(value) =>
             controller.sort &&
             controller.setSort({
               column: controller.sort.column,
-              direction: event.target.value === "desc" ? "desc" : "asc",
+              direction: value === "desc" ? "desc" : "asc",
             })
           }
-        >
-          <option value="asc">Ascending</option>
-          <option value="desc">Descending</option>
-        </select>
+          options={[
+            { value: "asc", label: "Ascending" },
+            { value: "desc", label: "Descending" },
+          ]}
+        />
       </label>
       {hint ? <p className="mobile-list-hint">{hint}</p> : null}
       {selection ? (

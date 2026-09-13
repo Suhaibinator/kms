@@ -5,6 +5,7 @@ import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { Badge, Button, Checkbox, Field, Input, Loading } from "@/components/ui";
 import { FileInput } from "@/components/ui/file-input";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { contractsMatch, schemaUpgradeContract } from "@/lib/contract-derive";
@@ -760,30 +761,25 @@ export function SchemaMigrationModal({
             label="Destination environment"
             hint="The active release here is the migration baseline and will be replaced. Starting values can come from that release or a defaults file."
           >
-            <select
-              className="native-select"
+            <AppSelect
               aria-label="Destination environment"
               value={environment}
-              onChange={(event) => setEnvironment(event.target.value)}
-            >
-              {activeEnvironments.map((item) => (
-                <option key={item.namespace.env} value={item.namespace.env}>
-                  {item.namespace.env}
-                  {item.production ? " (production)" : ""} · active v{item.release.active?.version}
-                </option>
-              ))}
-            </select>
+              onValueChange={setEnvironment}
+              options={activeEnvironments.map((item) => ({
+                value: item.namespace.env,
+                label: `${item.namespace.env}${item.production ? " (production)" : ""} · active v${item.release.active?.version}`,
+              }))}
+            />
           </Field>
           <Field
             label="Target registered schema"
             hint="The exact immutable schema version will be pinned."
           >
-            <select
-              className="native-select"
+            <AppSelect
               aria-label="Target registered schema"
-              value={schemaVersion}
-              onChange={(event) => {
-                setSchemaVersion(Number(event.target.value));
+              value={String(schemaVersion)}
+              onValueChange={(value) => {
+                setSchemaVersion(Number(value));
                 setDefaults(null);
                 setFileName("");
                 setArtifactError("");
@@ -791,34 +787,33 @@ export function SchemaMigrationModal({
                 setReadingArtifact(false);
                 setPreview(null);
               }}
-            >
-              {newerSchemas.length === 0 ? (
-                <option value={0}>No newer registered schema</option>
-              ) : null}
-              {newerSchemas.map((schema) => (
-                <option key={schema.version} value={schema.version}>
-                  v{schema.version} · {schema.digest.slice(0, 16)}…
-                </option>
-              ))}
-            </select>
+              options={
+                newerSchemas.length === 0
+                  ? [{ value: "0", label: "No newer registered schema" }]
+                  : newerSchemas.map((schema) => ({
+                      value: String(schema.version),
+                      label: `v${schema.version} · ${schema.digest.slice(0, 16)}…`,
+                    }))
+              }
+            />
           </Field>
           <Field label="Starting values">
-            <select
-              className="native-select"
+            <AppSelect
               aria-label="Starting values"
               value={source}
-              onChange={(event) => {
-                setSource(event.target.value);
+              onValueChange={(value) => {
+                setSource(value);
                 setPreview(null);
                 initializedDraft.current = "";
               }}
-            >
-              <option value="active">
-                Current release {application.release_name}@
-                {selectedEnvironment?.release.active?.version}
-              </option>
-              <option value="artifact">Import defaults file</option>
-            </select>
+              options={[
+                {
+                  value: "active",
+                  label: `Current release ${application.release_name}@${selectedEnvironment?.release.active?.version}`,
+                },
+                { value: "artifact", label: "Import defaults file" },
+              ]}
+            />
           </Field>
           {source === "artifact" && (
             <Field
@@ -1025,12 +1020,11 @@ export function SchemaMigrationModal({
                 />
               </Field>
               <Field label="Source alias">
-                <select
-                  className="native-select"
+                <AppSelect
                   aria-label="Source alias"
                   value={field.fromAlias ?? ""}
-                  onChange={(event) => {
-                    const fromAlias = event.target.value || undefined;
+                  onValueChange={(value) => {
+                    const fromAlias = value || undefined;
                     const entry = sourceEntries.find((candidate) => candidate.alias === fromAlias);
                     update(field.id, {
                       fromAlias,
@@ -1045,23 +1039,21 @@ export function SchemaMigrationModal({
                       originalContentType: undefined,
                     });
                   }}
-                >
-                  <option value="">New field</option>
-                  {sourceEntries.map((entry) => (
-                    <option key={entry.alias} value={entry.alias}>
-                      {entry.alias} · {entry.kind} v{entry.version}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="New field"
+                  emptyOptionLabel="New field"
+                  options={sourceEntries.map((entry) => ({
+                    value: entry.alias,
+                    label: `${entry.alias} · ${entry.kind} v${entry.version}`,
+                  }))}
+                />
               </Field>
               <Field label="Kind">
-                <select
-                  className="native-select"
+                <AppSelect
                   aria-label="Kind"
                   disabled={establishedContract}
                   value={field.kind}
-                  onChange={(event) => {
-                    const kind = event.target.value as "parameter" | "secret";
+                  onValueChange={(value) => {
+                    const kind = value as "parameter" | "secret";
                     setFieldValidity((current) => {
                       if (!(field.id in current)) return current;
                       const next = { ...current };
@@ -1083,24 +1075,22 @@ export function SchemaMigrationModal({
                       originalContentType: undefined,
                     });
                   }}
-                >
-                  <option value="parameter">Parameter</option>
-                  <option value="secret">Secret</option>
-                </select>
+                  options={[
+                    { value: "parameter", label: "Parameter" },
+                    { value: "secret", label: "Secret" },
+                  ]}
+                />
               </Field>
               <Field label="Content type">
-                <select
-                  className="native-select"
+                <AppSelect
                   aria-label="Content type"
                   value={field.content_type ?? ""}
                   disabled={establishedContract || field.kind === "secret"}
-                  onChange={(event) => update(field.id, { content_type: event.target.value })}
-                >
-                  <option value="">—</option>
-                  {PARAMETER_CONTENT_TYPES.map((type) => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
+                  onValueChange={(value) => update(field.id, { content_type: value })}
+                  placeholder="—"
+                  emptyOptionLabel="—"
+                  options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
+                />
               </Field>
               <Button
                 type="button"

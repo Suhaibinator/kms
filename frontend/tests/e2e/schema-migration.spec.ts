@@ -106,8 +106,8 @@ for (const width of [390, 1280]) {
     await page.getByRole("menuitem", { name: "Upgrade schema in prod…" }).click();
     const dialog = page.getByRole("dialog", { name: "Upgrade application schema" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel("Destination environment")).toHaveValue("prod");
-    await expect(dialog.getByLabel("Target registered schema")).toHaveValue("2");
+    await expect(dialog.getByLabel("Destination environment")).toContainText("prod");
+    await expect(dialog.getByLabel("Target registered schema")).toContainText("v2");
     await expectNoPageOverflow(page);
 
     await dialog.getByRole("button", { name: /Review contract/ }).click();
@@ -115,7 +115,8 @@ for (const width of [390, 1280]) {
     const contractRow = renamed.locator(
       "xpath=ancestor::*[contains(@class, 'migration-contract-row')]",
     );
-    await contractRow.getByLabel("Source alias").selectOption("rate_limits");
+    await contractRow.getByLabel("Source alias").click();
+    await page.getByRole("option", { name: /rate_limits · parameter/ }).click();
     await expectNoPageOverflow(page);
 
     await dialog.getByRole("button", { name: /Edit values/ }).click();

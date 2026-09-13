@@ -20,6 +20,7 @@ export function AppSelect({
   onValueChange,
   options,
   placeholder = "Select…",
+  emptyOptionLabel,
   disabled,
   required,
   name,
@@ -32,11 +33,14 @@ export function AppSelect({
   ref,
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
+  "aria-label": ariaLabel,
 }: {
   value: string;
   onValueChange: (value: string) => void;
   options: AppSelectOption[];
   placeholder?: string;
+  /** Adds an explicit option that calls `onValueChange("")`, allowing a selection to be reset. */
+  emptyOptionLabel?: string;
   disabled?: boolean;
   required?: boolean;
   name?: string;
@@ -50,15 +54,22 @@ export function AppSelect({
   ref?: Ref<HTMLButtonElement>;
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
+  "aria-label"?: string;
 }) {
-  const effectivelyDisabled = disabled || options.length === 0;
+  const effectivelyDisabled = disabled || (options.length === 0 && !emptyOptionLabel);
+  let emptyOptionValue = "__app-select-empty-option__";
+  while (options.some((option) => option.value === emptyOptionValue)) emptyOptionValue += "_";
 
   if (searchable) {
+    const searchableOptions = [
+      ...(emptyOptionLabel ? [{ value: emptyOptionValue, label: emptyOptionLabel }] : []),
+      ...options,
+    ];
     return (
       <SearchableAppSelect
         value={value}
-        onValueChange={onValueChange}
-        options={options}
+        onValueChange={(next) => onValueChange(next === emptyOptionValue ? "" : next)}
+        options={searchableOptions}
         placeholder={placeholder}
         searchPlaceholder={searchPlaceholder}
         emptyMessage={emptyMessage}
@@ -71,19 +82,22 @@ export function AppSelect({
         ref={ref}
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid}
+        aria-label={ariaLabel}
       />
     );
   }
 
-  const items = options.map(({ value: optionValue, label }) => ({
-    value: optionValue,
-    label,
-  }));
+  const items = [
+    ...(emptyOptionLabel ? [{ value: emptyOptionValue, label: emptyOptionLabel }] : []),
+    ...options.map(({ value: optionValue, label }) => ({ value: optionValue, label })),
+  ];
 
   return (
     <Select
       value={value || null}
-      onValueChange={(next) => onValueChange(next ?? "")}
+      onValueChange={(next) =>
+        onValueChange(next === emptyOptionValue || next === null ? "" : next)
+      }
       items={items}
       disabled={effectivelyDisabled}
       required={required}
@@ -96,10 +110,14 @@ export function AppSelect({
         onBlur={onBlur}
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid}
+        aria-label={ariaLabel}
       >
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent align="start">
+        {emptyOptionLabel ? (
+          <SelectItem value={emptyOptionValue}>{emptyOptionLabel}</SelectItem>
+        ) : null}
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
             {option.label}

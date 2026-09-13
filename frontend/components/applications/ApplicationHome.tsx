@@ -21,6 +21,7 @@ import { StatusChip } from "@/components/StatusChip";
 import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
+import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
@@ -367,29 +368,29 @@ export function ApplicationHome({
           <>
             <label className="row-wrap" htmlFor="application-schema-track">
               <span className="muted">Schema</span>
-              <select
+              <AppSelect
                 id="application-schema-track"
                 aria-label="Schema version"
-                value={schemaVersion}
-                onChange={(event) => {
+                value={String(schemaVersion)}
+                onValueChange={(value) => {
                   actions.closeAll();
                   void replaceQuery({
-                    schema_version: event.target.value,
+                    schema_version: value,
                     ship: "",
                     rollback: "",
                     migrate: migrate ?? "",
                   });
                 }}
-              >
-                {schemas.map((schema) => (
-                  <option key={schema.version} value={schema.version}>
-                    v{schema.version}
-                  </option>
-                ))}
-                {!schemas.some((schema) => schema.version === 0) ? (
-                  <option value={0}>v0 · schema-free</option>
-                ) : null}
-              </select>
+                options={[
+                  ...schemas.map((schema) => ({
+                    value: String(schema.version),
+                    label: `v${schema.version}`,
+                  })),
+                  ...(!schemas.some((schema) => schema.version === 0)
+                    ? [{ value: "0", label: "v0 · schema-free" }]
+                    : []),
+                ]}
+              />
             </label>
             {freshness ? (
               <TransportBadge

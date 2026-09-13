@@ -29,6 +29,7 @@ import {
   TableSummary,
 } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
+import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
@@ -809,32 +810,32 @@ export default function ReleasesPage() {
               </form>
             ) : (
               <Field label="Schema version">
-                <select
+                <AppSelect
                   aria-label="Schema version"
-                  value={schemaVersion ?? ""}
+                  value={schemaVersion === undefined ? "" : String(schemaVersion)}
                   disabled={!hasNS || tracks.versions === null}
-                  onChange={(event) =>
+                  onValueChange={(value) =>
                     void replaceQuery({
-                      schema_version: event.target.value,
+                      schema_version: value,
                       release: "",
                       compare: "",
                       section: "",
                     })
                   }
-                >
-                  {schemaVersion === undefined ? <option value="">Select schema</option> : null}
-                  {schemaVersion !== undefined &&
-                  schemaVersion !== 0 &&
-                  !tracks.versions?.includes(schemaVersion) ? (
-                    <option value={schemaVersion}>v{schemaVersion}</option>
-                  ) : null}
-                  {(tracks.versions ?? []).map((version) => (
-                    <option key={version} value={version}>
-                      v{version}
-                    </option>
-                  ))}
-                  <option value={0}>v0 · schema-free</option>
-                </select>
+                  placeholder="Select schema"
+                  options={[
+                    ...(schemaVersion !== undefined &&
+                    schemaVersion !== 0 &&
+                    !tracks.versions?.includes(schemaVersion)
+                      ? [{ value: String(schemaVersion), label: `v${schemaVersion}` }]
+                      : []),
+                    ...(tracks.versions ?? []).map((version) => ({
+                      value: String(version),
+                      label: `v${version}`,
+                    })),
+                    { value: "0", label: "v0 · schema-free" },
+                  ]}
+                />
               </Field>
             )}
             <form className="filters filter-grow" onSubmit={applyNameFilter}>

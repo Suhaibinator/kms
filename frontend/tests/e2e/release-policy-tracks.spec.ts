@@ -40,16 +40,17 @@ test("release-policy users discover inactive newest tracks and retain explicit h
   await page.goto("/releases?app=gradethis&env=prod&name=runtime");
   await expect(page).toHaveURL(/schema_version=5/);
   const selector = page.getByRole("combobox", { name: "Schema version" });
-  await expect(selector).toHaveValue("5");
+  await expect(selector).toContainText("v5");
   await expect(page.getByText("No releases found", { exact: true })).toBeVisible();
-  await selector.selectOption("1");
+  await selector.click();
+  await page.getByRole("option", { name: "v1" }).click();
   await expect(page).toHaveURL(/schema_version=1/);
   await expect(page.getByRole("table").getByRole("button", { name: "View" }).first()).toBeVisible();
   await page.goto("/releases?app=gradethis&env=prod&name=runtime&schema_version=0");
-  await expect(selector).toHaveValue("0");
+  await expect(selector).toContainText("v0 · schema-free");
   await expect.poll(() => selected.at(-1)).toBe(0);
   await page.goBack();
-  await expect(selector).toHaveValue("1");
+  await expect(selector).toContainText("v1");
   expect(adminSchemaReads).toBe(0);
   expect(selected).toContain(5);
   expect(selected).toContain(1);
@@ -130,17 +131,18 @@ test("changing release names resets schema discovery to the new track scope", as
   await expect(page.getByRole("button", { name: "New release" })).toBeDisabled();
   expect(requests.filter(({ name }) => name === "runtime")).toEqual([]);
   releaseNamedDiscovery();
-  await expect(selector).toHaveValue("2");
+  await expect(selector).toContainText("v2");
   await expect.poll(() => requests.at(-1)).toEqual({ name: "runtime", schema: "2" });
-  await selector.selectOption("0");
+  await selector.click();
+  await page.getByRole("option", { name: "v0 · schema-free" }).click();
   await expect.poll(() => requests.at(-1)).toEqual({ name: "runtime", schema: "0" });
   await filter.fill("other");
   await page.getByRole("button", { name: "Apply filter" }).click();
-  await expect(selector).toHaveValue("4");
+  await expect(selector).toContainText("v4");
   await expect.poll(() => requests.at(-1)).toEqual({ name: "other", schema: "4" });
   await filter.fill("");
   await page.getByRole("button", { name: "Apply filter" }).click();
-  await expect(selector).toHaveValue("5");
+  await expect(selector).toContainText("v5");
   await expect.poll(() => requests.at(-1)).toEqual({ name: "", schema: "5" });
   expect(
     requests
