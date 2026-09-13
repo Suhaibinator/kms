@@ -19,12 +19,14 @@ import {
   arrayStateLabel,
   buildForm,
   describeConstraints,
+  entryAt,
   extraKeys,
   type FormField,
   formatIssuePath,
   getAt,
   initialValue,
   isJsonObject,
+  isNullableField,
   itemAt,
   type JsonObject,
   type JsonSchema,
@@ -599,11 +601,54 @@ export function SchemaForm({
         ? "must be a JSON object"
         : null;
 
+  /**
+   * A scalar the schema lets be null gets a "Set to null" toggle under its
+   * control; nothing in a text or number box can express null otherwise, and
+   * the generator's pointer fields ("nil means …") are exactly this shape.
+   * Lists and maps offer null among their own state actions instead.
+   */
   function renderField(field: FormField): React.ReactNode {
+    const node = renderFieldControl(field);
+    if (!isNullableField(field) || !["string", "number", "boolean"].includes(field.kind)) {
+      return node;
+    }
+    const key = pathKey(field.path);
+    const controlId = `${baseId}-${key.replace(/[\s\0]+/g, "-")}-null`;
+    const current = getAt(data, field.path);
+    const label = fieldLabel(field);
+    return (
+      <div key={key} className="schema-form-nullable">
+        {node}
+        <div className="checkbox-row schema-form-null">
+          <Checkbox
+            id={controlId}
+            checked={current === null}
+            disabled={disabled}
+            onCheckedChange={(next) => {
+              setDraft(key, undefined);
+              if (next === true) {
+                commit(field.path, null);
+                return;
+              }
+              const restored = initialValue(field);
+              commit(field.path, restored === null ? undefined : restored);
+            }}
+          />
+          {/* Base UI names the checkbox by `${id}-label`, so the label carries it. */}
+          <label id={`${controlId}-label`} htmlFor={controlId} className="block text-sm">
+            Set {label} to null
+          </label>
+        </div>
+      </div>
+    );
+  }
+
+  function renderFieldControl(field: FormField): React.ReactNode {
     const key = pathKey(field.path);
     const controlId = `${baseId}-${key.replace(/[\s\0]+/g, "-")}`;
     const current = getAt(data, field.path);
     const label = fieldLabel(field);
+    const isNull = current === null;
     switch (field.kind) {
       case "object": {
         const forcedOpen = hasIssueWithin(key);
@@ -671,7 +716,7 @@ export function SchemaForm({
               <Checkbox
                 id={controlId}
                 checked={checked}
-                disabled={disabled}
+                disabled={disabled || isNull}
                 aria-required={field.required || undefined}
                 aria-invalid={error ? true : undefined}
                 onCheckedChange={(next) => commit(field.path, next === true)}
@@ -726,8 +771,8 @@ export function SchemaForm({
                       ? emptyValue
                       : text
                 }
-                disabled={disabled}
-                placeholder="Choose…"
+                disabled={disabled || isNull}
+                placeholder={isNull ? "null" : "Choose…"}
                 options={
                   field.required ? options : [{ value: unsetValue, label: "— none —" }, ...options]
                 }
@@ -764,7 +809,8 @@ export function SchemaForm({
                 className="font-mono"
                 rows={3}
                 value={text}
-                disabled={disabled}
+                disabled={disabled || isNull}
+                placeholder={isNull ? "null" : undefined}
                 spellCheck={false}
                 maxLength={maxLength}
                 onChange={(event) => commit(field.path, event.target.value)}
@@ -775,7 +821,8 @@ export function SchemaForm({
                 id={controlId}
                 className="font-mono"
                 value={text}
-                disabled={disabled}
+                disabled={disabled || isNull}
+                placeholder={isNull ? "null" : undefined}
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={maxLength}
@@ -811,8 +858,8 @@ export function SchemaForm({
               <AppSelect
                 id={controlId}
                 value={text}
-                disabled={disabled}
-                placeholder="Choose…"
+                disabled={disabled || isNull}
+                placeholder={isNull ? "null" : "Choose…"}
                 options={field.required ? options : [{ value: "", label: "— none —" }, ...options]}
                 onValueChange={(next) => commit(field.path, next === "" ? undefined : Number(next))}
                 onBlur={onBlur}
@@ -835,7 +882,8 @@ export function SchemaForm({
               className="font-mono"
               inputMode={field.integer ? "numeric" : "decimal"}
               value={text}
-              disabled={disabled}
+              disabled={disabled || isNull}
+              placeholder={isNull ? "null" : undefined}
               autoComplete="off"
               spellCheck={false}
               onChange={(event) => {
@@ -854,15 +902,297 @@ export function SchemaForm({
           </Field>
         );
       }
+      case "map": {
+        const entries = isJsonObject(current) ? Object.entries(current) : [];
+        const error = errorFor(field, null);
+        const hint = hintFor(field, current);
+        const nullable = isNullableField(field);
+        const state =
+          current === undefined
+            ? "unset"
+            : current === null
+              ? "null"
+              : isJsonObject(current)
+                ? "set"
+                : "invalid";
+        const valueSchema = isJsonObject(field.schema.additionalProperties)
+          ? field.schema.additionalProperties
+          : {};
+        const newKeyKey = `${key} \0newkey`;
+        const newKey = drafts[newKeyKey];
+        const keyTaken = newKey !== undefined && entries.some(([name]) => name === newKey.text);
+        const dropDrafts = (prefix: string) =>
+          setDrafts((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).filter(
+                ([draftKey]) => draftKey !== prefix && !draftKey.startsWith(`${prefix} `),
+              ),
+            ),
+          );
+        const replaceMap = (next: unknown) => {
+          dropDrafts(key);
+          commit(field.path, next);
+        };
+        const setEntry = (name: string, next: unknown) =>
+          commit(field.path, { ...(isJsonObject(current) ? current : {}), [name]: next });
+        const removeEntry = (name: string) => {
+          dropDrafts(pathKey([...field.path, name]));
+          const rest = { ...(isJsonObject(current) ? current : {}) };
+          delete rest[name];
+          commit(field.path, rest);
+        };
+        const initialEntry = (): unknown => {
+          if (field.itemField) return initialValue(field.itemField) ?? {};
+          if ("default" in valueSchema) return valueSchema.default;
+          return field.item === "boolean" ? false : field.item === "number" ? 0 : "";
+        };
+        const stateControl = (
+          <span className={cn("text-sm", error ? "text-danger" : "faint")} role="status">
+            {state === "unset"
+              ? field.required
+                ? "Missing · Required field"
+                : "Not configured · Field omitted"
+              : state === "null"
+                ? `Explicit null · null${nullable ? "" : " (not allowed)"}`
+                : state === "set"
+                  ? entries.length === 0
+                    ? "No entries · Empty object {}"
+                    : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`
+                  : "Not an object · use JSON to inspect"}
+          </span>
+        );
+        const mapActions = (
+          <div className="row-wrap">
+            {newKey !== undefined ? (
+              <>
+                <Input
+                  className="font-mono"
+                  aria-label={`New ${label} key`}
+                  value={newKey.text}
+                  disabled={disabled}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="key"
+                  onChange={(event) =>
+                    setDraft(newKeyKey, event.target.value, "Add or cancel the new entry.")
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || !newKey.text.trim() || keyTaken) return;
+                    event.preventDefault();
+                    setDraft(newKeyKey, undefined);
+                    setEntry(newKey.text.trim(), initialEntry());
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={disabled || !newKey.text.trim() || keyTaken}
+                  aria-label={`Add new ${label} entry`}
+                  onClick={() => {
+                    setDraft(newKeyKey, undefined);
+                    setEntry(newKey.text.trim(), initialEntry());
+                  }}
+                >
+                  Add entry
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() => setDraft(newKeyKey, undefined)}
+                >
+                  Cancel
+                </Button>
+                {keyTaken ? (
+                  <span className="field-error" role="alert">
+                    An entry with this key exists.
+                  </span>
+                ) : null}
+              </>
+            ) : state !== "invalid" ? (
+              <Button
+                id={`${controlId}-add`}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                onClick={() => setDraft(newKeyKey, "", "Add or cancel the new entry.")}
+              >
+                <Plus size={14} aria-hidden /> Add {label} entry
+              </Button>
+            ) : null}
+            {newKey === undefined && state !== "set" && state !== "invalid" ? (
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                disabled={disabled}
+                aria-label={`Use empty object for ${label}`}
+                onClick={() => replaceMap({})}
+              >
+                Use empty object
+              </Button>
+            ) : null}
+            {newKey === undefined && !field.required && state !== "unset" ? (
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                disabled={disabled}
+                aria-label={`Omit ${label} field`}
+                onClick={() => replaceMap(undefined)}
+              >
+                Omit field
+              </Button>
+            ) : null}
+            {newKey === undefined && nullable && state !== "null" ? (
+              <details>
+                <summary className="faint text-sm">More options</summary>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  disabled={disabled}
+                  aria-label={`Set ${label} to null`}
+                  onClick={() => replaceMap(null)}
+                >
+                  Set to null
+                </Button>
+              </details>
+            ) : null}
+          </div>
+        );
+        return (
+          <Field
+            key={key}
+            label={label}
+            required={field.required}
+            hint={hint}
+            error={error}
+            data-path={key}
+          >
+            {stateControl}
+            <ul className="schema-form-list" aria-label={`${label} entries`}>
+              {entries.map(([name, value]) => {
+                const entryPath = [...field.path, name];
+                const entryKey = pathKey(entryPath);
+                const remove = (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove ${label} entry ${name}`}
+                    disabled={disabled}
+                    onClick={() => removeEntry(name)}
+                  >
+                    <Trash2 size={14} aria-hidden />
+                  </Button>
+                );
+                if (field.item === "object") {
+                  const entry = entryAt(field, name);
+                  if (!entry) return null;
+                  return (
+                    <li key={entryKey} className="schema-form-list-item">
+                      {renderField(entry)}
+                      {remove}
+                    </li>
+                  );
+                }
+                const entryDraft = drafts[entryKey]?.text;
+                const entryError =
+                  drafts[entryKey]?.error ?? issueByPath.get(entryKey)?.join("; ") ?? null;
+                const entryId = `${controlId}-entry-${name.replace(/[^\w-]+/g, "-")}`;
+                const text =
+                  entryDraft ??
+                  (typeof value === "string" || typeof value === "number" ? String(value) : "");
+                return (
+                  <li key={entryKey} className="schema-form-map-row">
+                    <label htmlFor={entryId} className="mono schema-form-map-key">
+                      {name}
+                    </label>
+                    {field.item === "boolean" ? (
+                      <Checkbox
+                        id={entryId}
+                        aria-label={`${label} entry ${name}`}
+                        checked={value === true}
+                        disabled={disabled}
+                        onCheckedChange={(next) => setEntry(name, next === true)}
+                      />
+                    ) : field.enumValues ? (
+                      <AppSelect
+                        id={entryId}
+                        aria-label={`${label} entry ${name}`}
+                        value={text}
+                        disabled={disabled}
+                        placeholder="Choose…"
+                        options={field.enumValues.map((option) => ({
+                          value: String(option),
+                          label: String(option),
+                        }))}
+                        onValueChange={(next) =>
+                          setEntry(name, field.item === "number" ? Number(next) : next)
+                        }
+                      />
+                    ) : (
+                      <Input
+                        id={entryId}
+                        className="font-mono"
+                        aria-label={`${label} entry ${name}`}
+                        aria-invalid={entryError ? true : undefined}
+                        inputMode={
+                          field.item === "number"
+                            ? field.integer
+                              ? "numeric"
+                              : "decimal"
+                            : undefined
+                        }
+                        value={text}
+                        disabled={disabled}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          if (field.item !== "number") {
+                            setEntry(name, next);
+                            return;
+                          }
+                          const result = parseFormNumber(next, Boolean(field.integer));
+                          setDraft(entryKey, next, result.error);
+                          if (!result.error && result.value !== undefined) {
+                            setEntry(name, result.value);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (
+                            entryDraft !== undefined &&
+                            !parseFormNumber(entryDraft, Boolean(field.integer)).error
+                          ) {
+                            setDraft(entryKey, undefined);
+                          }
+                          onBlur?.();
+                        }}
+                      />
+                    )}
+                    {remove}
+                    {entryError ? (
+                      <span className="field-error schema-form-map-error" role="alert">
+                        {entryError}
+                      </span>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {mapActions}
+          </Field>
+        );
+      }
       case "list": {
         const items = Array.isArray(current) ? current : [];
         const error = errorFor(field, null);
         const hint = hintFor(field, current);
-        const nullable =
-          field.nullable ||
-          (Array.isArray(field.schema.type) &&
-            field.schema.type.includes("null") &&
-            validateValue(field.schema, null).length === 0);
+        const nullable = isNullableField(field);
         const state =
           current === undefined
             ? "unset"
