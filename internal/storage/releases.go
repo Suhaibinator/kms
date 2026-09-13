@@ -926,6 +926,9 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		return nil, "", err
 	}
 	type acknowledgementRow struct {
+		Sequence            uint64
+		LastAppliedRevision uint64
+		LastAppliedSequence uint64
 		SessionID           string
 		TargetRevision      uint64
 		PinVersion          uint64
@@ -959,7 +962,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 			s.server_timestamp, COALESCE(c.connected, s.connected) AS connected,
 			s.applied_divergent, s.divergent_field_count,
  '' AS session_id, 0 AS target_revision, 0 AS pin_version, 0 AS pin_revision, '' AS pinned_by, '' AS pinned_at, 0 AS last_applied_version, 0 AS desired_version, 0 AS desired_revision,
- COALESCE(c.server_timestamp, s.server_timestamp) AS live_timestamp
+ COALESCE(c.server_timestamp, s.server_timestamp) AS live_timestamp, 0 AS sequence, 0 AS last_applied_revision, 0 AS last_applied_sequence
 		FROM release_subscriber_states s
 		LEFT JOIN release_subscriber_connections c
 			ON c.namespace_id = s.namespace_id
@@ -971,7 +974,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		WHERE s.namespace_id = ? AND (? = '' OR s.release_name = ?) AND (? IS NULL OR s.schema_version = ?)
 		UNION ALL
 		SELECT c.schema_version, c.release_name, 0, 0, c.client_name, c.instance_id,
-			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0, '', 0, 0, 0, '', '', 0, 0, 0, c.server_timestamp
+			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0, '', 0, 0, 0, '', '', 0, 0, 0, c.server_timestamp, 0, 0, 0
 		FROM release_subscriber_connections c
 		WHERE c.namespace_id = ? AND (? = '' OR c.release_name = ?) AND (? IS NULL OR c.schema_version = ?)
 			AND NOT EXISTS (
@@ -984,11 +987,11 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 					AND s.identity = c.identity
 			)
  UNION ALL
- SELECT p.schema_version,p.release_name,p.release_version,p.activation_revision,p.client_name,p.instance_id,p.identity,p.state,p.rejection_category,'','',p.server_timestamp,p.connected,p.applied_divergent,p.divergent_field_count,
+ SELECT p.schema_version,p.release_name,p.release_version,p.activation_revision,p.client_name,p.instance_id,p.identity,p.state,p.rejection_category,p.diagnostic,p.client_timestamp,p.server_timestamp,p.connected,p.applied_divergent,p.divergent_field_count,
  p.session_id,p.target_revision,p.pin_version,p.pin_revision,p.pinned_by,p.pinned_at,p.last_applied_version,
  CASE WHEN p.pin_version > 0 THEN p.pin_version ELSE COALESCE(l.version_number,0) END,
  CASE WHEN p.pin_version > 0 THEN p.pin_revision ELSE MAX(p.pin_revision,COALESCE(l.activation_revision,0)) END,
- p.server_timestamp
+ p.server_timestamp, p.last_ack_sequence, p.last_applied_revision, p.last_applied_sequence
  FROM release_sessions p
  LEFT JOIN configuration_release_labels l ON l.namespace_id=p.namespace_id AND l.release_name=p.release_name AND l.schema_version=p.schema_version AND l.label='current'
  WHERE p.namespace_id = ? AND (? = '' OR p.release_name = ?) AND (? IS NULL OR p.schema_version = ?)
@@ -1029,6 +1032,9 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
 		out = make([]domain.ReleaseAcknowledgement, 0, len(rows))
 		for _, row := range rows {
 			out = append(out, domain.ReleaseAcknowledgement{SessionID: row.SessionID, TargetRevision: row.TargetRevision, PinVersion: row.PinVersion, PinRevision: row.PinRevision, PinnedBy: row.PinnedBy, PinnedAt: parseTime(row.PinnedAt), LastAppliedVersion: row.LastAppliedVersion, DesiredVersion: row.DesiredVersion, DesiredRevision: row.DesiredRevision, SchemaVersion: uint64(row.SchemaVersion), Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), LiveTimestamp: parseTime(row.LiveTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
+			out[len(out)-1].Sequence = row.Sequence
+			out[len(out)-1].LastAppliedRevision = row.LastAppliedRevision
+			out[len(out)-1].LastAppliedSequence = row.LastAppliedSequence
 		}
 		if hasMore {
 			last := rows[len(rows)-1]

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { KmsError } from "../../src/errors.js";
 import {
   ConfigurationRelease,
@@ -102,6 +103,28 @@ class FakeTransport implements ReleaseTransport {
 
   constructor(release: ConfigurationRelease, revision = 1n) {
     this.active = { release, activationRevision: revision, previousVersion: 0n };
+  }
+
+  async registerReleaseSession(): Promise<boolean> {
+    return true;
+  }
+
+  async getInstanceRelease(
+    session: ReleaseSessionRef,
+    signal?: AbortSignal,
+  ): Promise<InstanceReleaseTarget> {
+    const active = await this.getActiveRelease(
+      session.namespace ?? namespace,
+      session.name,
+      session.schemaVersion ?? 0n,
+      signal,
+    );
+    return {
+      release: active.release,
+      targetRevision: active.activationRevision,
+      activationRevision: active.activationRevision,
+      pinned: false,
+    } as InstanceReleaseTarget;
   }
 
   getActiveRelease(
@@ -1707,14 +1730,36 @@ function secretResource(
 
 function activationEvent(release: ConfigurationRelease, revision: bigint): WatchReleaseEvent {
   return {
-    event: { $case: "activation", value: { release } },
+    event: {
+      $case: "target",
+      value: {
+        release,
+        targetRevision: revision,
+        activationRevision: revision,
+        pinned: false,
+        pinRevision: 0n,
+        pinnedBy: "",
+        pinnedAtUnixMs: 0n,
+      },
+    },
     revision,
   };
 }
 
 function snapshotEvent(release: ConfigurationRelease, revision: bigint): WatchReleaseEvent {
   return {
-    event: { $case: "snapshot", value: { release } },
+    event: {
+      $case: "target",
+      value: {
+        release,
+        targetRevision: revision,
+        activationRevision: revision,
+        pinned: false,
+        pinRevision: 0n,
+        pinnedBy: "",
+        pinnedAtUnixMs: 0n,
+      },
+    },
     revision,
   };
 }
@@ -1813,6 +1858,204 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 describe("process session targets", () => {
+  it("drains delayed preparation before allowing a new execution", async () => {
+    const transport = new FakeTransport(
+      makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]),
+    );
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+    });
+    const entered = deferred<void>();
+    const releasePrepare = deferred<void>();
+    const stop = new AbortController();
+    let oldCommits = 0;
+    let oldAborts = 0;
+    const run = loader.run(async () => {
+      entered.resolve();
+      await releasePrepare.promise;
+      return {
+        commit() {
+          oldCommits++;
+        },
+        abort() {
+          oldAborts++;
+        },
+      };
+    }, stop.signal);
+    await entered.promise;
+    stop.abort();
+    await expect(loader.run(() => invalidPrepared())).rejects.toThrow(/already running/);
+    releasePrepare.resolve();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(oldCommits).toBe(0);
+    expect(oldAborts).toBe(1);
+    transport.stream = undefined;
+    const nextStop = new AbortController();
+    const nextRun = loader.run(() => ({ commit() {}, abort() {} }), nextStop.signal);
+    await waitFor(() => !!appliedAcknowledgement(transport.stream));
+    expect(acknowledgements(transport.stream).map((ack) => ack.sequence)).toEqual([1n, 2n, 3n]);
+    nextStop.abort();
+    await expect(nextRun).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("creates a fresh session and acknowledgement sequence when the loader is run again", async () => {
+    const transport = new FakeTransport(
+      makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]),
+    );
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const registrations: Array<{ sessionId: string; resume: boolean }> = [];
+    Object.assign(transport, {
+      registerReleaseSession: async (session: ReleaseSessionRef, resume: boolean) => {
+        registrations.push({ sessionId: session.sessionId, resume });
+        return true;
+      },
+    });
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+      instanceId: "stable",
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      transport.stream = undefined;
+      const stop = new AbortController();
+      const run = loader.run(() => ({ commit() {}, abort() {} }), stop.signal);
+      await waitFor(() => !!appliedAcknowledgement(transport.stream));
+      const events = acknowledgements(transport.stream);
+      expect(events.map((ack) => ack.sequence)).toEqual([1n, 2n, 3n]);
+      expect(events.every((ack) => ack.sessionId === registrations[attempt]?.sessionId)).toBe(true);
+      expect(registrations[attempt]?.resume).toBe(false);
+      stop.abort();
+      await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    }
+    expect(registrations[0]?.sessionId).not.toBe(registrations[1]?.sessionId);
+  });
+
+  const conformance = JSON.parse(
+    readFileSync(
+      new URL("../../../testdata/release_ack_conformance.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    cases: Array<{ name: string; states: string[]; retained_sequences: number[] }>;
+  };
+  it.each(conformance.cases)("conforms to replay fixture $name", async (fixture) => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let target = {
+      release,
+      targetRevision: 1n,
+      activationRevision: 153n,
+      pinned: false,
+      pinRevision: 0n,
+      pinnedBy: "",
+      pinnedAtUnixMs: 0n,
+    };
+    transport.getInstanceRelease = async () => target;
+    const streams: FakeWatchStream[] = [];
+    transport.watchReleaseHook = (_registration, signal) => {
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      return Promise.resolve(stream);
+    };
+    let failures = fixture.states.filter((state) => state === "rejected").length;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+      reconcileIntervalMs: 5,
+      random: () => 0,
+    });
+    const controller = new AbortController();
+    const run = loader.run((snapshot) => {
+      if (snapshot.targetRevision === 2n && failures-- > 0) throw new Error("retry");
+      return { commit() {}, abort() {} };
+    }, controller.signal);
+    await waitFor(() => !!appliedAcknowledgement(streams[0]));
+    // Establish LKG so rejection retries are permitted, then exercise the fixture.
+    target = { ...target, targetRevision: 2n };
+    await waitFor(() =>
+      acknowledgements(streams[0]).some(
+        (ack) => ack.state === "applied" && ack.targetRevision === 2n,
+      ),
+    );
+    const original = acknowledgements(streams[0]).filter((ack) => ack.targetRevision === 2n);
+    expect(original.map((ack) => ack.state)).toEqual(fixture.states);
+    const retained = fixture.retained_sequences.map((sequence) => original[sequence - 1]);
+    for (let index = 0; index < 2; index++) {
+      streams[index]?.close();
+      await waitFor(() => !!appliedAcknowledgement(streams[index + 1]));
+      expect(acknowledgements(streams[index + 1])).toEqual(retained);
+    }
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("requires session support before reading or watching a release", async () => {
+    const transport = new FakeTransport(makeRelease(1n, []));
+    transport.registerReleaseSession = async () => false;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+    });
+    await expect(loader.run(() => invalidPrepared())).rejects.toThrow(/upgrade the KMS server/);
+    expect(transport.calls).toEqual([]);
+    expect(transport.stream).toBeUndefined();
+  });
+
+  it("replays immutable causal events and does not reapply an unchanged target", async () => {
+    const transport = new FakeTransport(
+      makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]),
+    );
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    transport.watchReleaseHook = (_registration, signal) => {
+      const stream = new FakeWatchStream(signal);
+      streams.push(stream);
+      return Promise.resolve(stream);
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      schemaVersion: 0n,
+      clientName: "test",
+      reconcileIntervalMs: 5,
+      random: () => 0,
+    });
+    const controller = new AbortController();
+    let commits = 0;
+    const run = loader.run(
+      () => ({
+        commit() {
+          commits++;
+        },
+        abort() {},
+      }),
+      controller.signal,
+    );
+    await waitFor(() => !!appliedAcknowledgement(streams[0]));
+    const original = acknowledgements(streams[0]);
+    expect(original.map((ack) => ack.state)).toEqual(["received", "prepared", "applied"]);
+    expect(original.map((ack) => ack.sequence)).toEqual([1n, 2n, 3n]);
+    expect(original.every((ack) => ack.sessionId !== "" && ack.targetRevision === 1n)).toBe(true);
+    streams[0]?.close();
+    await waitFor(() => !!appliedAcknowledgement(streams[1]));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(acknowledgements(streams[1])).toEqual(original);
+    expect(commits).toBe(1);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("applies unpublished targets, retains failures, and reuses the session on reconnect", async () => {
     const base = new FakeTransport(makeRelease(1n, []));
     base.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));

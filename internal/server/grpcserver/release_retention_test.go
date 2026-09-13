@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,16 +28,17 @@ type delayedWatchReleaseLookup struct {
 	once    sync.Once
 }
 
-func (s *delayedWatchReleaseLookup) GetConfigurationRelease(ctx context.Context, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error) {
-	if version == 1 {
+func (s *delayedWatchReleaseLookup) ResolveInstanceRelease(ctx context.Context, ref domain.ReleaseSessionRef) (domain.InstanceReleaseTarget, error) {
+	active, err := s.GetActiveConfigurationRelease(ctx, ref.Track)
+	if err == nil && active.Release.Version == 1 {
 		s.once.Do(func() { close(s.entered) })
 		select {
 		case <-s.resume:
 		case <-ctx.Done():
-			return domain.ConfigurationRelease{}, ctx.Err()
+			return domain.InstanceReleaseTarget{}, ctx.Err()
 		}
 	}
-	return s.SQLStore.GetConfigurationRelease(ctx, track, version)
+	return s.SQLStore.ResolveInstanceRelease(ctx, ref)
 }
 
 func TestWatchReleaseRetentionLookupRace(t *testing.T) {
@@ -88,11 +88,11 @@ func testWatchReleaseRetentionLookupRace(t *testing.T, outcome string) {
 		t.Fatal(err)
 	}
 	track := domain.ReleaseTrack{Namespace: ns, Name: "runtime"}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "instance"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, watchCtx, kmsv1.NewConfigurationReleaseServiceClient(conn), &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "instance"})}}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := stream.Recv()
-	if err != nil || first.GetHeartbeat() == nil {
+	if err != nil || first.GetTarget() == nil || first.GetTarget().GetRelease() != nil {
 		t.Fatalf("inactive known track heartbeat: %v %v", first, err)
 	}
 	activate := func() domain.ActiveConfigurationRelease {
@@ -108,7 +108,7 @@ func testWatchReleaseRetentionLookupRace(t *testing.T, outcome string) {
 		hub.Wake()
 		return a
 	}
-	firstActivation := activate()
+	activate()
 	select {
 	case <-wrapped.entered:
 	case <-watchCtx.Done():
@@ -149,6 +149,37 @@ func testWatchReleaseRetentionLookupRace(t *testing.T, outcome string) {
 		wantCode = codes.Unauthenticated
 	}
 	close(wrapped.resume)
+	if outcome == "retained track" {
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.GetTarget() == nil {
+				continue
+			}
+			// An already queued target may precede the coalesced latest target.
+			if event.GetTarget().GetRelease().GetVersion() != current.Release.Version {
+				continue
+			}
+			break
+		}
+		if err := stream.CloseSend(); err != nil {
+			t.Fatal(err)
+		}
+		reconnected, err := kmsv1.NewConfigurationReleaseServiceClient(conn).WatchRelease(watchCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reconnected.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: &track.SchemaVersion, ClientName: "client", InstanceId: "instance", SessionId: "instance-session"}}}); err != nil {
+			t.Fatal(err)
+		}
+		event, err := reconnected.Recv()
+		if err != nil || event.GetTarget().GetRelease().GetVersion() != current.Release.Version || event.GetRevision() != current.ActivationRevision {
+			t.Fatalf("reconnect did not resolve retained target: %v %v", event, err)
+		}
+		return
+	}
 	for {
 		_, err := stream.Recv()
 		if err == nil {
@@ -157,29 +188,6 @@ func testWatchReleaseRetentionLookupRace(t *testing.T, outcome string) {
 		if status.Code(err) != wantCode {
 			t.Fatalf("stream status = %v, want %s", err, wantCode)
 		}
-		if recoverableHistory := strings.Contains(status.Convert(err).Message(), "delivery history changed"); recoverableHistory != (outcome == "retained track") {
-			t.Fatalf("stream misclassified retention versus fencing: %v", err)
-		}
 		break
-	}
-	if outcome != "retained track" {
-		return
-	}
-
-	// An SDK retries Aborted with the same numeric track and last accepted
-	// cursor. Pruned history must then yield that track's current snapshot.
-	reconnected, err := kmsv1.NewConfigurationReleaseServiceClient(conn).WatchRelease(watchCtx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reconnected.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{
-		Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: &track.SchemaVersion,
-		ClientName: "client", InstanceId: "instance", LastSeenRevision: firstActivation.ActivationRevision - 1,
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-	event, err := reconnected.Recv()
-	if err != nil || event.GetSnapshot().GetRelease().GetVersion() != current.Release.Version || event.GetSnapshot().GetRelease().GetSchemaVersion() != track.SchemaVersion || event.GetRevision() != current.ActivationRevision {
-		t.Fatalf("reconnect snapshot did not recover the exact track: %v %v", event, err)
 	}
 }

@@ -43,7 +43,7 @@ func readinessActive(env string, version, revision, previous uint64, dbPin, rate
 }
 
 func ack(instance, state string, version, revision uint64, connected bool, at time.Time) domain.ReleaseAcknowledgement {
-	return domain.ReleaseAcknowledgement{Namespace: domain.NamespaceRef{Env: "prod", App: "gradethis"}, ReleaseName: "runtime", ReleaseVersion: version, ActivationRevision: revision, ClientName: "api", InstanceID: instance, Identity: "svc", State: state, Connected: connected, ServerTimestamp: at}
+	return domain.ReleaseAcknowledgement{Namespace: domain.NamespaceRef{Env: "prod", App: "gradethis"}, ReleaseName: "runtime", ReleaseVersion: version, ActivationRevision: revision, TargetRevision: revision, DesiredRevision: revision, DesiredVersion: version, SessionID: "session-" + instance, Sequence: 1, ClientName: "api", InstanceID: instance, Identity: "svc", State: state, Connected: connected, ServerTimestamp: at}
 }
 
 func findingCodes(findings []domain.Finding) []string {
@@ -72,7 +72,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 	t.Run("ready", func(t *testing.T) {
 		in := base("dev")
 		in.Active = readinessActive("dev", 3, 40, 2, 1, 1)
-		in.Acks = []domain.ReleaseAcknowledgement{ack("i1", domain.ReleaseStateApplied, 3, 40, true, readinessNow), ack("i1", domain.ReleaseStateReceived, 3, 40, true, readinessNow)}
+		in.Acks = []domain.ReleaseAcknowledgement{ack("i1", domain.ReleaseStateApplied, 3, 40, true, readinessNow)}
 		out := computeEnvironmentReadiness(in)
 		if out.Status != domain.EnvStatusReady || out.ValuesState != domain.ValuesStateComplete || out.ReleaseState != domain.ReleaseStateActive || out.RolloutState != domain.RolloutStateApplied {
 			t.Fatalf("ready env = %s/%s/%s/%s findings=%v", out.Status, out.ValuesState, out.ReleaseState, out.RolloutState, findingCodes(out.Findings))
@@ -149,14 +149,17 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			ack("fresh", domain.ReleaseStateApplied, 3, 42, true, readinessNow),
 		}
 		in.Acks[0].RejectionCategory = domain.ReleaseRejectConfigValidationFailed
-		in.Acks = append(in.Acks, domain.ReleaseAcknowledgement{Namespace: in.Namespace.NamespaceRef, ReleaseName: "batch", ClientName: "worker", InstanceID: "w1", Identity: "svc", State: domain.ReleaseStateApplied, ActivationRevision: 42, Connected: true, ServerTimestamp: readinessNow})
+		in.Acks[1].DesiredRevision, in.Acks[1].DesiredVersion = 42, 3
+		other := ack("w1", domain.ReleaseStateApplied, 3, 42, true, readinessNow)
+		other.ReleaseName = "batch"
+		in.Acks = append(in.Acks, other)
 		out := computeEnvironmentReadiness(in)
 		if out.Status != domain.EnvStatusDegraded || out.RolloutState != domain.RolloutStateDegraded {
 			t.Fatalf("degraded env = %s/%s", out.Status, out.RolloutState)
 		}
 		r := out.Rollout
-		// "gone" disconnected five minutes ago without a pin: it has left the fleet.
-		if r.Total != 3 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
+		// "gone" is stale history and cannot establish current fleet health.
+		if r.Total != 4 || r.Stale != 1 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
 			t.Fatalf("rollout = %+v", r)
 		}
 		if len(r.OtherReleaseNames) != 1 || r.OtherReleaseNames[0] != "batch" {
@@ -182,14 +185,14 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("rolling env = %s/%s", out.Status, out.RolloutState)
 		}
 
-		// Only departed instances: the environment has no subscribers, and an
-		// other-release name backed solely by departed instances is dropped too.
+		// Only disconnected sessions: retain stale history but do not claim Ready.
+		// Legacy other-release history is not authoritative health evidence.
 		in.Acks = []domain.ReleaseAcknowledgement{
 			ack("gone", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-5*time.Minute)),
 			{Namespace: in.Namespace.NamespaceRef, ReleaseName: "batch", ClientName: "worker", InstanceID: "w1", Identity: "svc", State: domain.ReleaseStateApplied, ActivationRevision: 42, Connected: false, ServerTimestamp: readinessNow.Add(-5 * time.Minute)},
 		}
 		out = computeEnvironmentReadiness(in)
-		if out.Status != domain.EnvStatusReady || out.RolloutState != domain.RolloutStateNoSubscribers || out.Rollout.Total != 0 || len(out.Rollout.OtherReleaseNames) != 0 {
+		if out.Status != domain.EnvStatusUnknown || out.RolloutState != domain.RolloutStateNoSubscribers || out.Rollout.Total != 1 || out.Rollout.Stale != 1 || len(out.Rollout.OtherReleaseNames) != 0 {
 			t.Fatalf("departed-only env = %s/%s %+v", out.Status, out.RolloutState, out.Rollout)
 		}
 		if _, ok := hasFinding(out.Findings, domain.FindingNoSubscribers); !ok {
@@ -199,41 +202,40 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("departed other-release instance must not be reported: %v", findingCodes(out.Findings))
 		}
 
-		// Within the grace window a disconnected instance keeps its last state.
+		// Disconnected history never establishes current health, even immediately.
 		in.Acks = []domain.ReleaseAcknowledgement{ack("blip", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-10*time.Second))}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.Connected != 0 || out.Rollout.Pending != 1 || out.RolloutState != domain.RolloutStateRolling {
-			t.Fatalf("briefly disconnected legacy instance = %+v/%s", out.Rollout, out.RolloutState)
+		if out.Rollout.Total != 1 || out.Rollout.Connected != 0 || out.Rollout.Stale != 1 || out.Status != domain.EnvStatusUnknown {
+			t.Fatalf("briefly disconnected session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 		// Liveness follows the connection row's timestamp, not the last ack.
 		stayed := ack("quiet", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-time.Hour))
 		stayed.LiveTimestamp = readinessNow.Add(-10 * time.Second)
 		in.Acks = []domain.ReleaseAcknowledgement{stayed}
-		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Pending != 1 {
-			t.Fatalf("recently disconnected legacy instance with an old ack = %+v", out.Rollout)
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Stale != 1 {
+			t.Fatalf("recently disconnected session with an old ack = %+v", out.Rollout)
 		}
 
-		// A session that applied the current release and then disconnected is
-		// still applied inside the grace window and gone after it.
+		// Applied evidence remains history, not current fleet application.
 		session := ack("restarting", domain.ReleaseStateApplied, 3, 42, false, readinessNow.Add(-10*time.Second))
 		session.SessionID, session.TargetRevision, session.DesiredRevision, session.DesiredVersion = "s1", 42, 42, 3
 		in.Acks = []domain.ReleaseAcknowledgement{session}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.AppliedCurrent != 1 || out.RolloutState != domain.RolloutStateApplied {
+		if out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.Rollout.AppliedCurrent != 0 || out.Status != domain.EnvStatusUnknown {
 			t.Fatalf("briefly disconnected session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 		session.ServerTimestamp = readinessNow.Add(-2 * time.Minute)
 		in.Acks = []domain.ReleaseAcknowledgement{session}
-		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 0 || out.RolloutState != domain.RolloutStateNoSubscribers {
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.RolloutState != domain.RolloutStateNoSubscribers {
 			t.Fatalf("departed session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 
-		// A pinned session never departs: the pin stays visible until removed.
+		// A disconnected pin remains visible as stale history, not applied health.
 		pinned := session
 		pinned.PinVersion, pinned.PinRevision, pinned.ServerTimestamp = 2, 50, readinessNow.Add(-5*24*time.Hour)
 		in.Acks = []domain.ReleaseAcknowledgement{pinned}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.Pinned != 1 || out.RolloutState != domain.RolloutStateRolling {
+		if out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.Rollout.Pinned != 0 || out.Status != domain.EnvStatusUnknown {
 			t.Fatalf("departed pinned session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 	})
@@ -482,66 +484,43 @@ func TestJSONTypeToContentType(t *testing.T) {
 }
 
 func TestGroupSubscriberInstances(t *testing.T) {
-	now := readinessNow
-	acks := []domain.ReleaseAcknowledgement{
-		ack("b", domain.ReleaseStateReceived, 3, 40, true, now.Add(-2*time.Second)),
-		ack("b", domain.ReleaseStatePrepared, 3, 40, true, now.Add(-time.Second)),
-		ack("b", domain.ReleaseStateApplied, 3, 40, false, now),
-		ack("a", domain.ReleaseStateApplied, 2, 39, true, now.Add(-time.Minute)),
-		ack("a", domain.ReleaseStateRejected, 3, 40, true, now),
-		{Namespace: domain.NamespaceRef{Env: "prod", App: "gradethis"}, ReleaseName: "runtime", ClientName: "api", InstanceID: "c", Identity: "svc", Connected: true, ServerTimestamp: now},
-	}
-	got := groupSubscriberInstances(acks)
-	if len(got) != 3 || got[0].InstanceID != "a" || got[1].InstanceID != "b" || got[2].InstanceID != "c" {
-		t.Fatalf("grouped = %+v", got)
-	}
-	if got[0].State != domain.ReleaseStateRejected || got[0].ActivationRevision != 40 || got[0].ReleaseVersion != 3 {
-		t.Fatalf("a = %+v", got[0])
-	}
-	if got[1].State != domain.ReleaseStateApplied || !got[1].Connected || !got[1].ServerTimestamp.Equal(now) {
-		t.Fatalf("b = %+v", got[1])
-	}
-	if got[2].State != "" || got[2].ActivationRevision != 0 || !got[2].Connected {
-		t.Fatalf("c = %+v", got[2])
+	// Projection consumes one authoritative persisted snapshot per session. It
+	// must not reconstruct causality from raw legacy lifecycle history.
+	applied := ack("b", domain.ReleaseStateApplied, 3, 40, true, readinessNow)
+	applied.AppliedDivergent, applied.DivergentFieldCount = true, 2
+	applied.Sequence, applied.LastAppliedSequence, applied.LastAppliedRevision = 9, 9, 40
+	rejected := ack("a", domain.ReleaseStateRejected, 3, 40, true, readinessNow)
+	rejected.RejectionCategory, rejected.Diagnostic = "restart_required", "[redacted]"
+	pending := ack("c", "", 0, 0, true, readinessNow)
+	pending.DesiredRevision, pending.DesiredVersion = 40, 3
+	legacy := ack("legacy", domain.ReleaseStateRejected, 3, 40, true, readinessNow.Add(time.Hour))
+	legacy.SessionID = ""
+	for _, rows := range [][]domain.ReleaseAcknowledgement{
+		{applied, rejected, pending, legacy}, {legacy, pending, rejected, applied},
+	} {
+		got := groupSubscriberInstances(rows)
+		if len(got) != 3 || got[0].InstanceID != "a" || got[1].InstanceID != "b" || got[2].InstanceID != "c" {
+			t.Fatalf("grouped = %+v", got)
+		}
+		if got[0].State != domain.ReleaseStateRejected || got[0].RejectionCategory != rejected.RejectionCategory || got[0].Diagnostic != rejected.Diagnostic {
+			t.Fatalf("rejection metadata = %+v", got[0])
+		}
+		if got[1].State != domain.ReleaseStateApplied || !got[1].AppliedDivergent || got[1].DivergentFieldCount != 2 || got[1].RejectionCategory != "" || got[1].Sequence != 9 || got[1].LastAppliedSequence != 9 || got[1].LastAppliedRevision != 40 {
+			t.Fatalf("applied metadata = %+v", got[1])
+		}
+		if got[2].State != "" || got[2].TargetRevision != 0 || !got[2].Connected {
+			t.Fatalf("pending = %+v", got[2])
+		}
 	}
 }
 
-func TestGroupSubscriberInstancesReapplication(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		rejectedRevision uint64
-		rejectedOffset   time.Duration
-		want             string
-	}{
-		{"recovered", 40, -time.Second, domain.ReleaseStateApplied},
-		{"new rejection", 40, time.Second, domain.ReleaseStateRejected},
-		{"older revision", 39, time.Second, domain.ReleaseStateApplied},
-		{"newer revision", 41, -time.Second, domain.ReleaseStateRejected},
-		{"timestamp tie", 40, 0, domain.ReleaseStateRejected},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			applied := ack("replica", domain.ReleaseStateApplied, 4, 40, false, readinessNow)
-			applied.AppliedDivergent, applied.DivergentFieldCount = true, 2
-			rejected := ack("replica", domain.ReleaseStateRejected, 4, tc.rejectedRevision, true, readinessNow.Add(tc.rejectedOffset))
-			rejected.RejectionCategory, rejected.Diagnostic = "restart_required", "old rejection"
-			// A newer non-lifecycle row must affect freshness, not selection.
-			connection := ack("replica", "", 0, 0, true, readinessNow.Add(time.Hour))
-			for _, rows := range [][]domain.ReleaseAcknowledgement{
-				{connection, rejected, applied}, {applied, connection, rejected}, {rejected, applied, connection},
-			} {
-				got := groupSubscriberInstances(rows)[0]
-				if got.State != tc.want || !got.Connected || !got.ServerTimestamp.Equal(connection.ServerTimestamp) {
-					t.Fatalf("grouped = %+v, want %s and aggregated freshness", got, tc.want)
-				}
-				if tc.want == domain.ReleaseStateApplied {
-					if got.RejectionCategory != "" || got.Diagnostic != "" || !got.AppliedDivergent || got.DivergentFieldCount != 2 {
-						t.Fatalf("recovered metadata = %+v", got)
-					}
-				} else if got.RejectionCategory != rejected.RejectionCategory || got.Diagnostic != rejected.Diagnostic || got.AppliedDivergent || got.DivergentFieldCount != 0 {
-					t.Fatalf("rejection metadata = %+v", got)
-				}
-			}
-		})
+func TestGroupSubscriberInstancesLegacyHistoryIsNotHealth(t *testing.T) {
+	for _, state := range []string{domain.ReleaseStateApplied, domain.ReleaseStateRejected, domain.ReleaseStatePrepared} {
+		row := ack("legacy", state, 4, 40, true, readinessNow)
+		row.SessionID = ""
+		if got := groupSubscriberInstances([]domain.ReleaseAcknowledgement{row}); len(got) != 0 {
+			t.Fatalf("legacy %s contributed health: %+v", state, got)
+		}
 	}
 }
 

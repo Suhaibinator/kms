@@ -18,6 +18,23 @@ const expectedRef: ResourceRef = { namespace, key: "settings" };
 const wrongRef: ResourceRef = { namespace, key: "other" };
 
 describe("KmsClient release transport boundary", () => {
+  it("fails with upgrade guidance when the server does not implement sessions", async () => {
+    const transport = new FakeTransport((path) => {
+      expect(path).toBe("/kms.v1.ConfigurationReleaseService/RegisterReleaseSession");
+      throw new KmsError("unimplemented", "legacy server");
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const loader = await client.createReleaseLoader({ name: "runtime", schemaVersion: 0n });
+    await expect(
+      loader.run(() => {
+        throw new Error("must not prepare");
+      }),
+    ).rejects.toThrow(/upgrade the KMS server/);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.streams).toHaveLength(0);
+    await client.close();
+  });
+
   it("requires one schema selector and resolves a digest exactly once", async () => {
     const digest = "a".repeat(64);
     const transport = new FakeTransport((path, request) => {
@@ -58,9 +75,9 @@ describe("KmsClient release transport boundary", () => {
     });
     let parameterReads = 0;
     const transport = new FakeTransport((path, request) => {
-      if (path.endsWith("/GetActiveRelease")) {
-        expect(request).toMatchObject({ schemaVersion: 0n });
-        return { release, activationRevision: 11n, previousVersion: 0n };
+      if (path.endsWith("/GetInstanceRelease")) {
+        expect(request).toMatchObject({ session: { schemaVersion: 0n } });
+        return { release, targetRevision: 11n, activationRevision: 11n };
       }
       if (path.endsWith("/GetParameter")) {
         parameterReads += 1;
@@ -77,8 +94,7 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
-      if (path.endsWith("/RegisterReleaseSession"))
-        throw new KmsError("unimplemented", "legacy server");
+      if (path.endsWith("/RegisterReleaseSession")) return { pinCapable: true };
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
@@ -118,8 +134,8 @@ describe("KmsClient release transport boundary", () => {
       parameterDigest: "",
     });
     const transport = new FakeTransport((path, _request, options) => {
-      if (path.endsWith("/GetActiveRelease")) {
-        return { release, activationRevision: 12n, previousVersion: 0n };
+      if (path.endsWith("/GetInstanceRelease")) {
+        return { release, targetRevision: 12n, activationRevision: 12n };
       }
       if (path.endsWith("/GetSecret")) {
         expect(options.metadata?.["x-kms-secret-token"]).toBeUndefined();
@@ -158,8 +174,7 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
-      if (path.endsWith("/RegisterReleaseSession"))
-        throw new KmsError("unimplemented", "legacy server");
+      if (path.endsWith("/RegisterReleaseSession")) return { pinCapable: true };
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -198,8 +213,8 @@ describe("KmsClient release transport boundary", () => {
       parameterDigest: sha256Hex(value),
     });
     const transport = new RejectingRegistrationTransport((path) => {
-      if (path.endsWith("/GetActiveRelease")) {
-        return { release, activationRevision: 11n, previousVersion: 0n };
+      if (path.endsWith("/GetInstanceRelease")) {
+        return { release, targetRevision: 11n, activationRevision: 11n };
       }
       if (path.endsWith("/GetParameter")) {
         return {
@@ -215,8 +230,7 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
-      if (path.endsWith("/RegisterReleaseSession"))
-        throw new KmsError("unimplemented", "legacy server");
+      if (path.endsWith("/RegisterReleaseSession")) return { pinCapable: true };
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -245,9 +259,9 @@ describe("KmsClient release transport boundary", () => {
     });
     let active = false;
     const transport = new FakeTransport((path) => {
-      if (path.endsWith("/GetActiveRelease")) {
-        if (!active) throw new KmsError("not_found", "no active release");
-        return { release, activationRevision: 2n, previousVersion: 0n };
+      if (path.endsWith("/GetInstanceRelease")) {
+        if (!active) return { targetRevision: 0n, activationRevision: 0n };
+        return { release, targetRevision: 2n, activationRevision: 2n };
       }
       if (path.endsWith("/GetParameter")) {
         return {
@@ -263,8 +277,7 @@ describe("KmsClient release transport boundary", () => {
           },
         };
       }
-      if (path.endsWith("/RegisterReleaseSession"))
-        throw new KmsError("unimplemented", "legacy server");
+      if (path.endsWith("/RegisterReleaseSession")) return { pinCapable: true };
       throw new Error(`unexpected ${path}`);
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -300,7 +313,21 @@ describe("KmsClient release transport boundary", () => {
     expect(releaseRegistration(second)?.lastSeenRevision).toBe(0n);
 
     active = true;
-    second.emit({ event: { $case: "activation", value: { release } }, revision: 2n });
+    second.emit({
+      event: {
+        $case: "target",
+        value: {
+          release,
+          targetRevision: 2n,
+          activationRevision: 2n,
+          pinned: false,
+          pinRevision: 0n,
+          pinnedBy: "",
+          pinnedAtUnixMs: 0n,
+        },
+      },
+      revision: 2n,
+    });
     await committed.promise;
     await waitFor(() => loader.status().appliedVersion === release.version);
 

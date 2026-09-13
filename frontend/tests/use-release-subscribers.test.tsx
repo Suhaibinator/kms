@@ -1,5 +1,5 @@
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { startTransition, Suspense, useState } from "react";
+import { Suspense, startTransition, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import type { ReleaseSubscriberState, SubscriberStreamSnapshot } from "@/lib/types";
@@ -48,6 +48,10 @@ const snapshot = (
   revision: number,
 ): SubscriberStreamSnapshot => ({
   summary: {
+    complete: true,
+    stale: 0,
+    pinned: 0,
+    unknown: 0,
     total: subscribers.length,
     connected: subscribers.length,
     applied_current: 0,
@@ -59,6 +63,13 @@ const snapshot = (
     truncated: false,
   },
   subscribers,
+  instances: subscribers.map((subscriber) => ({
+    ...subscriber,
+    classification: subscriber.state === "applied" ? "applied" : "pending",
+    reason: "fixture",
+    session_id: "session-1",
+  })),
+  projection_revision: `projection-${revision}`,
   current_revision: revision,
   server_time_unix_ms: 5,
 });
@@ -95,6 +106,7 @@ describe("useReleaseSubscribers", () => {
     mocks.releaseSubscribers.mockReset();
     mocks.subscriberStream.mockReset();
     mocks.releaseSubscribers.mockResolvedValue({
+      ...snapshot([row({ state: "prepared", activation_revision: 41 })], 41),
       subscribers: [row({ state: "prepared", activation_revision: 41 })],
       current_revision: 41,
       next_page_token: "",
@@ -136,6 +148,83 @@ describe("useReleaseSubscribers", () => {
     const signal = mocks.subscriberStream.mock.calls[0]?.[3].signal as AbortSignal;
     unmount();
     expect(signal.aborted).toBe(true);
+  });
+
+  it("uses complete server totals beyond the displayed page and ignores contradictory raw history", async () => {
+    const projected = snapshot([row({ state: "applied" })], 41);
+    projected.summary = {
+      ...projected.summary,
+      total: 1501,
+      connected: 1501,
+      applied_current: 1501,
+    };
+    projected.subscribers = [row({ state: "rejected", diagnostic: "obsolete rejection" })];
+    mocks.releaseSubscribers.mockResolvedValueOnce(projected);
+    const { result } = renderHook(() =>
+      useReleaseSubscribers(ns, "runtime", { transport: "poll" }),
+    );
+    await waitFor(() => expect(result.current.instances).toHaveLength(1));
+    expect(result.current.instances[0].state).toBe("applied");
+    expect(result.current.summary?.applied_current).toBe(1501);
+    expect(result.current.summary?.total).toBe(1501);
+    expect(result.current.stale).toBe(false);
+  });
+
+  it("does not fabricate readiness from raw history when the projection is missing", async () => {
+    mocks.releaseSubscribers.mockResolvedValueOnce({
+      subscribers: [row({})],
+      current_revision: 41,
+    });
+    const { result } = renderHook(() =>
+      useReleaseSubscribers(ns, "runtime", { transport: "poll" }),
+    );
+    await waitFor(() => expect(result.current.stale).toBe(true));
+    expect(result.current.instances).toEqual([]);
+    expect(result.current.summary).toBeNull();
+  });
+
+  it("fences buffered stream frames before and after a manual page refresh", async () => {
+    const stream = openStream();
+    const { result } = renderHook(() => useReleaseSubscribers(ns, "runtime"));
+    await waitFor(() => expect(stream.push).toBeDefined());
+    const page = deferred<SubscriberStreamSnapshot>();
+    mocks.releaseSubscribers.mockImplementationOnce(() => page.promise);
+    let refresh: Promise<void>;
+    act(() => {
+      refresh = result.current.refresh();
+    });
+    await waitFor(() => expect(mocks.releaseSubscribers).toHaveBeenCalledTimes(2));
+    act(() => stream.push?.(snapshot([row({ state: "received" })], 40)));
+    await act(async () => {
+      page.resolve(snapshot([row({ state: "applied" })], 42));
+      await refresh;
+    });
+    // A content hash cannot tell us this buffered callback is older. The
+    // retired stream's ownership fence must reject it even after the page.
+    act(() => stream.push?.(snapshot([row({ state: "received" })], 41)));
+    expect(result.current.currentRevision).toBe(42);
+    expect(result.current.instances[0].state).toBe("applied");
+    expect(result.current.projectionRevision).toBe("projection-42");
+    expect(result.current.transport).toBe("poll");
+  });
+
+  it("preserves stale and pinned server classifications across poll and stream", async () => {
+    const projected = snapshot([row({ connected: false }), row({ instance_id: "pinned" })], 41);
+    projected.instances = projected.instances?.map((item, index) => ({
+      ...item,
+      classification: index === 0 ? "stale" : "pinned",
+      reason: index === 0 ? "disconnected" : "instance_pin",
+    }));
+    projected.summary = { ...projected.summary, connected: 1, stale: 1, pinned: 1 };
+    mocks.releaseSubscribers.mockResolvedValueOnce(projected);
+    const stream = openStream();
+    const { result } = renderHook(() => useReleaseSubscribers(ns, "runtime"));
+    await waitFor(() => expect(result.current.instances).toHaveLength(2));
+    const polled = result.current.instances;
+    await waitFor(() => expect(stream.push).toBeDefined());
+    act(() => stream.push?.(projected));
+    expect(result.current.instances).toEqual(polled);
+    expect(result.current.summary).toEqual(projected.summary);
   });
 
   it("falls back to 5 s polling when the server has no stream endpoint", async () => {
@@ -231,6 +320,7 @@ describe("useReleaseSubscribers", () => {
       }>();
       mocks.releaseSubscribers
         .mockResolvedValueOnce({
+          ...snapshot([row({ release_version: 1, activation_revision: 7 })], 7),
           subscribers: [row({ release_version: 1, activation_revision: 7 })],
           current_revision: 7,
           next_page_token: "",
@@ -252,7 +342,12 @@ describe("useReleaseSubscribers", () => {
       expect(result.current.stale).toBe(false);
       expect(result.current.lastUpdatedAt).toBeNull();
 
-      second.resolve({ subscribers: [], current_revision: 9, next_page_token: "" });
+      second.resolve({
+        ...snapshot([], 9),
+        subscribers: [],
+        current_revision: 9,
+        next_page_token: "",
+      });
       await waitFor(() => expect(result.current.currentRevision).toBe(9));
     },
   );
@@ -264,10 +359,10 @@ describe("useReleaseSubscribers", () => {
       next_page_token: string;
     }>();
     mocks.releaseSubscribers
-      .mockResolvedValueOnce({ subscribers: [], current_revision: 10, next_page_token: "" })
+      .mockResolvedValueOnce({ ...snapshot([], 10), next_page_token: "" })
       .mockImplementationOnce(() => oldList.promise)
-      .mockResolvedValueOnce({ subscribers: [], current_revision: 20, next_page_token: "" })
-      .mockResolvedValueOnce({ subscribers: [], current_revision: 30, next_page_token: "" });
+      .mockResolvedValueOnce({ ...snapshot([], 20), next_page_token: "" })
+      .mockResolvedValueOnce({ ...snapshot([], 30), next_page_token: "" });
     const oldStream = openStream();
     openStream();
     openStream();

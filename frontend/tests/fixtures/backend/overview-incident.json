@@ -119,14 +119,18 @@
       "rollout": {
         "applied_current": 1,
         "applied_divergent": 0,
+        "complete": true,
         "connected": 1,
+        "different_pins": 0,
         "other_release_names": [],
         "pending": 0,
         "pinned": 0,
         "rejected": 0,
         "rejected_instances": [],
+        "stale": 0,
         "total": 1,
-        "truncated": false
+        "truncated": false,
+        "unknown": 0
       },
       "rollout_state": "applied",
       "status": "ready",
@@ -282,7 +286,9 @@
       "rollout": {
         "applied_current": 2,
         "applied_divergent": 0,
+        "complete": true,
         "connected": 3,
+        "different_pins": 0,
         "other_release_names": [],
         "pending": 0,
         "pinned": 0,
@@ -291,20 +297,44 @@
           {
             "activation_revision": 12,
             "applied_divergent": false,
+            "classification": "rejected",
             "client_name": "api",
+            "client_timestamp_unix_ms": 0,
             "connected": true,
+            "desired_revision": 12,
+            "desired_version": 2,
             "diagnostic": "",
             "divergent_field_count": 0,
+            "fleet_version": 2,
             "identity": "admin",
             "instance_id": "prod-3",
+            "last_applied_revision": 0,
+            "last_applied_sequence": 0,
+            "last_applied_version": 0,
+            "namespace": {
+              "app": "gradethis",
+              "env": "prod"
+            },
+            "pin_revision": 0,
+            "pin_version": 0,
+            "pinned_at_unix_ms": 0,
+            "pinned_by": "",
+            "reason": "desired_target_rejected",
             "rejection_category": "config_validation_failed",
+            "release_name": "runtime",
             "release_version": 2,
+            "schema_version": 1,
+            "sequence": 1,
             "server_timestamp_unix_ms": 1755000000000,
-            "state": "rejected"
+            "session_id": "session-prod-3",
+            "state": "rejected",
+            "target_revision": 12
           }
         ],
+        "stale": 0,
         "total": 3,
-        "truncated": false
+        "truncated": false,
+        "unknown": 0
       },
       "rollout_state": "degraded",
       "status": "degraded",

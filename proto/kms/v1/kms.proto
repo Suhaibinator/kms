@@ -647,7 +647,10 @@ message ReleaseWatchRegistration {
   string client_name = 3;
   string instance_id = 4;
   uint64 last_seen_revision = 5;
-  string session_id = 7; // Presence negotiates instance-target delivery.
+  // Required. One loader execution owns a session; reconnects retain it and
+  // process restarts create a new session even with the same instance name.
+  // Legacy registrations fail with an actionable upgrade-required error.
+  string session_id = 7;
   // Required; absence never means the newest schema.
   optional uint64 schema_version = 6;
 }
@@ -668,11 +671,16 @@ message ReleaseAcknowledgement {
   bool applied_divergent = 11;
   uint32 divergent_field_count = 12;
   uint64 schema_version = 13;
-  // Client-assigned generation of this retained acknowledgement. The server
-  // echoes it when rejecting an unavailable activation so a delayed response
-  // cannot discard a newer acknowledgement for the same lifecycle state.
+  // Nonzero, strictly increasing for newly generated events within a session.
+  // Replay preserves sequence, original timestamp and payload exactly. Within
+  // a target sequence defines causality, never receipt time or lifecycle rank.
+  // Identical replay is idempotent; conflicting retained identities are errors.
+  // Do not generate events merely to replay an unchanged applied outcome.
   uint64 sequence = 14;
   string session_id = 15;
+  // Assigned target identity/order; release version is NOT an ordering key.
+  // A rollback or pin can select a lower version at a higher target revision.
+  // Last confirmed application is retained separately from the latest attempt.
   uint64 target_revision = 16;
 }
 
@@ -1171,6 +1179,8 @@ message Subscriber {
   uint64 release_version = 11;
   uint64 release_revision = 12;
   uint64 schema_version = 13;
+  string session_id = 14;
+  ReleaseSubscriberState effective = 15; // server-owned session projection
 }
 
 message ListSubscribersRequest {}
@@ -1181,6 +1191,13 @@ message ListSubscribersResponse {
 }
 
 message ReleaseSubscriberState {
+  // Effective classification is server-owned, not derived from lifecycle rank.
+  string classification = 26;
+  string reason = 27;
+  uint64 sequence = 28;
+  uint64 last_applied_revision = 29;
+  uint64 last_applied_sequence = 30;
+  uint64 fleet_version = 31;
  string session_id = 17;
  uint64 target_revision = 18;
  uint64 pin_version = 19;
@@ -1217,9 +1234,28 @@ message ListReleaseSubscribersRequest {
 }
 
 message ListReleaseSubscribersResponse {
+  // Raw history is distinct from effective session health.
   repeated ReleaseSubscriberState subscribers = 1;
   string next_page_token = 2;
   uint64 current_revision = 3;
+  repeated ReleaseSubscriberState instances = 4;
+  ReleaseSubscriberSummary summary = 5;
+  string projection_revision = 6;
+}
+
+// Counts cover the full effective population, independent of page size.
+message ReleaseSubscriberSummary {
+  uint64 total = 1;
+  uint64 connected = 2;
+  uint64 applied_current = 3;
+  uint64 applied_divergent = 4;
+  uint64 rejected = 5;
+  uint64 pending = 6;
+  uint64 pinned = 7;
+  uint64 stale = 8;
+  uint64 unknown = 9;
+  bool complete = 10;
+  uint64 different_pins = 11; // applied pins that differ from the fleet version
 }
 
 message HealthRequest {}

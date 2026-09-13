@@ -147,25 +147,36 @@ type OverviewActiveRelease struct {
 // (identity, client, instance) triple, folded from the per-state
 // acknowledgement rows.
 type SubscriberInstance struct {
-	SessionID          string
-	TargetRevision     uint64
-	PinVersion         uint64
-	PinRevision        uint64
-	PinnedBy           string
-	PinnedAt           time.Time
-	LastAppliedVersion uint64
-	DesiredVersion     uint64
-	DesiredRevision    uint64
-	Identity           string
-	ClientName         string
-	InstanceID         string
-	State              string
-	ReleaseVersion     uint64
-	ActivationRevision uint64
-	RejectionCategory  string
-	Diagnostic         string
-	Connected          bool
-	ServerTimestamp    time.Time
+	FleetVersion        uint64
+	Namespace           NamespaceRef
+	ReleaseName         string
+	SchemaVersion       uint64
+	Sequence            uint64
+	Classification      string
+	Reason              string
+	LastAppliedRevision uint64
+	LastAppliedSequence uint64
+	SessionID           string
+	TargetRevision      uint64
+	PinVersion          uint64
+	PinRevision         uint64
+	PinnedBy            string
+	PinnedAt            time.Time
+	LastAppliedVersion  uint64
+	DesiredVersion      uint64
+	DesiredRevision     uint64
+	Identity            string
+	ClientName          string
+	InstanceID          string
+	State               string
+	ReleaseVersion      uint64
+	ActivationRevision  uint64
+	RejectionCategory   string
+	Diagnostic          string
+	Connected           bool
+	// ClientTimestamp belongs to the selected acknowledgement, not transport freshness.
+	ClientTimestamp time.Time
+	ServerTimestamp time.Time
 	// LiveTimestamp is the newest LiveTimestamp across the instance's rows.
 	LiveTimestamp time.Time
 	// AppliedDivergent reports an applied generation that differs from the
@@ -177,6 +188,10 @@ type SubscriberInstance struct {
 // RolloutSummary aggregates subscriber instances against the current
 // activation revision.
 type RolloutSummary struct {
+	DifferentPins  int
+	Stale          int
+	Unknown        int
+	Complete       bool
 	Pinned         int
 	Total          int
 	Connected      int
@@ -359,8 +374,10 @@ type RollbackResult struct {
 
 // SubscriberStreamSnapshot is one frame of the live rollout stream.
 type SubscriberStreamSnapshot struct {
-	Summary         RolloutSummary
-	Subscribers     []ReleaseAcknowledgement
-	CurrentRevision uint64
-	ServerTime      time.Time
+	Instances          []SubscriberInstance
+	ProjectionRevision string
+	Summary            RolloutSummary
+	Subscribers        []ReleaseAcknowledgement
+	CurrentRevision    uint64
+	ServerTime         time.Time
 }

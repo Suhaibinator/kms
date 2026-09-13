@@ -55,7 +55,7 @@ func TestReleaseSessionPinLifecycle(t *testing.T) {
 	if _, e := st.SetReleasePin(ctx, a, next, 0, domain.AuditEvent{}); !errors.Is(e, domain.ErrAborted) {
 		t.Fatalf("stale guard: %v", e)
 	}
-	ack := domain.ReleaseAcknowledgement{TargetRevision: target.TargetRevision, ReleaseVersion: unpublished, State: "applied", ClientTimestamp: time.Now(), ConnectionID: "connection"}
+	ack := domain.ReleaseAcknowledgement{Sequence: 1, TargetRevision: target.TargetRevision, ReleaseVersion: unpublished, State: "applied", ClientTimestamp: time.Now(), ConnectionID: "connection"}
 	if e := st.AcknowledgeReleaseSession(ctx, a, ack); e != nil {
 		t.Fatal(e)
 	}
@@ -167,7 +167,7 @@ func TestReleaseSessionMigrationPreservesBaseline3(t *testing.T) {
 		}
 		out := map[string][]map[string]any{}
 		for _, table := range tables {
-			if table == "schema_migrations" || table == "release_sessions" || table == "release_target_deliveries" || table == "sqlite_sequence" {
+			if table == "schema_migrations" || table == "release_sessions" || table == "release_session_events" || table == "release_target_deliveries" || table == "sqlite_sequence" {
 				continue
 			}
 			var rows []map[string]any
@@ -180,7 +180,7 @@ func TestReleaseSessionMigrationPreservesBaseline3(t *testing.T) {
 	}
 	before := baselineRows()
 	// Removing only the new tables constructs the exact pre-feature baseline.
-	if e := st.db.Migrator().DropTable(&releaseTargetDeliveryModel{}, &releaseSessionModel{}); e != nil {
+	if e := st.db.Migrator().DropTable(&releaseSessionEventModel{}, &releaseTargetDeliveryModel{}, &releaseSessionModel{}); e != nil {
 		t.Fatal(e)
 	}
 	if e := st.db.Model(&schemaMigrationModel{}).Where("version = ?", schemaVersion).Update("version", 3).Error; e != nil {

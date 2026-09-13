@@ -529,6 +529,8 @@ export interface PostureFilters {
 // --- Subscribers ---
 
 export interface Subscriber {
+  session_id?: string;
+  effective?: SubscriberInstance;
   release_name?: string;
   schema_version?: number;
   release_state?: string;
@@ -699,6 +701,11 @@ export interface ActivateReleaseResponse {
 }
 
 export interface ReleaseSubscriberState {
+  classification?: string;
+  reason?: string;
+  sequence?: number;
+  last_applied_revision?: number;
+  last_applied_sequence?: number;
   session_id?: string;
   target_revision?: number;
   pin_version?: number;
@@ -776,6 +783,8 @@ export const PARAMETER_CONTENT_TYPES: string[] = [...CONTENT_TYPES];
 export type AppStatus = "blocked" | "setup" | "attention" | "ready";
 
 export type EnvStatus =
+  | "unknown"
+  | "pinned"
   | "blocked"
   | "empty"
   | "incomplete"
@@ -789,7 +798,13 @@ export type ValuesState = "empty" | "incomplete" | "complete";
 
 export type ReleaseState = "none" | "active" | "drift" | "blocked";
 
-export type RolloutState = "no_subscribers" | "applied" | "rolling" | "degraded";
+export type RolloutState =
+  | "no_subscribers"
+  | "applied"
+  | "rolling"
+  | "degraded"
+  | "unknown"
+  | "pinned";
 
 export type FindingCode =
   | "no_environments"
@@ -858,9 +873,15 @@ export interface OverviewActiveRelease {
   entries: ConfigurationReleaseEntry[];
 }
 
-// The effective lifecycle row for one (identity, client, instance) triple —
-// see lib/subscribers.ts for how the raw state rows collapse into it.
+// An authoritative server projection, never reduced from raw history by the UI.
 export interface SubscriberInstance {
+  fleet_version?: number;
+  classification?: string;
+  reason?: string;
+  sequence?: number;
+  schema_version?: number;
+  last_applied_revision?: number;
+  last_applied_sequence?: number;
   session_id?: string;
   target_revision?: number;
   pin_version?: number;
@@ -886,6 +907,10 @@ export interface SubscriberInstance {
 }
 
 export interface OverviewRollout {
+  different_pins?: number;
+  stale?: number;
+  unknown?: number;
+  complete?: boolean;
   pinned?: number;
   total: number;
   connected: number;
@@ -1088,6 +1113,8 @@ export interface RollbackResponse {
 
 // One `snapshot` frame on GET /release-subscribers/stream.
 export interface SubscriberStreamSnapshot {
+  instances?: SubscriberInstance[];
+  projection_revision?: string;
   summary: OverviewRollout;
   subscribers: ReleaseSubscriberState[];
   current_revision: number;

@@ -4,6 +4,7 @@ import { ReleaseWorkspace } from "@/components/releases/ReleaseWorkspace";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
 import ReleasesPage from "@/pages/releases";
+import { projectedSubscribers } from "./fixtures/subscriber-projection";
 import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
@@ -254,11 +255,7 @@ describe("ReleasesPage", () => {
             ],
       next_page_token: "",
     }));
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [],
-      current_revision: 0,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([], 0));
     // No stream endpoint: the rollout hook falls back to polling at once.
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
   });
@@ -767,27 +764,28 @@ describe("ReleasesPage", () => {
       ],
       next_page_token: "",
     });
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [
-        {
-          namespace: releaseV2.namespace,
-          release_name: "runtime",
-          client_name: "api",
-          instance_id: "api-1",
-          identity: "payments-client",
-          state: "applied",
-          release_version: 2,
-          activation_revision: 8,
-          rejection_category: "",
-          diagnostic: "",
-          client_timestamp_unix_ms: 1,
-          server_timestamp_unix_ms: 1,
-          connected: true,
-        },
-      ],
-      current_revision: 8,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(
+      projectedSubscribers(
+        [
+          {
+            namespace: releaseV2.namespace,
+            release_name: "runtime",
+            client_name: "api",
+            instance_id: "api-1",
+            identity: "payments-client",
+            state: "applied",
+            release_version: 2,
+            activation_revision: 8,
+            rejection_category: "",
+            diagnostic: "",
+            client_timestamp_unix_ms: 1,
+            server_timestamp_unix_ms: 1,
+            connected: true,
+          },
+        ],
+        8,
+      ),
+    );
 
     mocks.releaseDiff.mockResolvedValue(diffResponse(1, 2));
 
@@ -1900,27 +1898,28 @@ describe("ReleasesPage", () => {
       ],
       next_page_token: "",
     });
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [
-        {
-          namespace: releaseV1.namespace,
-          release_name: "runtime",
-          client_name: "api",
-          instance_id: "api-1",
-          identity: "payments-client",
-          state: "applied",
-          release_version: 2,
-          activation_revision: 8,
-          rejection_category: "",
-          diagnostic: "",
-          client_timestamp_unix_ms: 1,
-          server_timestamp_unix_ms: 1,
-          connected: true,
-        },
-      ],
-      current_revision: 8,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(
+      projectedSubscribers(
+        [
+          {
+            namespace: releaseV1.namespace,
+            release_name: "runtime",
+            client_name: "api",
+            instance_id: "api-1",
+            identity: "payments-client",
+            state: "applied",
+            release_version: 2,
+            activation_revision: 8,
+            rejection_category: "",
+            diagnostic: "",
+            client_timestamp_unix_ms: 1,
+            server_timestamp_unix_ms: 1,
+            connected: true,
+          },
+        ],
+        8,
+      ),
+    );
     render(<ReleasesPage />);
     const view = await screen.findAllByRole("button", { name: "View" });
     fireEvent.click(view[1]);

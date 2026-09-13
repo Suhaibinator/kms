@@ -76,7 +76,7 @@ func TestProcessScopedReleasePinsOverRealKMS(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		for _, r := range rows.Subscribers {
+		for _, r := range rows.Instances {
 			if r.InstanceId == "replica-a" && r.Connected && r.State == "applied" {
 				row = r
 				return r.SessionId != ""
@@ -109,7 +109,7 @@ func TestProcessScopedReleasePinsOverRealKMS(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		for _, r := range rows.Subscribers {
+		for _, r := range rows.Instances {
 			if r.SessionId == ref.SessionId {
 				return r.PinVersion == 4 && r.State == "rejected" && r.LastAppliedVersion == 2
 			}

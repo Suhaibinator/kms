@@ -4647,7 +4647,10 @@ type ReleaseWatchRegistration struct {
 	ClientName       string                 `protobuf:"bytes,3,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
 	InstanceId       string                 `protobuf:"bytes,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	LastSeenRevision uint64                 `protobuf:"varint,5,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"`
-	SessionId        string                 `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // Presence negotiates instance-target delivery.
+	// Required. One loader execution owns a session; reconnects retain it and
+	// process restarts create a new session even with the same instance name.
+	// Legacy registrations fail with an actionable upgrade-required error.
+	SessionId string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Required; absence never means the newest schema.
 	SchemaVersion *uint64 `protobuf:"varint,6,opt,name=schema_version,json=schemaVersion,proto3,oneof" json:"schema_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -4750,11 +4753,16 @@ type ReleaseAcknowledgement struct {
 	AppliedDivergent    bool   `protobuf:"varint,11,opt,name=applied_divergent,json=appliedDivergent,proto3" json:"applied_divergent,omitempty"`
 	DivergentFieldCount uint32 `protobuf:"varint,12,opt,name=divergent_field_count,json=divergentFieldCount,proto3" json:"divergent_field_count,omitempty"`
 	SchemaVersion       uint64 `protobuf:"varint,13,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	// Client-assigned generation of this retained acknowledgement. The server
-	// echoes it when rejecting an unavailable activation so a delayed response
-	// cannot discard a newer acknowledgement for the same lifecycle state.
-	Sequence       uint64 `protobuf:"varint,14,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	SessionId      string `protobuf:"bytes,15,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Nonzero, strictly increasing for newly generated events within a session.
+	// Replay preserves sequence, original timestamp and payload exactly. Within
+	// a target sequence defines causality, never receipt time or lifecycle rank.
+	// Identical replay is idempotent; conflicting retained identities are errors.
+	// Do not generate events merely to replay an unchanged applied outcome.
+	Sequence  uint64 `protobuf:"varint,14,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	SessionId string `protobuf:"bytes,15,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Assigned target identity/order; release version is NOT an ordering key.
+	// A rollback or pin can select a lower version at a higher target revision.
+	// Last confirmed application is retained separately from the latest attempt.
 	TargetRevision uint64 `protobuf:"varint,16,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -8954,20 +8962,22 @@ func (x *ListAuditEventsResponse) GetNextPageToken() string {
 }
 
 type Subscriber struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	ClientName          string                 `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
-	InstanceId          string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	Identity            string                 `protobuf:"bytes,3,opt,name=identity,proto3" json:"identity,omitempty"`
-	Namespaces          []*NamespaceRef        `protobuf:"bytes,4,rep,name=namespaces,proto3" json:"namespaces,omitempty"` // the namespaces this stream is watching
-	RemoteAddr          string                 `protobuf:"bytes,5,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
-	ConnectedAtUnixMs   int64                  `protobuf:"varint,6,opt,name=connected_at_unix_ms,json=connectedAtUnixMs,proto3" json:"connected_at_unix_ms,omitempty"`
-	LastHeartbeatUnixMs int64                  `protobuf:"varint,7,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
-	LastAckedRevision   uint64                 `protobuf:"varint,8,opt,name=last_acked_revision,json=lastAckedRevision,proto3" json:"last_acked_revision,omitempty"` // namespace transport ACK only
-	ReleaseName         string                 `protobuf:"bytes,9,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`                      // set for release streams
-	ReleaseState        string                 `protobuf:"bytes,10,opt,name=release_state,json=releaseState,proto3" json:"release_state,omitempty"`                  // empty until the first validated lifecycle ACK
-	ReleaseVersion      uint64                 `protobuf:"varint,11,opt,name=release_version,json=releaseVersion,proto3" json:"release_version,omitempty"`
-	ReleaseRevision     uint64                 `protobuf:"varint,12,opt,name=release_revision,json=releaseRevision,proto3" json:"release_revision,omitempty"`
-	SchemaVersion       uint64                 `protobuf:"varint,13,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	state               protoimpl.MessageState  `protogen:"open.v1"`
+	ClientName          string                  `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
+	InstanceId          string                  `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Identity            string                  `protobuf:"bytes,3,opt,name=identity,proto3" json:"identity,omitempty"`
+	Namespaces          []*NamespaceRef         `protobuf:"bytes,4,rep,name=namespaces,proto3" json:"namespaces,omitempty"` // the namespaces this stream is watching
+	RemoteAddr          string                  `protobuf:"bytes,5,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
+	ConnectedAtUnixMs   int64                   `protobuf:"varint,6,opt,name=connected_at_unix_ms,json=connectedAtUnixMs,proto3" json:"connected_at_unix_ms,omitempty"`
+	LastHeartbeatUnixMs int64                   `protobuf:"varint,7,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
+	LastAckedRevision   uint64                  `protobuf:"varint,8,opt,name=last_acked_revision,json=lastAckedRevision,proto3" json:"last_acked_revision,omitempty"` // namespace transport ACK only
+	ReleaseName         string                  `protobuf:"bytes,9,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`                      // set for release streams
+	ReleaseState        string                  `protobuf:"bytes,10,opt,name=release_state,json=releaseState,proto3" json:"release_state,omitempty"`                  // empty until the first validated lifecycle ACK
+	ReleaseVersion      uint64                  `protobuf:"varint,11,opt,name=release_version,json=releaseVersion,proto3" json:"release_version,omitempty"`
+	ReleaseRevision     uint64                  `protobuf:"varint,12,opt,name=release_revision,json=releaseRevision,proto3" json:"release_revision,omitempty"`
+	SchemaVersion       uint64                  `protobuf:"varint,13,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	SessionId           string                  `protobuf:"bytes,14,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Effective           *ReleaseSubscriberState `protobuf:"bytes,15,opt,name=effective,proto3" json:"effective,omitempty"` // server-owned session projection
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -9093,6 +9103,20 @@ func (x *Subscriber) GetSchemaVersion() uint64 {
 	return 0
 }
 
+func (x *Subscriber) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *Subscriber) GetEffective() *ReleaseSubscriberState {
+	if x != nil {
+		return x.Effective
+	}
+	return nil
+}
+
 type ListSubscribersRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -9182,32 +9206,39 @@ func (x *ListSubscribersResponse) GetCurrentRevision() uint64 {
 }
 
 type ReleaseSubscriberState struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	SessionId             string                 `protobuf:"bytes,17,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	TargetRevision        uint64                 `protobuf:"varint,18,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"`
-	PinVersion            uint64                 `protobuf:"varint,19,opt,name=pin_version,json=pinVersion,proto3" json:"pin_version,omitempty"`
-	PinRevision           uint64                 `protobuf:"varint,20,opt,name=pin_revision,json=pinRevision,proto3" json:"pin_revision,omitempty"`
-	PinnedBy              string                 `protobuf:"bytes,21,opt,name=pinned_by,json=pinnedBy,proto3" json:"pinned_by,omitempty"`
-	PinnedAtUnixMs        int64                  `protobuf:"varint,22,opt,name=pinned_at_unix_ms,json=pinnedAtUnixMs,proto3" json:"pinned_at_unix_ms,omitempty"`
-	LastAppliedVersion    uint64                 `protobuf:"varint,23,opt,name=last_applied_version,json=lastAppliedVersion,proto3" json:"last_applied_version,omitempty"`
-	DesiredVersion        uint64                 `protobuf:"varint,24,opt,name=desired_version,json=desiredVersion,proto3" json:"desired_version,omitempty"`
-	DesiredRevision       uint64                 `protobuf:"varint,25,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
-	Namespace             *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	ReleaseName           string                 `protobuf:"bytes,2,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
-	ClientName            string                 `protobuf:"bytes,3,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
-	InstanceId            string                 `protobuf:"bytes,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	Identity              string                 `protobuf:"bytes,5,opt,name=identity,proto3" json:"identity,omitempty"`
-	State                 string                 `protobuf:"bytes,6,opt,name=state,proto3" json:"state,omitempty"`
-	ReleaseVersion        uint64                 `protobuf:"varint,7,opt,name=release_version,json=releaseVersion,proto3" json:"release_version,omitempty"`
-	ActivationRevision    uint64                 `protobuf:"varint,8,opt,name=activation_revision,json=activationRevision,proto3" json:"activation_revision,omitempty"`
-	RejectionCategory     string                 `protobuf:"bytes,9,opt,name=rejection_category,json=rejectionCategory,proto3" json:"rejection_category,omitempty"`
-	Diagnostic            string                 `protobuf:"bytes,10,opt,name=diagnostic,proto3" json:"diagnostic,omitempty"`
-	ClientTimestampUnixMs int64                  `protobuf:"varint,11,opt,name=client_timestamp_unix_ms,json=clientTimestampUnixMs,proto3" json:"client_timestamp_unix_ms,omitempty"`
-	ServerTimestampUnixMs int64                  `protobuf:"varint,12,opt,name=server_timestamp_unix_ms,json=serverTimestampUnixMs,proto3" json:"server_timestamp_unix_ms,omitempty"`
-	Connected             bool                   `protobuf:"varint,13,opt,name=connected,proto3" json:"connected,omitempty"`
-	AppliedDivergent      bool                   `protobuf:"varint,14,opt,name=applied_divergent,json=appliedDivergent,proto3" json:"applied_divergent,omitempty"`
-	DivergentFieldCount   uint32                 `protobuf:"varint,15,opt,name=divergent_field_count,json=divergentFieldCount,proto3" json:"divergent_field_count,omitempty"`
-	SchemaVersion         uint64                 `protobuf:"varint,16,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Effective classification is server-owned, not derived from lifecycle rank.
+	Classification        string        `protobuf:"bytes,26,opt,name=classification,proto3" json:"classification,omitempty"`
+	Reason                string        `protobuf:"bytes,27,opt,name=reason,proto3" json:"reason,omitempty"`
+	Sequence              uint64        `protobuf:"varint,28,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	LastAppliedRevision   uint64        `protobuf:"varint,29,opt,name=last_applied_revision,json=lastAppliedRevision,proto3" json:"last_applied_revision,omitempty"`
+	LastAppliedSequence   uint64        `protobuf:"varint,30,opt,name=last_applied_sequence,json=lastAppliedSequence,proto3" json:"last_applied_sequence,omitempty"`
+	FleetVersion          uint64        `protobuf:"varint,31,opt,name=fleet_version,json=fleetVersion,proto3" json:"fleet_version,omitempty"`
+	SessionId             string        `protobuf:"bytes,17,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TargetRevision        uint64        `protobuf:"varint,18,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"`
+	PinVersion            uint64        `protobuf:"varint,19,opt,name=pin_version,json=pinVersion,proto3" json:"pin_version,omitempty"`
+	PinRevision           uint64        `protobuf:"varint,20,opt,name=pin_revision,json=pinRevision,proto3" json:"pin_revision,omitempty"`
+	PinnedBy              string        `protobuf:"bytes,21,opt,name=pinned_by,json=pinnedBy,proto3" json:"pinned_by,omitempty"`
+	PinnedAtUnixMs        int64         `protobuf:"varint,22,opt,name=pinned_at_unix_ms,json=pinnedAtUnixMs,proto3" json:"pinned_at_unix_ms,omitempty"`
+	LastAppliedVersion    uint64        `protobuf:"varint,23,opt,name=last_applied_version,json=lastAppliedVersion,proto3" json:"last_applied_version,omitempty"`
+	DesiredVersion        uint64        `protobuf:"varint,24,opt,name=desired_version,json=desiredVersion,proto3" json:"desired_version,omitempty"`
+	DesiredRevision       uint64        `protobuf:"varint,25,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
+	Namespace             *NamespaceRef `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName           string        `protobuf:"bytes,2,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	ClientName            string        `protobuf:"bytes,3,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
+	InstanceId            string        `protobuf:"bytes,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Identity              string        `protobuf:"bytes,5,opt,name=identity,proto3" json:"identity,omitempty"`
+	State                 string        `protobuf:"bytes,6,opt,name=state,proto3" json:"state,omitempty"`
+	ReleaseVersion        uint64        `protobuf:"varint,7,opt,name=release_version,json=releaseVersion,proto3" json:"release_version,omitempty"`
+	ActivationRevision    uint64        `protobuf:"varint,8,opt,name=activation_revision,json=activationRevision,proto3" json:"activation_revision,omitempty"`
+	RejectionCategory     string        `protobuf:"bytes,9,opt,name=rejection_category,json=rejectionCategory,proto3" json:"rejection_category,omitempty"`
+	Diagnostic            string        `protobuf:"bytes,10,opt,name=diagnostic,proto3" json:"diagnostic,omitempty"`
+	ClientTimestampUnixMs int64         `protobuf:"varint,11,opt,name=client_timestamp_unix_ms,json=clientTimestampUnixMs,proto3" json:"client_timestamp_unix_ms,omitempty"`
+	ServerTimestampUnixMs int64         `protobuf:"varint,12,opt,name=server_timestamp_unix_ms,json=serverTimestampUnixMs,proto3" json:"server_timestamp_unix_ms,omitempty"`
+	Connected             bool          `protobuf:"varint,13,opt,name=connected,proto3" json:"connected,omitempty"`
+	AppliedDivergent      bool          `protobuf:"varint,14,opt,name=applied_divergent,json=appliedDivergent,proto3" json:"applied_divergent,omitempty"`
+	DivergentFieldCount   uint32        `protobuf:"varint,15,opt,name=divergent_field_count,json=divergentFieldCount,proto3" json:"divergent_field_count,omitempty"`
+	SchemaVersion         uint64        `protobuf:"varint,16,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -9240,6 +9271,48 @@ func (x *ReleaseSubscriberState) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ReleaseSubscriberState.ProtoReflect.Descriptor instead.
 func (*ReleaseSubscriberState) Descriptor() ([]byte, []int) {
 	return file_kms_v1_kms_proto_rawDescGZIP(), []int{139}
+}
+
+func (x *ReleaseSubscriberState) GetClassification() string {
+	if x != nil {
+		return x.Classification
+	}
+	return ""
+}
+
+func (x *ReleaseSubscriberState) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ReleaseSubscriberState) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberState) GetLastAppliedRevision() uint64 {
+	if x != nil {
+		return x.LastAppliedRevision
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberState) GetLastAppliedSequence() uint64 {
+	if x != nil {
+		return x.LastAppliedSequence
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberState) GetFleetVersion() uint64 {
+	if x != nil {
+		return x.FleetVersion
+	}
+	return 0
 }
 
 func (x *ReleaseSubscriberState) GetSessionId() string {
@@ -9494,12 +9567,16 @@ func (x *ListReleaseSubscribersRequest) GetSchemaVersion() uint64 {
 }
 
 type ListReleaseSubscribersResponse struct {
-	state           protoimpl.MessageState    `protogen:"open.v1"`
-	Subscribers     []*ReleaseSubscriberState `protobuf:"bytes,1,rep,name=subscribers,proto3" json:"subscribers,omitempty"`
-	NextPageToken   string                    `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	CurrentRevision uint64                    `protobuf:"varint,3,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Raw history is distinct from effective session health.
+	Subscribers        []*ReleaseSubscriberState `protobuf:"bytes,1,rep,name=subscribers,proto3" json:"subscribers,omitempty"`
+	NextPageToken      string                    `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	CurrentRevision    uint64                    `protobuf:"varint,3,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
+	Instances          []*ReleaseSubscriberState `protobuf:"bytes,4,rep,name=instances,proto3" json:"instances,omitempty"`
+	Summary            *ReleaseSubscriberSummary `protobuf:"bytes,5,opt,name=summary,proto3" json:"summary,omitempty"`
+	ProjectionRevision string                    `protobuf:"bytes,6,opt,name=projection_revision,json=projectionRevision,proto3" json:"projection_revision,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ListReleaseSubscribersResponse) Reset() {
@@ -9553,6 +9630,152 @@ func (x *ListReleaseSubscribersResponse) GetCurrentRevision() uint64 {
 	return 0
 }
 
+func (x *ListReleaseSubscribersResponse) GetInstances() []*ReleaseSubscriberState {
+	if x != nil {
+		return x.Instances
+	}
+	return nil
+}
+
+func (x *ListReleaseSubscribersResponse) GetSummary() *ReleaseSubscriberSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
+func (x *ListReleaseSubscribersResponse) GetProjectionRevision() string {
+	if x != nil {
+		return x.ProjectionRevision
+	}
+	return ""
+}
+
+// Counts cover the full effective population, independent of page size.
+type ReleaseSubscriberSummary struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Total            uint64                 `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
+	Connected        uint64                 `protobuf:"varint,2,opt,name=connected,proto3" json:"connected,omitempty"`
+	AppliedCurrent   uint64                 `protobuf:"varint,3,opt,name=applied_current,json=appliedCurrent,proto3" json:"applied_current,omitempty"`
+	AppliedDivergent uint64                 `protobuf:"varint,4,opt,name=applied_divergent,json=appliedDivergent,proto3" json:"applied_divergent,omitempty"`
+	Rejected         uint64                 `protobuf:"varint,5,opt,name=rejected,proto3" json:"rejected,omitempty"`
+	Pending          uint64                 `protobuf:"varint,6,opt,name=pending,proto3" json:"pending,omitempty"`
+	Pinned           uint64                 `protobuf:"varint,7,opt,name=pinned,proto3" json:"pinned,omitempty"`
+	Stale            uint64                 `protobuf:"varint,8,opt,name=stale,proto3" json:"stale,omitempty"`
+	Unknown          uint64                 `protobuf:"varint,9,opt,name=unknown,proto3" json:"unknown,omitempty"`
+	Complete         bool                   `protobuf:"varint,10,opt,name=complete,proto3" json:"complete,omitempty"`
+	DifferentPins    uint64                 `protobuf:"varint,11,opt,name=different_pins,json=differentPins,proto3" json:"different_pins,omitempty"` // applied pins that differ from the fleet version
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReleaseSubscriberSummary) Reset() {
+	*x = ReleaseSubscriberSummary{}
+	mi := &file_kms_v1_kms_proto_msgTypes[142]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseSubscriberSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseSubscriberSummary) ProtoMessage() {}
+
+func (x *ReleaseSubscriberSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[142]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseSubscriberSummary.ProtoReflect.Descriptor instead.
+func (*ReleaseSubscriberSummary) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{142}
+}
+
+func (x *ReleaseSubscriberSummary) GetTotal() uint64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetConnected() uint64 {
+	if x != nil {
+		return x.Connected
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetAppliedCurrent() uint64 {
+	if x != nil {
+		return x.AppliedCurrent
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetAppliedDivergent() uint64 {
+	if x != nil {
+		return x.AppliedDivergent
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetRejected() uint64 {
+	if x != nil {
+		return x.Rejected
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetPending() uint64 {
+	if x != nil {
+		return x.Pending
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetPinned() uint64 {
+	if x != nil {
+		return x.Pinned
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetStale() uint64 {
+	if x != nil {
+		return x.Stale
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetUnknown() uint64 {
+	if x != nil {
+		return x.Unknown
+	}
+	return 0
+}
+
+func (x *ReleaseSubscriberSummary) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *ReleaseSubscriberSummary) GetDifferentPins() uint64 {
+	if x != nil {
+		return x.DifferentPins
+	}
+	return 0
+}
+
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -9561,7 +9784,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[142]
+	mi := &file_kms_v1_kms_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9573,7 +9796,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[142]
+	mi := &file_kms_v1_kms_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9586,7 +9809,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{142}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{143}
 }
 
 type HealthResponse struct {
@@ -9602,7 +9825,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[143]
+	mi := &file_kms_v1_kms_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9614,7 +9837,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[143]
+	mi := &file_kms_v1_kms_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9627,7 +9850,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{143}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -9686,7 +9909,7 @@ type CreateApplicationReleaseRequest struct {
 
 func (x *CreateApplicationReleaseRequest) Reset() {
 	*x = CreateApplicationReleaseRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[144]
+	mi := &file_kms_v1_kms_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9698,7 +9921,7 @@ func (x *CreateApplicationReleaseRequest) String() string {
 func (*CreateApplicationReleaseRequest) ProtoMessage() {}
 
 func (x *CreateApplicationReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[144]
+	mi := &file_kms_v1_kms_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9711,7 +9934,7 @@ func (x *CreateApplicationReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateApplicationReleaseRequest.ProtoReflect.Descriptor instead.
 func (*CreateApplicationReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{144}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *CreateApplicationReleaseRequest) GetNamespace() *NamespaceRef {
@@ -9773,7 +9996,7 @@ type ApplicationReleasePlanEntry struct {
 
 func (x *ApplicationReleasePlanEntry) Reset() {
 	*x = ApplicationReleasePlanEntry{}
-	mi := &file_kms_v1_kms_proto_msgTypes[145]
+	mi := &file_kms_v1_kms_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9785,7 +10008,7 @@ func (x *ApplicationReleasePlanEntry) String() string {
 func (*ApplicationReleasePlanEntry) ProtoMessage() {}
 
 func (x *ApplicationReleasePlanEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[145]
+	mi := &file_kms_v1_kms_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9798,7 +10021,7 @@ func (x *ApplicationReleasePlanEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplicationReleasePlanEntry.ProtoReflect.Descriptor instead.
 func (*ApplicationReleasePlanEntry) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{145}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *ApplicationReleasePlanEntry) GetAlias() string {
@@ -9865,7 +10088,7 @@ type CreateApplicationReleaseResponse struct {
 
 func (x *CreateApplicationReleaseResponse) Reset() {
 	*x = CreateApplicationReleaseResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[146]
+	mi := &file_kms_v1_kms_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9877,7 +10100,7 @@ func (x *CreateApplicationReleaseResponse) String() string {
 func (*CreateApplicationReleaseResponse) ProtoMessage() {}
 
 func (x *CreateApplicationReleaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[146]
+	mi := &file_kms_v1_kms_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9890,7 +10113,7 @@ func (x *CreateApplicationReleaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateApplicationReleaseResponse.ProtoReflect.Descriptor instead.
 func (*CreateApplicationReleaseResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{146}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *CreateApplicationReleaseResponse) GetProfile() string {
@@ -10692,7 +10915,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	" \x01(\tR\bdecision\"m\n" +
 	"\x17ListAuditEventsResponse\x12*\n" +
 	"\x06events\x18\x01 \x03(\v2\x12.kms.v1.AuditEventR\x06events\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x9a\x04\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xf7\x04\n" +
 	"\n" +
 	"Subscriber\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
@@ -10713,12 +10936,21 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	" \x01(\tR\freleaseState\x12'\n" +
 	"\x0frelease_version\x18\v \x01(\x04R\x0ereleaseVersion\x12)\n" +
 	"\x10release_revision\x18\f \x01(\x04R\x0freleaseRevision\x12%\n" +
-	"\x0eschema_version\x18\r \x01(\x04R\rschemaVersion\"\x18\n" +
+	"\x0eschema_version\x18\r \x01(\x04R\rschemaVersion\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x0e \x01(\tR\tsessionId\x12<\n" +
+	"\teffective\x18\x0f \x01(\v2\x1e.kms.v1.ReleaseSubscriberStateR\teffective\"\x18\n" +
 	"\x16ListSubscribersRequest\"z\n" +
 	"\x17ListSubscribersResponse\x124\n" +
 	"\vsubscribers\x18\x01 \x03(\v2\x12.kms.v1.SubscriberR\vsubscribers\x12)\n" +
-	"\x10current_revision\x18\x02 \x01(\x04R\x0fcurrentRevision\"\xfe\a\n" +
-	"\x16ReleaseSubscriberState\x12\x1d\n" +
+	"\x10current_revision\x18\x02 \x01(\x04R\x0fcurrentRevision\"\xe7\t\n" +
+	"\x16ReleaseSubscriberState\x12&\n" +
+	"\x0eclassification\x18\x1a \x01(\tR\x0eclassification\x12\x16\n" +
+	"\x06reason\x18\x1b \x01(\tR\x06reason\x12\x1a\n" +
+	"\bsequence\x18\x1c \x01(\x04R\bsequence\x122\n" +
+	"\x15last_applied_revision\x18\x1d \x01(\x04R\x13lastAppliedRevision\x122\n" +
+	"\x15last_applied_sequence\x18\x1e \x01(\x04R\x13lastAppliedSequence\x12#\n" +
+	"\rfleet_version\x18\x1f \x01(\x04R\ffleetVersion\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x11 \x01(\tR\tsessionId\x12'\n" +
 	"\x0ftarget_revision\x18\x12 \x01(\x04R\x0etargetRevision\x12\x1f\n" +
@@ -10758,11 +10990,27 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"page_token\x18\x04 \x01(\tR\tpageToken\x12*\n" +
 	"\x0eschema_version\x18\x05 \x01(\x04H\x00R\rschemaVersion\x88\x01\x01B\x11\n" +
-	"\x0f_schema_version\"\xb5\x01\n" +
+	"\x0f_schema_version\"\xe0\x02\n" +
 	"\x1eListReleaseSubscribersResponse\x12@\n" +
 	"\vsubscribers\x18\x01 \x03(\v2\x1e.kms.v1.ReleaseSubscriberStateR\vsubscribers\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12)\n" +
-	"\x10current_revision\x18\x03 \x01(\x04R\x0fcurrentRevision\"\x0f\n" +
+	"\x10current_revision\x18\x03 \x01(\x04R\x0fcurrentRevision\x12<\n" +
+	"\tinstances\x18\x04 \x03(\v2\x1e.kms.v1.ReleaseSubscriberStateR\tinstances\x12:\n" +
+	"\asummary\x18\x05 \x01(\v2 .kms.v1.ReleaseSubscriberSummaryR\asummary\x12/\n" +
+	"\x13projection_revision\x18\x06 \x01(\tR\x12projectionRevision\"\xe5\x02\n" +
+	"\x18ReleaseSubscriberSummary\x12\x14\n" +
+	"\x05total\x18\x01 \x01(\x04R\x05total\x12\x1c\n" +
+	"\tconnected\x18\x02 \x01(\x04R\tconnected\x12'\n" +
+	"\x0fapplied_current\x18\x03 \x01(\x04R\x0eappliedCurrent\x12+\n" +
+	"\x11applied_divergent\x18\x04 \x01(\x04R\x10appliedDivergent\x12\x1a\n" +
+	"\brejected\x18\x05 \x01(\x04R\brejected\x12\x18\n" +
+	"\apending\x18\x06 \x01(\x04R\apending\x12\x16\n" +
+	"\x06pinned\x18\a \x01(\x04R\x06pinned\x12\x14\n" +
+	"\x05stale\x18\b \x01(\x04R\x05stale\x12\x18\n" +
+	"\aunknown\x18\t \x01(\x04R\aunknown\x12\x1a\n" +
+	"\bcomplete\x18\n" +
+	" \x01(\bR\bcomplete\x12%\n" +
+	"\x0edifferent_pins\x18\v \x01(\x04R\rdifferentPins\"\x0f\n" +
 	"\rHealthRequest\"\xa8\x01\n" +
 	"\x0eHealthResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x14\n" +
@@ -10884,7 +11132,7 @@ func file_kms_v1_kms_proto_rawDescGZIP() []byte {
 	return file_kms_v1_kms_proto_rawDescData
 }
 
-var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 150)
+var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 151)
 var file_kms_v1_kms_proto_goTypes = []any{
 	(*NamespaceRef)(nil),                        // 0: kms.v1.NamespaceRef
 	(*ResourceRef)(nil),                         // 1: kms.v1.ResourceRef
@@ -11028,21 +11276,22 @@ var file_kms_v1_kms_proto_goTypes = []any{
 	(*ReleaseSubscriberState)(nil),              // 139: kms.v1.ReleaseSubscriberState
 	(*ListReleaseSubscribersRequest)(nil),       // 140: kms.v1.ListReleaseSubscribersRequest
 	(*ListReleaseSubscribersResponse)(nil),      // 141: kms.v1.ListReleaseSubscribersResponse
-	(*HealthRequest)(nil),                       // 142: kms.v1.HealthRequest
-	(*HealthResponse)(nil),                      // 143: kms.v1.HealthResponse
-	(*CreateApplicationReleaseRequest)(nil),     // 144: kms.v1.CreateApplicationReleaseRequest
-	(*ApplicationReleasePlanEntry)(nil),         // 145: kms.v1.ApplicationReleasePlanEntry
-	(*CreateApplicationReleaseResponse)(nil),    // 146: kms.v1.CreateApplicationReleaseResponse
-	nil,                                         // 147: kms.v1.Parameter.LabelsEntry
-	nil,                                         // 148: kms.v1.SecretMetadata.LabelsEntry
-	nil,                                         // 149: kms.v1.GetParameterMetadataResponse.LabelsEntry
+	(*ReleaseSubscriberSummary)(nil),            // 142: kms.v1.ReleaseSubscriberSummary
+	(*HealthRequest)(nil),                       // 143: kms.v1.HealthRequest
+	(*HealthResponse)(nil),                      // 144: kms.v1.HealthResponse
+	(*CreateApplicationReleaseRequest)(nil),     // 145: kms.v1.CreateApplicationReleaseRequest
+	(*ApplicationReleasePlanEntry)(nil),         // 146: kms.v1.ApplicationReleasePlanEntry
+	(*CreateApplicationReleaseResponse)(nil),    // 147: kms.v1.CreateApplicationReleaseResponse
+	nil,                                         // 148: kms.v1.Parameter.LabelsEntry
+	nil,                                         // 149: kms.v1.SecretMetadata.LabelsEntry
+	nil,                                         // 150: kms.v1.GetParameterMetadataResponse.LabelsEntry
 }
 var file_kms_v1_kms_proto_depIdxs = []int32{
 	0,   // 0: kms.v1.ResourceRef.namespace:type_name -> kms.v1.NamespaceRef
 	1,   // 1: kms.v1.Parameter.ref:type_name -> kms.v1.ResourceRef
-	147, // 2: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
+	148, // 2: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
 	1,   // 3: kms.v1.SecretMetadata.ref:type_name -> kms.v1.ResourceRef
-	148, // 4: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
+	149, // 4: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
 	5,   // 5: kms.v1.SecretMetadata.versions:type_name -> kms.v1.SecretVersionInfo
 	1,   // 6: kms.v1.GetParameterRequest.ref:type_name -> kms.v1.ResourceRef
 	2,   // 7: kms.v1.GetParameterResponse.parameter:type_name -> kms.v1.Parameter
@@ -11052,7 +11301,7 @@ var file_kms_v1_kms_proto_depIdxs = []int32{
 	1,   // 11: kms.v1.DeleteParameterRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 12: kms.v1.GetParameterMetadataRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 13: kms.v1.GetParameterMetadataResponse.ref:type_name -> kms.v1.ResourceRef
-	149, // 14: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
+	150, // 14: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
 	3,   // 15: kms.v1.GetParameterMetadataResponse.versions:type_name -> kms.v1.ParameterVersionInfo
 	1,   // 16: kms.v1.GetSecretRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 17: kms.v1.GetSecretResponse.ref:type_name -> kms.v1.ResourceRef
@@ -11149,138 +11398,141 @@ var file_kms_v1_kms_proto_depIdxs = []int32{
 	0,   // 108: kms.v1.WhoAmIResponse.namespace:type_name -> kms.v1.NamespaceRef
 	133, // 109: kms.v1.ListAuditEventsResponse.events:type_name -> kms.v1.AuditEvent
 	0,   // 110: kms.v1.Subscriber.namespaces:type_name -> kms.v1.NamespaceRef
-	136, // 111: kms.v1.ListSubscribersResponse.subscribers:type_name -> kms.v1.Subscriber
-	0,   // 112: kms.v1.ReleaseSubscriberState.namespace:type_name -> kms.v1.NamespaceRef
-	0,   // 113: kms.v1.ListReleaseSubscribersRequest.namespace:type_name -> kms.v1.NamespaceRef
-	139, // 114: kms.v1.ListReleaseSubscribersResponse.subscribers:type_name -> kms.v1.ReleaseSubscriberState
-	0,   // 115: kms.v1.CreateApplicationReleaseRequest.namespace:type_name -> kms.v1.NamespaceRef
-	1,   // 116: kms.v1.ApplicationReleasePlanEntry.ref:type_name -> kms.v1.ResourceRef
-	145, // 117: kms.v1.CreateApplicationReleaseResponse.entries:type_name -> kms.v1.ApplicationReleasePlanEntry
-	54,  // 118: kms.v1.CreateApplicationReleaseResponse.validation:type_name -> kms.v1.ReleaseValidationError
-	50,  // 119: kms.v1.CreateApplicationReleaseResponse.release:type_name -> kms.v1.ConfigurationRelease
-	6,   // 120: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
-	8,   // 121: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
-	10,  // 122: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
-	12,  // 123: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
-	14,  // 124: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
-	16,  // 125: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
-	18,  // 126: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
-	18,  // 127: kms.v1.SecretService.PutSecretV03:input_type -> kms.v1.PutSecretRequest
-	20,  // 128: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
-	22,  // 129: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
-	24,  // 130: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
-	26,  // 131: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
-	28,  // 132: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
-	30,  // 133: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
-	32,  // 134: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
-	33,  // 135: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
-	35,  // 136: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
-	36,  // 137: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
-	37,  // 138: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
-	39,  // 139: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
-	40,  // 140: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
-	86,  // 141: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
-	43,  // 142: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:input_type -> kms.v1.RegisterReleaseSessionRequest
-	45,  // 143: kms.v1.ConfigurationReleaseService.GetInstanceRelease:input_type -> kms.v1.GetInstanceReleaseRequest
-	46,  // 144: kms.v1.ConfigurationReleaseService.SetReleasePin:input_type -> kms.v1.SetReleasePinRequest
-	51,  // 145: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
-	53,  // 146: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
-	56,  // 147: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
-	58,  // 148: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
-	60,  // 149: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
-	61,  // 150: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:input_type -> kms.v1.ResolveReleaseSchemaRequest
-	64,  // 151: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
-	73,  // 152: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
-	68,  // 153: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
-	80,  // 154: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
-	82,  // 155: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
-	84,  // 156: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
-	96,  // 157: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
-	98,  // 158: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
-	100, // 159: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
-	102, // 160: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
-	109, // 161: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
-	111, // 162: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
-	113, // 163: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
-	115, // 164: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
-	117, // 165: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
-	119, // 166: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
-	121, // 167: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
-	123, // 168: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
-	125, // 169: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
-	127, // 170: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
-	129, // 171: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
-	131, // 172: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
-	134, // 173: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
-	137, // 174: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
-	140, // 175: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
-	104, // 176: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
-	144, // 177: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
-	142, // 178: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
-	7,   // 179: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
-	9,   // 180: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
-	11,  // 181: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
-	13,  // 182: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
-	15,  // 183: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
-	17,  // 184: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
-	19,  // 185: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
-	19,  // 186: kms.v1.SecretService.PutSecretV03:output_type -> kms.v1.PutSecretResponse
-	21,  // 187: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
-	23,  // 188: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
-	25,  // 189: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
-	27,  // 190: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
-	29,  // 191: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
-	31,  // 192: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
-	34,  // 193: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	34,  // 194: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 195: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	34,  // 196: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 197: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	41,  // 198: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	41,  // 199: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	87,  // 200: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
-	44,  // 201: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:output_type -> kms.v1.ReleaseSessionResponse
-	47,  // 202: kms.v1.ConfigurationReleaseService.GetInstanceRelease:output_type -> kms.v1.InstanceReleaseTarget
-	47,  // 203: kms.v1.ConfigurationReleaseService.SetReleasePin:output_type -> kms.v1.InstanceReleaseTarget
-	52,  // 204: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
-	55,  // 205: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
-	57,  // 206: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
-	59,  // 207: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
-	63,  // 208: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
-	62,  // 209: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:output_type -> kms.v1.ResolveReleaseSchemaResponse
-	66,  // 210: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
-	77,  // 211: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
-	70,  // 212: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
-	81,  // 213: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
-	83,  // 214: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
-	85,  // 215: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
-	97,  // 216: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
-	99,  // 217: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
-	101, // 218: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
-	103, // 219: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
-	110, // 220: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
-	112, // 221: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
-	114, // 222: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
-	116, // 223: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
-	118, // 224: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
-	120, // 225: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
-	122, // 226: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
-	124, // 227: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
-	126, // 228: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
-	128, // 229: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
-	130, // 230: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
-	132, // 231: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
-	135, // 232: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
-	138, // 233: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
-	141, // 234: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
-	106, // 235: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
-	146, // 236: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
-	143, // 237: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
-	179, // [179:238] is the sub-list for method output_type
-	120, // [120:179] is the sub-list for method input_type
-	120, // [120:120] is the sub-list for extension type_name
-	120, // [120:120] is the sub-list for extension extendee
-	0,   // [0:120] is the sub-list for field type_name
+	139, // 111: kms.v1.Subscriber.effective:type_name -> kms.v1.ReleaseSubscriberState
+	136, // 112: kms.v1.ListSubscribersResponse.subscribers:type_name -> kms.v1.Subscriber
+	0,   // 113: kms.v1.ReleaseSubscriberState.namespace:type_name -> kms.v1.NamespaceRef
+	0,   // 114: kms.v1.ListReleaseSubscribersRequest.namespace:type_name -> kms.v1.NamespaceRef
+	139, // 115: kms.v1.ListReleaseSubscribersResponse.subscribers:type_name -> kms.v1.ReleaseSubscriberState
+	139, // 116: kms.v1.ListReleaseSubscribersResponse.instances:type_name -> kms.v1.ReleaseSubscriberState
+	142, // 117: kms.v1.ListReleaseSubscribersResponse.summary:type_name -> kms.v1.ReleaseSubscriberSummary
+	0,   // 118: kms.v1.CreateApplicationReleaseRequest.namespace:type_name -> kms.v1.NamespaceRef
+	1,   // 119: kms.v1.ApplicationReleasePlanEntry.ref:type_name -> kms.v1.ResourceRef
+	146, // 120: kms.v1.CreateApplicationReleaseResponse.entries:type_name -> kms.v1.ApplicationReleasePlanEntry
+	54,  // 121: kms.v1.CreateApplicationReleaseResponse.validation:type_name -> kms.v1.ReleaseValidationError
+	50,  // 122: kms.v1.CreateApplicationReleaseResponse.release:type_name -> kms.v1.ConfigurationRelease
+	6,   // 123: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
+	8,   // 124: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
+	10,  // 125: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
+	12,  // 126: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
+	14,  // 127: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
+	16,  // 128: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
+	18,  // 129: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
+	18,  // 130: kms.v1.SecretService.PutSecretV03:input_type -> kms.v1.PutSecretRequest
+	20,  // 131: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
+	22,  // 132: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
+	24,  // 133: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
+	26,  // 134: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
+	28,  // 135: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
+	30,  // 136: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
+	32,  // 137: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
+	33,  // 138: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
+	35,  // 139: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
+	36,  // 140: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
+	37,  // 141: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
+	39,  // 142: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
+	40,  // 143: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
+	86,  // 144: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
+	43,  // 145: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:input_type -> kms.v1.RegisterReleaseSessionRequest
+	45,  // 146: kms.v1.ConfigurationReleaseService.GetInstanceRelease:input_type -> kms.v1.GetInstanceReleaseRequest
+	46,  // 147: kms.v1.ConfigurationReleaseService.SetReleasePin:input_type -> kms.v1.SetReleasePinRequest
+	51,  // 148: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
+	53,  // 149: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
+	56,  // 150: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
+	58,  // 151: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
+	60,  // 152: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
+	61,  // 153: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:input_type -> kms.v1.ResolveReleaseSchemaRequest
+	64,  // 154: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
+	73,  // 155: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
+	68,  // 156: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
+	80,  // 157: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
+	82,  // 158: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
+	84,  // 159: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
+	96,  // 160: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
+	98,  // 161: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
+	100, // 162: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
+	102, // 163: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
+	109, // 164: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
+	111, // 165: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
+	113, // 166: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
+	115, // 167: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
+	117, // 168: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
+	119, // 169: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
+	121, // 170: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
+	123, // 171: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
+	125, // 172: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
+	127, // 173: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
+	129, // 174: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
+	131, // 175: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
+	134, // 176: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
+	137, // 177: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
+	140, // 178: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
+	104, // 179: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
+	145, // 180: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
+	143, // 181: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
+	7,   // 182: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
+	9,   // 183: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
+	11,  // 184: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
+	13,  // 185: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
+	15,  // 186: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
+	17,  // 187: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
+	19,  // 188: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
+	19,  // 189: kms.v1.SecretService.PutSecretV03:output_type -> kms.v1.PutSecretResponse
+	21,  // 190: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
+	23,  // 191: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
+	25,  // 192: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
+	27,  // 193: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
+	29,  // 194: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
+	31,  // 195: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
+	34,  // 196: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	34,  // 197: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 198: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	34,  // 199: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 200: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	41,  // 201: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	41,  // 202: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	87,  // 203: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
+	44,  // 204: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:output_type -> kms.v1.ReleaseSessionResponse
+	47,  // 205: kms.v1.ConfigurationReleaseService.GetInstanceRelease:output_type -> kms.v1.InstanceReleaseTarget
+	47,  // 206: kms.v1.ConfigurationReleaseService.SetReleasePin:output_type -> kms.v1.InstanceReleaseTarget
+	52,  // 207: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
+	55,  // 208: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
+	57,  // 209: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
+	59,  // 210: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
+	63,  // 211: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
+	62,  // 212: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:output_type -> kms.v1.ResolveReleaseSchemaResponse
+	66,  // 213: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
+	77,  // 214: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
+	70,  // 215: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
+	81,  // 216: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
+	83,  // 217: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
+	85,  // 218: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
+	97,  // 219: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
+	99,  // 220: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
+	101, // 221: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
+	103, // 222: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
+	110, // 223: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
+	112, // 224: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
+	114, // 225: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
+	116, // 226: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
+	118, // 227: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
+	120, // 228: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
+	122, // 229: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
+	124, // 230: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
+	126, // 231: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
+	128, // 232: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
+	130, // 233: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
+	132, // 234: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
+	135, // 235: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
+	138, // 236: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
+	141, // 237: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
+	106, // 238: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
+	147, // 239: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
+	144, // 240: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
+	182, // [182:241] is the sub-list for method output_type
+	123, // [123:182] is the sub-list for method input_type
+	123, // [123:123] is the sub-list for extension type_name
+	123, // [123:123] is the sub-list for extension extendee
+	0,   // [0:123] is the sub-list for field type_name
 }
 
 func init() { file_kms_v1_kms_proto_init() }
@@ -11317,14 +11569,14 @@ func file_kms_v1_kms_proto_init() {
 	}
 	file_kms_v1_kms_proto_msgTypes[104].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[140].OneofWrappers = []any{}
-	file_kms_v1_kms_proto_msgTypes[144].OneofWrappers = []any{}
+	file_kms_v1_kms_proto_msgTypes[145].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kms_v1_kms_proto_rawDesc), len(file_kms_v1_kms_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   150,
+			NumMessages:   151,
 			NumExtensions: 0,
 			NumServices:   6,
 		},

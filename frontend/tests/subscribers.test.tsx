@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { links } from "@/lib/links";
 import type { Subscriber } from "@/lib/types";
 import SubscribersPage from "@/pages/subscribers";
+import { projectedSubscribers } from "./fixtures/subscriber-projection";
 
 const mocks = vi.hoisted(() => ({
   subscribers: vi.fn(),
@@ -66,7 +67,7 @@ describe("SubscribersPage", () => {
     expect(screen.getByText("up to date")).toBeVisible();
   });
 
-  it("shows release streams before an ACK and does not compare their lifecycle to the global revision", async () => {
+  it("shows Unknown without a projection and uses authoritative release state instead of global revision", async () => {
     const release: Subscriber = {
       client_name: "release-client",
       instance_id: "same-process",
@@ -87,18 +88,23 @@ describe("SubscribersPage", () => {
           release_state: "rejected",
           release_version: 2,
           release_revision: 4,
+          effective: {
+            ...projectedSubscribers([{ ...release, state: "rejected", connected: true }], 4)
+              .instances[0],
+            classification: "rejected",
+            last_applied_version: 1,
+            desired_revision: 4,
+          },
         },
       ],
       current_revision: 100,
     });
     render(<SubscribersPage />);
-    expect(await screen.findByText("Connected · awaiting lifecycle report")).toBeVisible();
-    expect(screen.getByText("rejected · v2 · revision 4")).toBeVisible();
+    expect(await screen.findByText("Unknown · status unavailable")).toBeVisible();
+    expect(screen.getByText("rejected · last applied v1 · target revision 4")).toBeVisible();
     expect(screen.getByText("all acknowledged")).toBeVisible();
     expect(document.querySelectorAll("tr.stale")).toHaveLength(0);
-    expect(
-      screen.getByRole("link", { name: "Connected · awaiting lifecycle report" }),
-    ).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Unknown · status unavailable" })).toHaveAttribute(
       "href",
       links.releases({ app: "app", env: "prod", name: "runtime", schemaVersion: 0 }),
     );

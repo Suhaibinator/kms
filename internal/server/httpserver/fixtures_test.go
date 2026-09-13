@@ -34,6 +34,10 @@ func normalizeFixture(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, val := range x {
+			if k == "projection_revision" {
+				x[k] = "fixture-projection-revision"
+				continue
+			}
 			if strings.HasSuffix(k, "_unix_ms") {
 				if n, ok := val.(float64); ok && n > 0 {
 					x[k] = fixtureTime

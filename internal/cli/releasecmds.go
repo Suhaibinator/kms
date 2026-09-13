@@ -16,7 +16,6 @@ import (
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
-	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1006,8 +1005,9 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewAdminServiceClient(conn)
-	instances := map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus{}
-	currentRevision := uint64(0)
+	instances := []*kmsv1.ReleaseSubscriberState{}
+	projectionRevision := ""
+	var summary *kmsv1.ReleaseSubscriberSummary
 	pageToken := ""
 	for {
 		req := &kmsv1.ListReleaseSubscribersRequest{
@@ -1020,246 +1020,50 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 		if listErr != nil {
 			return c.failErr("release subscribers", listErr)
 		}
-		currentRevision = max(currentRevision, resp.GetCurrentRevision())
-		mergeReleaseSubscriberStates(instances, resp.GetSubscribers())
+		if !resp.GetSummary().GetComplete() || resp.GetProjectionRevision() == "" {
+			return c.failErr("release subscribers", fmt.Errorf("authoritative subscriber status unavailable; upgrade the server or retry"))
+		}
+		if projectionRevision != "" && projectionRevision != resp.GetProjectionRevision() {
+			return c.failErr("release subscribers", fmt.Errorf("subscriber projection changed during pagination; retry"))
+		}
+		projectionRevision = resp.GetProjectionRevision()
+		summary = resp.GetSummary()
+		instances = append(instances, resp.GetInstances()...)
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
 			break
 		}
 	}
-	currentRevisions := map[uint64]uint64{}
-	if schema.set {
-		currentRevisions[schema.value] = currentRevision
-	} else {
-		currentRevisions, err = releaseSubscriberTrackRevisions(cf.authCtx(ctx), kmsv1.NewConfigurationReleaseServiceClient(conn), ns, pos[1], instances)
-		if err != nil {
-			return c.failErr("release subscribers", err)
-		}
-	}
 	if c.jsonOutput() {
-		// Every page has been followed, so there is no token to hand back.
-		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevisions), "")
+		return c.printJSON(struct {
+			Items              []*kmsv1.ReleaseSubscriberState `json:"items"`
+			Summary            *kmsv1.ReleaseSubscriberSummary `json:"summary"`
+			ProjectionRevision string                          `json:"projection_revision"`
+			NextPageToken      string                          `json:"next_page_token"`
+		}{Items: instances, Summary: summary, ProjectionRevision: projectionRevision})
 	}
-	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevisions)
+	if _, err := fmt.Fprintf(c.Stdout, "Connected: %d · applied: %d · pending: %d · rejected: %d · pinned: %d · stale: %d · unknown: %d\n", summary.GetConnected(), summary.GetAppliedCurrent(), summary.GetPending(), summary.GetRejected(), summary.GetPinned(), summary.GetStale(), summary.GetUnknown()); err != nil {
+		return c.failErr("release subscribers", err)
+	}
+	writeEffectiveReleaseSubscribers(c.Stdout, instances)
 	return 0
 }
 
-// releaseSubscriberTrackRevisions resolves each schema track represented in an
-// unfiltered subscriber listing. The listing's current_revision is zero when
-// it spans tracks, so using it for every row would hide real revision lag.
-func releaseSubscriberTrackRevisions(ctx context.Context, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus) (map[uint64]uint64, error) {
-	revisions := make(map[uint64]uint64)
-	for key := range instances {
-		if _, resolved := revisions[key.schemaVersion]; resolved {
-			continue
+// The server owns classification and serving evidence; presentation must not
+// reinterpret acknowledgement arrival order or calculate readiness from lag.
+func writeEffectiveReleaseSubscribers(w io.Writer, instances []*kmsv1.ReleaseSubscriberState) {
+	rows := make([][]string, 0, len(instances))
+	for _, instance := range instances {
+		classification := instance.GetClassification()
+		if classification == "" {
+			classification = "unknown"
 		}
-		schemaVersion := key.schemaVersion
-		active, err := client.GetActiveRelease(ctx, &kmsv1.GetActiveReleaseRequest{
-			Namespace: ns, Name: name, SchemaVersion: &schemaVersion,
-		})
-		if status.Code(err) == codes.NotFound {
-			revisions[schemaVersion] = 0
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("get active release for schema %d: %w", schemaVersion, err)
-		}
-		release := active.GetRelease()
-		if release == nil {
-			return nil, fmt.Errorf("get active release for schema %d: server returned an empty release", schemaVersion)
-		}
-		if !sameNamespace(release.GetNamespace(), ns) {
-			return nil, fmt.Errorf("get active release for schema %d: server returned a different namespace", schemaVersion)
-		}
-		if release.GetName() != name {
-			return nil, fmt.Errorf("get active release for schema %d: server returned release %q", schemaVersion, release.GetName())
-		}
-		if release.GetSchemaVersion() != schemaVersion {
-			return nil, fmt.Errorf("get active release for schema %d: server returned schema %d", schemaVersion, release.GetSchemaVersion())
-		}
-		revisions[schemaVersion] = active.GetActivationRevision()
+		rows = append(rows, []string{instance.GetIdentity(), instance.GetClientName(), instance.GetInstanceId(),
+			strconv.FormatUint(instance.GetSchemaVersion(), 10), instance.GetSessionId(), classification,
+			instance.GetReason(), strconv.FormatUint(instance.GetDesiredVersion(), 10),
+			strconv.FormatUint(instance.GetLastAppliedVersion(), 10), strconv.FormatBool(instance.GetConnected())})
 	}
-	return revisions, nil
-}
-
-type releaseSubscriberInstanceStatus struct {
-	identity, client, instance string
-	session                    string
-	latest                     *kmsv1.ReleaseSubscriberState
-	schemaVersion              uint64
-	connected                  bool
-	latestRevision             uint64
-	states                     map[string]*kmsv1.ReleaseSubscriberState
-}
-
-type releaseSubscriberInstanceKey struct {
-	session       string
-	identity      string
-	client        string
-	instance      string
-	schemaVersion uint64
-}
-
-func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, subscribers []*kmsv1.ReleaseSubscriberState) {
-	for _, subscriber := range subscribers {
-		key := releaseSubscriberInstanceKey{session: subscriber.GetSessionId(),
-			identity:      subscriber.GetIdentity(),
-			client:        subscriber.GetClientName(),
-			instance:      subscriber.GetInstanceId(),
-			schemaVersion: subscriber.GetSchemaVersion(),
-		}
-		instance := instances[key]
-		if instance == nil {
-			instance = &releaseSubscriberInstanceStatus{
-				identity:      subscriber.GetIdentity(),
-				client:        subscriber.GetClientName(),
-				instance:      subscriber.GetInstanceId(),
-				schemaVersion: subscriber.GetSchemaVersion(),
-				states:        make(map[string]*kmsv1.ReleaseSubscriberState),
-			}
-			instances[key] = instance
-		}
-		instance.session = subscriber.GetSessionId()
-		instance.latest = subscriber
-		instance.states[subscriber.GetState()] = subscriber
-		instance.connected = instance.connected || subscriber.GetConnected()
-		instance.latestRevision = max(instance.latestRevision, subscriber.GetActivationRevision())
-	}
-}
-
-// sortedReleaseSubscriberKeys orders instances the way both renderers present
-// them: by identity, then client, then instance id.
-func sortedReleaseSubscriberKeys(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus) []releaseSubscriberInstanceKey {
-	keys := make([]releaseSubscriberInstanceKey, 0, len(instances))
-	for key := range instances {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].identity != keys[j].identity {
-			return keys[i].identity < keys[j].identity
-		}
-		if keys[i].client != keys[j].client {
-			return keys[i].client < keys[j].client
-		}
-		if keys[i].schemaVersion != keys[j].schemaVersion {
-			return keys[i].schemaVersion < keys[j].schemaVersion
-		}
-		return keys[i].instance < keys[j].instance
-	})
-	return keys
-}
-
-// releaseSubscriberLag is the difference between the active release's global
-// revision for this schema track and the newest revision reported by the
-// instance. Global revisions can include changes outside this track.
-func releaseSubscriberLag(instance *releaseSubscriberInstanceStatus, currentRevision uint64) uint64 {
-	if currentRevision > instance.latestRevision {
-		return currentRevision - instance.latestRevision
-	}
-	return 0
-}
-
-// releaseSubscriberStateJSON is one lifecycle state an instance reported. The
-// table squeezes it into "v1/r2[:category]"; JSON keeps the parts separate.
-type releaseSubscriberStateJSON struct {
-	ReleaseVersion     uint64 `json:"release_version"`
-	ActivationRevision uint64 `json:"activation_revision"`
-	RejectionCategory  string `json:"rejection_category,omitempty"`
-}
-
-// releaseSubscriberJSON is one row of `release subscribers`. A state the
-// instance never reported is null, the JSON form of the table's "-".
-type releaseSubscriberJSON struct {
-	SessionID          string                      `json:"session_id,omitempty"`
-	PinVersion         uint64                      `json:"pin_version,omitempty"`
-	PinRevision        uint64                      `json:"pin_revision"`
-	DesiredVersion     uint64                      `json:"desired_version,omitempty"`
-	LastAppliedVersion uint64                      `json:"last_applied_version,omitempty"`
-	PinnedBy           string                      `json:"pinned_by,omitempty"`
-	Identity           string                      `json:"identity"`
-	Client             string                      `json:"client"`
-	Instance           string                      `json:"instance"`
-	Received           *releaseSubscriberStateJSON `json:"received"`
-	Prepared           *releaseSubscriberStateJSON `json:"prepared"`
-	Applied            *releaseSubscriberStateJSON `json:"applied"`
-	Rejected           *releaseSubscriberStateJSON `json:"rejected"`
-	Lag                uint64                      `json:"lag"`
-	Connected          bool                        `json:"connected"`
-	SchemaVersion      uint64                      `json:"schema_version"`
-}
-
-func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseSubscriberStateJSON {
-	if state == nil {
-		return nil
-	}
-	return &releaseSubscriberStateJSON{
-		ReleaseVersion:     state.GetReleaseVersion(),
-		ActivationRevision: state.GetActivationRevision(),
-		RejectionCategory:  state.GetRejectionCategory(),
-	}
-}
-
-func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) []releaseSubscriberJSON {
-	items := make([]releaseSubscriberJSON, 0, len(instances))
-	for _, key := range sortedReleaseSubscriberKeys(instances) {
-		instance := instances[key]
-		items = append(items, releaseSubscriberJSON{SessionID: instance.session, PinVersion: instance.latest.GetPinVersion(), PinRevision: instance.latest.GetPinRevision(), DesiredVersion: instance.latest.GetDesiredVersion(), LastAppliedVersion: instance.latest.GetLastAppliedVersion(), PinnedBy: instance.latest.GetPinnedBy(),
-			Identity:      instance.identity,
-			Client:        instance.client,
-			Instance:      instance.instance,
-			Received:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateReceived]),
-			Prepared:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStatePrepared]),
-			Applied:       releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateApplied]),
-			Rejected:      releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateRejected]),
-			Lag:           releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]),
-			Connected:     instance.connected,
-			SchemaVersion: instance.schemaVersion,
-		})
-	}
-	return items
-}
-
-func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevisions map[uint64]uint64) {
-	keys := sortedReleaseSubscriberKeys(instances)
-	rows := make([][]string, 0, len(keys))
-	hasSessions := false
-	for _, key := range keys {
-		if instances[key].session != "" {
-			hasSessions = true
-		}
-	}
-	for _, key := range keys {
-		instance := instances[key]
-		row := []string{
-			instance.identity, instance.client, instance.instance, strconv.FormatUint(instance.schemaVersion, 10),
-			releaseSubscriberStateText(instance.states[domain.ReleaseStateReceived]),
-			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
-			releaseSubscriberStateText(instance.states[domain.ReleaseStateApplied]),
-			releaseSubscriberStateText(instance.states[domain.ReleaseStateRejected]),
-			strconv.FormatUint(releaseSubscriberLag(instance, currentRevisions[instance.schemaVersion]), 10),
-			strconv.FormatBool(instance.connected),
-		}
-		if hasSessions {
-			row = append(row, instance.session, strconv.FormatUint(instance.latest.GetPinVersion(), 10), strconv.FormatUint(instance.latest.GetPinRevision(), 10))
-		}
-		rows = append(rows, row)
-	}
-	headers := []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "REVISION LAG", "CONNECTED"}
-	if hasSessions {
-		headers = append(headers, "SESSION", "PIN", "PIN REVISION")
-	}
-	writeAlignedTable(w, headers, rows)
-}
-
-func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {
-	if state == nil {
-		return "-"
-	}
-	value := fmt.Sprintf("v%d/r%d", state.GetReleaseVersion(), state.GetActivationRevision())
-	if state.GetState() == domain.ReleaseStateRejected && state.GetRejectionCategory() != "" {
-		value += ":" + state.GetRejectionCategory()
-	}
-	return value
+	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "SCHEMA", "SESSION", "STATUS", "REASON", "DESIRED VERSION", "LAST APPLIED VERSION", "CONNECTED"}, rows)
 }
 
 func (c *CLI) cmdReleaseSchema(args []string) int {

@@ -1518,7 +1518,7 @@ class ListAuditEventsResponse(_message.Message):
     def __init__(self, events: _Optional[_Iterable[_Union[AuditEvent, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class Subscriber(_message.Message):
-    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision", "release_name", "release_state", "release_version", "release_revision", "schema_version")
+    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision", "release_name", "release_state", "release_version", "release_revision", "schema_version", "session_id", "effective")
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
@@ -1532,6 +1532,8 @@ class Subscriber(_message.Message):
     RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
     RELEASE_REVISION_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    EFFECTIVE_FIELD_NUMBER: _ClassVar[int]
     client_name: str
     instance_id: str
     identity: str
@@ -1545,7 +1547,9 @@ class Subscriber(_message.Message):
     release_version: int
     release_revision: int
     schema_version: int
-    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ..., release_name: _Optional[str] = ..., release_state: _Optional[str] = ..., release_version: _Optional[int] = ..., release_revision: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    session_id: str
+    effective: ReleaseSubscriberState
+    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ..., release_name: _Optional[str] = ..., release_state: _Optional[str] = ..., release_version: _Optional[int] = ..., release_revision: _Optional[int] = ..., schema_version: _Optional[int] = ..., session_id: _Optional[str] = ..., effective: _Optional[_Union[ReleaseSubscriberState, _Mapping]] = ...) -> None: ...
 
 class ListSubscribersRequest(_message.Message):
     __slots__ = ()
@@ -1560,7 +1564,13 @@ class ListSubscribersResponse(_message.Message):
     def __init__(self, subscribers: _Optional[_Iterable[_Union[Subscriber, _Mapping]]] = ..., current_revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseSubscriberState(_message.Message):
-    __slots__ = ("session_id", "target_revision", "pin_version", "pin_revision", "pinned_by", "pinned_at_unix_ms", "last_applied_version", "desired_version", "desired_revision", "namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count", "schema_version")
+    __slots__ = ("classification", "reason", "sequence", "last_applied_revision", "last_applied_sequence", "fleet_version", "session_id", "target_revision", "pin_version", "pin_revision", "pinned_by", "pinned_at_unix_ms", "last_applied_version", "desired_version", "desired_revision", "namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count", "schema_version")
+    CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    LAST_APPLIED_REVISION_FIELD_NUMBER: _ClassVar[int]
+    LAST_APPLIED_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    FLEET_VERSION_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     TARGET_REVISION_FIELD_NUMBER: _ClassVar[int]
     PIN_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -1586,6 +1596,12 @@ class ReleaseSubscriberState(_message.Message):
     APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
     DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    classification: str
+    reason: str
+    sequence: int
+    last_applied_revision: int
+    last_applied_sequence: int
+    fleet_version: int
     session_id: str
     target_revision: int
     pin_version: int
@@ -1611,7 +1627,7 @@ class ReleaseSubscriberState(_message.Message):
     applied_divergent: bool
     divergent_field_count: int
     schema_version: int
-    def __init__(self, session_id: _Optional[str] = ..., target_revision: _Optional[int] = ..., pin_version: _Optional[int] = ..., pin_revision: _Optional[int] = ..., pinned_by: _Optional[str] = ..., pinned_at_unix_ms: _Optional[int] = ..., last_applied_version: _Optional[int] = ..., desired_version: _Optional[int] = ..., desired_revision: _Optional[int] = ..., namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    def __init__(self, classification: _Optional[str] = ..., reason: _Optional[str] = ..., sequence: _Optional[int] = ..., last_applied_revision: _Optional[int] = ..., last_applied_sequence: _Optional[int] = ..., fleet_version: _Optional[int] = ..., session_id: _Optional[str] = ..., target_revision: _Optional[int] = ..., pin_version: _Optional[int] = ..., pin_revision: _Optional[int] = ..., pinned_by: _Optional[str] = ..., pinned_at_unix_ms: _Optional[int] = ..., last_applied_version: _Optional[int] = ..., desired_version: _Optional[int] = ..., desired_revision: _Optional[int] = ..., namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersRequest(_message.Message):
     __slots__ = ("namespace", "release_name", "page_size", "page_token", "schema_version")
@@ -1628,14 +1644,46 @@ class ListReleaseSubscribersRequest(_message.Message):
     def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersResponse(_message.Message):
-    __slots__ = ("subscribers", "next_page_token", "current_revision")
+    __slots__ = ("subscribers", "next_page_token", "current_revision", "instances", "summary", "projection_revision")
     SUBSCRIBERS_FIELD_NUMBER: _ClassVar[int]
     NEXT_PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     CURRENT_REVISION_FIELD_NUMBER: _ClassVar[int]
+    INSTANCES_FIELD_NUMBER: _ClassVar[int]
+    SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    PROJECTION_REVISION_FIELD_NUMBER: _ClassVar[int]
     subscribers: _containers.RepeatedCompositeFieldContainer[ReleaseSubscriberState]
     next_page_token: str
     current_revision: int
-    def __init__(self, subscribers: _Optional[_Iterable[_Union[ReleaseSubscriberState, _Mapping]]] = ..., next_page_token: _Optional[str] = ..., current_revision: _Optional[int] = ...) -> None: ...
+    instances: _containers.RepeatedCompositeFieldContainer[ReleaseSubscriberState]
+    summary: ReleaseSubscriberSummary
+    projection_revision: str
+    def __init__(self, subscribers: _Optional[_Iterable[_Union[ReleaseSubscriberState, _Mapping]]] = ..., next_page_token: _Optional[str] = ..., current_revision: _Optional[int] = ..., instances: _Optional[_Iterable[_Union[ReleaseSubscriberState, _Mapping]]] = ..., summary: _Optional[_Union[ReleaseSubscriberSummary, _Mapping]] = ..., projection_revision: _Optional[str] = ...) -> None: ...
+
+class ReleaseSubscriberSummary(_message.Message):
+    __slots__ = ("total", "connected", "applied_current", "applied_divergent", "rejected", "pending", "pinned", "stale", "unknown", "complete", "different_pins")
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    CONNECTED_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_CURRENT_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
+    REJECTED_FIELD_NUMBER: _ClassVar[int]
+    PENDING_FIELD_NUMBER: _ClassVar[int]
+    PINNED_FIELD_NUMBER: _ClassVar[int]
+    STALE_FIELD_NUMBER: _ClassVar[int]
+    UNKNOWN_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    DIFFERENT_PINS_FIELD_NUMBER: _ClassVar[int]
+    total: int
+    connected: int
+    applied_current: int
+    applied_divergent: int
+    rejected: int
+    pending: int
+    pinned: int
+    stale: int
+    unknown: int
+    complete: bool
+    different_pins: int
+    def __init__(self, total: _Optional[int] = ..., connected: _Optional[int] = ..., applied_current: _Optional[int] = ..., applied_divergent: _Optional[int] = ..., rejected: _Optional[int] = ..., pending: _Optional[int] = ..., pinned: _Optional[int] = ..., stale: _Optional[int] = ..., unknown: _Optional[int] = ..., complete: _Optional[bool] = ..., different_pins: _Optional[int] = ...) -> None: ...
 
 class HealthRequest(_message.Message):
     __slots__ = ()

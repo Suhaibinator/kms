@@ -328,12 +328,13 @@ export function needsTypedConfirmation(env: string): boolean {
   return isProductionEnvironment(env);
 }
 
-const STATE_ORDER: Record<SubscriberInstance["state"], number> = {
+const STATE_ORDER: Record<string, number> = {
   rejected: 0,
-  received: 1,
-  prepared: 2,
-  "": 3,
+  pending: 1,
+  unknown: 2,
+  pinned: 3,
   applied: 4,
+  stale: 5,
 };
 
 /**
@@ -342,17 +343,10 @@ const STATE_ORDER: Record<SubscriberInstance["state"], number> = {
  */
 export function sortForRollout(
   instances: readonly SubscriberInstance[],
-  activationRevision: number,
+  _activationRevision: number,
 ): SubscriberInstance[] {
   const rank = (instance: SubscriberInstance): number => {
-    const atCurrent = instance.session_id
-      ? instance.target_revision === instance.desired_revision &&
-        instance.release_version === instance.desired_version
-      : instance.activation_revision >= activationRevision;
-    if (instance.state === "rejected" && atCurrent) return 0;
-    if (instance.state === "applied" && atCurrent) return 4;
-    // Applied to an older activation counts as pending for this one.
-    return STATE_ORDER[instance.state] === 4 ? 2 : STATE_ORDER[instance.state];
+    return STATE_ORDER[instance.classification ?? "unknown"] ?? STATE_ORDER.unknown;
   };
   return [...instances]
     .map((instance, index) => ({ instance, index }))

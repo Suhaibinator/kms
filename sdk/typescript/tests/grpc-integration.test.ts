@@ -23,6 +23,8 @@ import {
   type DisableSecretResponse,
   type GetActiveReleaseRequest,
   type GetActiveReleaseResponse,
+  type ReleaseSessionResponse,
+  type InstanceReleaseTarget,
   type GetParameterMetadataRequest,
   type GetParameterMetadataResponse,
   type GetParameterRequest,
@@ -175,6 +177,23 @@ describe("protocol-faithful gRPC integration", () => {
     };
     server.addService(ConfigurationReleaseServiceService, {
       getActiveRelease,
+      registerReleaseSession: (
+        _call: unknown,
+        callback: (error: null, value: Partial<ReleaseSessionResponse>) => void,
+      ) => callback(null, { pinCapable: true }),
+      getInstanceRelease: (
+        _call: unknown,
+        callback: (error: null, value: InstanceReleaseTarget) => void,
+      ) =>
+        callback(null, {
+          release,
+          targetRevision: 11n,
+          activationRevision: 11n,
+          pinned: false,
+          pinRevision: 0n,
+          pinnedBy: "",
+          pinnedAtUnixMs: 0n,
+        }),
       watchRelease,
     } as UntypedServiceImplementation);
 

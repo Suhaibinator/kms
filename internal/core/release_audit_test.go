@@ -110,14 +110,24 @@ func TestReleaseLifecycleAuditIdentifiesDuplicateVersionsAcrossTracks(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = svc.SetReleaseSubscriberConnected(ctx, track, "api", "replica", actor.Identity.Name, "connection", true); err != nil {
+		session := domain.ReleaseSessionRef{Track: track, ClientName: "api", InstanceID: "replica", Identity: actor.Identity.Name, SessionID: fmt.Sprintf("audit-session-%d", schema)}
+		if err = svc.RegisterReleaseSession(ctx, actor, session, false); err != nil {
 			t.Fatal(err)
 		}
-		ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: track.Name, SchemaVersion: schema, ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica", ConnectionID: "connection", State: domain.ReleaseStateApplied}
+		target, err := svc.GetInstanceRelease(ctx, actor, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.ConnectReleaseSession(ctx, session, "connection", true); err != nil {
+			t.Fatal(err)
+		}
+		ack := domain.ReleaseAcknowledgement{SessionID: session.SessionID, TargetRevision: target.TargetRevision, Sequence: 1, Namespace: ns, ReleaseName: track.Name, SchemaVersion: schema, ReleaseVersion: 1, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica", ConnectionID: "connection", State: domain.ReleaseStateApplied}
 		if err = svc.AcknowledgeConfigurationRelease(ctx, actor, ack); err != nil {
 			t.Fatal(err)
 		}
 		ack.ActivationRevision = 999999
+		ack.TargetRevision = 999999
+		ack.Sequence = 2
 		var unavailable *domain.ReleaseAcknowledgementUnavailableError
 		if err = svc.AcknowledgeConfigurationRelease(ctx, actor, ack); !errors.As(err, &unavailable) {
 			t.Fatalf("unavailable ACK: %v", err)

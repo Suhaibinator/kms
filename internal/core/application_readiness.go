@@ -13,12 +13,6 @@ import (
 // overview endpoint has already fetched, so the rules are unit-testable
 // without storage and the frontend never re-derives them.
 
-// departAfter is how long a disconnected, unpinned instance may be missing
-// before it leaves the fleet. A restarted process never resumes its session,
-// so departed instances are dropped from the rollout summary and findings
-// rather than reported; pinned sessions stay visible so the pin can be removed.
-const departAfter = 90 * time.Second
-
 // maxRolloutInstanceFindings caps per-instance findings and the
 // rejected_instances list so a large fleet cannot bloat one response.
 const maxRolloutInstanceFindings = 50
@@ -246,12 +240,14 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 
 	// --- rollout --------------------------------------------------------------
 	currentRevision := uint64(0)
+	currentVersion := uint64(0)
 	if in.Active != nil {
 		currentRevision = in.Active.ActivationRevision
+		currentVersion = in.Active.Release.Version
 	}
-	out.Rollout, out.RolloutState = computeRollout(in.Acks, in.App.ReleaseName, currentRevision, in.Now)
+	out.Rollout, out.RolloutState = computeRollout(in.Acks, in.App.ReleaseName, currentRevision, in.Now, currentVersion)
 	if out.ReleaseState == domain.ReleaseStateActive || out.ReleaseState == domain.ReleaseStateDrift {
-		if out.Rollout.Total == 0 {
+		if out.Rollout.Connected == 0 {
 			add(finding(domain.FindingNoSubscribers, domain.FindingInfo, envScope, nil))
 		}
 		if n := len(out.Rollout.OtherReleaseNames); n > 0 {
@@ -301,6 +297,10 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		out.Status = domain.EnvStatusDegraded
 	case out.RolloutState == domain.RolloutStateRolling:
 		out.Status = domain.EnvStatusRolling
+	case out.RolloutState == domain.RolloutStatePinned:
+		out.Status = domain.EnvStatusPinned
+	case out.RolloutState == domain.RolloutStateNoSubscribers || out.RolloutState == domain.RolloutStateUnknown:
+		out.Status = domain.EnvStatusUnknown
 	case out.ReleaseState == domain.ReleaseStateDrift:
 		out.Status = domain.EnvStatusDrift
 	default:
@@ -360,60 +360,40 @@ func otherReleaseInstanceCount(acks []domain.ReleaseAcknowledgement, releaseName
 			others = append(others, ack)
 		}
 	}
-	return len(liveInstances(others, now))
+	count := 0
+	for _, inst := range liveInstances(others, now) {
+		if inst.Connected {
+			count++
+		}
+	}
+	return count
 }
 
-// liveInstances folds acks into instances and drops the departed ones.
+// liveInstances exposes session history as well as connected processes.
+// Disconnected sessions classify as stale and never contribute current health.
 func liveInstances(acks []domain.ReleaseAcknowledgement, now time.Time) []domain.SubscriberInstance {
-	out := make([]domain.SubscriberInstance, 0)
-	for _, inst := range groupSubscriberInstances(acks) {
-		if !departed(inst, now) {
-			out = append(out, inst)
-		}
-	}
-	return out
+	return groupSubscriberInstances(acks)
 }
 
-// departed reports whether a disconnected, unpinned instance has been gone
-// long enough to leave the fleet. LiveTimestamp is the disconnect time; rows
-// built without one fall back to ServerTimestamp.
-func departed(inst domain.SubscriberInstance, now time.Time) bool {
-	if inst.Connected || inst.PinVersion > 0 {
-		return false
-	}
-	seen := inst.LiveTimestamp
-	if seen.IsZero() {
-		seen = inst.ServerTimestamp
-	}
-	return now.Sub(seen) > departAfter
-}
-
-var lifecycleRank = map[string]int{
-	domain.ReleaseStateReceived: 1,
-	domain.ReleaseStatePrepared: 2,
-	domain.ReleaseStateApplied:  3,
-	domain.ReleaseStateRejected: 4,
-}
-
-// groupSubscriberInstances folds the per-state acknowledgement rows into one
-// effective row per (identity, client, instance, session). Legacy rows select
-// the newest activation revision, then server timestamp, then lifecycle rank,
-// matching frontend/lib/subscribers.ts. Liveness and freshness aggregate across
-// all rows independently of the selected lifecycle state.
+// groupSubscriberInstances projects persisted session snapshots. Legacy rows
+// remain available as history but cannot establish current process health.
 func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.SubscriberInstance {
-	type key struct{ identity, client, instance, session string }
-	grouped := map[key]*domain.SubscriberInstance{}
-	selectedAt := map[key]time.Time{}
-	order := make([]key, 0)
+	out := make([]domain.SubscriberInstance, 0, len(acks))
 	for _, ack := range acks {
-		k := key{ack.Identity, ack.ClientName, ack.InstanceID, ack.SessionID}
-		inst := grouped[k]
-		if inst == nil {
-			inst = &domain.SubscriberInstance{Identity: ack.Identity, ClientName: ack.ClientName, InstanceID: ack.InstanceID}
-			grouped[k] = inst
-			order = append(order, k)
+		// Legacy acknowledgement history is not evidence of current process health.
+		if ack.SessionID == "" {
+			continue
 		}
+		// Storage returns exactly one authoritative row per session. Do not
+		// re-reduce it with arrival-time or lifecycle-rank rules here.
+		inst := domain.SubscriberInstance{Identity: ack.Identity, ClientName: ack.ClientName, InstanceID: ack.InstanceID}
+		inst.Namespace = ack.Namespace
+		inst.ReleaseName = ack.ReleaseName
 		inst.SessionID = ack.SessionID
+		inst.SchemaVersion = ack.SchemaVersion
+		inst.Sequence = ack.Sequence
+		inst.LastAppliedRevision = ack.LastAppliedRevision
+		inst.LastAppliedSequence = ack.LastAppliedSequence
 		inst.TargetRevision = ack.TargetRevision
 		inst.PinVersion = ack.PinVersion
 		inst.PinRevision = ack.PinRevision
@@ -422,47 +402,47 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 		inst.LastAppliedVersion = ack.LastAppliedVersion
 		inst.DesiredVersion = ack.DesiredVersion
 		inst.DesiredRevision = ack.DesiredRevision
-		inst.Connected = inst.Connected || ack.Connected
-		if ack.ServerTimestamp.After(inst.ServerTimestamp) {
-			inst.ServerTimestamp = ack.ServerTimestamp
+		inst.Connected = ack.Connected
+		inst.ClientTimestamp = ack.ClientTimestamp
+		inst.ServerTimestamp = ack.ServerTimestamp
+		inst.LiveTimestamp = ack.LiveTimestamp
+		inst.State = ack.State
+		inst.ReleaseVersion = ack.ReleaseVersion
+		inst.ActivationRevision = ack.ActivationRevision
+		inst.RejectionCategory = ack.RejectionCategory
+		inst.Diagnostic = ack.Diagnostic
+		inst.AppliedDivergent = ack.State == domain.ReleaseStateApplied && ack.AppliedDivergent
+		if inst.AppliedDivergent {
+			inst.DivergentFieldCount = ack.DivergentFieldCount
 		}
-		if ack.LiveTimestamp.After(inst.LiveTimestamp) {
-			inst.LiveTimestamp = ack.LiveTimestamp
-		}
-		rank, lifecycle := lifecycleRank[ack.State]
-		if !lifecycle {
-			continue
-		}
-		current := lifecycleRank[inst.State]
-		newerAtRevision := ack.ServerTimestamp.After(selectedAt[k]) || (ack.ServerTimestamp.Equal(selectedAt[k]) && rank > current)
-		if ack.SessionID != "" || current == 0 || ack.ActivationRevision > inst.ActivationRevision || (ack.ActivationRevision == inst.ActivationRevision && newerAtRevision) {
-			selectedAt[k] = ack.ServerTimestamp
-			inst.State = ack.State
-			inst.ReleaseVersion = ack.ReleaseVersion
-			inst.ActivationRevision = ack.ActivationRevision
-			inst.RejectionCategory = ack.RejectionCategory
-			inst.Diagnostic = ack.Diagnostic
-			// Divergence is only meaningful on an applied row; never let a stale
-			// prepared/rejected row's flag leak into the instance.
-			inst.AppliedDivergent = ack.State == domain.ReleaseStateApplied && ack.AppliedDivergent
-			inst.DivergentFieldCount = 0
-			if inst.AppliedDivergent {
-				inst.DivergentFieldCount = ack.DivergentFieldCount
-			}
-		}
-	}
-	out := make([]domain.SubscriberInstance, 0, len(order))
-	for _, k := range order {
-		out = append(out, *grouped[k])
+		out = append(out, inst)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace.Env != out[j].Namespace.Env {
+			return out[i].Namespace.Env < out[j].Namespace.Env
+		}
+		if out[i].Namespace.App != out[j].Namespace.App {
+			return out[i].Namespace.App < out[j].Namespace.App
+		}
+		if out[i].ReleaseName != out[j].ReleaseName {
+			return out[i].ReleaseName < out[j].ReleaseName
+		}
+		if out[i].SchemaVersion != out[j].SchemaVersion {
+			return out[i].SchemaVersion < out[j].SchemaVersion
+		}
 		if out[i].Identity != out[j].Identity {
 			return out[i].Identity < out[j].Identity
 		}
 		if out[i].ClientName != out[j].ClientName {
 			return out[i].ClientName < out[j].ClientName
 		}
-		return out[i].InstanceID < out[j].InstanceID
+		if out[i].InstanceID != out[j].InstanceID {
+			return out[i].InstanceID < out[j].InstanceID
+		}
+		if out[i].SchemaVersion != out[j].SchemaVersion {
+			return out[i].SchemaVersion < out[j].SchemaVersion
+		}
+		return out[i].SessionID < out[j].SessionID
 	})
 	return out
 }
@@ -474,18 +454,20 @@ const (
 	instanceRejected
 	instancePending
 	instancePinned
+	instanceStale
+	instanceUnknown
 )
 
-// classifyInstance places one live instance relative to the current
-// activation revision. Departed instances are filtered out before this runs;
-// a briefly disconnected instance keeps classifying by its last reported
-// state so a reconnect does not flap the counts. A disconnected pinned
-// session reports as pinned until an operator removes the pin.
+// classifyInstance places persisted session state relative to the desired
+// target. Disconnected processes are stale immediately, including pinned ones.
 func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64) instanceClass {
+	if !inst.Connected {
+		return instanceStale
+	}
+	if inst.SessionID == "" || currentRevision == 0 || inst.DesiredRevision == 0 || inst.DesiredVersion == 0 {
+		return instanceUnknown
+	}
 	if inst.SessionID != "" {
-		if !inst.Connected && inst.PinVersion > 0 {
-			return instancePinned
-		}
 		if inst.TargetRevision != inst.DesiredRevision || inst.ReleaseVersion != inst.DesiredVersion {
 			return instancePending
 		}
@@ -507,11 +489,41 @@ func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64) in
 	return instancePending
 }
 
+// ProjectSubscriberInstances is the sole effective-state classification used by
+// transports and clients. Arrival timestamps never determine lifecycle state.
+func ProjectSubscriberInstances(acks []domain.ReleaseAcknowledgement, currentRevision uint64, now time.Time, fleetVersion ...uint64) []domain.SubscriberInstance {
+	instances := liveInstances(acks, now)
+	for i := range instances {
+		inst := &instances[i]
+		if len(fleetVersion) > 0 {
+			inst.FleetVersion = fleetVersion[0]
+		}
+		switch classifyInstance(*inst, currentRevision) {
+		case instanceApplied:
+			inst.Classification, inst.Reason = "applied", "desired_target_applied"
+		case instanceRejected:
+			inst.Classification, inst.Reason = "rejected", "desired_target_rejected"
+		case instancePending:
+			inst.Classification, inst.Reason = "pending", "desired_target_unconfirmed"
+		case instancePinned:
+			inst.Classification, inst.Reason = "pinned", "instance_pin_applied"
+			if inst.PinVersion == inst.FleetVersion {
+				inst.Reason = "fleet_matching_pin_applied"
+			}
+		case instanceStale:
+			inst.Classification, inst.Reason = "stale", "session_disconnected"
+		default:
+			inst.Classification, inst.Reason = "unknown", "target_unavailable"
+		}
+	}
+	return instances
+}
+
 // computeRollout summarises the namespace's subscriber instances for
 // releaseName against currentRevision. Instances subscribed under other
 // release names are reported by name only.
-func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, currentRevision uint64, now time.Time) (domain.RolloutSummary, string) {
-	summary := domain.RolloutSummary{OtherReleaseNames: []string{}, RejectedInstances: []domain.SubscriberInstance{}}
+func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, currentRevision uint64, now time.Time, fleetVersion ...uint64) (domain.RolloutSummary, string) {
+	summary := domain.RolloutSummary{Complete: true, OtherReleaseNames: []string{}, RejectedInstances: []domain.SubscriberInstance{}}
 	otherNames := map[string]struct{}{}
 	for _, ack := range acks {
 		if ack.ReleaseName != releaseName {
@@ -519,19 +531,29 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		}
 	}
 	for name := range otherNames {
-		if len(liveInstances(filterAcks(acks, name), now)) > 0 {
-			summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
+		for _, inst := range liveInstances(filterAcks(acks, name), now) {
+			if inst.Connected {
+				summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
+				break
+			}
 		}
 	}
 	sort.Strings(summary.OtherReleaseNames)
-	for _, inst := range liveInstances(filterAcks(acks, releaseName), now) {
+	for _, inst := range ProjectSubscriberInstances(filterAcks(acks, releaseName), currentRevision, now, fleetVersion...) {
 		summary.Total++
 		if inst.Connected {
 			summary.Connected++
 		}
 		switch classifyInstance(inst, currentRevision) {
+		case instanceStale:
+			summary.Stale++
+		case instanceUnknown:
+			summary.Unknown++
 		case instancePinned:
 			summary.Pinned++
+			if inst.PinVersion != inst.FleetVersion {
+				summary.DifferentPins++
+			}
 		case instanceApplied:
 			summary.AppliedCurrent++
 			if inst.AppliedDivergent {
@@ -550,12 +572,16 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 	}
 	state := domain.RolloutStateApplied
 	switch {
-	case summary.Total == 0:
+	case summary.Connected == 0:
 		state = domain.RolloutStateNoSubscribers
 	case summary.Rejected > 0:
 		state = domain.RolloutStateDegraded
-	case summary.Pending > 0 || summary.Pinned > 0:
+	case summary.Unknown > 0:
+		state = domain.RolloutStateUnknown
+	case summary.Pending > 0:
 		state = domain.RolloutStateRolling
+	case summary.DifferentPins > 0:
+		state = domain.RolloutStatePinned
 	}
 	return summary, state
 }
@@ -619,7 +645,7 @@ func computeApplicationFindings(in applicationReadinessInput) (string, []domain.
 			if env.Status != domain.EnvStatusEmpty {
 				attention = true
 			}
-		case domain.EnvStatusDegraded, domain.EnvStatusRolling, domain.EnvStatusDrift:
+		case domain.EnvStatusDegraded, domain.EnvStatusRolling, domain.EnvStatusDrift, domain.EnvStatusUnknown, domain.EnvStatusPinned:
 			allSetup = false
 			attention = true
 		default:

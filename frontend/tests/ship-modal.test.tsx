@@ -24,6 +24,7 @@ import type {
 import incidentJson from "./fixtures/backend/overview-incident.json";
 import conflictJson from "./fixtures/backend/ship-conflict.json";
 import previewJson from "./fixtures/backend/ship-preview.json";
+import { projectedSubscribers } from "./fixtures/subscriber-projection";
 
 const mocks = vi.hoisted(() => ({
   ship: vi.fn(),
@@ -111,6 +112,10 @@ const rejectedInstance: ReleaseSubscriberState = {
   instance_id: "grader-api-3",
   identity: "gradethis-dev",
   state: "rejected",
+  last_applied_version: base,
+  last_applied_revision: 118,
+  desired_revision: 119,
+  target_revision: 119,
   release_version: base,
   activation_revision: 119,
   rejection_category: "config_validation_failed",
@@ -260,11 +265,7 @@ describe("ship editor rows", () => {
       },
     });
     mocks.ship.mockImplementation(shipLike());
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [],
-      current_revision: 119,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([], 119));
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
     mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
   });
@@ -377,11 +378,7 @@ describe("ShipModal", () => {
       },
     });
     mocks.ship.mockImplementation(shipLike());
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [],
-      current_revision: 119,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([], 119));
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
     mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
   });
@@ -1465,11 +1462,9 @@ describe("ShipModal", () => {
   });
 
   it("shows the rollout with rejected instances first and offers an inline rollback", async () => {
-    mocks.releaseSubscribers.mockResolvedValue({
-      subscribers: [appliedInstance, rejectedInstance],
-      current_revision: 119,
-      next_page_token: "",
-    });
+    mocks.releaseSubscribers.mockResolvedValue(
+      projectedSubscribers([appliedInstance, rejectedInstance], 119),
+    );
     mocks.rollbackRelease.mockResolvedValue({
       release: {
         ...dev.release.active,
@@ -1495,7 +1490,8 @@ describe("ShipModal", () => {
     const rows = within(rollout).getAllByTestId("rollout-instance");
     expect(rows[0]).toHaveAttribute("data-state", "rejected");
     expect(rows[0]).toHaveTextContent("config_validation_failed");
-    expect(rows[0]).toHaveTextContent(`still serving v${base}`);
+    expect(within(rollout).getByRole("columnheader", { name: "Last applied" })).toBeVisible();
+    expect(within(rows[0]).getAllByRole("cell")[2]).toHaveTextContent(`v${base}`);
     expect(rows[0]).toHaveTextContent("rate_limits.per_minute must be greater than zero");
     expect(within(rollout).getByText(/Polling|Live|Stale/)).toBeVisible();
     expect(screen.getByRole("dialog", { name: /Shipped/ })).toHaveTextContent(

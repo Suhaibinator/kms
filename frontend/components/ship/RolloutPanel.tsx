@@ -6,11 +6,10 @@ import { Badge, Button } from "@/components/ui";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { rejectionGuidance } from "@/lib/glossary";
-import { countSubscribers } from "@/lib/subscribers";
 import type { NamespaceRef, SubscriberInstance } from "@/lib/types";
 import { useReleaseSubscribers } from "@/lib/useReleaseSubscribers";
-import { ReleasePinDialog } from "./ReleasePinDialog";
 import { sortForRollout } from "./model";
+import { ReleasePinDialog } from "./ReleasePinDialog";
 
 export interface RolloutPanelProps {
   namespace: NamespaceRef;
@@ -33,26 +32,19 @@ export interface RolloutPanelProps {
 
 function stateTone(
   instance: SubscriberInstance,
-  atCurrent: boolean,
 ): "success" | "danger" | "accent" | "neutral" | "warning" {
-  if (instance.state === "rejected" && atCurrent) return "danger";
-  if (instance.state === "applied" && atCurrent) {
+  if (instance.classification === "rejected") return "danger";
+  if (instance.classification === "pinned") return "warning";
+  if (instance.classification === "applied") {
     return instance.applied_divergent ? "warning" : "success";
   }
-  if (!instance.connected) return "neutral";
-  return "accent";
+  return instance.classification === "pending" ? "accent" : "neutral";
 }
 
-function stateLabel(instance: SubscriberInstance, atCurrent: boolean): string {
-  if (instance.pin_version)
-    return atCurrent && instance.state === "applied"
-      ? "pinned · applied"
-      : `pinned · ${instance.state || "pending"}`;
-  if (!atCurrent) {
-    return instance.state === "applied" ? "pending" : instance.state || "connected";
-  }
-  if (instance.state === "applied" && instance.applied_divergent) return "applied · divergent";
-  return instance.state || "connected";
+function stateLabel(instance: SubscriberInstance): string {
+  if (instance.classification === "applied" && instance.applied_divergent)
+    return "applied · divergent";
+  return instance.classification || "unknown";
 }
 
 /**
@@ -125,7 +117,7 @@ export function RolloutPanel({
     rolloutRevision,
     activeScope,
   ]);
-  const counts = countSubscribers(live.instances, rolloutRevision);
+  const counts = live.summary;
   const ordered = sortForRollout(live.instances, rolloutRevision);
   const divergentGuidance = rejectionGuidance("default_mismatch");
 
@@ -133,8 +125,10 @@ export function RolloutPanel({
     <section className="rollout-panel" data-testid="ship-rollout" aria-label="Rollout">
       <div className="rollout-head">
         <div className="rollout-progress" data-testid="rollout-progress">
-          {counts.total === 0 ? (
-            <strong>No subscribers</strong>
+          {!counts?.complete || live.stale ? (
+            <strong>Unknown · status unavailable</strong>
+          ) : counts.connected === 0 ? (
+            <strong>Unknown · no connected subscribers</strong>
           ) : (
             <>
               <strong>
@@ -193,6 +187,11 @@ export function RolloutPanel({
         </div>
       </div>
       {caption ? <div className="faint text-sm rollout-caption">{caption}</div> : null}
+      {live.truncated ? (
+        <p className="faint text-sm">
+          Showing the first {live.instances.length} instances. Counts include all instances.
+        </p>
+      ) : null}
 
       {ordered.length === 0 ? (
         <p className="faint text-sm rollout-empty">
@@ -206,17 +205,15 @@ export function RolloutPanel({
               <tr>
                 <th>Instance</th>
                 <th>State</th>
-                <th>Serving</th>
+                <th>Last applied</th>
                 <th>Detail</th>
               </tr>
             </thead>
             <tbody>
               {ordered.map((instance) => {
-                const atCurrent = instance.session_id
-                  ? instance.target_revision === instance.desired_revision &&
-                    instance.release_version === instance.desired_version
-                  : instance.activation_revision >= rolloutRevision;
-                const rejected = instance.state === "rejected" && atCurrent;
+                const atCurrent =
+                  instance.classification === "applied" || instance.classification === "pinned";
+                const rejected = instance.classification === "rejected";
                 const guidance = rejected ? rejectionGuidance(instance.rejection_category) : null;
                 return (
                   <tr
@@ -228,7 +225,7 @@ export function RolloutPanel({
                     ])}
                     className={rejected ? "rollout-rejected" : undefined}
                     data-testid="rollout-instance"
-                    data-state={rejected ? "rejected" : stateLabel(instance, atCurrent)}
+                    data-state={stateLabel(instance)}
                   >
                     <td data-label="Instance">
                       <div className="rollout-instance">
@@ -242,9 +239,7 @@ export function RolloutPanel({
                     </td>
                     <td data-label="State">
                       <div className="rollout-state">
-                        <Badge kind={stateTone(instance, atCurrent)}>
-                          {stateLabel(instance, atCurrent)}
-                        </Badge>
+                        <Badge kind={stateTone(instance)}>{stateLabel(instance)}</Badge>
                         {rejected && instance.rejection_category ? (
                           <Tooltip>
                             <TooltipTrigger
@@ -263,16 +258,8 @@ export function RolloutPanel({
                         ) : null}
                       </div>
                     </td>
-                    <td data-label="Serving" className="mono">
-                      {instance.session_id
-                        ? instance.last_applied_version
-                          ? `v${instance.last_applied_version}`
-                          : "—"
-                        : rejected
-                          ? `still serving v${instance.release_version}`
-                          : instance.release_version > 0
-                            ? `v${instance.release_version}`
-                            : "—"}
+                    <td data-label="Last applied" className="mono">
+                      {instance.last_applied_version ? `v${instance.last_applied_version}` : "—"}
                       <span className="faint text-sm"> · schema {schemaVersion}</span>
                     </td>
                     <td data-label="Detail">

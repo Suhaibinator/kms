@@ -1,5 +1,24 @@
 # kms_paramstore — Python SDK
 
+Release loaders require a KMS server supporting release sessions and instance
+targets. Unsupported servers fail with an upgrade-required error; loaders never
+fall back to legacy release acknowledgements. Each `run()` starts a new session,
+while transport reconnects retain that session and replay the original event
+sequence, timestamp, and payload in sequence order. An unchanged applied target
+does not create new lifecycle events. Target revisions, rather than release
+versions or fleet activation revisions, order release attempts (including pins
+and rollbacks). These requirements apply equally to sync and async loaders;
+ordinary parameter subscriptions are unaffected.
+
+The real-server conformance harness runs
+`scripts/release_conformance_client.py sync` and `... async` against its temporary
+TLS server and TCP proxy. It supplies `ENDPOINT`, `TOKEN`,
+`CA_FILE`, `NAMESPACE`, `SCHEMA_VERSION`, `RELEASE`, and `INSTANCE` (each prefixed
+with `KMS_CONFORMANCE_`). The driver resolves and commits the provisioned release,
+keeps watching across forced transport disconnects, and stops on SIGTERM. The
+host test checks persisted, live, and HTTP state before and after reconnect;
+this driver is for the local test harness, not production operation.
+
 Python client for the KMS parameter store and secret management service. It hides
 gRPC boilerplate, supports TLS/mTLS, caches parameter reads, redacts secrets in logs and
 errors, resolves declarative config fields, and hot-reloads parameters over the
