@@ -649,7 +649,11 @@ export interface ReleaseWatchRegistration {
   clientName: string;
   instanceId: string;
   lastSeenRevision: bigint;
-  /** Presence negotiates instance-target delivery. */
+  /**
+   * Required. One loader execution owns a session; reconnects retain it and
+   * process restarts create a new session even with the same instance name.
+   * Legacy registrations fail with an actionable upgrade-required error.
+   */
   sessionId: string;
   /** Required; absence never means the newest schema. */
   schemaVersion?: bigint | undefined;
@@ -676,12 +680,19 @@ export interface ReleaseAcknowledgement {
   divergentFieldCount: number;
   schemaVersion: bigint;
   /**
-   * Client-assigned generation of this retained acknowledgement. The server
-   * echoes it when rejecting an unavailable activation so a delayed response
-   * cannot discard a newer acknowledgement for the same lifecycle state.
+   * Nonzero, strictly increasing for newly generated events within a session.
+   * Replay preserves sequence, original timestamp and payload exactly. Within
+   * a target sequence defines causality, never receipt time or lifecycle rank.
+   * Identical replay is idempotent; conflicting retained identities are errors.
+   * Do not generate events merely to replay an unchanged applied outcome.
    */
   sequence: bigint;
   sessionId: string;
+  /**
+   * Assigned target identity/order; release version is NOT an ordering key.
+   * A rollback or pin can select a lower version at a higher target revision.
+   * Last confirmed application is retained separately from the latest attempt.
+   */
   targetRevision: bigint;
 }
 
@@ -1233,6 +1244,9 @@ export interface Subscriber {
   releaseVersion: bigint;
   releaseRevision: bigint;
   schemaVersion: bigint;
+  sessionId: string;
+  /** server-owned session projection */
+  effective: ReleaseSubscriberState | undefined;
 }
 
 export interface ListSubscribersRequest {
@@ -1244,6 +1258,13 @@ export interface ListSubscribersResponse {
 }
 
 export interface ReleaseSubscriberState {
+  /** Effective classification is server-owned, not derived from lifecycle rank. */
+  classification: string;
+  reason: string;
+  sequence: bigint;
+  lastAppliedRevision: bigint;
+  lastAppliedSequence: bigint;
+  fleetVersion: bigint;
   sessionId: string;
   targetRevision: bigint;
   pinVersion: bigint;
@@ -1280,9 +1301,29 @@ export interface ListReleaseSubscribersRequest {
 }
 
 export interface ListReleaseSubscribersResponse {
+  /** Raw history is distinct from effective session health. */
   subscribers: ReleaseSubscriberState[];
   nextPageToken: string;
   currentRevision: bigint;
+  instances: ReleaseSubscriberState[];
+  summary: ReleaseSubscriberSummary | undefined;
+  projectionRevision: string;
+}
+
+/** Counts cover the full effective population, independent of page size. */
+export interface ReleaseSubscriberSummary {
+  total: bigint;
+  connected: bigint;
+  appliedCurrent: bigint;
+  appliedDivergent: bigint;
+  rejected: bigint;
+  pending: bigint;
+  pinned: bigint;
+  stale: bigint;
+  unknown: bigint;
+  complete: boolean;
+  /** applied pins that differ from the fleet version */
+  differentPins: bigint;
 }
 
 export interface HealthRequest {
@@ -18312,6 +18353,8 @@ function createBaseSubscriber(): Subscriber {
     releaseVersion: 0n,
     releaseRevision: 0n,
     schemaVersion: 0n,
+    sessionId: "",
+    effective: undefined,
   };
 }
 
@@ -18373,6 +18416,12 @@ export const Subscriber: MessageFns<Subscriber> = {
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
       writer.uint32(104).uint64(message.schemaVersion);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(114).string(message.sessionId);
+    }
+    if (message.effective !== undefined) {
+      ReleaseSubscriberState.encode(message.effective, writer.uint32(122).fork()).join();
     }
     return writer;
   },
@@ -18494,6 +18543,22 @@ export const Subscriber: MessageFns<Subscriber> = {
             message.schemaVersion = reader.uint64() as bigint;
             continue;
           }
+          case 14: {
+            if (tag !== 114) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 15: {
+            if (tag !== 122) {
+              break;
+            }
+
+            message.effective = ReleaseSubscriberState.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -18567,6 +18632,12 @@ export const Subscriber: MessageFns<Subscriber> = {
         : isSet(object.schema_version)
         ? BigInt(object.schema_version)
         : 0n,
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      effective: isSet(object.effective) ? ReleaseSubscriberState.fromJSON(object.effective) : undefined,
     };
   },
 
@@ -18611,6 +18682,12 @@ export const Subscriber: MessageFns<Subscriber> = {
     if (message.schemaVersion !== 0n) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.effective !== undefined) {
+      obj.effective = ReleaseSubscriberState.toJSON(message.effective);
+    }
     return obj;
   },
 
@@ -18644,6 +18721,10 @@ export const Subscriber: MessageFns<Subscriber> = {
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
       : 0n;
+    message.sessionId = object.sessionId ?? "";
+    message.effective = (object.effective !== undefined && object.effective !== null)
+      ? ReleaseSubscriberState.fromPartial(object.effective)
+      : undefined;
     return message;
   },
 };
@@ -18798,6 +18879,12 @@ export const ListSubscribersResponse: MessageFns<ListSubscribersResponse> = {
 
 function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
   return {
+    classification: "",
+    reason: "",
+    sequence: 0n,
+    lastAppliedRevision: 0n,
+    lastAppliedSequence: 0n,
+    fleetVersion: 0n,
     sessionId: "",
     targetRevision: 0n,
     pinVersion: 0n,
@@ -18828,6 +18915,36 @@ function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
 
 export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
   encode(message: ReleaseSubscriberState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.classification !== "") {
+      writer.uint32(210).string(message.classification);
+    }
+    if (message.reason !== "") {
+      writer.uint32(218).string(message.reason);
+    }
+    if (message.sequence !== 0n) {
+      if (BigInt.asUintN(64, message.sequence) !== message.sequence) {
+        throw new globalThis.Error("value provided for field message.sequence of type uint64 too large");
+      }
+      writer.uint32(224).uint64(message.sequence);
+    }
+    if (message.lastAppliedRevision !== 0n) {
+      if (BigInt.asUintN(64, message.lastAppliedRevision) !== message.lastAppliedRevision) {
+        throw new globalThis.Error("value provided for field message.lastAppliedRevision of type uint64 too large");
+      }
+      writer.uint32(232).uint64(message.lastAppliedRevision);
+    }
+    if (message.lastAppliedSequence !== 0n) {
+      if (BigInt.asUintN(64, message.lastAppliedSequence) !== message.lastAppliedSequence) {
+        throw new globalThis.Error("value provided for field message.lastAppliedSequence of type uint64 too large");
+      }
+      writer.uint32(240).uint64(message.lastAppliedSequence);
+    }
+    if (message.fleetVersion !== 0n) {
+      if (BigInt.asUintN(64, message.fleetVersion) !== message.fleetVersion) {
+        throw new globalThis.Error("value provided for field message.fleetVersion of type uint64 too large");
+      }
+      writer.uint32(248).uint64(message.fleetVersion);
+    }
     if (message.sessionId !== "") {
       writer.uint32(138).string(message.sessionId);
     }
@@ -18955,6 +19072,54 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
+          case 26: {
+            if (tag !== 210) {
+              break;
+            }
+
+            message.classification = reader.string();
+            continue;
+          }
+          case 27: {
+            if (tag !== 218) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+          case 28: {
+            if (tag !== 224) {
+              break;
+            }
+
+            message.sequence = reader.uint64() as bigint;
+            continue;
+          }
+          case 29: {
+            if (tag !== 232) {
+              break;
+            }
+
+            message.lastAppliedRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 30: {
+            if (tag !== 240) {
+              break;
+            }
+
+            message.lastAppliedSequence = reader.uint64() as bigint;
+            continue;
+          }
+          case 31: {
+            if (tag !== 248) {
+              break;
+            }
+
+            message.fleetVersion = reader.uint64() as bigint;
+            continue;
+          }
           case 17: {
             if (tag !== 138) {
               break;
@@ -19169,6 +19334,24 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
 
   fromJSON(object: any): ReleaseSubscriberState {
     return {
+      classification: isSet(object.classification) ? globalThis.String(object.classification) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      sequence: isSet(object.sequence) ? BigInt(object.sequence) : 0n,
+      lastAppliedRevision: isSet(object.lastAppliedRevision)
+        ? BigInt(object.lastAppliedRevision)
+        : isSet(object.last_applied_revision)
+        ? BigInt(object.last_applied_revision)
+        : 0n,
+      lastAppliedSequence: isSet(object.lastAppliedSequence)
+        ? BigInt(object.lastAppliedSequence)
+        : isSet(object.last_applied_sequence)
+        ? BigInt(object.last_applied_sequence)
+        : 0n,
+      fleetVersion: isSet(object.fleetVersion)
+        ? BigInt(object.fleetVersion)
+        : isSet(object.fleet_version)
+        ? BigInt(object.fleet_version)
+        : 0n,
       sessionId: isSet(object.sessionId)
         ? globalThis.String(object.sessionId)
         : isSet(object.session_id)
@@ -19279,6 +19462,24 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
 
   toJSON(message: ReleaseSubscriberState): unknown {
     const obj: any = {};
+    if (message.classification !== "") {
+      obj.classification = message.classification;
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    if (message.sequence !== 0n) {
+      obj.sequence = message.sequence.toString();
+    }
+    if (message.lastAppliedRevision !== 0n) {
+      obj.lastAppliedRevision = message.lastAppliedRevision.toString();
+    }
+    if (message.lastAppliedSequence !== 0n) {
+      obj.lastAppliedSequence = message.lastAppliedSequence.toString();
+    }
+    if (message.fleetVersion !== 0n) {
+      obj.fleetVersion = message.fleetVersion.toString();
+    }
     if (message.sessionId !== "") {
       obj.sessionId = message.sessionId;
     }
@@ -19362,6 +19563,18 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
   },
   fromPartial(object: DeepPartial<ReleaseSubscriberState>): ReleaseSubscriberState {
     const message = createBaseReleaseSubscriberState();
+    message.classification = object.classification ?? "";
+    message.reason = object.reason ?? "";
+    message.sequence = (object.sequence !== undefined && object.sequence !== null) ? BigInt(object.sequence) : 0n;
+    message.lastAppliedRevision = (object.lastAppliedRevision !== undefined && object.lastAppliedRevision !== null)
+      ? BigInt(object.lastAppliedRevision)
+      : 0n;
+    message.lastAppliedSequence = (object.lastAppliedSequence !== undefined && object.lastAppliedSequence !== null)
+      ? BigInt(object.lastAppliedSequence)
+      : 0n;
+    message.fleetVersion = (object.fleetVersion !== undefined && object.fleetVersion !== null)
+      ? BigInt(object.fleetVersion)
+      : 0n;
     message.sessionId = object.sessionId ?? "";
     message.targetRevision = (object.targetRevision !== undefined && object.targetRevision !== null)
       ? BigInt(object.targetRevision)
@@ -19576,7 +19789,14 @@ export const ListReleaseSubscribersRequest: MessageFns<ListReleaseSubscribersReq
 };
 
 function createBaseListReleaseSubscribersResponse(): ListReleaseSubscribersResponse {
-  return { subscribers: [], nextPageToken: "", currentRevision: 0n };
+  return {
+    subscribers: [],
+    nextPageToken: "",
+    currentRevision: 0n,
+    instances: [],
+    summary: undefined,
+    projectionRevision: "",
+  };
 }
 
 export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersResponse> = {
@@ -19592,6 +19812,15 @@ export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersRe
         throw new globalThis.Error("value provided for field message.currentRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.currentRevision);
+    }
+    for (const v of message.instances) {
+      ReleaseSubscriberState.encode(v!, writer.uint32(34).fork()).join();
+    }
+    if (message.summary !== undefined) {
+      ReleaseSubscriberSummary.encode(message.summary, writer.uint32(42).fork()).join();
+    }
+    if (message.projectionRevision !== "") {
+      writer.uint32(50).string(message.projectionRevision);
     }
     return writer;
   },
@@ -19633,6 +19862,30 @@ export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersRe
             message.currentRevision = reader.uint64() as bigint;
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.instances.push(ReleaseSubscriberState.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.summary = ReleaseSubscriberSummary.decode(reader, reader.uint32());
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.projectionRevision = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -19660,6 +19913,15 @@ export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersRe
         : isSet(object.current_revision)
         ? BigInt(object.current_revision)
         : 0n,
+      instances: globalThis.Array.isArray(object?.instances)
+        ? object.instances.map((e: any) => ReleaseSubscriberState.fromJSON(e))
+        : [],
+      summary: isSet(object.summary) ? ReleaseSubscriberSummary.fromJSON(object.summary) : undefined,
+      projectionRevision: isSet(object.projectionRevision)
+        ? globalThis.String(object.projectionRevision)
+        : isSet(object.projection_revision)
+        ? globalThis.String(object.projection_revision)
+        : "",
     };
   },
 
@@ -19674,6 +19936,15 @@ export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersRe
     if (message.currentRevision !== 0n) {
       obj.currentRevision = message.currentRevision.toString();
     }
+    if (message.instances?.length) {
+      obj.instances = message.instances.map((e) => ReleaseSubscriberState.toJSON(e));
+    }
+    if (message.summary !== undefined) {
+      obj.summary = ReleaseSubscriberSummary.toJSON(message.summary);
+    }
+    if (message.projectionRevision !== "") {
+      obj.projectionRevision = message.projectionRevision;
+    }
     return obj;
   },
 
@@ -19686,6 +19957,300 @@ export const ListReleaseSubscribersResponse: MessageFns<ListReleaseSubscribersRe
     message.nextPageToken = object.nextPageToken ?? "";
     message.currentRevision = (object.currentRevision !== undefined && object.currentRevision !== null)
       ? BigInt(object.currentRevision)
+      : 0n;
+    message.instances = object.instances?.map((e) => ReleaseSubscriberState.fromPartial(e)) || [];
+    message.summary = (object.summary !== undefined && object.summary !== null)
+      ? ReleaseSubscriberSummary.fromPartial(object.summary)
+      : undefined;
+    message.projectionRevision = object.projectionRevision ?? "";
+    return message;
+  },
+};
+
+function createBaseReleaseSubscriberSummary(): ReleaseSubscriberSummary {
+  return {
+    total: 0n,
+    connected: 0n,
+    appliedCurrent: 0n,
+    appliedDivergent: 0n,
+    rejected: 0n,
+    pending: 0n,
+    pinned: 0n,
+    stale: 0n,
+    unknown: 0n,
+    complete: false,
+    differentPins: 0n,
+  };
+}
+
+export const ReleaseSubscriberSummary: MessageFns<ReleaseSubscriberSummary> = {
+  encode(message: ReleaseSubscriberSummary, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.total !== 0n) {
+      if (BigInt.asUintN(64, message.total) !== message.total) {
+        throw new globalThis.Error("value provided for field message.total of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.total);
+    }
+    if (message.connected !== 0n) {
+      if (BigInt.asUintN(64, message.connected) !== message.connected) {
+        throw new globalThis.Error("value provided for field message.connected of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.connected);
+    }
+    if (message.appliedCurrent !== 0n) {
+      if (BigInt.asUintN(64, message.appliedCurrent) !== message.appliedCurrent) {
+        throw new globalThis.Error("value provided for field message.appliedCurrent of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.appliedCurrent);
+    }
+    if (message.appliedDivergent !== 0n) {
+      if (BigInt.asUintN(64, message.appliedDivergent) !== message.appliedDivergent) {
+        throw new globalThis.Error("value provided for field message.appliedDivergent of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.appliedDivergent);
+    }
+    if (message.rejected !== 0n) {
+      if (BigInt.asUintN(64, message.rejected) !== message.rejected) {
+        throw new globalThis.Error("value provided for field message.rejected of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.rejected);
+    }
+    if (message.pending !== 0n) {
+      if (BigInt.asUintN(64, message.pending) !== message.pending) {
+        throw new globalThis.Error("value provided for field message.pending of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.pending);
+    }
+    if (message.pinned !== 0n) {
+      if (BigInt.asUintN(64, message.pinned) !== message.pinned) {
+        throw new globalThis.Error("value provided for field message.pinned of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.pinned);
+    }
+    if (message.stale !== 0n) {
+      if (BigInt.asUintN(64, message.stale) !== message.stale) {
+        throw new globalThis.Error("value provided for field message.stale of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.stale);
+    }
+    if (message.unknown !== 0n) {
+      if (BigInt.asUintN(64, message.unknown) !== message.unknown) {
+        throw new globalThis.Error("value provided for field message.unknown of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.unknown);
+    }
+    if (message.complete !== false) {
+      writer.uint32(80).bool(message.complete);
+    }
+    if (message.differentPins !== 0n) {
+      if (BigInt.asUintN(64, message.differentPins) !== message.differentPins) {
+        throw new globalThis.Error("value provided for field message.differentPins of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.differentPins);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReleaseSubscriberSummary {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReleaseSubscriberSummary();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.total = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.connected = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.appliedCurrent = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.appliedDivergent = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.rejected = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.pending = reader.uint64() as bigint;
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.pinned = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.stale = reader.uint64() as bigint;
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.unknown = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.complete = reader.bool();
+            continue;
+          }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.differentPins = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ReleaseSubscriberSummary {
+    return {
+      total: isSet(object.total) ? BigInt(object.total) : 0n,
+      connected: isSet(object.connected) ? BigInt(object.connected) : 0n,
+      appliedCurrent: isSet(object.appliedCurrent)
+        ? BigInt(object.appliedCurrent)
+        : isSet(object.applied_current)
+        ? BigInt(object.applied_current)
+        : 0n,
+      appliedDivergent: isSet(object.appliedDivergent)
+        ? BigInt(object.appliedDivergent)
+        : isSet(object.applied_divergent)
+        ? BigInt(object.applied_divergent)
+        : 0n,
+      rejected: isSet(object.rejected) ? BigInt(object.rejected) : 0n,
+      pending: isSet(object.pending) ? BigInt(object.pending) : 0n,
+      pinned: isSet(object.pinned) ? BigInt(object.pinned) : 0n,
+      stale: isSet(object.stale) ? BigInt(object.stale) : 0n,
+      unknown: isSet(object.unknown) ? BigInt(object.unknown) : 0n,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      differentPins: isSet(object.differentPins)
+        ? BigInt(object.differentPins)
+        : isSet(object.different_pins)
+        ? BigInt(object.different_pins)
+        : 0n,
+    };
+  },
+
+  toJSON(message: ReleaseSubscriberSummary): unknown {
+    const obj: any = {};
+    if (message.total !== 0n) {
+      obj.total = message.total.toString();
+    }
+    if (message.connected !== 0n) {
+      obj.connected = message.connected.toString();
+    }
+    if (message.appliedCurrent !== 0n) {
+      obj.appliedCurrent = message.appliedCurrent.toString();
+    }
+    if (message.appliedDivergent !== 0n) {
+      obj.appliedDivergent = message.appliedDivergent.toString();
+    }
+    if (message.rejected !== 0n) {
+      obj.rejected = message.rejected.toString();
+    }
+    if (message.pending !== 0n) {
+      obj.pending = message.pending.toString();
+    }
+    if (message.pinned !== 0n) {
+      obj.pinned = message.pinned.toString();
+    }
+    if (message.stale !== 0n) {
+      obj.stale = message.stale.toString();
+    }
+    if (message.unknown !== 0n) {
+      obj.unknown = message.unknown.toString();
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.differentPins !== 0n) {
+      obj.differentPins = message.differentPins.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ReleaseSubscriberSummary>): ReleaseSubscriberSummary {
+    return ReleaseSubscriberSummary.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ReleaseSubscriberSummary>): ReleaseSubscriberSummary {
+    const message = createBaseReleaseSubscriberSummary();
+    message.total = (object.total !== undefined && object.total !== null) ? BigInt(object.total) : 0n;
+    message.connected = (object.connected !== undefined && object.connected !== null) ? BigInt(object.connected) : 0n;
+    message.appliedCurrent = (object.appliedCurrent !== undefined && object.appliedCurrent !== null)
+      ? BigInt(object.appliedCurrent)
+      : 0n;
+    message.appliedDivergent = (object.appliedDivergent !== undefined && object.appliedDivergent !== null)
+      ? BigInt(object.appliedDivergent)
+      : 0n;
+    message.rejected = (object.rejected !== undefined && object.rejected !== null) ? BigInt(object.rejected) : 0n;
+    message.pending = (object.pending !== undefined && object.pending !== null) ? BigInt(object.pending) : 0n;
+    message.pinned = (object.pinned !== undefined && object.pinned !== null) ? BigInt(object.pinned) : 0n;
+    message.stale = (object.stale !== undefined && object.stale !== null) ? BigInt(object.stale) : 0n;
+    message.unknown = (object.unknown !== undefined && object.unknown !== null) ? BigInt(object.unknown) : 0n;
+    message.complete = object.complete ?? false;
+    message.differentPins = (object.differentPins !== undefined && object.differentPins !== null)
+      ? BigInt(object.differentPins)
       : 0n;
     return message;
   },
@@ -21346,5 +21911,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 9c718f1aececd93cde98b74e582883709332a34e07f0986128dd0c20c130fa62
+// source-sha256: 3e622f2b3c2f5e43de20e88605c36b45de8e08d8bc472a5d4a4a2e666ffa050a
 // generation-sha256: 2a1ecb1d357c44fd566c75ddfde66638e2ef127c268c9da6bbd4667140ee7865

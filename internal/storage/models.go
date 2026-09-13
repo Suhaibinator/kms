@@ -422,6 +422,7 @@ var autoMigrateModels = []any{
 	&releaseSubscriberStateModel{},
 	&releaseSubscriberConnectionModel{},
 	&releaseSessionModel{},
+	&releaseSessionEventModel{},
 	&releaseTargetDeliveryModel{},
 }
 

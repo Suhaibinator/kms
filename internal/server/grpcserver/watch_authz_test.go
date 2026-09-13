@@ -94,7 +94,7 @@ func TestReleaseWatchRegistrationDenialAuditsSelectedTrack(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{
-			Namespace: pNS(ns.Env, ns.App), Name: "runtime", SchemaVersion: &schema, ClientName: "client", InstanceId: "instance",
+			Namespace: pNS(ns.Env, ns.App), Name: "runtime", SchemaVersion: &schema, ClientName: "client", InstanceId: "instance", SessionId: "denied-session",
 		}}}); err != nil {
 			t.Fatal(err)
 		}

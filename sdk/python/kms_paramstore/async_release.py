@@ -127,7 +127,6 @@ class AsyncReleaseLoader:
         self._instance_id = config.instance_id or str(uuid.uuid4())
         self._session_id = str(uuid.uuid4())
         self._session_registered = False
-        self._legacy_session = False
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
         self._schema_version = config.schema_version
         self._running = False
@@ -209,6 +208,12 @@ class AsyncReleaseLoader:
         if self._running:
             raise errors.ConfigError("an AsyncReleaseLoader is already running")
         self._running = True
+        self._session_id = str(uuid.uuid4())
+        self._session_registered = False
+        self._ack_generation = 0
+        self._ack_latest.clear()
+        self._ack_flushed_by_state.clear()
+        self._last_seen_revision = 0
         self._stop_event = asyncio.Event()
         self._candidate_queue = asyncio.Queue(maxsize=1)
         self._watch_error = None
@@ -692,11 +697,8 @@ class AsyncReleaseLoader:
         )
 
     async def _register_session(self):
-        if self._legacy_session:
-            return
         if not hasattr(self._stub, "RegisterReleaseSession"):
-            self._legacy_session = True
-            return
+            raise ReleaseStartupError("release sessions are required; upgrade the KMS server")
         try:
             response = await self._stub.RegisterReleaseSession(
                 kms_pb2.RegisterReleaseSessionRequest(session=self._session_ref(), resume=self._session_registered),
@@ -705,8 +707,7 @@ class AsyncReleaseLoader:
             )
         except grpc.RpcError as exc:
             if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
-                self._legacy_session = True
-                return
+                raise ReleaseStartupError("release sessions are required; upgrade the KMS server") from None
             raise errors.map_grpc_error(exc) from None
         if not response.pin_capable:
             raise ReleaseStartupError("server did not negotiate instance targets")
@@ -714,24 +715,13 @@ class AsyncReleaseLoader:
 
     async def _read_active(self) -> _Candidate:
         try:
-            if self._session_registered and not self._legacy_session:
-                response = await self._stub.GetInstanceRelease(
-                    kms_pb2.GetInstanceReleaseRequest(session=self._session_ref()),
-                    metadata=self._client._auth_metadata(),
-                    timeout=self._client._call_timeout(self._config.request_timeout),
-                )
-                if not response.HasField("release"):
-                    raise errors.NotFoundError("release track has no active target")
-            else:
-                response = await self._stub.GetActiveRelease(
-                    kms_pb2.GetActiveReleaseRequest(
-                        namespace=to_proto_namespace(self._require_namespace()),
-                        name=self._config.name,
-                        schema_version=self._require_schema_version(),
-                    ),
-                    metadata=self._client._auth_metadata(),
-                    timeout=self._client._call_timeout(self._config.request_timeout),
-                )
+            response = await self._stub.GetInstanceRelease(
+                kms_pb2.GetInstanceReleaseRequest(session=self._session_ref()),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+            if not response.HasField("release"):
+                raise errors.NotFoundError("release track has no active target")
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
         if not response.HasField("release") or not response.release.name:
@@ -749,7 +739,7 @@ class AsyncReleaseLoader:
         ):
             raise ReleaseStartupError("active release response has the wrong release track")
         return _Candidate(_clone_release(response.release),
-                          response.target_revision if self._session_registered and not self._legacy_session else response.activation_revision,
+                          response.target_revision,
                           activation_revision=response.activation_revision)
 
     async def _reconcile_loop(self) -> None:
@@ -816,7 +806,7 @@ class AsyncReleaseLoader:
                         name=self._config.name,
                         client_name=self._client_name,
                         instance_id=self._instance_id,
-                session_id=self._session_id if self._session_registered and not self._legacy_session else "",
+                session_id=self._session_id,
                         last_seen_revision=self._last_seen_revision,
                         schema_version=self._require_schema_version(),
                     )
@@ -832,36 +822,9 @@ class AsyncReleaseLoader:
                 if kind == "target":
                     target = event.target
                     if target.HasField("release") and _release_matches_track(target.release, self._require_namespace(), self._config.name, self._require_schema_version()):
-                        received_event = True
+                        received = True
+                        self._last_seen_revision = max(self._last_seen_revision, event.revision)
                         self._offer_candidate(_Candidate(_clone_release(target.release), target.target_revision, activation_revision=target.activation_revision), source="reconciliation")
-                elif kind == "snapshot":
-                    if event.snapshot.HasField("release") and _release_matches_track(
-                        event.snapshot.release,
-                        self._require_namespace(),
-                        self._config.name,
-                        self._require_schema_version(),
-                    ):
-                        self._last_seen_revision = max(
-                            self._last_seen_revision, event.revision
-                        )
-                        self._offer_candidate(
-                            _Candidate(_clone_release(event.snapshot.release), event.revision)
-                        )
-                        received = True
-                elif kind == "activation":
-                    if event.activation.HasField("release") and _release_matches_track(
-                        event.activation.release,
-                        self._require_namespace(),
-                        self._config.name,
-                        self._require_schema_version(),
-                    ):
-                        self._last_seen_revision = max(
-                            self._last_seen_revision, event.revision
-                        )
-                        self._offer_candidate(
-                            _Candidate(_clone_release(event.activation.release), event.revision)
-                        )
-                        received = True
                 elif kind == "heartbeat":
                     self._last_seen_revision = max(
                         self._last_seen_revision, event.revision
@@ -900,7 +863,7 @@ class AsyncReleaseLoader:
     ) -> bool:
         namespace = self._require_namespace()
         if (
-            rejection.session_id != (self._session_id if self._session_registered and not self._legacy_session else "")
+            rejection.session_id != self._session_id
             or rejection.reason not in ("activation_unavailable", "target_unavailable")
             or rejection.namespace.env != namespace.env
             or rejection.namespace.app != namespace.app
@@ -918,7 +881,8 @@ class AsyncReleaseLoader:
             generation == rejection.sequence
             and acknowledgement.sequence == rejection.sequence
             and acknowledgement.version == rejection.version
-            and max(acknowledgement.target_revision, acknowledgement.activation_revision) == max(rejection.target_revision, rejection.activation_revision)
+            and acknowledgement.target_revision == rejection.target_revision
+            and acknowledgement.activation_revision == rejection.activation_revision
             and acknowledgement.state == rejection.state
         ):
             del self._ack_latest[rejection.state]
@@ -937,7 +901,7 @@ class AsyncReleaseLoader:
                 for state, (generation, acknowledgement, dirty) in self._ack_latest.items()
                 if replay or dirty
             ),
-            key=lambda item: item[0],
+            key=lambda item: item[1],
         )
         for state, generation, acknowledgement in pending:
             await call.write(kms_pb2.WatchReleaseRequest(acknowledgement=acknowledgement))
@@ -993,11 +957,11 @@ class AsyncReleaseLoader:
             namespace=to_proto_namespace(self._require_namespace()),
             name=self._config.name,
             version=candidate.release.version,
-            target_revision=candidate.revision if self._session_registered and not self._legacy_session else 0,
+            target_revision=candidate.revision,
             activation_revision=candidate.activation_revision if candidate.activation_revision is not None else candidate.revision,
             client_name=self._client_name,
             instance_id=self._instance_id,
-                session_id=self._session_id if self._session_registered and not self._legacy_session else "",
+            session_id=self._session_id,
             state=state,
             rejection_category=category,
             diagnostic="",
@@ -1007,7 +971,7 @@ class AsyncReleaseLoader:
             schema_version=self._require_schema_version(),
         )
         current = self._ack_latest.get(state)
-        if current is None or max(current[1].target_revision, current[1].activation_revision) <= candidate.revision:
+        if current is None or (current[1].target_revision or current[1].activation_revision) <= candidate.revision:
             self._ack_generation += 1
             generation = self._ack_generation
             acknowledgement.sequence = generation

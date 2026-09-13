@@ -5,18 +5,21 @@
 // jitter (1 s → 30 s); after two consecutive failures — or as soon as the
 // server says the endpoint does not exist — the hook falls back to the 5 s
 // visibility-gated polling the Subscribers page uses. Everything stops on
-// unmount or when `enabled` flips off.
+// unmount or when `enabled` flips off. Manual refresh retires the stream and
+// keeps this scope on polling, preventing buffered frames racing the page.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { useLatestRequest } from "@/lib/hooks";
-import { groupSubscriberInstances } from "@/lib/subscribers";
-import type { NamespaceRef, SubscriberInstance } from "@/lib/types";
+import type { NamespaceRef, OverviewRollout, SubscriberInstance } from "@/lib/types";
 
 export type SubscriberTransport = "stream" | "poll" | "off";
 
 export interface ReleaseSubscribersState {
   instances: SubscriberInstance[];
+  summary: OverviewRollout | null;
+  projectionRevision: string | null;
+  truncated: boolean;
   currentRevision: number;
   transport: SubscriberTransport;
   /** The last refresh failed (or the stream dropped); data may be behind. */
@@ -41,6 +44,9 @@ type ReleaseSubscribersData = Omit<ReleaseSubscribersState, "refresh">;
 
 const emptySubscriberData = (): ReleaseSubscribersData => ({
   instances: [],
+  summary: null,
+  projectionRevision: null,
+  truncated: false,
   currentRevision: 0,
   transport: "off",
   stale: false,
@@ -81,6 +87,7 @@ export function useReleaseSubscribers(
     data: ReleaseSubscribersData;
   }>(() => ({ scope, data: emptySubscriberData() }));
   const request = useLatestRequest();
+  const manualOwner = useRef<{ scope: string; takePolling: () => void } | null>(null);
 
   const update = useCallback(
     (change: Partial<ReleaseSubscribersData>) => {
@@ -92,7 +99,7 @@ export function useReleaseSubscribers(
     [scope],
   );
 
-  const refresh = useCallback(async () => {
+  const loadPage = useCallback(async () => {
     if (!enabled) return;
     const run = request.begin();
     try {
@@ -106,16 +113,29 @@ export function useReleaseSubscribers(
       );
       if (!run.current) return;
       update({
-        instances: groupSubscriberInstances(page.subscribers ?? []),
+        instances: page.instances ?? [],
+        summary: page.summary ?? null,
+        projectionRevision: page.projection_revision ?? null,
+        truncated: !!page.next_page_token,
         currentRevision: page.current_revision ?? 0,
         lastUpdatedAt: Date.now(),
-        stale: false,
+        stale: !page.summary?.complete || !page.instances || !page.projection_revision,
       });
     } catch (err) {
       if (!run.current || isAbortError(err)) return;
       update({ stale: true });
     }
   }, [enabled, env, app, name, request, schemaVersion, update]);
+
+  const refresh = useCallback(async () => {
+    // Projection revisions are content identities, not clocks. Stop accepting
+    // stream frames before fetching a manual refresh: a buffered older frame
+    // must never overwrite a newer completed page. Keep polling until the
+    // scope changes so there is exactly one snapshot source.
+    if (manualOwner.current?.scope !== scope) return;
+    manualOwner.current.takePolling();
+    await loadPage();
+  }, [loadPage, scope]);
 
   useEffect(() => {
     if (!enabled) {
@@ -129,6 +149,8 @@ export function useReleaseSubscribers(
 
     const controller = new AbortController();
     const { signal } = controller;
+    const streamController = new AbortController();
+    const streamSignal = streamController.signal;
     let pollTimer: number | undefined;
     let polling = false;
 
@@ -136,14 +158,14 @@ export function useReleaseSubscribers(
       if (signal.aborted || document.hidden || pollTimer !== undefined) return;
       pollTimer = window.setTimeout(async () => {
         pollTimer = undefined;
-        await refresh();
+        await loadPage();
         schedulePoll();
       }, POLL_INTERVAL_MS);
     };
     const onVisibilityChange = () => {
       if (pollTimer !== undefined) window.clearTimeout(pollTimer);
       pollTimer = undefined;
-      if (!document.hidden) void refresh().finally(schedulePoll);
+      if (!document.hidden) void loadPage().finally(schedulePoll);
     };
     const startPolling = () => {
       if (polling || signal.aborted) return;
@@ -153,30 +175,48 @@ export function useReleaseSubscribers(
       schedulePoll();
     };
 
+    const owner = {
+      scope,
+      takePolling: () => {
+        streamController.abort();
+        startPolling();
+      },
+    };
+    manualOwner.current = owner;
+
     const streamLoop = async () => {
       let failures = 0;
       let attempt = 0;
-      while (!signal.aborted) {
+      while (!signal.aborted && !streamSignal.aborted) {
         try {
           await api.subscriberStream({ env, app }, name, schemaVersion, {
-            signal,
+            signal: streamSignal,
             onSnapshot: (snapshot) => {
-              if (signal.aborted) return;
+              if (signal.aborted || streamSignal.aborted) return;
+              // A stream frame supersedes any in-flight poll as one atomic
+              // projection. Never let a delayed page replace its counts/rows.
+              request.abort();
               failures = 0;
               attempt = 0;
               update({
-                instances: groupSubscriberInstances(snapshot.subscribers ?? []),
+                instances: snapshot.instances ?? [],
+                summary: snapshot.summary ?? null,
+                projectionRevision: snapshot.projection_revision ?? null,
+                truncated: snapshot.summary?.truncated ?? false,
                 currentRevision: snapshot.current_revision ?? 0,
                 lastUpdatedAt: Date.now(),
-                stale: false,
+                stale:
+                  !snapshot.summary?.complete ||
+                  !snapshot.instances ||
+                  !snapshot.projection_revision,
                 transport: "stream",
               });
             },
           });
           // The server ended the stream cleanly; reconnect without penalty.
-          if (signal.aborted) return;
+          if (signal.aborted || streamSignal.aborted) return;
         } catch (err) {
-          if (signal.aborted || isAbortError(err)) return;
+          if (signal.aborted || streamSignal.aborted || isAbortError(err)) return;
           if (err instanceof ApiError && err.code === "unimplemented") {
             startPolling();
             return;
@@ -189,22 +229,24 @@ export function useReleaseSubscribers(
           }
         }
         attempt += 1;
-        await sleep(reconnectDelay(attempt), signal);
+        await sleep(reconnectDelay(attempt), streamSignal);
       }
     };
 
-    void refresh().finally(() => {
+    void loadPage().finally(() => {
       if (signal.aborted) return;
-      if (mode === "poll") startPolling();
+      if (mode === "poll" || streamSignal.aborted) startPolling();
       else void streamLoop();
     });
 
     return () => {
       controller.abort();
+      streamController.abort();
+      if (manualOwner.current === owner) manualOwner.current = null;
       if (pollTimer !== undefined) window.clearTimeout(pollTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [enabled, mode, refresh, scope, update, env, app, name, schemaVersion]);
+  }, [enabled, mode, loadPage, scope, update, env, app, name, schemaVersion, request]);
 
   const data = result.scope === scope && enabled ? result.data : emptySubscriberData();
 

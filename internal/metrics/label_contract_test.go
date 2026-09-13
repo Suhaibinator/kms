@@ -44,6 +44,7 @@ func exerciseEveryHook(t *testing.T, m *Metrics) {
 		m.RateLimited(id)
 		m.AuditEvent(id, id)
 		m.ReleaseOutcome(id)
+		m.ReleaseAcknowledgementOutcome(id)
 		m.ReloadResult(id)
 		m.ObserveGRPC("/"+id+"/"+id, codes.Code(99), time.Millisecond)
 		m.GRPCStreamStarted("/" + id + "/" + id)

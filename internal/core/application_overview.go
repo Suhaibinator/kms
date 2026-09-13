@@ -14,9 +14,6 @@ import (
 // ask for one environment at a time.
 const maxOverviewEnvironments = 64
 
-// maxOverviewAcks bounds the acknowledgement rows folded per environment.
-const maxOverviewAcks = 1000
-
 // OverviewOptions tunes GetApplicationOverview / GetFleetOverview.
 type OverviewOptions struct {
 	SchemaVersion *uint64
@@ -60,8 +57,14 @@ func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.Re
 		return facts, err
 	}
 	if withAcks {
-		if facts.Acks, _, err = rs.ListReleaseAcknowledgements(ctx, trackFilter(track), storage.ListPage{Limit: maxOverviewAcks, DepartedBefore: s.now().Add(-departAfter)}); err != nil {
+		var actives map[domain.ReleaseTrack]domain.ActiveConfigurationRelease
+		if facts.Acks, actives, err = rs.ReadReleaseProjection(ctx, trackFilter(track)); err != nil {
 			return facts, err
+		}
+		// The release used for health and its sessions come from one read snapshot.
+		facts.Active = nil
+		if active, ok := actives[track]; ok {
+			facts.Active = &active
 		}
 	}
 	return facts, nil
@@ -286,7 +289,7 @@ func (s *Service) GetFleetOverview(ctx context.Context, pr Principal, opts Overv
 		facts := make(map[string]environmentReleaseFacts, len(environments))
 		otherActive := map[string]domain.ConfigurationRelease{}
 		for _, ns := range environments {
-			f, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns.NamespaceRef), false)
+			f, err := s.loadEnvironmentReleaseFacts(ctx, rs, applicationTrack(app, ns.NamespaceRef), true)
 			if err != nil {
 				return nil, err
 			}
@@ -305,7 +308,7 @@ func (s *Service) GetFleetOverview(ctx context.Context, pr Principal, opts Overv
 			refs := resolveContractRefs(app, ns.Env, activeRelease, f.Latest, otherActive, rows)
 			envOverviews = append(envOverviews, computeEnvironmentReadiness(environmentReadinessInput{
 				App: app, Namespace: ns, Rows: rows, Refs: refs, Active: f.Active,
-				LatestVersion: f.LatestVersion, ReleaseCount: f.Count, SchemaMissing: schemaMissing, Now: now,
+				LatestVersion: f.LatestVersion, ReleaseCount: f.Count, SchemaMissing: schemaMissing, Acks: f.Acks, Now: now,
 			}))
 		}
 		status, _ := computeApplicationFindings(applicationReadinessInput{App: app, Environments: envOverviews, Schema: schema, SchemaMissing: schemaMissing, InsecureListener: opts.InsecureListener})

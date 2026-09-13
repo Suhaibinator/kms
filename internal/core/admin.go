@@ -881,7 +881,45 @@ func (s *Service) ListSubscribers(ctx context.Context, pr Principal) ([]domain.S
 	if err != nil {
 		return nil, 0, err
 	}
-	return s.getHub().Subscribers(), rev, nil
+	subscribers := deduplicateReleaseTransports(s.getHub().Subscribers())
+	projections := map[domain.ReleaseTrack][]domain.SubscriberInstance{}
+	for i := range subscribers {
+		subscriber := &subscribers[i]
+		if subscriber.ReleaseName == "" {
+			continue
+		}
+		unknown := domain.SubscriberInstance{ReleaseName: subscriber.ReleaseName, SessionID: subscriber.SessionID, Identity: subscriber.Identity, ClientName: subscriber.ClientName, InstanceID: subscriber.InstanceID, SchemaVersion: subscriber.SchemaVersion, Connected: true, Classification: "unknown", Reason: "session_unavailable"}
+		if len(subscriber.Namespaces) == 1 {
+			unknown.Namespace = subscriber.Namespaces[0]
+		}
+		subscriber.Effective = &unknown
+		// A live transport without a session cannot assert release health.
+		if subscriber.SessionID == "" {
+			continue
+		}
+		for _, ns := range subscriber.Namespaces {
+			track := domain.ReleaseTrack{Namespace: ns, Name: subscriber.ReleaseName, SchemaVersion: subscriber.SchemaVersion}
+			instances, found := projections[track]
+			if !found {
+				snapshot, err := s.GetReleaseRolloutSnapshot(ctx, pr, track)
+				if err != nil {
+					return nil, 0, err
+				}
+				instances = snapshot.Instances
+				projections[track] = instances
+			}
+			for _, instance := range instances {
+				if instance.SessionID == subscriber.SessionID && instance.Identity == subscriber.Identity && instance.ClientName == subscriber.ClientName && instance.InstanceID == subscriber.InstanceID {
+					copy := instance
+					subscriber.Effective = &copy
+					subscriber.ReleaseState = instance.State
+					subscriber.ReleaseVersion = instance.ReleaseVersion
+					subscriber.ReleaseRevision = instance.ActivationRevision
+				}
+			}
+		}
+	}
+	return subscribers, rev, nil
 }
 
 // ListKeyMetadata returns KEK metadata (no key material). Admin only.

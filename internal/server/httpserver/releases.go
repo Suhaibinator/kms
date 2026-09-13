@@ -188,19 +188,36 @@ func (s *server) handleListReleaseSubscribers(w http.ResponseWriter, r *http.Req
 		s.writeError(w, r, err)
 		return
 	}
+	snapshot, next, err := s.svc.ListReleaseSubscriberProjection(r.Context(), principalFrom(r.Context()),
+		domain.ReleaseFilter{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: schemaVersion}, listPage(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	out := toSubscriberStreamSnapshotDTO(snapshot)
+	writeJSON(w, http.StatusOK, map[string]any{"subscribers": out.Subscribers, "instances": out.Instances,
+		"summary": out.Summary, "projection_revision": out.ProjectionRevision,
+		"next_page_token": next, "current_revision": out.CurrentRevision, "server_time_unix_ms": out.ServerTimeUnixMS})
+}
+
+// Historical lifecycle rows are deliberately separate from effective health.
+func (s *server) handleReleaseSubscriberHistory(w http.ResponseWriter, r *http.Request) {
+	schemaVersion, err := parseSchemaVersion(r, false)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
 	items, next, revision, err := s.svc.ListReleaseSubscribers(r.Context(), principalFrom(r.Context()),
 		domain.ReleaseFilter{Namespace: nsRefFromQuery(r), Name: r.URL.Query().Get("name"), SchemaVersion: schemaVersion}, listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	out := make([]releaseSubscriberDTO, 0, len(items))
+	rows := make([]releaseSubscriberDTO, 0, len(items))
 	for _, item := range items {
-		out = append(out, toReleaseSubscriberDTO(item))
+		rows = append(rows, toReleaseSubscriberDTO(item))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"subscribers": out, "next_page_token": next, "current_revision": revision,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"subscribers": rows, "next_page_token": next, "current_revision": revision})
 }
 
 func (s *server) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {

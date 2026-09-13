@@ -67,7 +67,7 @@
         {
           "env": "prod",
           "production": true,
-          "status": "drift"
+          "status": "degraded"
         }
       ],
       "status": "attention"
@@ -96,10 +96,10 @@
         {
           "env": "dev",
           "production": false,
-          "status": "ready"
+          "status": "unknown"
         }
       ],
-      "status": "ready"
+      "status": "attention"
     }
   ]
 }

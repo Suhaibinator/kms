@@ -1,6 +1,121 @@
 import { describe, expect, it } from "vitest";
 import type { ReleaseDiffResponse } from "../../../lib/types";
-import { type FakeSecret, handle, handleFakeConsoleRequest, incidentState } from "./console-api";
+import {
+  allApplied,
+  type FakeSecret,
+  handle,
+  handleFakeConsoleRequest,
+  incidentState,
+  oneRejected,
+} from "./console-api";
+
+describe("console API fake application evidence", () => {
+  it("drops departed unpinned sessions while retaining reconnect grace and pins", () => {
+    const state = incidentState();
+    const ns = state.namespaces.prod;
+    const base = {
+      ...ns.subscribers[0],
+      connected: false,
+      state: "applied" as const,
+      activation_revision: ns.activationRevision,
+    };
+    ns.subscribers = [
+      { ...base, instance_id: "grace", server_timestamp_unix_ms: Date.now() - 10_000 },
+      { ...base, instance_id: "departed", server_timestamp_unix_ms: Date.now() - 120_000 },
+      {
+        ...base,
+        instance_id: "pin",
+        pin_version: 1,
+        server_timestamp_unix_ms: Date.now() - 120_000,
+      },
+    ];
+    const response = handle(
+      state,
+      "GET",
+      "/release-subscribers",
+      new URLSearchParams({ env: "prod", app: "gradethis", name: "runtime" }),
+      undefined,
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      instances: [
+        { instance_id: "grace", classification: "applied" },
+        { instance_id: "pin", classification: "pinned" },
+      ],
+      summary: { total: 2, connected: 0, applied_current: 1, pinned: 1 },
+    });
+    expect(ns.subscribers).toHaveLength(3);
+  });
+
+  it("keeps the rejected attempt separate from the last applied target and recovers on rollback", () => {
+    const state = incidentState();
+    const ns = state.namespaces.prod;
+    const release = ns.releases.find((row) => row.version === ns.active);
+    if (!release) throw new Error("Missing active fixture release");
+    const previous = allApplied({
+      env: "prod",
+      release,
+      revision: ns.activationRevision,
+      kind: "activate",
+      previous: ns.subscribers,
+    });
+    const candidate = { ...release, version: release.version + 1 };
+    const rejected = oneRejected(
+      previous[0].instance_id,
+      "config_validation_failed",
+      "invalid",
+    )({
+      env: "prod",
+      release: candidate,
+      revision: ns.activationRevision + 1,
+      kind: "ship",
+      previous,
+    });
+    expect(rejected[0]).toMatchObject({
+      state: "rejected",
+      release_version: candidate.version,
+      desired_version: candidate.version,
+      last_applied_version: release.version,
+      last_applied_revision: ns.activationRevision,
+      last_applied_sequence: previous[0].sequence,
+    });
+    const recovered = allApplied({
+      env: "prod",
+      release,
+      revision: ns.activationRevision + 2,
+      kind: "rollback",
+      previous: rejected,
+    });
+    expect(recovered[0]).toMatchObject({
+      state: "applied",
+      release_version: release.version,
+      last_applied_version: release.version,
+      last_applied_revision: ns.activationRevision + 2,
+      rejection_category: "",
+      diagnostic: "",
+    });
+  });
+
+  it("does not invent prior application from a rejected attempt", () => {
+    const ns = incidentState().namespaces.prod;
+    const previous = ns.subscribers.filter((row) => row.state === "rejected");
+    const release = ns.releases.find((row) => row.version === ns.active);
+    if (!release || previous.length !== 1) throw new Error("Missing rejected fixture");
+    const result = oneRejected(
+      previous[0].instance_id,
+      "config_validation_failed",
+      "invalid",
+    )({
+      env: "prod",
+      release,
+      revision: ns.activationRevision + 1,
+      kind: "ship",
+      previous,
+    });
+    expect(result[0].last_applied_version).toBe(0);
+    expect(result[0].last_applied_revision).toBe(0);
+  });
+});
 
 const keyA = "binding-key-a-0123456789-0123456789";
 const keyB = "binding-key-b-0123456789-0123456789";

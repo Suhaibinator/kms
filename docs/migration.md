@@ -36,11 +36,15 @@ upgrade path for existing baseline-4 databases. Those databases were rejected
 with “physical schema has 58 objects; expected 59” and misleading advice to
 create a fresh 0.3.x database.
 
-The corrected server recognizes the exact baseline-4 schema from before that
-index and creates only the missing index in a transaction. It verifies the
-result before committing; all stored rows and the baseline-4 stamp remain
-unchanged. Stop KMS, take a backup, and start the corrected binary against the
-existing database. No fresh database or manual SQL repair is required.
+The baseline-4 repair recognizes that exact historical schema and adds the
+missing index without changing stored rows or the baseline-4 stamp.
+The session-consistency release also accepts both baseline-4 variants and
+upgrades them transactionally to baseline 5, preserving existing data and
+adding acknowledgement replay metadata. See
+[the session protocol migration and rollout guide](release-session-protocol.md)
+for the required SDK compatibility changes and backup/restore procedure.
+Stop KMS, take a backup, and start the corrected binary against the existing
+database. No fresh database or manual SQL repair is required.
 Validation accepts this supported predecessor without modifying it. Other
 schema differences remain rejected, with missing, unexpected, or changed
 objects named in the error. Preserve rejected databases and use a compatible

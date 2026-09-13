@@ -73,15 +73,16 @@ type Metrics struct {
 	lastReload prometheus.Gauge
 
 	// Security and audit signals (the core.Metrics seam).
-	authFailures       *prometheus.CounterVec
-	authzDenials       *prometheus.CounterVec
-	authzMethodDenials *prometheus.CounterVec
-	rateLimited        *prometheus.CounterVec
-	auditEvents        *prometheus.CounterVec
-	auditWriteFailures prometheus.Counter
-	auditPruned        prometheus.Counter
-	decryptFailures    prometheus.Counter
-	releaseOutcomes    *prometheus.CounterVec
+	authFailures            *prometheus.CounterVec
+	authzDenials            *prometheus.CounterVec
+	authzMethodDenials      *prometheus.CounterVec
+	rateLimited             *prometheus.CounterVec
+	auditEvents             *prometheus.CounterVec
+	auditWriteFailures      prometheus.Counter
+	auditPruned             prometheus.Counter
+	decryptFailures         prometheus.Counter
+	releaseOutcomes         *prometheus.CounterVec
+	releaseAcknowledgements *prometheus.CounterVec
 
 	// Transport.
 	grpcRequests *prometheus.CounterVec
@@ -153,6 +154,8 @@ func New(opts Options) *Metrics {
 			"Secret versions whose ciphertext could not be opened with the current keyring."),
 		releaseOutcomes: counterVec("kms_release_outcomes_total",
 			"Release activations and rollbacks by outcome.", labelOutcome),
+		releaseAcknowledgements: counterVec("kms_release_acknowledgements_total",
+			"Release acknowledgement ingress dispositions, including legacy registration refusals.", labelOutcome),
 
 		grpcRequests: counterVec("kms_grpc_requests_total", "Completed unary gRPC requests.",
 			labelService, labelMethod, labelCode),
@@ -192,6 +195,7 @@ func New(opts Options) *Metrics {
 
 		m.authFailures, m.authzDenials, m.authzMethodDenials, m.rateLimited,
 		m.auditEvents, m.auditWriteFailures, m.auditPruned, m.decryptFailures, m.releaseOutcomes,
+		m.releaseAcknowledgements,
 
 		m.grpcRequests, m.grpcDuration, m.grpcStreams,
 		m.httpRequests, m.httpDuration, m.sseStreams,
@@ -218,6 +222,9 @@ func (m *Metrics) initClosedSets() {
 	}
 	for _, outcome := range core.ReleaseOutcomes {
 		m.releaseOutcomes.WithLabelValues(outcome)
+	}
+	for _, outcome := range core.ReleaseAcknowledgementOutcomes {
+		m.releaseAcknowledgements.WithLabelValues(outcome)
 	}
 	for _, result := range ReloadResults {
 		m.reloads.WithLabelValues(result)

@@ -48,6 +48,25 @@ type Metrics interface {
 	ReleaseOutcome(outcome string)
 }
 
+// ReleaseAcknowledgementMetrics is an optional extension of Metrics. The
+// outcome is bounded; implementations must not label events with session IDs,
+// namespaces, diagnostics, or other caller-supplied data.
+type ReleaseAcknowledgementMetrics interface {
+	ReleaseAcknowledgementOutcome(outcome string)
+}
+
+var ReleaseAcknowledgementOutcomes = []string{
+	"accepted", "duplicate", "stale", "conflict", "unavailable", "legacy_rejected",
+}
+
+// RecordReleaseAcknowledgementOutcome records one ingress disposition. It is
+// exported for transport-level registration refusals, which precede reduction.
+func (s *Service) RecordReleaseAcknowledgementOutcome(outcome string) {
+	if m, ok := s.m().(ReleaseAcknowledgementMetrics); ok {
+		m.ReleaseAcknowledgementOutcome(outcome)
+	}
+}
+
 // Auth-failure reasons: the closed set of AuthFailure label values.
 const (
 	AuthFailureToken                   = "token"

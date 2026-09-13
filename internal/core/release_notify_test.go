@@ -82,16 +82,24 @@ func TestServiceNotifiesOnConnectionAckAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectWake("activation")
-	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, "api", "i1", pr.Identity.Name, "conn-1", true); err != nil {
+	session := domain.ReleaseSessionRef{Track: release.Track(), ClientName: "api", InstanceID: "i1", Identity: pr.Identity.Name, SessionID: "notify-session"}
+	if err := svc.RegisterReleaseSession(ctx, pr, session, false); err != nil {
+		t.Fatal(err)
+	}
+	target, err := svc.GetInstanceRelease(ctx, pr, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ConnectReleaseSession(ctx, session, "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 	expectWake("connection")
-	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: release.Version, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "i1", ConnectionID: "conn-1", State: domain.ReleaseStateApplied}); err != nil {
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SessionID: session.SessionID, TargetRevision: target.TargetRevision, Sequence: 1, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: release.Version, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "i1", ConnectionID: "conn-1", State: domain.ReleaseStateApplied}); err != nil {
 		t.Fatal(err)
 	}
 	expectWake("acknowledgement")
 	snapshot, err := svc.GetReleaseRolloutSnapshot(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0})
-	if err != nil || snapshot.CurrentRevision != active.ActivationRevision || snapshot.Summary.Total != 1 || snapshot.Summary.AppliedCurrent != 1 || len(snapshot.Subscribers) == 0 || snapshot.ServerTime.IsZero() {
+	if err != nil || snapshot.CurrentRevision != active.ActivationRevision || snapshot.Summary.Total != 1 || snapshot.Summary.AppliedCurrent != 1 || len(snapshot.Instances) == 0 || snapshot.ServerTime.IsZero() {
 		t.Fatalf("snapshot = %+v err=%v", snapshot, err)
 	}
 	if _, err := svc.GetReleaseRolloutSnapshot(ctx, clientPrincipal("c"), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}); err == nil {

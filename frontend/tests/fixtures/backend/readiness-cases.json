@@ -353,8 +353,8 @@
         "values_state": "complete",
         "release_state": "active",
         "rollout_state": "no_subscribers",
-        "env_status": "ready",
-        "app_status": "ready",
+        "env_status": "unknown",
+        "app_status": "attention",
         "finding_codes": [
           "no_subscribers"
         ]
@@ -830,8 +830,8 @@
         "values_state": "complete",
         "release_state": "active",
         "rollout_state": "no_subscribers",
-        "env_status": "ready",
-        "app_status": "ready",
+        "env_status": "unknown",
+        "app_status": "attention",
         "finding_codes": [
           "no_subscribers"
         ]
@@ -909,11 +909,12 @@
       "expected": {
         "values_state": "complete",
         "release_state": "active",
-        "rollout_state": "applied",
-        "env_status": "ready",
-        "app_status": "ready",
+        "rollout_state": "rolling",
+        "env_status": "rolling",
+        "app_status": "attention",
         "finding_codes": [
-          "rolled_back"
+          "rolled_back",
+          "instance_pending"
         ]
       }
     },

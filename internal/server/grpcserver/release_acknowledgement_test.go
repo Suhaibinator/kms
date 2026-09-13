@@ -79,14 +79,14 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "instance"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, watchCtx, client, &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "instance"})}}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := stream.Recv()
-	if err != nil || first.GetSnapshot().GetRelease().GetVersion() != current.Release.Version {
+	if err != nil || first.GetTarget().GetRelease().GetVersion() != current.Release.Version {
 		t.Fatalf("snapshot: %v %v", first, err)
 	}
-	ack := &kmsv1.ReleaseAcknowledgement{Namespace: pNS(ns.Env, ns.App), Name: track.Name, Version: old.Release.Version, ActivationRevision: old.ActivationRevision, ClientName: "client", InstanceId: "instance", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectPrepareFailed, Diagnostic: "must-not-be-echoed", Sequence: 42}
+	ack := &kmsv1.ReleaseAcknowledgement{Namespace: pNS(ns.Env, ns.App), Name: track.Name, Version: old.Release.Version, ActivationRevision: old.ActivationRevision, ClientName: "client", InstanceId: "instance", SessionId: "instance-session", TargetRevision: old.ActivationRevision, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectPrepareFailed, Diagnostic: "must-not-be-echoed", Sequence: 42}
 	sendAck := func() {
 		t.Helper()
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: ack}}); err != nil {
@@ -103,7 +103,7 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 		if rejected == nil {
 			continue
 		}
-		if event.Revision != 0 || rejected.GetReason() != "activation_unavailable" || rejected.GetNamespace().GetEnv() != ns.Env || rejected.GetNamespace().GetApp() != ns.App || rejected.Name != track.Name || rejected.SchemaVersion != 0 || rejected.Version != old.Release.Version || rejected.ActivationRevision != old.ActivationRevision || rejected.ClientName != "client" || rejected.InstanceId != "instance" || rejected.State != ack.State || rejected.Sequence != 42 {
+		if event.Revision != 0 || rejected.GetReason() != "target_unavailable" || rejected.GetNamespace().GetEnv() != ns.Env || rejected.GetNamespace().GetApp() != ns.App || rejected.Name != track.Name || rejected.SchemaVersion != 0 || rejected.Version != old.Release.Version || rejected.ActivationRevision != old.ActivationRevision || rejected.ClientName != "client" || rejected.InstanceId != "instance" || rejected.State != ack.State || rejected.Sequence != 42 {
 			t.Fatalf("rejection identity: %v", event)
 		}
 		break
@@ -124,6 +124,7 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 	}
 	ack.Version = current.Release.Version
 	ack.ActivationRevision = current.ActivationRevision
+	ack.TargetRevision = current.ActivationRevision
 	ack.Sequence = 43
 	ack.State = domain.ReleaseStateApplied
 	ack.RejectionCategory = ""
@@ -163,7 +164,7 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "second"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, watchCtx, client, &kmsv1.ReleaseWatchRegistration{Namespace: pNS(ns.Env, ns.App), Name: track.Name, SchemaVersion: new(uint64), ClientName: "client", InstanceId: "second"})}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stream.Recv(); err != nil {
@@ -172,8 +173,10 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 	ack.SchemaVersion = 0
 	ack.Version = old.Release.Version
 	ack.ActivationRevision = old.ActivationRevision
+	ack.TargetRevision = old.ActivationRevision
 	ack.InstanceId = "second"
-	ack.Sequence = 0
+	ack.SessionId = "second-session"
+	ack.Sequence = 44
 	sendAck()
 	if err := stream.CloseSend(); err != nil {
 		t.Fatal(err)
@@ -189,7 +192,7 @@ func TestWatchReleaseRejectsUnavailableAcknowledgementAndKeepsStream(t *testing.
 		}
 		if event.GetAcknowledgementRejected() != nil {
 			sawRejection = true
-			if event.GetAcknowledgementRejected().Sequence != 0 {
+			if event.GetAcknowledgementRejected().Sequence != 44 {
 				t.Fatal("raw client sequence changed")
 			}
 		}

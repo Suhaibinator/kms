@@ -236,24 +236,29 @@ type ConfigurationSchema struct {
 // ReleaseAcknowledgement records one application lifecycle state. InstanceID
 // is stable for one process lifetime and reused across stream reconnects.
 type ReleaseAcknowledgement struct {
-	Sequence           uint64
-	SessionID          string
-	TargetRevision     uint64
-	PinVersion         uint64
-	PinRevision        uint64
-	PinnedBy           string
-	PinnedAt           time.Time
-	LastAppliedVersion uint64
-	DesiredVersion     uint64
-	DesiredRevision    uint64
-	SchemaVersion      uint64
-	Namespace          NamespaceRef
-	ReleaseName        string
-	ReleaseVersion     uint64
-	ActivationRevision uint64
-	ClientName         string
-	InstanceID         string
-	Identity           string
+	// PayloadFingerprint is trusted ingress metadata computed before diagnostic
+	// redaction. It is never read from a client or exposed on public responses.
+	PayloadFingerprint  string
+	Sequence            uint64
+	SessionID           string
+	TargetRevision      uint64
+	PinVersion          uint64
+	PinRevision         uint64
+	PinnedBy            string
+	PinnedAt            time.Time
+	LastAppliedVersion  uint64
+	LastAppliedRevision uint64
+	LastAppliedSequence uint64
+	DesiredVersion      uint64
+	DesiredRevision     uint64
+	SchemaVersion       uint64
+	Namespace           NamespaceRef
+	ReleaseName         string
+	ReleaseVersion      uint64
+	ActivationRevision  uint64
+	ClientName          string
+	InstanceID          string
+	Identity            string
 	// ConnectionID is the server-issued generation for the stream that carried
 	// this acknowledgement. It is internal transport state, never accepted from
 	// the wire or exposed in subscriber responses.

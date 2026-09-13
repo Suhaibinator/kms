@@ -18,6 +18,12 @@ test("incident: edit & ship to prod, rejected instance, roll back to the previou
   const currentValue = rateLimits.versions[rateLimits.versions.length - 1];
   const rejectedId = prod.subscribers.find((row) => row.state === "rejected")?.instance_id ?? "";
   const instanceCount = prod.subscribers.length;
+  // This scenario has explicit application evidence before the failed retry.
+  // A rejection's attempted release version alone is not serving evidence.
+  const previouslyApplied = prod.subscribers.find((row) => row.instance_id === rejectedId);
+  if (!previouslyApplied) throw new Error("Missing rejected fixture instance");
+  previouslyApplied.last_applied_version = activeBefore;
+  previouslyApplied.last_applied_revision = prod.activationRevision;
 
   // The ship activation leaves one instance rejected; the rollback heals it.
   state.onActivate = (ctx) =>
@@ -92,7 +98,8 @@ test("incident: edit & ship to prod, rejected instance, roll back to the previou
     "rejected",
   );
   await expect(rejected).toContainText("config_validation_failed");
-  await expect(rejected).toContainText(`still serving v${activeBefore}`);
+  await expect(rejected.locator('[data-label="Last applied"]')).toContainText(`v${activeBefore}`);
+  await expect(rejected.locator('[data-label="Detail"]')).toContainText(`target v${nextVersion}`);
   await expect(rollout.getByRole("status")).toContainText(/Polling|Live/);
 
   // Click 3: Roll back, from the rollout itself.

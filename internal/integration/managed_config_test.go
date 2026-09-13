@@ -287,7 +287,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 		if listErr != nil {
 			return false
 		}
-		for _, row := range response.GetSubscribers() {
+		for _, row := range response.GetInstances() {
 			if row.GetInstanceId() == restartInstance && row.GetState() == kmsclient.ReleaseStateApplied && row.GetReleaseVersion() == hotRelease.GetVersion() {
 				restartRow = row
 				return true

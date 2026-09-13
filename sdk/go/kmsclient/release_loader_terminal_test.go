@@ -22,13 +22,13 @@ type terminalWatchReconcileClient struct {
 	rejectedOnce sync.Once
 }
 
-func (c *terminalWatchReconcileClient) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveReleaseRequest, opts ...grpc.CallOption) (*kmsv1.GetActiveReleaseResponse, error) {
+func (c *terminalWatchReconcileClient) GetInstanceRelease(ctx context.Context, req *kmsv1.GetInstanceReleaseRequest, opts ...grpc.CallOption) (*kmsv1.InstanceReleaseTarget, error) {
 	if c.calls.Add(1) == 2 {
 		close(c.blocked)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return c.ConfigurationReleaseServiceClient.GetActiveRelease(ctx, req, opts...)
+	return c.ConfigurationReleaseServiceClient.GetInstanceRelease(ctx, req, opts...)
 }
 
 func (c *terminalWatchReconcileClient) WatchRelease(ctx context.Context, opts ...grpc.CallOption) (kmsv1.ConfigurationReleaseService_WatchReleaseClient, error) {

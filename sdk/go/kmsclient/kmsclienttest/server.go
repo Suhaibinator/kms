@@ -1445,6 +1445,25 @@ func (s *Server) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveRelea
 	return proto.Clone(active).(*kmsv1.GetActiveReleaseResponse), nil
 }
 
+// RegisterReleaseSession negotiates the session protocol used by ReleaseLoader.
+func (s *Server) RegisterReleaseSession(ctx context.Context, req *kmsv1.RegisterReleaseSessionRequest) (*kmsv1.ReleaseSessionResponse, error) {
+	s.recordMD(ctx, "RegisterReleaseSession")
+	if req.GetSession().GetSessionId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session ID is required")
+	}
+	return &kmsv1.ReleaseSessionResponse{PinCapable: true}, nil
+}
+
+// GetInstanceRelease projects the fake fleet release as an unpinned target.
+func (s *Server) GetInstanceRelease(ctx context.Context, req *kmsv1.GetInstanceReleaseRequest) (*kmsv1.InstanceReleaseTarget, error) {
+	session := req.GetSession()
+	active, err := s.GetActiveRelease(ctx, &kmsv1.GetActiveReleaseRequest{Namespace: session.GetNamespace(), Name: session.GetName(), SchemaVersion: session.SchemaVersion})
+	if err != nil {
+		return nil, err
+	}
+	return &kmsv1.InstanceReleaseTarget{Release: active.Release, TargetRevision: active.ActivationRevision, ActivationRevision: active.ActivationRevision}, nil
+}
+
 // ResolveReleaseSchema resolves a digest to the fake active release's schema
 // version and records the request for assertions.
 func (s *Server) ResolveReleaseSchema(ctx context.Context, req *kmsv1.ResolveReleaseSchemaRequest) (*kmsv1.ResolveReleaseSchemaResponse, error) {
@@ -1516,6 +1535,18 @@ func (s *Server) WatchRelease(stream kmsv1.ConfigurationReleaseService_WatchRele
 	for {
 		select {
 		case event := <-sub.send:
+			if registration.GetSessionId() != "" {
+				var release *kmsv1.ConfigurationRelease
+				switch payload := event.GetEvent().(type) {
+				case *kmsv1.WatchReleaseEvent_Snapshot:
+					release = payload.Snapshot.GetRelease()
+				case *kmsv1.WatchReleaseEvent_Activation:
+					release = payload.Activation.GetRelease()
+				}
+				if release != nil {
+					event = &kmsv1.WatchReleaseEvent{Revision: event.Revision, Event: &kmsv1.WatchReleaseEvent_Target{Target: &kmsv1.InstanceReleaseTarget{Release: release, TargetRevision: event.Revision, ActivationRevision: event.Revision}}}
+				}
+			}
 			if err := stream.Send(event); err != nil {
 				return err
 			}

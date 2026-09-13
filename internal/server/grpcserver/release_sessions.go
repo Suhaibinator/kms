@@ -96,7 +96,7 @@ func (h *configurationReleaseServer) watchInstanceRelease(stream kmsv1.Configura
 		return h.s.mapErr(ctx, e)
 	}
 	namespaceID, _ := storage.ExpectedNamespaceIncarnation(ctx, ref.Track.Namespace)
-	sub, e := h.s.hub.SubscribeRelease(ctx, watch.ReleaseRegistration{Namespace: ref.Track.Namespace, NamespaceID: namespaceID, Name: ref.Track.Name, SchemaVersion: ref.Track.SchemaVersion, ClientName: ref.ClientName, InstanceID: ref.InstanceID, Identity: ref.Identity, RemoteAddr: pr.RemoteAddr})
+	sub, e := h.s.hub.SubscribeRelease(ctx, watch.ReleaseRegistration{Namespace: ref.Track.Namespace, NamespaceID: namespaceID, Name: ref.Track.Name, SchemaVersion: ref.Track.SchemaVersion, ClientName: ref.ClientName, InstanceID: ref.InstanceID, SessionID: ref.SessionID, Identity: ref.Identity, RemoteAddr: pr.RemoteAddr})
 	if e != nil {
 		return h.s.mapErr(ctx, e)
 	}
@@ -116,18 +116,27 @@ func (h *configurationReleaseServer) watchInstanceRelease(stream kmsv1.Configura
 		defer cancel()
 		_ = h.s.svc.ConnectReleaseSession(cleanup, ref, connection, false)
 	}()
-	incoming := make(chan *kmsv1.WatchReleaseRequest, 1)
-	recvErr := make(chan error, 1)
+	effective, e := h.s.svc.ReleaseSessionAcknowledgement(ctx, pr, ref)
+	if e != nil {
+		return h.s.mapErr(ctx, e)
+	}
+	sub.RecordEffectiveAcknowledgement(effective)
+	// Receive messages and terminal errors share one FIFO, so client half-close
+	// cannot overtake a queued acknowledgement or its rejection response.
+	type receiveResult struct {
+		request *kmsv1.WatchReleaseRequest
+		err     error
+	}
+	incoming := make(chan receiveResult, 1)
 	go func() {
 		for {
 			request, e := stream.Recv()
-			if e != nil {
-				recvErr <- e
+			select {
+			case incoming <- receiveResult{request: request, err: e}:
+			case <-ctx.Done():
 				return
 			}
-			select {
-			case incoming <- request:
-			case <-ctx.Done():
+			if e != nil {
 				return
 			}
 		}
@@ -158,11 +167,6 @@ func (h *configurationReleaseServer) watchInstanceRelease(stream kmsv1.Configura
 		select {
 		case <-ctx.Done():
 			return nil
-		case e := <-recvErr:
-			if e == io.EOF {
-				return nil
-			}
-			return e
 		case <-sub.Done():
 			return nil
 		case <-sub.Events():
@@ -180,15 +184,21 @@ func (h *configurationReleaseServer) watchInstanceRelease(stream kmsv1.Configura
 			if e := stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_Heartbeat{Heartbeat: &kmsv1.Heartbeat{ServerTimeUnixMs: time.Now().UnixMilli()}}, Revision: last}); e != nil {
 				return e
 			}
-		case request := <-incoming:
-			a := request.GetAcknowledgement()
+		case received := <-incoming:
+			if received.err == io.EOF {
+				return nil
+			}
+			if received.err != nil {
+				return received.err
+			}
+			a := received.request.GetAcknowledgement()
 			if a == nil || a.SessionId != ref.SessionID || nsRefFromProto(a.Namespace) != ref.Track.Namespace || a.Name != ref.Track.Name || a.SchemaVersion != ref.Track.SchemaVersion || a.ClientName != ref.ClientName || a.InstanceId != ref.InstanceID {
 				return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match process session"))
 			}
 			ack := domain.ReleaseAcknowledgement{Sequence: a.Sequence, SessionID: ref.SessionID, TargetRevision: a.TargetRevision, Namespace: ref.Track.Namespace, SchemaVersion: ref.Track.SchemaVersion, ReleaseName: ref.Track.Name, ReleaseVersion: a.Version, ActivationRevision: a.ActivationRevision, ClientName: ref.ClientName, InstanceID: ref.InstanceID, ConnectionID: connection, State: a.State, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestamp: unixMSToTime(a.TimestampUnixMs), AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
-			e := h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, ack)
+			result, e := h.s.svc.AcknowledgeConfigurationReleaseResult(ctx, pr, ack)
 			if e == nil {
-				sub.RecordAcknowledgement(ack)
+				sub.RecordEffectiveAcknowledgement(result.Effective)
 			}
 			if _, ok := errors.AsType[*domain.ReleaseAcknowledgementUnavailableError](e); ok {
 				e = stream.Send(&kmsv1.WatchReleaseEvent{Event: &kmsv1.WatchReleaseEvent_AcknowledgementRejected{AcknowledgementRejected: &kmsv1.ReleaseAcknowledgementRejectedEvent{Namespace: a.Namespace, Name: a.Name, SchemaVersion: a.SchemaVersion, Version: a.Version, ActivationRevision: a.ActivationRevision, TargetRevision: a.TargetRevision, SessionId: ref.SessionID, ClientName: a.ClientName, InstanceId: a.InstanceId, State: a.State, Sequence: a.Sequence, Reason: "target_unavailable"}}})

@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -79,13 +80,17 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	watchTrack := func(schema, revision uint64) (kmsv1.ConfigurationReleaseService_WatchReleaseClient, context.CancelFunc) {
 		t.Helper()
 		watchCtx, stop := context.WithCancel(auth)
+		if _, err := releases.RegisterReleaseSession(auth, &kmsv1.RegisterReleaseSessionRequest{Session: &kmsv1.ReleaseSessionRef{Namespace: wireNS, Name: name, SchemaVersion: &schema, ClientName: "same-client", InstanceId: "same-instance", SessionId: fmt.Sprintf("schema-session-%d", schema)}, Resume: revision > 0}); err != nil {
+			stop()
+			t.Fatal(err)
+		}
 		stream, err := releases.WatchRelease(watchCtx)
 		if err != nil {
 			stop()
 			t.Fatal(err)
 		}
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{
-			Namespace: wireNS, Name: name, SchemaVersion: &schema, ClientName: "same-client", InstanceId: "same-instance", LastSeenRevision: revision,
+			Namespace: wireNS, Name: name, SchemaVersion: &schema, ClientName: "same-client", InstanceId: "same-instance", LastSeenRevision: revision, SessionId: fmt.Sprintf("schema-session-%d", schema),
 		}}}); err != nil {
 			stop()
 			t.Fatal(err)
@@ -100,6 +105,9 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 				t.Fatal(err)
 			}
 			release := event.GetSnapshot().GetRelease()
+			if release == nil {
+				release = event.GetTarget().GetRelease()
+			}
 			if release == nil {
 				release = event.GetActivation().GetRelease()
 			}
@@ -122,7 +130,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 	// A registered schema with no release is a live waiting subscription, never
 	// a snapshot of the older schema and never an automatic stream failure.
 	waiting, err := newStream.Recv()
-	if err != nil || waiting.GetHeartbeat() == nil {
+	if err != nil || waiting.GetTarget() == nil || waiting.GetTarget().GetRelease() != nil {
 		t.Fatalf("waiting schema event = %v, %v", waiting, err)
 	}
 	if _, err := releases.GetActiveRelease(auth, &kmsv1.GetActiveReleaseRequest{Namespace: wireNS, Name: name, SchemaVersion: &secondSchema.Version}); status.Code(err) != codes.NotFound {
@@ -232,6 +240,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 		if err := acknowledgement.stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{
 			Namespace: wireNS, Name: name, SchemaVersion: acknowledgement.schema, Version: acknowledgement.version, ActivationRevision: acknowledgement.revision,
 			ClientName: "same-client", InstanceId: "same-instance", State: "applied",
+			SessionId: fmt.Sprintf("schema-session-%d", acknowledgement.schema), Sequence: 1, TargetRevision: acknowledgement.revision,
 		}}}); err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +252,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 			return false
 		}
 		seen := map[uint64]bool{}
-		for _, row := range result.GetSubscribers() {
+		for _, row := range result.GetInstances() {
 			if row.GetClientName() == "same-client" && row.GetState() == "applied" && row.GetConnected() {
 				seen[row.GetSchemaVersion()] = true
 			}
@@ -297,7 +306,7 @@ func TestIndependentSchemaTracksOverRealKMS(t *testing.T) {
 			return false
 		}
 		connected := map[uint64]bool{}
-		for _, row := range result.GetSubscribers() {
+		for _, row := range result.GetInstances() {
 			if row.GetClientName() == "same-client" {
 				connected[row.GetSchemaVersion()] = connected[row.GetSchemaVersion()] || row.GetConnected()
 			}

@@ -153,11 +153,23 @@ class _AsyncReleaseStub:
         self.calls.append(call)
         return call
 
+    async def RegisterReleaseSession(self, request, **_kwargs):
+        return kms_pb2.ReleaseSessionResponse(pin_capable=True)
+
+    async def GetInstanceRelease(self, request, **kwargs):
+        active = await self.GetActiveRelease(kms_pb2.GetActiveReleaseRequest(
+            namespace=request.session.namespace, name=request.session.name,
+            schema_version=request.session.schema_version), **kwargs)
+        return kms_pb2.InstanceReleaseTarget(release=active.release,
+            activation_revision=active.activation_revision,
+            target_revision=active.activation_revision)
+
     def activate(self, release_and_revision) -> None:
         self.release, self.revision = release_and_revision
         self.inactive = False
         event = kms_pb2.WatchReleaseEvent(
-            activation=kms_pb2.ReleaseActivationEvent(release=self.release),
+            target=kms_pb2.InstanceReleaseTarget(release=self.release, target_revision=self.revision,
+                activation_revision=self.revision),
             revision=self.revision,
         )
         for call in self.calls:
@@ -329,6 +341,8 @@ def _ack_rejection(loader, acknowledgement, *, sequence=None, revision=999):
             instance_id=loader.instance_id,
             state=acknowledgement.state,
             sequence=sequence if sequence is not None else acknowledgement.sequence,
+            session_id=acknowledgement.session_id,
+            target_revision=acknowledgement.target_revision,
             reason="activation_unavailable",
         ),
         revision=revision,
