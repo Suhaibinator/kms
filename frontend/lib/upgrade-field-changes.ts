@@ -4,6 +4,7 @@ import type {
   ConfigurationReleaseEntry,
   ReleaseValidationError,
 } from "./types";
+import type { FieldReadiness } from "./upgrade-readiness";
 
 export type UpgradeDraftField = ApplicationContractField & {
   id: number;
@@ -24,6 +25,8 @@ export interface UpgradeFieldChange {
   labels: string[];
   paths: StructuredSchemaDifference[];
   problems: ReleaseValidationError[];
+  /** Local schema readiness, when the caller supplies a target schema check. */
+  readiness?: FieldReadiness;
   attention: boolean;
   changed: boolean;
 }
@@ -33,8 +36,10 @@ export function upgradeFieldChanges(
   entries: ConfigurationReleaseEntry[],
   differences: StructuredSchemaDifference[],
   validation: ReleaseValidationError[],
+  readinessFor?: (field: UpgradeDraftField) => FieldReadiness | undefined,
 ): UpgradeFieldChange[] {
   return fields.map((field) => {
+    const readiness = readinessFor?.(field);
     const prior = contract.find((item) => item.alias === (field.fromAlias ?? field.alias));
     const pin = entries.find((item) => item.alias === field.fromAlias);
     const paths = differences.filter(
@@ -63,6 +68,7 @@ export function upgradeFieldChanges(
       labels.push("Value edited");
     if (pin && (pin.ref.key !== field.key || pin.version !== field.version))
       labels.push("Reference changed");
+    if (readiness?.status === "fails_schema") labels.push("Fails target schema");
     const problems = validation.filter((p) => p.alias === field.alias);
     const badVersion = field.versionText
       ? !/^[1-9]\d*$/.test(field.versionText) || !Number.isSafeInteger(Number(field.versionText))
@@ -73,6 +79,8 @@ export function upgradeFieldChanges(
         field.loadError ||
         badVersion ||
         missing ||
+        readiness?.status === "fails_schema" ||
+        readiness?.status === "invalid_draft" ||
         !field.alias.trim() ||
         !field.key.trim(),
     );
@@ -83,6 +91,7 @@ export function upgradeFieldChanges(
       labels,
       paths,
       problems,
+      readiness,
       attention,
       changed: labels.length > 0,
     };
