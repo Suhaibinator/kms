@@ -1394,6 +1394,77 @@ export interface CreateApplicationReleaseResponse {
   release: ConfigurationRelease | undefined;
 }
 
+/**
+ * ApplicationMigrationChange addresses one target contract alias when
+ * migrating an active release to another schema track. from_alias carries
+ * the active pin of a renamed alias; version pins an exact existing resource;
+ * value (parameters only) writes a new version with that content. Aliases
+ * with no change carry their active pin unchanged.
+ */
+export interface ApplicationMigrationChange {
+  alias: string;
+  fromAlias: string;
+  key: string;
+  value?: string | undefined;
+  contentType: string;
+  version: bigint;
+}
+
+/**
+ * MigrateApplicationReleaseRequest rebuilds the source track's active
+ * release against the target schema's contract and, on execute, writes the
+ * edited parameters, creates the release on the target track and activates
+ * it in one transaction. Preview is the default; execute requires the exact
+ * plan_digest returned by a preceding preview. contract is the complete
+ * target definition, not a patch, and must match a registered contract when
+ * the schema has one.
+ */
+export interface MigrateApplicationReleaseRequest {
+  namespace: NamespaceRef | undefined;
+  sourceSchemaVersion: bigint;
+  schemaVersion: bigint;
+  contract: ApplicationContractField[];
+  changes: ApplicationMigrationChange[];
+  metadataJson: string;
+  execute: boolean;
+  planDigest: string;
+  /** Compare-and-swap on the source: supply both or neither. */
+  expectedSourceVersion?: bigint | undefined;
+  expectedSourceActivationRevision?: bigint | undefined;
+}
+
+export interface ApplicationMigrationEnvironment {
+  environment: string;
+  activeVersion: bigint;
+  schemaVersion: bigint;
+}
+
+export interface ApplicationMigrationActivation {
+  activationRevision: bigint;
+  previousVersion: bigint;
+  changed: boolean;
+}
+
+/**
+ * MigrateApplicationReleaseResponse is value-free. entries.source is
+ * preserved | renamed | edited | pinned | added | missing | removed.
+ */
+export interface MigrateApplicationReleaseResponse {
+  planDigest: string;
+  valid: boolean;
+  executed: boolean;
+  definitionChanged: boolean;
+  releaseName: string;
+  sourceVersion: bigint;
+  sourceActivationRevision: bigint;
+  schemaVersion: bigint;
+  entries: ApplicationReleasePlanEntry[];
+  validation: ReleaseValidationError[];
+  affectedEnvironments: ApplicationMigrationEnvironment[];
+  release: ConfigurationRelease | undefined;
+  activation: ApplicationMigrationActivation | undefined;
+}
+
 function createBaseNamespaceRef(): NamespaceRef {
   return { env: "", app: "" };
 }
@@ -21110,6 +21181,1012 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
   },
 };
 
+function createBaseApplicationMigrationChange(): ApplicationMigrationChange {
+  return { alias: "", fromAlias: "", key: "", value: undefined, contentType: "", version: 0n };
+}
+
+export const ApplicationMigrationChange: MessageFns<ApplicationMigrationChange> = {
+  encode(message: ApplicationMigrationChange, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.alias !== "") {
+      writer.uint32(10).string(message.alias);
+    }
+    if (message.fromAlias !== "") {
+      writer.uint32(18).string(message.fromAlias);
+    }
+    if (message.key !== "") {
+      writer.uint32(26).string(message.key);
+    }
+    if (message.value !== undefined) {
+      writer.uint32(34).string(message.value);
+    }
+    if (message.contentType !== "") {
+      writer.uint32(42).string(message.contentType);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.version);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplicationMigrationChange {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseApplicationMigrationChange();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.alias = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.fromAlias = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.key = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.value = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.contentType = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ApplicationMigrationChange {
+    return {
+      alias: isSet(object.alias) ? globalThis.String(object.alias) : "",
+      fromAlias: isSet(object.fromAlias)
+        ? globalThis.String(object.fromAlias)
+        : isSet(object.from_alias)
+        ? globalThis.String(object.from_alias)
+        : "",
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : undefined,
+      contentType: isSet(object.contentType)
+        ? globalThis.String(object.contentType)
+        : isSet(object.content_type)
+        ? globalThis.String(object.content_type)
+        : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+    };
+  },
+
+  toJSON(message: ApplicationMigrationChange): unknown {
+    const obj: any = {};
+    if (message.alias !== "") {
+      obj.alias = message.alias;
+    }
+    if (message.fromAlias !== "") {
+      obj.fromAlias = message.fromAlias;
+    }
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = message.value;
+    }
+    if (message.contentType !== "") {
+      obj.contentType = message.contentType;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplicationMigrationChange>): ApplicationMigrationChange {
+    return ApplicationMigrationChange.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplicationMigrationChange>): ApplicationMigrationChange {
+    const message = createBaseApplicationMigrationChange();
+    message.alias = object.alias ?? "";
+    message.fromAlias = object.fromAlias ?? "";
+    message.key = object.key ?? "";
+    message.value = object.value ?? undefined;
+    message.contentType = object.contentType ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    return message;
+  },
+};
+
+function createBaseMigrateApplicationReleaseRequest(): MigrateApplicationReleaseRequest {
+  return {
+    namespace: undefined,
+    sourceSchemaVersion: 0n,
+    schemaVersion: 0n,
+    contract: [],
+    changes: [],
+    metadataJson: "",
+    execute: false,
+    planDigest: "",
+    expectedSourceVersion: undefined,
+    expectedSourceActivationRevision: undefined,
+  };
+}
+
+export const MigrateApplicationReleaseRequest: MessageFns<MigrateApplicationReleaseRequest> = {
+  encode(message: MigrateApplicationReleaseRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.sourceSchemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.sourceSchemaVersion) !== message.sourceSchemaVersion) {
+        throw new globalThis.Error("value provided for field message.sourceSchemaVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.sourceSchemaVersion);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
+    }
+    for (const v of message.contract) {
+      ApplicationContractField.encode(v!, writer.uint32(34).fork()).join();
+    }
+    for (const v of message.changes) {
+      ApplicationMigrationChange.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.metadataJson !== "") {
+      writer.uint32(50).string(message.metadataJson);
+    }
+    if (message.execute !== false) {
+      writer.uint32(56).bool(message.execute);
+    }
+    if (message.planDigest !== "") {
+      writer.uint32(66).string(message.planDigest);
+    }
+    if (message.expectedSourceVersion !== undefined) {
+      if (BigInt.asUintN(64, message.expectedSourceVersion) !== message.expectedSourceVersion) {
+        throw new globalThis.Error("value provided for field message.expectedSourceVersion of type uint64 too large");
+      }
+      writer.uint32(72).uint64(message.expectedSourceVersion);
+    }
+    if (message.expectedSourceActivationRevision !== undefined) {
+      if (BigInt.asUintN(64, message.expectedSourceActivationRevision) !== message.expectedSourceActivationRevision) {
+        throw new globalThis.Error(
+          "value provided for field message.expectedSourceActivationRevision of type uint64 too large",
+        );
+      }
+      writer.uint32(80).uint64(message.expectedSourceActivationRevision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MigrateApplicationReleaseRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMigrateApplicationReleaseRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.sourceSchemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.contract.push(ApplicationContractField.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.changes.push(ApplicationMigrationChange.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.metadataJson = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.execute = reader.bool();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.planDigest = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.expectedSourceVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.expectedSourceActivationRevision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): MigrateApplicationReleaseRequest {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      sourceSchemaVersion: isSet(object.sourceSchemaVersion)
+        ? BigInt(object.sourceSchemaVersion)
+        : isSet(object.source_schema_version)
+        ? BigInt(object.source_schema_version)
+        : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+      contract: globalThis.Array.isArray(object?.contract)
+        ? object.contract.map((e: any) => ApplicationContractField.fromJSON(e))
+        : [],
+      changes: globalThis.Array.isArray(object?.changes)
+        ? object.changes.map((e: any) => ApplicationMigrationChange.fromJSON(e))
+        : [],
+      metadataJson: isSet(object.metadataJson)
+        ? globalThis.String(object.metadataJson)
+        : isSet(object.metadata_json)
+        ? globalThis.String(object.metadata_json)
+        : "",
+      execute: isSet(object.execute) ? globalThis.Boolean(object.execute) : false,
+      planDigest: isSet(object.planDigest)
+        ? globalThis.String(object.planDigest)
+        : isSet(object.plan_digest)
+        ? globalThis.String(object.plan_digest)
+        : "",
+      expectedSourceVersion: isSet(object.expectedSourceVersion)
+        ? BigInt(object.expectedSourceVersion)
+        : isSet(object.expected_source_version)
+        ? BigInt(object.expected_source_version)
+        : undefined,
+      expectedSourceActivationRevision: isSet(object.expectedSourceActivationRevision)
+        ? BigInt(object.expectedSourceActivationRevision)
+        : isSet(object.expected_source_activation_revision)
+        ? BigInt(object.expected_source_activation_revision)
+        : undefined,
+    };
+  },
+
+  toJSON(message: MigrateApplicationReleaseRequest): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.sourceSchemaVersion !== 0n) {
+      obj.sourceSchemaVersion = message.sourceSchemaVersion.toString();
+    }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.contract?.length) {
+      obj.contract = message.contract.map((e) => ApplicationContractField.toJSON(e));
+    }
+    if (message.changes?.length) {
+      obj.changes = message.changes.map((e) => ApplicationMigrationChange.toJSON(e));
+    }
+    if (message.metadataJson !== "") {
+      obj.metadataJson = message.metadataJson;
+    }
+    if (message.execute !== false) {
+      obj.execute = message.execute;
+    }
+    if (message.planDigest !== "") {
+      obj.planDigest = message.planDigest;
+    }
+    if (message.expectedSourceVersion !== undefined) {
+      obj.expectedSourceVersion = message.expectedSourceVersion.toString();
+    }
+    if (message.expectedSourceActivationRevision !== undefined) {
+      obj.expectedSourceActivationRevision = message.expectedSourceActivationRevision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<MigrateApplicationReleaseRequest>): MigrateApplicationReleaseRequest {
+    return MigrateApplicationReleaseRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<MigrateApplicationReleaseRequest>): MigrateApplicationReleaseRequest {
+    const message = createBaseMigrateApplicationReleaseRequest();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.sourceSchemaVersion = (object.sourceSchemaVersion !== undefined && object.sourceSchemaVersion !== null)
+      ? BigInt(object.sourceSchemaVersion)
+      : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    message.contract = object.contract?.map((e) => ApplicationContractField.fromPartial(e)) || [];
+    message.changes = object.changes?.map((e) => ApplicationMigrationChange.fromPartial(e)) || [];
+    message.metadataJson = object.metadataJson ?? "";
+    message.execute = object.execute ?? false;
+    message.planDigest = object.planDigest ?? "";
+    message.expectedSourceVersion =
+      (object.expectedSourceVersion !== undefined && object.expectedSourceVersion !== null)
+        ? BigInt(object.expectedSourceVersion)
+        : undefined;
+    message.expectedSourceActivationRevision =
+      (object.expectedSourceActivationRevision !== undefined && object.expectedSourceActivationRevision !== null)
+        ? BigInt(object.expectedSourceActivationRevision)
+        : undefined;
+    return message;
+  },
+};
+
+function createBaseApplicationMigrationEnvironment(): ApplicationMigrationEnvironment {
+  return { environment: "", activeVersion: 0n, schemaVersion: 0n };
+}
+
+export const ApplicationMigrationEnvironment: MessageFns<ApplicationMigrationEnvironment> = {
+  encode(message: ApplicationMigrationEnvironment, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.environment !== "") {
+      writer.uint32(10).string(message.environment);
+    }
+    if (message.activeVersion !== 0n) {
+      if (BigInt.asUintN(64, message.activeVersion) !== message.activeVersion) {
+        throw new globalThis.Error("value provided for field message.activeVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.activeVersion);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.schemaVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplicationMigrationEnvironment {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseApplicationMigrationEnvironment();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.environment = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.activeVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ApplicationMigrationEnvironment {
+    return {
+      environment: isSet(object.environment) ? globalThis.String(object.environment) : "",
+      activeVersion: isSet(object.activeVersion)
+        ? BigInt(object.activeVersion)
+        : isSet(object.active_version)
+        ? BigInt(object.active_version)
+        : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+    };
+  },
+
+  toJSON(message: ApplicationMigrationEnvironment): unknown {
+    const obj: any = {};
+    if (message.environment !== "") {
+      obj.environment = message.environment;
+    }
+    if (message.activeVersion !== 0n) {
+      obj.activeVersion = message.activeVersion.toString();
+    }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplicationMigrationEnvironment>): ApplicationMigrationEnvironment {
+    return ApplicationMigrationEnvironment.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplicationMigrationEnvironment>): ApplicationMigrationEnvironment {
+    const message = createBaseApplicationMigrationEnvironment();
+    message.environment = object.environment ?? "";
+    message.activeVersion = (object.activeVersion !== undefined && object.activeVersion !== null)
+      ? BigInt(object.activeVersion)
+      : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    return message;
+  },
+};
+
+function createBaseApplicationMigrationActivation(): ApplicationMigrationActivation {
+  return { activationRevision: 0n, previousVersion: 0n, changed: false };
+}
+
+export const ApplicationMigrationActivation: MessageFns<ApplicationMigrationActivation> = {
+  encode(message: ApplicationMigrationActivation, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.activationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.activationRevision) !== message.activationRevision) {
+        throw new globalThis.Error("value provided for field message.activationRevision of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.activationRevision);
+    }
+    if (message.previousVersion !== 0n) {
+      if (BigInt.asUintN(64, message.previousVersion) !== message.previousVersion) {
+        throw new globalThis.Error("value provided for field message.previousVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.previousVersion);
+    }
+    if (message.changed !== false) {
+      writer.uint32(24).bool(message.changed);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplicationMigrationActivation {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseApplicationMigrationActivation();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.activationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.previousVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.changed = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ApplicationMigrationActivation {
+    return {
+      activationRevision: isSet(object.activationRevision)
+        ? BigInt(object.activationRevision)
+        : isSet(object.activation_revision)
+        ? BigInt(object.activation_revision)
+        : 0n,
+      previousVersion: isSet(object.previousVersion)
+        ? BigInt(object.previousVersion)
+        : isSet(object.previous_version)
+        ? BigInt(object.previous_version)
+        : 0n,
+      changed: isSet(object.changed) ? globalThis.Boolean(object.changed) : false,
+    };
+  },
+
+  toJSON(message: ApplicationMigrationActivation): unknown {
+    const obj: any = {};
+    if (message.activationRevision !== 0n) {
+      obj.activationRevision = message.activationRevision.toString();
+    }
+    if (message.previousVersion !== 0n) {
+      obj.previousVersion = message.previousVersion.toString();
+    }
+    if (message.changed !== false) {
+      obj.changed = message.changed;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplicationMigrationActivation>): ApplicationMigrationActivation {
+    return ApplicationMigrationActivation.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplicationMigrationActivation>): ApplicationMigrationActivation {
+    const message = createBaseApplicationMigrationActivation();
+    message.activationRevision = (object.activationRevision !== undefined && object.activationRevision !== null)
+      ? BigInt(object.activationRevision)
+      : 0n;
+    message.previousVersion = (object.previousVersion !== undefined && object.previousVersion !== null)
+      ? BigInt(object.previousVersion)
+      : 0n;
+    message.changed = object.changed ?? false;
+    return message;
+  },
+};
+
+function createBaseMigrateApplicationReleaseResponse(): MigrateApplicationReleaseResponse {
+  return {
+    planDigest: "",
+    valid: false,
+    executed: false,
+    definitionChanged: false,
+    releaseName: "",
+    sourceVersion: 0n,
+    sourceActivationRevision: 0n,
+    schemaVersion: 0n,
+    entries: [],
+    validation: [],
+    affectedEnvironments: [],
+    release: undefined,
+    activation: undefined,
+  };
+}
+
+export const MigrateApplicationReleaseResponse: MessageFns<MigrateApplicationReleaseResponse> = {
+  encode(message: MigrateApplicationReleaseResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.planDigest !== "") {
+      writer.uint32(10).string(message.planDigest);
+    }
+    if (message.valid !== false) {
+      writer.uint32(16).bool(message.valid);
+    }
+    if (message.executed !== false) {
+      writer.uint32(24).bool(message.executed);
+    }
+    if (message.definitionChanged !== false) {
+      writer.uint32(32).bool(message.definitionChanged);
+    }
+    if (message.releaseName !== "") {
+      writer.uint32(42).string(message.releaseName);
+    }
+    if (message.sourceVersion !== 0n) {
+      if (BigInt.asUintN(64, message.sourceVersion) !== message.sourceVersion) {
+        throw new globalThis.Error("value provided for field message.sourceVersion of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.sourceVersion);
+    }
+    if (message.sourceActivationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.sourceActivationRevision) !== message.sourceActivationRevision) {
+        throw new globalThis.Error(
+          "value provided for field message.sourceActivationRevision of type uint64 too large",
+        );
+      }
+      writer.uint32(56).uint64(message.sourceActivationRevision);
+    }
+    if (message.schemaVersion !== 0n) {
+      if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
+        throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.schemaVersion);
+    }
+    for (const v of message.entries) {
+      ApplicationReleasePlanEntry.encode(v!, writer.uint32(74).fork()).join();
+    }
+    for (const v of message.validation) {
+      ReleaseValidationError.encode(v!, writer.uint32(82).fork()).join();
+    }
+    for (const v of message.affectedEnvironments) {
+      ApplicationMigrationEnvironment.encode(v!, writer.uint32(90).fork()).join();
+    }
+    if (message.release !== undefined) {
+      ConfigurationRelease.encode(message.release, writer.uint32(98).fork()).join();
+    }
+    if (message.activation !== undefined) {
+      ApplicationMigrationActivation.encode(message.activation, writer.uint32(106).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MigrateApplicationReleaseResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMigrateApplicationReleaseResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.planDigest = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.valid = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.executed = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.definitionChanged = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.releaseName = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.sourceVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.sourceActivationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.schemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.entries.push(ApplicationReleasePlanEntry.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.validation.push(ReleaseValidationError.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.affectedEnvironments.push(ApplicationMigrationEnvironment.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+
+            message.release = ConfigurationRelease.decode(reader, reader.uint32());
+            continue;
+          }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+
+            message.activation = ApplicationMigrationActivation.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): MigrateApplicationReleaseResponse {
+    return {
+      planDigest: isSet(object.planDigest)
+        ? globalThis.String(object.planDigest)
+        : isSet(object.plan_digest)
+        ? globalThis.String(object.plan_digest)
+        : "",
+      valid: isSet(object.valid) ? globalThis.Boolean(object.valid) : false,
+      executed: isSet(object.executed) ? globalThis.Boolean(object.executed) : false,
+      definitionChanged: isSet(object.definitionChanged)
+        ? globalThis.Boolean(object.definitionChanged)
+        : isSet(object.definition_changed)
+        ? globalThis.Boolean(object.definition_changed)
+        : false,
+      releaseName: isSet(object.releaseName)
+        ? globalThis.String(object.releaseName)
+        : isSet(object.release_name)
+        ? globalThis.String(object.release_name)
+        : "",
+      sourceVersion: isSet(object.sourceVersion)
+        ? BigInt(object.sourceVersion)
+        : isSet(object.source_version)
+        ? BigInt(object.source_version)
+        : 0n,
+      sourceActivationRevision: isSet(object.sourceActivationRevision)
+        ? BigInt(object.sourceActivationRevision)
+        : isSet(object.source_activation_revision)
+        ? BigInt(object.source_activation_revision)
+        : 0n,
+      schemaVersion: isSet(object.schemaVersion)
+        ? BigInt(object.schemaVersion)
+        : isSet(object.schema_version)
+        ? BigInt(object.schema_version)
+        : 0n,
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => ApplicationReleasePlanEntry.fromJSON(e))
+        : [],
+      validation: globalThis.Array.isArray(object?.validation)
+        ? object.validation.map((e: any) => ReleaseValidationError.fromJSON(e))
+        : [],
+      affectedEnvironments: globalThis.Array.isArray(object?.affectedEnvironments)
+        ? object.affectedEnvironments.map((e: any) => ApplicationMigrationEnvironment.fromJSON(e))
+        : globalThis.Array.isArray(object?.affected_environments)
+        ? object.affected_environments.map((e: any) => ApplicationMigrationEnvironment.fromJSON(e))
+        : [],
+      release: isSet(object.release) ? ConfigurationRelease.fromJSON(object.release) : undefined,
+      activation: isSet(object.activation) ? ApplicationMigrationActivation.fromJSON(object.activation) : undefined,
+    };
+  },
+
+  toJSON(message: MigrateApplicationReleaseResponse): unknown {
+    const obj: any = {};
+    if (message.planDigest !== "") {
+      obj.planDigest = message.planDigest;
+    }
+    if (message.valid !== false) {
+      obj.valid = message.valid;
+    }
+    if (message.executed !== false) {
+      obj.executed = message.executed;
+    }
+    if (message.definitionChanged !== false) {
+      obj.definitionChanged = message.definitionChanged;
+    }
+    if (message.releaseName !== "") {
+      obj.releaseName = message.releaseName;
+    }
+    if (message.sourceVersion !== 0n) {
+      obj.sourceVersion = message.sourceVersion.toString();
+    }
+    if (message.sourceActivationRevision !== 0n) {
+      obj.sourceActivationRevision = message.sourceActivationRevision.toString();
+    }
+    if (message.schemaVersion !== 0n) {
+      obj.schemaVersion = message.schemaVersion.toString();
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => ApplicationReleasePlanEntry.toJSON(e));
+    }
+    if (message.validation?.length) {
+      obj.validation = message.validation.map((e) => ReleaseValidationError.toJSON(e));
+    }
+    if (message.affectedEnvironments?.length) {
+      obj.affectedEnvironments = message.affectedEnvironments.map((e) => ApplicationMigrationEnvironment.toJSON(e));
+    }
+    if (message.release !== undefined) {
+      obj.release = ConfigurationRelease.toJSON(message.release);
+    }
+    if (message.activation !== undefined) {
+      obj.activation = ApplicationMigrationActivation.toJSON(message.activation);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<MigrateApplicationReleaseResponse>): MigrateApplicationReleaseResponse {
+    return MigrateApplicationReleaseResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<MigrateApplicationReleaseResponse>): MigrateApplicationReleaseResponse {
+    const message = createBaseMigrateApplicationReleaseResponse();
+    message.planDigest = object.planDigest ?? "";
+    message.valid = object.valid ?? false;
+    message.executed = object.executed ?? false;
+    message.definitionChanged = object.definitionChanged ?? false;
+    message.releaseName = object.releaseName ?? "";
+    message.sourceVersion = (object.sourceVersion !== undefined && object.sourceVersion !== null)
+      ? BigInt(object.sourceVersion)
+      : 0n;
+    message.sourceActivationRevision =
+      (object.sourceActivationRevision !== undefined && object.sourceActivationRevision !== null)
+        ? BigInt(object.sourceActivationRevision)
+        : 0n;
+    message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
+      ? BigInt(object.schemaVersion)
+      : 0n;
+    message.entries = object.entries?.map((e) => ApplicationReleasePlanEntry.fromPartial(e)) || [];
+    message.validation = object.validation?.map((e) => ReleaseValidationError.fromPartial(e)) || [];
+    message.affectedEnvironments =
+      object.affectedEnvironments?.map((e) => ApplicationMigrationEnvironment.fromPartial(e)) || [];
+    message.release = (object.release !== undefined && object.release !== null)
+      ? ConfigurationRelease.fromPartial(object.release)
+      : undefined;
+    message.activation = (object.activation !== undefined && object.activation !== null)
+      ? ApplicationMigrationActivation.fromPartial(object.activation)
+      : undefined;
+    return message;
+  },
+};
+
 export type ParameterServiceService = typeof ParameterServiceService;
 export const ParameterServiceService = {
   getParameter: {
@@ -21863,6 +22940,19 @@ export const AdminServiceService = {
     responseDeserialize: (value: Buffer): CreateApplicationReleaseResponse =>
       CreateApplicationReleaseResponse.decode(value),
   },
+  migrateApplicationRelease: {
+    path: "/kms.v1.AdminService/MigrateApplicationRelease" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: MigrateApplicationReleaseRequest): Buffer =>
+      Buffer.from(MigrateApplicationReleaseRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): MigrateApplicationReleaseRequest =>
+      MigrateApplicationReleaseRequest.decode(value),
+    responseSerialize: (value: MigrateApplicationReleaseResponse): Buffer =>
+      Buffer.from(MigrateApplicationReleaseResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): MigrateApplicationReleaseResponse =>
+      MigrateApplicationReleaseResponse.decode(value),
+  },
   health: {
     path: "/kms.v1.AdminService/Health" as const,
     requestStream: false as const,
@@ -21896,6 +22986,7 @@ export interface AdminServiceServer extends UntypedServiceImplementation {
   listReleaseSubscribers: handleUnaryCall<ListReleaseSubscribersRequest, ListReleaseSubscribersResponse>;
   applyApplicationDefaults: handleUnaryCall<ApplyApplicationDefaultsRequest, ApplyApplicationDefaultsResponse>;
   createApplicationRelease: handleUnaryCall<CreateApplicationReleaseRequest, CreateApplicationReleaseResponse>;
+  migrateApplicationRelease: handleUnaryCall<MigrateApplicationReleaseRequest, MigrateApplicationReleaseResponse>;
   health: handleUnaryCall<HealthRequest, HealthResponse>;
 }
 
@@ -21933,5 +23024,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 330e9a4cd58c3bb8f2e5052e8b403c23f3d80c2227cc7a25302ccf435c9b7652
+// source-sha256: c531d826bd52735b3b8549bf15a5f900afc0be120a188f22e12923e08e1ba381
 // generation-sha256: 2a1ecb1d357c44fd566c75ddfde66638e2ef127c268c9da6bbd4667140ee7865
