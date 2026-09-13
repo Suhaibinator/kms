@@ -247,7 +247,7 @@ func isWindowsDriveSlashPath(path string) bool {
 }
 
 func incompatibleBaseline(format string, args ...any) error {
-	return fmt.Errorf("incompatible 0.3.x database baseline: "+format+"; create a fresh database for KMS 0.3.x", args...)
+	return fmt.Errorf("incompatible KMS database schema: "+format+"; this build cannot automatically upgrade this schema; preserve the database and use a compatible binary or a supported migration", args...)
 }
 
 func inspectBaselinePath(path string) (bool, error) {
@@ -353,6 +353,33 @@ func referenceSchema(legacy bool) ([]baselineSchemaObject, error) {
 	return schema, err
 }
 
+// Report object names rather than just counts so operators can diagnose drift.
+func compareBaselineSchema(actual, expected []baselineSchemaObject) error {
+	byName := make(map[string]baselineSchemaObject, len(actual))
+	for _, obj := range actual {
+		byName[obj.Name] = obj
+	}
+	var differences []string
+	for _, obj := range expected {
+		got, exists := byName[obj.Name]
+		if !exists {
+			differences = append(differences, fmt.Sprintf("missing %s %q", obj.Type, obj.Name))
+		} else if got != obj {
+			differences = append(differences, fmt.Sprintf("definition differs for %s %q", obj.Type, obj.Name))
+		}
+		delete(byName, obj.Name)
+	}
+	for _, obj := range actual {
+		if _, exists := byName[obj.Name]; exists {
+			differences = append(differences, fmt.Sprintf("unexpected %s %q", obj.Type, obj.Name))
+		}
+	}
+	if len(differences) > 0 {
+		return incompatibleBaseline("physical schema has %d objects; expected %d: %s", len(actual), len(expected), strings.Join(differences, "; "))
+	}
+	return nil
+}
+
 func inspectBaselineDB(db *gorm.DB) (bool, error) {
 	actual, err := readBaselineSchema(db)
 	if err != nil {
@@ -369,13 +396,8 @@ func inspectBaselineDB(db *gorm.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if len(actual) != len(expected) {
-		return false, incompatibleBaseline("physical schema has %d objects; expected %d", len(actual), len(expected))
-	}
-	for i := range actual {
-		if actual[i] != expected[i] {
-			return false, incompatibleBaseline("physical schema differs at %s %q", actual[i].Type, actual[i].Name)
-		}
+	if err := compareBaselineSchema(actual, expected); err != nil {
+		return false, err
 	}
 
 	var stamps []schemaMigrationModel
