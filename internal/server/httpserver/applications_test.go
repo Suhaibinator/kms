@@ -133,7 +133,7 @@ func TestGetApplicationHTTP(t *testing.T) {
 	mustStatus(t, w, http.StatusNotFound)
 }
 
-func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
+func TestApplicationOverviewPreservesRestartGraceHTTP(t *testing.T) {
 	e := newReleaseTestEnv(t)
 	e.seedConsoleApp("prod")
 	e.ship("prod", "rate_limits", "7", false)
@@ -153,7 +153,7 @@ func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
 	if err := e.svc.ConnectReleaseSession(ctx, oldRef, "conn-replica", false); err != nil {
 		t.Fatal(err)
 	}
-	if disconnected := read(); disconnected["status"] != "unknown" {
+	if disconnected := read(); disconnected["status"] != "degraded" {
 		t.Fatalf("disconnected = %v", disconnected)
 	}
 	ref := oldRef
@@ -168,7 +168,7 @@ func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := read(); pending["status"] != "rolling" {
+	if pending := read(); pending["status"] != "degraded" {
 		t.Fatalf("restarted pending = %v", pending)
 	}
 	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
@@ -181,13 +181,13 @@ func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
 	}
 	after := read()
 	rollout := after["rollout"].(map[string]any)
-	if after["status"] != "ready" || rollout["connected"] != float64(1) || rollout["applied_current"] != float64(1) || rollout["rejected"] != float64(0) || len(rollout["rejected_instances"].([]any)) != 0 {
+	if after["status"] != "degraded" || rollout["total"] != float64(2) || rollout["connected"] != float64(1) || rollout["applied_current"] != float64(1) || rollout["rejected"] != float64(1) || len(rollout["rejected_instances"].([]any)) != 1 {
 		t.Fatalf("after restart = %v", after)
 	}
-	for _, code := range findingCodesOf(after["findings"]) {
-		if code == "instance_rejected" {
-			t.Fatalf("obsolete rejection finding: %v", after)
-		}
+	// The old rejection remains during the 90-second reconnect grace.
+	// Core projection tests advance the clock and verify its eventual departure.
+	if _, exists := rollout["stale"]; exists {
+		t.Fatal("stale rollout bucket was reintroduced")
 	}
 }
 

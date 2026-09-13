@@ -10,6 +10,43 @@ import {
 } from "./console-api";
 
 describe("console API fake application evidence", () => {
+  it("drops departed unpinned sessions while retaining reconnect grace and pins", () => {
+    const state = incidentState();
+    const ns = state.namespaces.prod;
+    const base = {
+      ...ns.subscribers[0],
+      connected: false,
+      state: "applied" as const,
+      activation_revision: ns.activationRevision,
+    };
+    ns.subscribers = [
+      { ...base, instance_id: "grace", server_timestamp_unix_ms: Date.now() - 10_000 },
+      { ...base, instance_id: "departed", server_timestamp_unix_ms: Date.now() - 120_000 },
+      {
+        ...base,
+        instance_id: "pin",
+        pin_version: 1,
+        server_timestamp_unix_ms: Date.now() - 120_000,
+      },
+    ];
+    const response = handle(
+      state,
+      "GET",
+      "/release-subscribers",
+      new URLSearchParams({ env: "prod", app: "gradethis", name: "runtime" }),
+      undefined,
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      instances: [
+        { instance_id: "grace", classification: "applied" },
+        { instance_id: "pin", classification: "pinned" },
+      ],
+      summary: { total: 2, connected: 0, applied_current: 1, pinned: 1 },
+    });
+    expect(ns.subscribers).toHaveLength(3);
+  });
+
   it("keeps the rejected attempt separate from the last applied target and recovers on rollback", () => {
     const state = incidentState();
     const ns = state.namespaces.prod;

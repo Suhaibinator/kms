@@ -58,17 +58,19 @@ changes between requests.
 
 | Effective instance | Meaning for current readiness |
 | --- | --- |
-| Disconnected/stale | Historical evidence only, not current health |
+| Disconnected, unpinned, within 90 seconds | Keeps its last reported state during reconnect grace |
+| Disconnected, unpinned, beyond 90 seconds | Removed from effective fleet; retained in raw history |
+| Disconnected, pinned | Remains visible as pinned until unpinned |
 | Connected, desired target unfinished | Pending / Rolling out |
 | Desired target rejected | Rejected / Degraded |
 | Desired fleet target applied | Applied |
 | Explicit pin applied | Pinned separately; a differing pin prevents fleet convergence |
 | Missing/invalid projection or lookup failure | Unknown/error; never fabricated revision zero or Ready |
 
-Blocking configuration errors keep precedence. Otherwise, any connected
-rejection degrades the environment; connected pending instances mean Rolling
-out. No connected release sessions means Unknown. Ready requires every
-connected unpinned session to confirm the desired fleet target, without a
+Blocking configuration errors keep precedence. Otherwise, any effective
+rejection degrades the environment; effective pending instances mean Rolling
+out. No effective release sessions means Unknown. Ready requires every
+effective unpinned session to confirm the desired fleet target, without a
 differing applied pin, and remains subject to configuration-drift checks.
 Last-applied information explains what a pending/rejected process last confirmed
 it served; it is not a claim that it serves the new target.
@@ -151,7 +153,7 @@ all four SDK variants must preserve event identities under replay, and storage,
 live Subscribers, HTTP overview, rollout polling/streaming, and CLI must report
 the same state/reason. Include real gRPC/SQLite reconnect, delivery permutations
 and duplicates, fenced old streams, session expiry, metadata coherence, scope
-isolation, retained last-applied evidence, disconnected-only Unknown, and
+isolation, retained last-applied evidence, departed-only Unknown, and
 pagination beyond 1,000 records. Record exact tested builds and any skipped
 checks in the PR; a skipped deployment acceptance check is not a production
 verification.

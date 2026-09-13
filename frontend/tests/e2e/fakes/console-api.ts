@@ -623,16 +623,20 @@ function activeRelease(ns: FakeNamespace): ConfigurationRelease | null {
   return ns.releases.find((release) => release.version === ns.active) ?? null;
 }
 
-/** Effective sessions include disconnected history but never count it as current health. */
+/** Match the server departure grace while retaining disconnected pins. */
 function visibleSubscribers(ns: FakeNamespace): ReleaseSubscriberState[] {
-  return ns.subscribers;
+  return ns.subscribers.filter(
+    (row) =>
+      row.connected ||
+      (row.pin_version ?? 0) > 0 ||
+      Date.now() - row.server_timestamp_unix_ms <= 90_000,
+  );
 }
 
 function rolloutOf(ns: FakeNamespace): OverviewRollout {
   const visible = visibleSubscribers(ns);
   const rollout: OverviewRollout = {
     complete: true,
-    stale: 0,
     pinned: 0,
     unknown: 0,
     total: visible.length,
@@ -649,8 +653,7 @@ function rolloutOf(ns: FakeNamespace): OverviewRollout {
     const atCurrent = row.activation_revision >= ns.activationRevision;
     const applied = row.state === "applied" && atCurrent;
     if (row.connected) rollout.connected += 1;
-    if (!row.connected) rollout.stale = (rollout.stale ?? 0) + 1;
-    else if (row.pin_version && applied) rollout.pinned = (rollout.pinned ?? 0) + 1;
+    if (row.pin_version && (!row.connected || applied)) rollout.pinned = (rollout.pinned ?? 0) + 1;
     else if (applied) rollout.applied_current += 1;
     else if (row.state === "rejected" && atCurrent) {
       rollout.rejected += 1;
@@ -1799,15 +1802,16 @@ export function handle(
             .map((row, index) => ({
               ...row,
               session_id: row.session_id ?? `fixture-session-${index}`,
-              classification: !row.connected
-                ? "stale"
-                : row.state === "rejected"
-                  ? "rejected"
-                  : row.state === "applied" && row.pin_version
-                    ? "pinned"
-                    : row.state === "applied" && row.activation_revision === ns.activationRevision
-                      ? "applied"
-                      : "pending",
+              classification:
+                !row.connected && row.pin_version
+                  ? "pinned"
+                  : row.state === "rejected"
+                    ? "rejected"
+                    : row.state === "applied" && row.pin_version
+                      ? "pinned"
+                      : row.state === "applied" && row.activation_revision === ns.activationRevision
+                        ? "applied"
+                        : "pending",
               reason: "fixture",
               desired_revision: ns.activationRevision,
               desired_version: row.desired_version ?? ns.active,

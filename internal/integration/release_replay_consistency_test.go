@@ -148,7 +148,7 @@ func TestReleaseSessionReplayConsistencyOverRealKMS(t *testing.T) {
 					return false
 				}
 				summary := rows.Summary
-				if summary == nil || !summary.Complete || summary.Connected != 1 || summary.Total != summary.AppliedCurrent+summary.Rejected+summary.Pending+summary.Pinned+summary.Stale+summary.Unknown {
+				if summary == nil || !summary.Complete || summary.Connected != 1 || summary.Total != summary.AppliedCurrent+summary.Rejected+summary.Pending+summary.Pinned+summary.Unknown {
 					t.Fatalf("incomplete/non-partitioned summary: %v", summary)
 				}
 				live, _, err := env.svc.ListSubscribers(ctx, admin)
@@ -170,7 +170,18 @@ func TestReleaseSessionReplayConsistencyOverRealKMS(t *testing.T) {
 			barrier()
 			waitForManagedState(t, consistent, "permuted events applied across all surfaces")
 			stop()
-			waitForManagedState(t, func() bool { return assertOverview("unknown") }, "disconnected history is unknown")
+			waitForManagedState(t, func() bool {
+				rows, err := adminRPC.ListReleaseSubscribers(auth, &kmsv1.ListReleaseSubscribersRequest{Namespace: session.Namespace, ReleaseName: session.Name, SchemaVersion: session.SchemaVersion})
+				if err != nil || rows.Summary == nil || rows.Summary.Connected != 0 {
+					return false
+				}
+				for _, row := range rows.Instances {
+					if row.SessionId == session.SessionId {
+						return !row.Connected && row.Classification == "applied" && assertOverview("ready")
+					}
+				}
+				return false
+			}, "disconnect retains applied state during grace")
 			if _, err := rpc.RegisterReleaseSession(auth, &kmsv1.RegisterReleaseSessionRequest{Session: session, Resume: true}); err != nil {
 				t.Fatal(err)
 			}
@@ -260,7 +271,7 @@ func TestReleaseSessionReplayConsistencyOverRealKMS(t *testing.T) {
 				waitForManagedState(t, consistent, "rollback to lower release version applies")
 			}
 			stop()
-			waitForManagedState(t, func() bool { return assertOverview("unknown") }, "disconnect after replay")
+			waitForManagedState(t, func() bool { return assertOverview("ready") }, "disconnect after replay retains applied state")
 		})
 	}
 	legacy, err := rpc.WatchRelease(auth)

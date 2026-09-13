@@ -189,7 +189,6 @@ type SubscriberInstance struct {
 // activation revision.
 type RolloutSummary struct {
 	DifferentPins  int
-	Stale          int
 	Unknown        int
 	Complete       bool
 	Pinned         int

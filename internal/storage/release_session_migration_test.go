@@ -10,25 +10,7 @@ import (
 
 func TestReleaseBaseline4UpgradeAtomicPreservesSessions(t *testing.T) {
 	st := newStore(t)
-	if err := st.db.Migrator().DropTable(&releaseSessionEventModel{}, &releaseSessionModel{}); err != nil {
-		t.Fatal(err)
-	}
-	objects, err := releaseBaselineSchema(4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, kind := range []string{"table", "index"} {
-		for _, object := range objects {
-			if object.TableName == "release_sessions" && object.Type == kind {
-				if err := st.db.Exec(object.SQL).Error; err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-	}
-	if err := st.db.Model(&schemaMigrationModel{}).Where("version = ?", schemaVersion).Update("version", 4).Error; err != nil {
-		t.Fatal(err)
-	}
+	createReleaseBaseline4(t, st)
 	if err := st.db.Exec(`INSERT INTO release_sessions (session_id,namespace_id,release_name,schema_version,client_name,instance_id,identity,server_timestamp,state,last_ack_sequence,last_applied_version,last_applied_revision) VALUES ('kept',1,'runtime',4,'api','one','client','2026-09-12T00:00:00Z','applied',9,4,153)`).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +75,28 @@ func TestReleaseBaseline4RejectsUnexpectedSchema(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("rejected database was mutated")
+	}
+}
+
+func createReleaseBaseline4(t *testing.T, st *SQLStore) {
+	t.Helper()
+	if err := st.db.Migrator().DropTable(&releaseSessionEventModel{}, &releaseSessionModel{}); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := releaseBaselineSchema(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"table", "index"} {
+		for _, object := range objects {
+			if object.TableName == "release_sessions" && object.Type == kind {
+				if err := st.db.Exec(object.SQL).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	if err := st.db.Model(&schemaMigrationModel{}).Where("version = ?", schemaVersion).Update("version", 4).Error; err != nil {
+		t.Fatal(err)
 	}
 }

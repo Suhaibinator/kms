@@ -29,6 +29,28 @@ pre-upgrade backup with the previous binary; older binaries cannot open baseline
 4. Retain the upgraded database separately if it contains subsequent writes.
 
 
+## Upgrade existing baseline 4 databases after v0.4.2
+
+v0.4.2 added the `idx_release_sessions_disconnected_at` index without an
+upgrade path for existing baseline-4 databases. Those databases were rejected
+with “physical schema has 58 objects; expected 59” and misleading advice to
+create a fresh 0.3.x database.
+
+The baseline-4 repair recognizes that exact historical schema and adds the
+missing index without changing stored rows or the baseline-4 stamp.
+The session-consistency release also accepts both baseline-4 variants and
+upgrades them transactionally to baseline 5, preserving existing data and
+adding acknowledgement replay metadata. See
+[the session protocol migration and rollout guide](release-session-protocol.md)
+for the required SDK compatibility changes and backup/restore procedure.
+Stop KMS, take a backup, and start the corrected binary against the existing
+database. No fresh database or manual SQL repair is required.
+Validation accepts this supported predecessor without modifying it. Other
+schema differences remain rejected, with missing, unexpected, or changed
+objects named in the error. Preserve rejected databases and use a compatible
+binary or a supported migration.
+
+
 The versioned protection-transition update within this greenfield `0.3.x`
 contract changes SecretService and SDK signatures, but not the SQLite table
 layout, application configuration schema, release-entry schema, or release

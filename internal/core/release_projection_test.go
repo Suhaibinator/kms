@@ -90,7 +90,7 @@ func TestReleaseProjectionPinAndHistoryClassification(t *testing.T) {
 	base.Connected = false
 	base.ServerTimestamp = time.Now().Add(-time.Hour)
 	summary, state = computeRollout([]domain.ReleaseAcknowledgement{base}, "runtime", 153, time.Now(), 4)
-	if state != domain.RolloutStateNoSubscribers || summary.Stale != 1 || summary.Rejected != 0 || summary.Total != 1 {
+	if state != domain.RolloutStatePinned || summary.Pinned != 1 || summary.Rejected != 0 || summary.Total != 1 {
 		t.Fatalf("disconnected history affects health: %+v %s", summary, state)
 	}
 }
@@ -111,5 +111,42 @@ func TestReleaseTransportOverlapDeduplicatesOnlySameSession(t *testing.T) {
 	other.SessionID = "new-process"
 	if got := deduplicateReleaseTransports([]domain.Subscriber{old, other}); len(got) != 2 {
 		t.Fatal("different process sessions conflated")
+	}
+}
+
+func TestReleaseProjectionDepartureGraceAndPins(t *testing.T) {
+	ctx := context.Background()
+	_, sqlStore := newConsoleTestService(t)
+	now := time.Now().UTC()
+	track := domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: "dev", App: "app"}, Name: "runtime", SchemaVersion: 1}
+	row := domain.ReleaseAcknowledgement{Namespace: track.Namespace, ReleaseName: track.Name, SchemaVersion: 1, SessionID: "grace", InstanceID: "grace", State: "applied", ReleaseVersion: 4, DesiredVersion: 4, TargetRevision: 153, DesiredRevision: 153, ActivationRevision: 153, ServerTimestamp: now.Add(-time.Hour), LiveTimestamp: now.Add(-90 * time.Second)}
+	departed := row
+	departed.SessionID, departed.InstanceID, departed.LiveTimestamp = "departed", "departed", now.Add(-90*time.Second-time.Nanosecond)
+	pin := departed
+	pin.SessionID, pin.InstanceID, pin.PinVersion = "pin", "pin", 3
+	store := &projectionTestStore{SQLStore: sqlStore, rows: []domain.ReleaseAcknowledgement{departed, row, pin}, active: map[domain.ReleaseTrack]domain.ActiveConfigurationRelease{track: {Release: domain.ConfigurationRelease{Version: 4}, ActivationRevision: 153}}}
+	svc := New(store, nil, "test")
+	svc.now = func() time.Time { return now }
+	filter := domain.ReleaseFilter{Namespace: track.Namespace, Name: track.Name, SchemaVersion: &track.SchemaVersion}
+	first, cursor, err := svc.ListReleaseSubscriberProjection(ctx, adminPrincipal(), filter, storage.ListPage{Limit: 1})
+	if err != nil || cursor == "" || len(first.Instances) != 1 || first.Instances[0].SessionID != "grace" || first.Instances[0].Classification != "applied" || first.Summary.Total != 2 || first.Summary.AppliedCurrent != 1 || first.Summary.Pinned != 1 || first.Summary.DifferentPins != 1 {
+		t.Fatalf("grace/pin projection: %+v %v", first, err)
+	}
+	snapshot, err := svc.GetReleaseRolloutSnapshot(ctx, adminPrincipal(), track)
+	if err != nil || len(snapshot.Instances) != 2 || !reflect.DeepEqual(snapshot.Summary, first.Summary) {
+		t.Fatalf("stream disagrees with paged list: %+v %v", snapshot, err)
+	}
+	now = now.Add(time.Nanosecond)
+	if _, _, err := svc.ListReleaseSubscriberProjection(ctx, adminPrincipal(), filter, storage.ListPage{Token: cursor}); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("departure must invalidate prior page cursor: %v", err)
+	}
+	snapshot, err = svc.GetReleaseRolloutSnapshot(ctx, adminPrincipal(), track)
+	if err != nil || len(snapshot.Instances) != 1 || snapshot.Instances[0].Classification != "pinned" || snapshot.Instances[0].Reason != "disconnected_pin" || snapshot.Summary.Total != 1 {
+		t.Fatalf("departed session retained: %+v %v", snapshot, err)
+	}
+	store.rows[2].PinVersion = 0
+	snapshot, err = svc.GetReleaseRolloutSnapshot(ctx, adminPrincipal(), track)
+	if err != nil || len(snapshot.Instances) != 0 || snapshot.Summary.Total != 0 {
+		t.Fatalf("unpinned departed session retained: %+v %v", snapshot, err)
 	}
 }

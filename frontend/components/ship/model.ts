@@ -334,7 +334,6 @@ const STATE_ORDER: Record<string, number> = {
   unknown: 2,
   pinned: 3,
   applied: 4,
-  stale: 5,
 };
 
 /**

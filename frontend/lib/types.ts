@@ -908,7 +908,6 @@ export interface SubscriberInstance {
 
 export interface OverviewRollout {
   different_pins?: number;
-  stale?: number;
   unknown?: number;
   complete?: boolean;
   pinned?: number;

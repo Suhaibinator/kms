@@ -230,7 +230,11 @@ func (s *SQLStore) AcknowledgeReleaseSession(ctx context.Context, ref domain.Rel
 }
 
 func sessionAcknowledgement(ref domain.ReleaseSessionRef, m releaseSessionModel) domain.ReleaseAcknowledgement {
-	return domain.ReleaseAcknowledgement{Namespace: ref.Track.Namespace, ReleaseName: m.ReleaseName, SchemaVersion: m.SchemaVersion, SessionID: m.SessionID, ClientName: m.ClientName, InstanceID: m.InstanceID, Identity: m.Identity, ConnectionID: m.ConnectionID, Connected: m.Connected != 0, Sequence: m.LastAckSequence, State: m.State, ReleaseVersion: m.ReleaseVersion, TargetRevision: m.TargetRevision, ActivationRevision: m.ActivationRevision, LastAppliedVersion: m.LastAppliedVersion, LastAppliedRevision: m.LastAppliedRevision, LastAppliedSequence: m.LastAppliedSequence, RejectionCategory: m.RejectionCategory, Diagnostic: m.Diagnostic, AppliedDivergent: m.AppliedDivergent != 0, DivergentFieldCount: m.DivergentFieldCount, ClientTimestamp: parseTime(m.ClientTimestamp), ServerTimestamp: parseTime(m.ServerTimestamp), LiveTimestamp: parseTime(m.ServerTimestamp), PinVersion: m.PinVersion, PinRevision: m.PinRevision, PinnedBy: m.PinnedBy, PinnedAt: parseTime(m.PinnedAt)}
+	liveTimestamp := m.ServerTimestamp
+	if m.Connected == 0 && m.DisconnectedAt != "" {
+		liveTimestamp = m.DisconnectedAt
+	}
+	return domain.ReleaseAcknowledgement{Namespace: ref.Track.Namespace, ReleaseName: m.ReleaseName, SchemaVersion: m.SchemaVersion, SessionID: m.SessionID, ClientName: m.ClientName, InstanceID: m.InstanceID, Identity: m.Identity, ConnectionID: m.ConnectionID, Connected: m.Connected != 0, Sequence: m.LastAckSequence, State: m.State, ReleaseVersion: m.ReleaseVersion, TargetRevision: m.TargetRevision, ActivationRevision: m.ActivationRevision, LastAppliedVersion: m.LastAppliedVersion, LastAppliedRevision: m.LastAppliedRevision, LastAppliedSequence: m.LastAppliedSequence, RejectionCategory: m.RejectionCategory, Diagnostic: m.Diagnostic, AppliedDivergent: m.AppliedDivergent != 0, DivergentFieldCount: m.DivergentFieldCount, ClientTimestamp: parseTime(m.ClientTimestamp), ServerTimestamp: parseTime(m.ServerTimestamp), LiveTimestamp: parseTime(liveTimestamp), PinVersion: m.PinVersion, PinRevision: m.PinRevision, PinnedBy: m.PinnedBy, PinnedAt: parseTime(m.PinnedAt)}
 }
 
 func (s *SQLStore) GetReleaseSessionAcknowledgement(ctx context.Context, ref domain.ReleaseSessionRef) (domain.ReleaseAcknowledgement, error) {

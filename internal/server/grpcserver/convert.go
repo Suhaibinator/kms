@@ -342,7 +342,7 @@ func toProtoSubscriberSummary(s domain.RolloutSummary) *kmsv1.ReleaseSubscriberS
 	return &kmsv1.ReleaseSubscriberSummary{Total: uint64(s.Total), Connected: uint64(s.Connected),
 		AppliedCurrent: uint64(s.AppliedCurrent), AppliedDivergent: uint64(s.AppliedDivergent),
 		Rejected: uint64(s.Rejected), Pending: uint64(s.Pending), Pinned: uint64(s.Pinned),
-		Stale: uint64(s.Stale), Unknown: uint64(s.Unknown), Complete: s.Complete, DifferentPins: uint64(s.DifferentPins)}
+		Unknown: uint64(s.Unknown), Complete: s.Complete, DifferentPins: uint64(s.DifferentPins)}
 }
 
 // --- configuration releases ----------------------------------------------

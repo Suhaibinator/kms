@@ -85,7 +85,6 @@ func (s *Service) ListReleaseSubscriberProjection(ctx context.Context, pr Princi
 		out.Summary.Pending += part.Pending
 		out.Summary.Pinned += part.Pinned
 		out.Summary.DifferentPins += part.DifferentPins
-		out.Summary.Stale += part.Stale
 		out.Summary.Unknown += part.Unknown
 		for _, rejected := range part.RejectedInstances {
 			if len(out.Summary.RejectedInstances) < maxRolloutInstanceFindings {

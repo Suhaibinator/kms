@@ -1042,7 +1042,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			NextPageToken      string                          `json:"next_page_token"`
 		}{Items: instances, Summary: summary, ProjectionRevision: projectionRevision})
 	}
-	if _, err := fmt.Fprintf(c.Stdout, "Connected: %d · applied: %d · pending: %d · rejected: %d · pinned: %d · stale: %d · unknown: %d\n", summary.GetConnected(), summary.GetAppliedCurrent(), summary.GetPending(), summary.GetRejected(), summary.GetPinned(), summary.GetStale(), summary.GetUnknown()); err != nil {
+	if _, err := fmt.Fprintf(c.Stdout, "Connected: %d · applied: %d · pending: %d · rejected: %d · pinned: %d · unknown: %d\n", summary.GetConnected(), summary.GetAppliedCurrent(), summary.GetPending(), summary.GetRejected(), summary.GetPinned(), summary.GetUnknown()); err != nil {
 		return c.failErr("release subscribers", err)
 	}
 	writeEffectiveReleaseSubscribers(c.Stdout, instances)

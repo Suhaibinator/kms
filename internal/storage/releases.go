@@ -991,7 +991,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, filter domai
  p.session_id,p.target_revision,p.pin_version,p.pin_revision,p.pinned_by,p.pinned_at,p.last_applied_version,
  CASE WHEN p.pin_version > 0 THEN p.pin_version ELSE COALESCE(l.version_number,0) END,
  CASE WHEN p.pin_version > 0 THEN p.pin_revision ELSE MAX(p.pin_revision,COALESCE(l.activation_revision,0)) END,
- p.server_timestamp, p.last_ack_sequence, p.last_applied_revision, p.last_applied_sequence
+ CASE WHEN p.connected = 0 AND p.disconnected_at <> '' THEN p.disconnected_at ELSE p.server_timestamp END, p.last_ack_sequence, p.last_applied_revision, p.last_applied_sequence
  FROM release_sessions p
  LEFT JOIN configuration_release_labels l ON l.namespace_id=p.namespace_id AND l.release_name=p.release_name AND l.schema_version=p.schema_version AND l.label='current'
  WHERE p.namespace_id = ? AND (? = '' OR p.release_name = ?) AND (? IS NULL OR p.schema_version = ?)

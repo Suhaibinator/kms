@@ -76,3 +76,35 @@ func TestReadReleaseProjectionPreservesActiveReleaseDetails(t *testing.T) {
 		t.Fatalf("projection lost active metadata: got %+v want %+v", active[ref.Track], want)
 	}
 }
+
+func TestReleaseProjectionUsesDisconnectTimeAndPreservesRawHistory(t *testing.T) {
+	st, ref, ack := reducerFixture(t)
+	ctx := context.Background()
+	ack.State, ack.Sequence = "applied", 1
+	if _, err := st.ReduceReleaseSessionAcknowledgement(ctx, ref, ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ConnectReleaseSession(ctx, ref, ack.ConnectionID, false); err != nil {
+		t.Fatal(err)
+	}
+	// A long-silent process can disconnect now; its ACK timestamp is not liveness.
+	if err := st.db.Model(&releaseSessionModel{}).Where("session_id = ?", ref.SessionID).Update("server_timestamp", "2020-01-01T00:00:00.000000000Z").Error; err != nil {
+		t.Fatal(err)
+	}
+	model, err := sessionTx(st.db, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := domain.ReleaseFilter{Namespace: ref.Track.Namespace, Name: ref.Track.Name}
+	rows, _, err := st.ReadReleaseProjection(ctx, filter)
+	if err != nil || len(rows) != 1 || rows[0].LiveTimestamp != parseTime(model.DisconnectedAt) {
+		t.Fatalf("disconnect timestamp lost: %+v %v", rows, err)
+	}
+	if err := st.db.Model(&releaseSessionModel{}).Where("session_id = ?", ref.SessionID).Update("disconnected_at", "2020-01-01T00:00:00.000000000Z").Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, filter, ListPage{})
+	if err != nil || len(rows) != 1 || rows[0].State != "applied" {
+		t.Fatalf("departure deleted raw history: %+v %v", rows, err)
+	}
+}

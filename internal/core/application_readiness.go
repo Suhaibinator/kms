@@ -247,7 +247,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 	}
 	out.Rollout, out.RolloutState = computeRollout(in.Acks, in.App.ReleaseName, currentRevision, in.Now, currentVersion)
 	if out.ReleaseState == domain.ReleaseStateActive || out.ReleaseState == domain.ReleaseStateDrift {
-		if out.Rollout.Connected == 0 {
+		if out.Rollout.Total == 0 {
 			add(finding(domain.FindingNoSubscribers, domain.FindingInfo, envScope, nil))
 		}
 		if n := len(out.Rollout.OtherReleaseNames); n > 0 {
@@ -360,19 +360,34 @@ func otherReleaseInstanceCount(acks []domain.ReleaseAcknowledgement, releaseName
 			others = append(others, ack)
 		}
 	}
-	count := 0
-	for _, inst := range liveInstances(others, now) {
-		if inst.Connected {
-			count++
-		}
-	}
-	return count
+	return len(liveInstances(others, now))
 }
 
-// liveInstances exposes session history as well as connected processes.
-// Disconnected sessions classify as stale and never contribute current health.
+const departAfter = 90 * time.Second
+
+// liveInstances folds acks into instances and drops the departed ones.
 func liveInstances(acks []domain.ReleaseAcknowledgement, now time.Time) []domain.SubscriberInstance {
-	return groupSubscriberInstances(acks)
+	out := make([]domain.SubscriberInstance, 0)
+	for _, inst := range groupSubscriberInstances(acks) {
+		if !departed(inst, now) {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// departed reports whether a disconnected, unpinned instance has been gone
+// long enough to leave the fleet. LiveTimestamp is the disconnect time; rows
+// built without one fall back to ServerTimestamp.
+func departed(inst domain.SubscriberInstance, now time.Time) bool {
+	if inst.Connected || inst.PinVersion > 0 {
+		return false
+	}
+	seen := inst.LiveTimestamp
+	if seen.IsZero() {
+		seen = inst.ServerTimestamp
+	}
+	return now.Sub(seen) > departAfter
 }
 
 // groupSubscriberInstances projects persisted session snapshots. Legacy rows
@@ -454,15 +469,15 @@ const (
 	instanceRejected
 	instancePending
 	instancePinned
-	instanceStale
 	instanceUnknown
 )
 
 // classifyInstance places persisted session state relative to the desired
-// target. Disconnected processes are stale immediately, including pinned ones.
+// target. Brief disconnects retain the reported state; disconnected pins remain
+// visible until unpinned. Departed unpinned sessions are filtered first.
 func classifyInstance(inst domain.SubscriberInstance, currentRevision uint64) instanceClass {
-	if !inst.Connected {
-		return instanceStale
+	if !inst.Connected && inst.PinVersion > 0 {
+		return instancePinned
 	}
 	if inst.SessionID == "" || currentRevision == 0 || inst.DesiredRevision == 0 || inst.DesiredVersion == 0 {
 		return instanceUnknown
@@ -507,11 +522,11 @@ func ProjectSubscriberInstances(acks []domain.ReleaseAcknowledgement, currentRev
 			inst.Classification, inst.Reason = "pending", "desired_target_unconfirmed"
 		case instancePinned:
 			inst.Classification, inst.Reason = "pinned", "instance_pin_applied"
-			if inst.PinVersion == inst.FleetVersion {
+			if !inst.Connected {
+				inst.Reason = "disconnected_pin"
+			} else if inst.PinVersion == inst.FleetVersion {
 				inst.Reason = "fleet_matching_pin_applied"
 			}
-		case instanceStale:
-			inst.Classification, inst.Reason = "stale", "session_disconnected"
 		default:
 			inst.Classification, inst.Reason = "unknown", "target_unavailable"
 		}
@@ -531,11 +546,8 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		}
 	}
 	for name := range otherNames {
-		for _, inst := range liveInstances(filterAcks(acks, name), now) {
-			if inst.Connected {
-				summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
-				break
-			}
+		if len(liveInstances(filterAcks(acks, name), now)) > 0 {
+			summary.OtherReleaseNames = append(summary.OtherReleaseNames, name)
 		}
 	}
 	sort.Strings(summary.OtherReleaseNames)
@@ -545,8 +557,6 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 			summary.Connected++
 		}
 		switch classifyInstance(inst, currentRevision) {
-		case instanceStale:
-			summary.Stale++
 		case instanceUnknown:
 			summary.Unknown++
 		case instancePinned:
@@ -572,7 +582,7 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 	}
 	state := domain.RolloutStateApplied
 	switch {
-	case summary.Connected == 0:
+	case summary.Total == 0:
 		state = domain.RolloutStateNoSubscribers
 	case summary.Rejected > 0:
 		state = domain.RolloutStateDegraded

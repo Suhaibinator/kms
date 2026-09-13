@@ -25,8 +25,8 @@ const instance = (
 
 describe("server projected subscriber presentation", () => {
   it("orders classifications without reclassifying lifecycle state or revisions", () => {
-    const rows = ["stale", "applied", "pinned", "unknown", "pending", "rejected"].map(
-      (classification) => instance(classification),
+    const rows = ["applied", "pinned", "unknown", "pending", "rejected"].map((classification) =>
+      instance(classification),
     );
     expect(sortForRollout(rows, 999).map((row) => row.classification)).toEqual([
       "rejected",
@@ -34,14 +34,14 @@ describe("server projected subscriber presentation", () => {
       "unknown",
       "pinned",
       "applied",
-      "stale",
     ]);
-    expect(rows[0].classification).toBe("stale");
+    expect(rows[0].classification).toBe("applied");
   });
 
   it("retains distinct sessions and their atomic metadata", () => {
-    const old = instance("stale", {
+    const old = instance("applied", {
       session_id: "old",
+      instance_id: "applied",
       connected: false,
       diagnostic: "old failure",
     });

@@ -7,12 +7,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// inspectSupportedBaselineDB accepts the current baseline and exact baselines 3 and 4
-// schema without changing operator data. All other baselines remain unsupported.
+// inspectSupportedBaselineDB accepts the current baseline and exact baselines
+// 3 and 4, including baseline 4 before the disconnect index, without changing
+// operator data. All other baselines remain unsupported.
 func inspectSupportedBaselineDB(db *gorm.DB) (bool, error) {
 	empty, err := inspectBaselineDB(db)
 	if err == nil {
 		return empty, nil
+	}
+	if legacyErr := verifyReleaseBaseline4WithoutDisconnectIndex(db); legacyErr == nil {
+		return false, nil
 	}
 	if legacyErr := verifyReleaseBaseline3(db); legacyErr == nil {
 		return false, nil
@@ -66,13 +70,12 @@ func upgradeReleaseSessionsWithVerifier(db *gorm.DB, verify func(*gorm.DB) error
 		return nil
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		baseline4 := false
-		if err := verifyReleaseBaseline4(tx); err != nil {
+		// Validate the historical schema inside the transaction before any writes.
+		baseline4 := verifyReleaseBaseline4(tx) == nil || verifyReleaseBaseline4WithoutDisconnectIndex(tx) == nil
+		if !baseline4 {
 			if err := verifyReleaseBaseline3(tx); err != nil {
 				return err
 			}
-		} else {
-			baseline4 = true
 		}
 		var sessionColumns []string
 		if baseline4 {
@@ -172,6 +175,38 @@ func verifyReleaseBaselineVersion(db *gorm.DB, version int) error {
 	}
 	if len(stamps) != 1 || stamps[0].Version != version {
 		return incompatibleBaseline("expected baseline %d", version)
+	}
+	return nil
+}
+
+const releaseSessionDisconnectIndexName = "idx_release_sessions_disconnected_at"
+
+// v0.4.2 added this index without changing the baseline-4 stamp. Accept only
+// the exact historical schema; arbitrary missing indexes must still be rejected.
+func verifyReleaseBaseline4WithoutDisconnectIndex(db *gorm.DB) error {
+	actual, err := readBaselineSchema(db)
+	if err != nil {
+		return err
+	}
+	current, err := releaseBaselineSchema(4)
+	if err != nil {
+		return err
+	}
+	expected := make([]baselineSchemaObject, 0, len(current)-1)
+	for _, obj := range current {
+		if obj.Name != releaseSessionDisconnectIndexName {
+			expected = append(expected, obj)
+		}
+	}
+	if err := compareBaselineSchema(actual, expected); err != nil {
+		return err
+	}
+	var stamps []schemaMigrationModel
+	if err := db.Find(&stamps).Error; err != nil {
+		return err
+	}
+	if len(stamps) != 1 || stamps[0].Version != 4 {
+		return incompatibleBaseline("expected baseline 4 before the release-session disconnect index")
 	}
 	return nil
 }

@@ -10,13 +10,8 @@ export function projectedSubscribers<T extends { state: string; connected: boole
     divergent_field_count: 0,
     ...row,
     session_id: `session-${index}`,
-    classification: !row.connected
-      ? "stale"
-      : row.state === "applied"
-        ? "applied"
-        : row.state === "rejected"
-          ? "rejected"
-          : "pending",
+    classification:
+      row.state === "applied" ? "applied" : row.state === "rejected" ? "rejected" : "pending",
     reason: "fixture",
   }));
   const summary: OverviewRollout = {
@@ -25,7 +20,6 @@ export function projectedSubscribers<T extends { state: string; connected: boole
     applied_current: instances.filter((row) => row.classification === "applied").length,
     rejected: instances.filter((row) => row.classification === "rejected").length,
     pending: instances.filter((row) => row.classification === "pending").length,
-    stale: instances.filter((row) => row.classification === "stale").length,
     applied_divergent: 0,
     pinned: 0,
     unknown: 0,

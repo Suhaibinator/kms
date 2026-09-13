@@ -92,7 +92,6 @@ type subscriberInstanceDTO struct {
 
 type rolloutDTO struct {
 	DifferentPins     int                     `json:"different_pins"`
-	Stale             int                     `json:"stale"`
 	Unknown           int                     `json:"unknown"`
 	Complete          bool                    `json:"complete"`
 	Pinned            int                     `json:"pinned"`
@@ -116,7 +115,7 @@ func toRolloutDTO(r domain.RolloutSummary) rolloutDTO {
 	for _, inst := range r.RejectedInstances {
 		rejected = append(rejected, toSubscriberInstanceDTO(inst))
 	}
-	return rolloutDTO{DifferentPins: r.DifferentPins, Stale: r.Stale, Unknown: r.Unknown, Complete: r.Complete, Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
+	return rolloutDTO{DifferentPins: r.DifferentPins, Unknown: r.Unknown, Complete: r.Complete, Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
 }
 
 func toSubscriberInstanceDTO(inst domain.SubscriberInstance) subscriberInstanceDTO {

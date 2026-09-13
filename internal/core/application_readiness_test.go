@@ -158,8 +158,8 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("degraded env = %s/%s", out.Status, out.RolloutState)
 		}
 		r := out.Rollout
-		// "gone" is stale history and cannot establish current fleet health.
-		if r.Total != 4 || r.Stale != 1 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
+		// "gone" has departed and no longer contributes to the fleet.
+		if r.Total != 3 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
 			t.Fatalf("rollout = %+v", r)
 		}
 		if len(r.OtherReleaseNames) != 1 || r.OtherReleaseNames[0] != "batch" {
@@ -185,14 +185,14 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("rolling env = %s/%s", out.Status, out.RolloutState)
 		}
 
-		// Only disconnected sessions: retain stale history but do not claim Ready.
+		// Departed sessions leave the effective fleet; raw history remains retained.
 		// Legacy other-release history is not authoritative health evidence.
 		in.Acks = []domain.ReleaseAcknowledgement{
 			ack("gone", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-5*time.Minute)),
 			{Namespace: in.Namespace.NamespaceRef, ReleaseName: "batch", ClientName: "worker", InstanceID: "w1", Identity: "svc", State: domain.ReleaseStateApplied, ActivationRevision: 42, Connected: false, ServerTimestamp: readinessNow.Add(-5 * time.Minute)},
 		}
 		out = computeEnvironmentReadiness(in)
-		if out.Status != domain.EnvStatusUnknown || out.RolloutState != domain.RolloutStateNoSubscribers || out.Rollout.Total != 1 || out.Rollout.Stale != 1 || len(out.Rollout.OtherReleaseNames) != 0 {
+		if out.Status != domain.EnvStatusUnknown || out.RolloutState != domain.RolloutStateNoSubscribers || out.Rollout.Total != 0 || len(out.Rollout.OtherReleaseNames) != 0 {
 			t.Fatalf("departed-only env = %s/%s %+v", out.Status, out.RolloutState, out.Rollout)
 		}
 		if _, ok := hasFinding(out.Findings, domain.FindingNoSubscribers); !ok {
@@ -202,40 +202,40 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("departed other-release instance must not be reported: %v", findingCodes(out.Findings))
 		}
 
-		// Disconnected history never establishes current health, even immediately.
+		// Brief disconnects keep their last reported classification.
 		in.Acks = []domain.ReleaseAcknowledgement{ack("blip", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-10*time.Second))}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.Connected != 0 || out.Rollout.Stale != 1 || out.Status != domain.EnvStatusUnknown {
+		if out.Rollout.Total != 1 || out.Rollout.Connected != 0 || out.Rollout.Pending != 1 || out.Status != domain.EnvStatusRolling {
 			t.Fatalf("briefly disconnected session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 		// Liveness follows the connection row's timestamp, not the last ack.
 		stayed := ack("quiet", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-time.Hour))
 		stayed.LiveTimestamp = readinessNow.Add(-10 * time.Second)
 		in.Acks = []domain.ReleaseAcknowledgement{stayed}
-		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Stale != 1 {
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Pending != 1 {
 			t.Fatalf("recently disconnected session with an old ack = %+v", out.Rollout)
 		}
 
-		// Applied evidence remains history, not current fleet application.
+		// Applied sessions keep their state during the reconnect grace period.
 		session := ack("restarting", domain.ReleaseStateApplied, 3, 42, false, readinessNow.Add(-10*time.Second))
 		session.SessionID, session.TargetRevision, session.DesiredRevision, session.DesiredVersion = "s1", 42, 42, 3
 		in.Acks = []domain.ReleaseAcknowledgement{session}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.Rollout.AppliedCurrent != 0 || out.Status != domain.EnvStatusUnknown {
+		if out.Rollout.Total != 1 || out.Rollout.AppliedCurrent != 1 || out.Status != domain.EnvStatusReady {
 			t.Fatalf("briefly disconnected session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 		session.ServerTimestamp = readinessNow.Add(-2 * time.Minute)
 		in.Acks = []domain.ReleaseAcknowledgement{session}
-		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.RolloutState != domain.RolloutStateNoSubscribers {
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 0 || out.RolloutState != domain.RolloutStateNoSubscribers {
 			t.Fatalf("departed session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 
-		// A disconnected pin remains visible as stale history, not applied health.
+		// A disconnected pin remains visible until explicitly unpinned.
 		pinned := session
 		pinned.PinVersion, pinned.PinRevision, pinned.ServerTimestamp = 2, 50, readinessNow.Add(-5*24*time.Hour)
 		in.Acks = []domain.ReleaseAcknowledgement{pinned}
 		out = computeEnvironmentReadiness(in)
-		if out.Rollout.Total != 1 || out.Rollout.Stale != 1 || out.Rollout.Pinned != 0 || out.Status != domain.EnvStatusUnknown {
+		if out.Rollout.Total != 1 || out.Rollout.Pinned != 1 || out.Status != domain.EnvStatusPinned {
 			t.Fatalf("departed pinned session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 	})

@@ -49,7 +49,6 @@ const snapshot = (
 ): SubscriberStreamSnapshot => ({
   summary: {
     complete: true,
-    stale: 0,
     pinned: 0,
     unknown: 0,
     total: subscribers.length,
@@ -208,14 +207,14 @@ describe("useReleaseSubscribers", () => {
     expect(result.current.transport).toBe("poll");
   });
 
-  it("preserves stale and pinned server classifications across poll and stream", async () => {
+  it("preserves applied and pinned server classifications across poll and stream", async () => {
     const projected = snapshot([row({ connected: false }), row({ instance_id: "pinned" })], 41);
     projected.instances = projected.instances?.map((item, index) => ({
       ...item,
-      classification: index === 0 ? "stale" : "pinned",
+      classification: index === 0 ? "applied" : "pinned",
       reason: index === 0 ? "disconnected" : "instance_pin",
     }));
-    projected.summary = { ...projected.summary, connected: 1, stale: 1, pinned: 1 };
+    projected.summary = { ...projected.summary, connected: 1, applied_current: 1, pinned: 1 };
     mocks.releaseSubscribers.mockResolvedValueOnce(projected);
     const stream = openStream();
     const { result } = renderHook(() => useReleaseSubscribers(ns, "runtime"));
