@@ -95,6 +95,7 @@ func TestHelpDoesNotLeakToken(t *testing.T) {
 		{"list", "-h"},
 		{"admin", "identity", "create", "-h"},
 		{"release", "activate", "-h"},
+		{"release", "migrate", "-h"},
 		{"defaults", "apply", "-h"},
 	} {
 		c := newTestCLI()

@@ -108,6 +108,11 @@ the failing value, so **Fix field** lands on the exact nested control.
 The final preview identifies the source and destination schema tracks and
 validates the candidate. **Review and activate** writes edited parameters,
 creates a release in the destination track, and activates it transactionally.
+The CLI equivalent is
+[`release migrate`](operations.md#configuration-release-commands): it carries
+every pin the target contract still names, overrides only the values a
+defaults artifact (`--from`) shows to differ, previews by default, and
+activates with `--execute`.
 The source track keeps its active release and remains available for new
 releases and rollback. Production environments require typing the environment
 name. A stale preview must be refreshed; failed validation or a transaction
