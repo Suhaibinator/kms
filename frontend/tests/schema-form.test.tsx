@@ -366,6 +366,27 @@ describe("SchemaForm", () => {
     expect(summary).toHaveTextContent("3 schema issues");
   });
 
+  it("marks every field with its schema path so a jump can find a nested control", () => {
+    const nested: JsonSchema = {
+      type: "object",
+      properties: {
+        pool: { type: "object", properties: { min: { type: "integer" } } },
+        tags: { type: "array", items: { type: "string" } },
+      },
+    };
+    const { container } = render(
+      <Harness schema={nested} initial='{"pool":{"min":1},"tags":["a"]}' />,
+    );
+    const min = container.querySelector('[data-path="pool min"]');
+    expect(min).not.toBeNull();
+    expect(within(min as HTMLElement).getByLabelText(/^min/)).toBe(screen.getByLabelText(/^min/));
+    const tags = container.querySelector('[data-path="tags"]');
+    expect(tags).not.toBeNull();
+    expect(
+      within(tags as HTMLElement).getByRole("list", { name: "tags items" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders a list of objects as repeated sub-forms", () => {
     render(<Harness schema={richSchema} initial='{"endpoints":[{"host":"a","port":1}]}' />);
     expect(screen.getByRole("group", { name: /^endpoints 1/ })).toBeInTheDocument();

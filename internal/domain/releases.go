@@ -197,6 +197,10 @@ type ReleaseValidationError struct {
 	Code          string
 	SchemaPointer string
 	Message       string
+	// InstancePointer is the RFC 6901 JSON pointer to the failing value inside
+	// the release object (for example "/database/pool/min"). It is built from
+	// object keys and array indexes only and is empty for release-level errors.
+	InstancePointer string
 }
 
 // ReleaseValidationFailedError is the bounded, value-free failure returned

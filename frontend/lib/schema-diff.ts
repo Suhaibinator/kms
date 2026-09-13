@@ -1,4 +1,5 @@
 import { tokenizeJson } from "./json-text";
+import { type JsonSchema, unwrapNullable } from "./schema-form";
 
 export interface SchemaDifference {
   path: string;
@@ -111,4 +112,142 @@ export function structuredSchemaDifferences(
 
 export function schemaDifferences(before: string, after: string): SchemaDifference[] {
   return structuredSchemaDifferences(before, after).map(({ path, change }) => ({ path, change }));
+}
+
+// --- Effect of a difference on values ----------------------------------------------
+
+export type SchemaEffect = {
+  kind: "provide" | "optional" | "remove" | "ignored" | "review" | "none";
+  text: string;
+};
+
+const isSchemaObject = (value: unknown): value is JsonSchema =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const unwrap = (schema: JsonSchema): JsonSchema => unwrapNullable(schema) ?? schema;
+
+/**
+ * Resolves a structured difference path (`properties` names, `[]` for `items`,
+ * an index for `prefixItems`) inside a parsed schema, unwrapping the
+ * generator's nullable wrapper on the way down.
+ */
+export function schemaNodeAt(
+  root: JsonSchema | null,
+  segments: readonly string[],
+): { node: JsonSchema | null; parent: JsonSchema | null; key: string | null } {
+  let node: JsonSchema | null = root ? unwrap(root) : null;
+  let parent: JsonSchema | null = null;
+  let key: string | null = null;
+  for (const segment of segments) {
+    if (!node) return { node: null, parent: null, key: null };
+    parent = node;
+    key = segment;
+    const properties = isSchemaObject(node.properties) ? node.properties : {};
+    let next: unknown;
+    if (segment in properties) next = properties[segment];
+    else if (segment === "[]") next = node.items;
+    else if (/^\d+$/.test(segment) && Array.isArray(node.prefixItems))
+      next = node.prefixItems[Number(segment)];
+    node = isSchemaObject(next) ? unwrap(next) : null;
+  }
+  return { node, parent, key };
+}
+
+const requiredIn = (parent: JsonSchema | null, key: string | null): boolean =>
+  Boolean(
+    parent && key !== null && Array.isArray(parent.required) && parent.required.includes(key),
+  );
+
+const DOCUMENTATION_KEYWORDS = new Set(["description", "title", "examples", "$comment"]);
+
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+};
+
+function changedKeywords(a: JsonSchema | null, b: JsonSchema | null): string[] {
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
+  keys.delete("properties");
+  return [...keys].filter((key) => canonical(a?.[key]) !== canonical(b?.[key])).sort();
+}
+
+function describeRequired(a: JsonSchema | null, b: JsonSchema | null): string {
+  const names = (schema: JsonSchema | null) =>
+    new Set(
+      Array.isArray(schema?.required)
+        ? schema.required.filter((item): item is string => typeof item === "string")
+        : [],
+    );
+  const before = names(a);
+  const after = names(b);
+  const added = [...after].filter((name) => !before.has(name));
+  const removed = [...before].filter((name) => !after.has(name));
+  const parts: string[] = [];
+  if (added.length) parts.push(`now requires ${added.join(", ")}`);
+  if (removed.length) parts.push(`no longer requires ${removed.join(", ")}`);
+  return parts.join("; ") || "required changed";
+}
+
+/**
+ * What one schema difference means for a stored value: whether the operator
+ * must provide, remove or review something, or nothing at all.
+ */
+export function describeSchemaEffect(
+  diff: StructuredSchemaDifference,
+  before: JsonSchema | null,
+  after: JsonSchema | null,
+): SchemaEffect {
+  if (!diff.segments.length) return { kind: "review", text: "Root constraints changed" };
+  const top = diff.segments.length === 1;
+  const a = schemaNodeAt(before, diff.segments);
+  const b = schemaNodeAt(after, diff.segments);
+  if (diff.change === "added") {
+    if (requiredIn(b.parent, b.key)) {
+      return {
+        kind: "provide",
+        text: top ? "New contract field — give it a value in Edit values" : "Provide a value",
+      };
+    }
+    const fallback =
+      b.node && "default" in b.node ? ` · default: ${JSON.stringify(b.node.default)}` : "";
+    return { kind: "optional", text: `Optional${fallback}` };
+  }
+  if (diff.change === "removed") {
+    if (top) return { kind: "ignored", text: "Leaves the release" };
+    if (b.parent?.additionalProperties === false) {
+      return { kind: "remove", text: "Remove it from the value" };
+    }
+    return { kind: "ignored", text: "Ignored by the target schema" };
+  }
+  const wasRequired = requiredIn(a.parent, a.key);
+  const isRequired = requiredIn(b.parent, b.key);
+  const keywords = changedKeywords(a.node, b.node);
+  const meaningful = keywords.filter((keyword) => !DOCUMENTATION_KEYWORDS.has(keyword));
+  const detail = meaningful
+    .map((keyword) => (keyword === "required" ? describeRequired(a.node, b.node) : keyword))
+    .join(", ");
+  if (isRequired && !wasRequired) {
+    return {
+      kind: "provide",
+      text: detail
+        ? `Now required — provide a value · ${detail}`
+        : "Now required — provide a value",
+    };
+  }
+  if (wasRequired && !isRequired) {
+    return { kind: "optional", text: detail ? `Now optional · ${detail}` : "Now optional" };
+  }
+  if (!keywords.length) return { kind: "review", text: "Constraints changed" };
+  if (!meaningful.length) return { kind: "none", text: "Documentation only" };
+  return {
+    kind: "review",
+    text: meaningful.every((keyword) => keyword === "required")
+      ? detail
+      : `${meaningful.filter((k) => k !== "required").join(", ")} changed${meaningful.includes("required") ? ` · ${describeRequired(a.node, b.node)}` : ""}`,
+  };
 }

@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
 import { structuredSchemaDifferences } from "@/lib/schema-diff";
-import {
-  upgradeFieldChanges,
-  removedUpgradeAliases,
-  orderUpgradeChanges,
-  type UpgradeDraftField,
-} from "@/lib/upgrade-field-changes";
 import type { ConfigurationReleaseEntry } from "@/lib/types";
+import {
+  orderUpgradeChanges,
+  removedUpgradeAliases,
+  type UpgradeDraftField,
+  upgradeFieldChanges,
+} from "@/lib/upgrade-field-changes";
 
 const contract = [
   { alias: "database", kind: "parameter" as const, content_type: "json" },
@@ -137,4 +137,24 @@ it("exposes nested array and tuple property changes for alias search", () => {
   expect(structuredSchemaDifferences(JSON.stringify(before), JSON.stringify(after))).toContainEqual(
     { path: "workers.[].timeout", segments: ["workers", "[]", "timeout"], change: "changed" },
   );
+});
+
+it("marks a value that fails local schema checks as needing attention", () => {
+  const loaded = { ...field, loaded: true, value: "{}", originalValue: "{}" };
+  const changes = upgradeFieldChanges([loaded], contract, [pin], [], [], () => ({
+    status: "fails_schema",
+    issues: [{ path: ["tls"], message: "is required", cause: "new_required" }],
+    summary: "1 field fails the target schema",
+  }));
+  expect(changes[0].labels).toEqual(["Needs attention", "Fails target schema"]);
+  expect(changes[0].attention).toBe(true);
+  expect(changes[0].changed).toBe(true);
+  expect(changes[0].readiness?.summary).toBe("1 field fails the target schema");
+  expect(
+    upgradeFieldChanges([loaded], contract, [pin], [], [], () => ({
+      status: "ready",
+      issues: [],
+      summary: "Passes local checks",
+    }))[0].changed,
+  ).toBe(false);
 });

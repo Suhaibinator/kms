@@ -612,16 +612,18 @@ class ValidateReleaseRequest(_message.Message):
     def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
 
 class ReleaseValidationError(_message.Message):
-    __slots__ = ("alias", "code", "schema_pointer", "message")
+    __slots__ = ("alias", "code", "schema_pointer", "message", "instance_pointer")
     ALIAS_FIELD_NUMBER: _ClassVar[int]
     CODE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_POINTER_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_POINTER_FIELD_NUMBER: _ClassVar[int]
     alias: str
     code: str
     schema_pointer: str
     message: str
-    def __init__(self, alias: _Optional[str] = ..., code: _Optional[str] = ..., schema_pointer: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+    instance_pointer: str
+    def __init__(self, alias: _Optional[str] = ..., code: _Optional[str] = ..., schema_pointer: _Optional[str] = ..., message: _Optional[str] = ..., instance_pointer: _Optional[str] = ...) -> None: ...
 
 class ValidateReleaseResponse(_message.Message):
     __slots__ = ("valid", "errors")

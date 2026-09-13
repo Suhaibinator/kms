@@ -612,6 +612,8 @@ export interface ReleaseValidationError {
   alias: string;
   code: string;
   schema_pointer: string;
+  /** JSON pointer to the failing value inside the release object; keys only, never values. */
+  instance_pointer?: string;
   message: string;
 }
 

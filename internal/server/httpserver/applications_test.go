@@ -420,10 +420,16 @@ func TestShipApplicationHTTP(t *testing.T) {
 	if validation["valid"] != false || len(validation["errors"].([]any)) != 1 {
 		t.Fatalf("invalid preview = %v", validation)
 	}
+	if problem := validation["errors"].([]any)[0].(map[string]any); problem["alias"] != "rate_limits" || problem["instance_pointer"] != "/rate_limits" {
+		t.Fatalf("preview problem = %v", problem)
+	}
 
 	rejected := e.ship("dev", "rate_limits", "-1", false)
 	if rejected["status"] != "rejected" || rejected["error"].(map[string]any)["code"] != "failed_precondition" || len(rejected["error"].(map[string]any)["validation_errors"].([]any)) != 1 {
 		t.Fatalf("rejected = %v", rejected)
+	}
+	if problem := rejected["error"].(map[string]any)["validation_errors"].([]any)[0].(map[string]any); problem["instance_pointer"] != "/rate_limits" {
+		t.Fatalf("rejected problem = %v", problem)
 	}
 
 	shipped := e.ship("dev", "rate_limits", "12", false)

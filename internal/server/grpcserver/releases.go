@@ -74,7 +74,7 @@ func (h *configurationReleaseServer) VerifyReleaseDefaults(ctx context.Context, 
 }
 
 func toProtoReleaseValidationError(e domain.ReleaseValidationError) *kmsv1.ReleaseValidationError {
-	return &kmsv1.ReleaseValidationError{Alias: e.Alias, Code: e.Code, SchemaPointer: e.SchemaPointer, Message: e.Message}
+	return &kmsv1.ReleaseValidationError{Alias: e.Alias, Code: e.Code, SchemaPointer: e.SchemaPointer, Message: e.Message, InstancePointer: e.InstancePointer}
 }
 
 func (h *configurationReleaseServer) ActivateRelease(ctx context.Context, req *kmsv1.ActivateReleaseRequest) (*kmsv1.ActivateReleaseResponse, error) {

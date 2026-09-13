@@ -509,6 +509,8 @@ export interface ReleaseValidationError {
   schemaPointer: string;
   /** sanitized; never contains resource values */
   message: string;
+  /** JSON pointer to the failing value inside the release object; keys only, never values */
+  instancePointer: string;
 }
 
 export interface ValidateReleaseResponse {
@@ -8285,7 +8287,7 @@ export const ValidateReleaseRequest: MessageFns<ValidateReleaseRequest> = {
 };
 
 function createBaseReleaseValidationError(): ReleaseValidationError {
-  return { alias: "", code: "", schemaPointer: "", message: "" };
+  return { alias: "", code: "", schemaPointer: "", message: "", instancePointer: "" };
 }
 
 export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
@@ -8301,6 +8303,9 @@ export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
     }
     if (message.message !== "") {
       writer.uint32(34).string(message.message);
+    }
+    if (message.instancePointer !== "") {
+      writer.uint32(42).string(message.instancePointer);
     }
     return writer;
   },
@@ -8350,6 +8355,14 @@ export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
             message.message = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.instancePointer = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8372,6 +8385,11 @@ export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
         ? globalThis.String(object.schema_pointer)
         : "",
       message: isSet(object.message) ? globalThis.String(object.message) : "",
+      instancePointer: isSet(object.instancePointer)
+        ? globalThis.String(object.instancePointer)
+        : isSet(object.instance_pointer)
+        ? globalThis.String(object.instance_pointer)
+        : "",
     };
   },
 
@@ -8389,6 +8407,9 @@ export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
     if (message.message !== "") {
       obj.message = message.message;
     }
+    if (message.instancePointer !== "") {
+      obj.instancePointer = message.instancePointer;
+    }
     return obj;
   },
 
@@ -8401,6 +8422,7 @@ export const ReleaseValidationError: MessageFns<ReleaseValidationError> = {
     message.code = object.code ?? "";
     message.schemaPointer = object.schemaPointer ?? "";
     message.message = object.message ?? "";
+    message.instancePointer = object.instancePointer ?? "";
     return message;
   },
 };
@@ -21911,5 +21933,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 3e622f2b3c2f5e43de20e88605c36b45de8e08d8bc472a5d4a4a2e666ffa050a
+// source-sha256: 330e9a4cd58c3bb8f2e5052e8b403c23f3d80c2227cc7a25302ccf435c9b7652
 // generation-sha256: 2a1ecb1d357c44fd566c75ddfde66638e2ef127c268c9da6bbd4667140ee7865

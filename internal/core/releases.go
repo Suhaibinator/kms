@@ -1058,10 +1058,33 @@ func sanitizeSchemaErrors(err error) []domain.ReleaseValidationError {
 		if ptr == "/" {
 			ptr = ""
 		}
-		out = append(out, domain.ReleaseValidationError{Alias: alias, Code: domain.ReleaseValidationSchema, SchemaPointer: ptr, Message: actionableSchemaMessage(e.ErrorKind)})
+		out = append(out, domain.ReleaseValidationError{
+			Alias: alias, Code: domain.ReleaseValidationSchema, SchemaPointer: ptr,
+			Message: actionableSchemaMessage(e.ErrorKind), InstancePointer: instancePointer(e.InstanceLocation),
+		})
 	}
 	return out
 }
+
+// instancePointer renders the validator's instance location as an RFC 6901 JSON
+// pointer. Segments are object keys and array indexes, never values, so the
+// pointer is safe to expose alongside the sanitized message. An empty location
+// (a release-level error) yields an empty pointer.
+func instancePointer(location []string) string {
+	if len(location) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, segment := range location {
+		b.WriteByte('/')
+		b.WriteString(jsonPointerEscaper.Replace(segment))
+	}
+	return b.String()
+}
+
+// jsonPointerEscaper applies RFC 6901 escaping in a single pass, so the "~1"
+// produced for "/" is never re-escaped.
+var jsonPointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
 
 // Only schema requirements are described here. Validator error strings may include
 // configuration values, so never expose Error(), Got, or nested validator errors.

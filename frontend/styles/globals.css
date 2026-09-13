@@ -2950,6 +2950,14 @@
     font-size: var(--text-sm);
     color: var(--danger-fg);
   }
+  .success-panel {
+    background: var(--success-soft);
+    border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
+    border-radius: var(--radius);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--success);
+  }
   .info-panel {
     background: var(--accent-soft);
     border: 1px solid var(--accent-border);
@@ -2963,11 +2971,13 @@
      add its own UA margin on top of that. */
   .warn-panel > :first-child,
   .danger-panel > :first-child,
+  .success-panel > :first-child,
   .info-panel > :first-child {
     margin-top: 0;
   }
   .warn-panel > :last-child,
   .danger-panel > :last-child,
+  .success-panel > :last-child,
   .info-panel > :last-child {
     margin-bottom: 0;
   }
@@ -4579,6 +4589,100 @@
     flex-shrink: 0;
     color: var(--muted-foreground);
     font-size: var(--text-xs);
+  }
+
+  /* Release readiness: the same box as the navigator, stacked above it, so
+     the two read as one toolbar area. Groups are ordered by fix, each a list
+     of ghost buttons that jump to the control. */
+  .upgrade-readiness {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    margin-block: var(--space-4) 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+  }
+  .upgrade-readiness-heading {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .upgrade-readiness-heading strong {
+    font-weight: 650;
+  }
+  .upgrade-readiness > p[role="status"] {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--success);
+  }
+  .upgrade-readiness-group {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .upgrade-readiness-group h4 {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+  .upgrade-readiness-group > ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1);
+  }
+  .upgrade-readiness-group > ul > li {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  /* The jump buttons are shadcn Buttons: their wrapping and alignment are
+     utilities on the element (rule 5 in the header), not set here. */
+  /* Nested schema issues under a field: `path · message · cause`, with a
+     "Go to" that focuses the control. Mirrors `.upgrade-change-paths`. */
+  .upgrade-change-issues {
+    list-style: none;
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    /* Three wrapped rows fit at 390px before the box scrolls; 12rem clipped
+       the third mid-sentence. */
+    max-height: 20rem;
+    overflow-y: auto;
+    position: relative;
+    min-width: 0;
+    contain: inline-size;
+    font-size: var(--text-sm);
+  }
+  .upgrade-change-issues li {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding-block: var(--space-1);
+  }
+  .upgrade-change-issues li > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .upgrade-problem-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .upgrade-problem-heading .mono {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--text-sm);
   }
   .upgrade-value-card {
     margin-top: var(--space-4);

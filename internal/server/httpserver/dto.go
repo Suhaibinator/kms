@@ -579,10 +579,11 @@ func (d createReleaseDTO) toDomain() domain.CreateConfigurationReleaseInput {
 }
 
 type releaseValidationErrorDTO struct {
-	Alias         string `json:"alias"`
-	Code          string `json:"code"`
-	SchemaPointer string `json:"schema_pointer"`
-	Message       string `json:"message"`
+	Alias           string `json:"alias"`
+	Code            string `json:"code"`
+	SchemaPointer   string `json:"schema_pointer"`
+	Message         string `json:"message"`
+	InstancePointer string `json:"instance_pointer,omitempty"`
 }
 
 type schemaDTO struct {

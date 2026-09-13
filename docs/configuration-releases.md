@@ -92,6 +92,19 @@ pins. Only edited or new parameters receive new versions. Removed aliases do
 not delete their resources. New secret bindings select existing versions in
 the same environment; create missing secrets through normal secret management.
 
+From **Review contract** onward the wizard shows a **Release readiness**
+checklist. It runs the console's local schema checks (type, required
+properties, enum and const, numeric bounds, string length and pattern, list
+bounds, and `additionalProperties: false`) over every draft value as the
+server will type it, and lists each alias and nested field that must be
+provided or changed, grouped by fix. Every row carries the same status chip
+("Value needed", "Fails target schema", "Passes local checks", …), and the
+schema comparison's **Effect on values** column states what each difference
+means for stored values. Local checks are a subset of JSON Schema: they can
+miss a problem but never invent one, so they never block **Preview migration**,
+which remains authoritative. Preview problems carry an `instance_pointer` to
+the failing value, so **Fix field** lands on the exact nested control.
+
 The final preview identifies the source and destination schema tracks and
 validates the candidate. **Review and activate** writes edited parameters,
 creates a release in the destination track, and activates it transactionally.
