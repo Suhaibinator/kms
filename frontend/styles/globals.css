@@ -4652,7 +4652,9 @@
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
     background: var(--background);
-    max-height: 12rem;
+    /* Three wrapped rows fit at 390px before the box scrolls; 12rem clipped
+       the third mid-sentence. */
+    max-height: 20rem;
     overflow-y: auto;
     position: relative;
     min-width: 0;
