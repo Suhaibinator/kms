@@ -150,8 +150,13 @@ func evaluateReadinessCase(in readinessCaseInput) readinessCaseExpected {
 	}
 	acks := []domain.ReleaseAcknowledgement{}
 	for _, inst := range in.Instances {
+		desiredRevision, desiredVersion := inst.ActivationRevision, inst.ReleaseVersion
+		if active != nil {
+			desiredRevision, desiredVersion = active.ActivationRevision, active.Release.Version
+		}
 		acks = append(acks, domain.ReleaseAcknowledgement{
 			Namespace: ns, ReleaseName: app.ReleaseName, ReleaseVersion: inst.ReleaseVersion, ActivationRevision: inst.ActivationRevision,
+			SessionID: "session-" + inst.InstanceID, Sequence: 1, TargetRevision: inst.ActivationRevision, DesiredRevision: desiredRevision, DesiredVersion: desiredVersion,
 			ClientName: inst.ClientName, InstanceID: inst.InstanceID, Identity: inst.Identity, State: inst.State,
 			RejectionCategory: inst.RejectionCategory, Diagnostic: inst.Diagnostic, Connected: inst.Connected,
 			ServerTimestamp: time.UnixMilli(inst.ServerTimestampUnixMS).UTC(),

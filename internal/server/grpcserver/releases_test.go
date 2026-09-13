@@ -156,14 +156,14 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, adminCtx(), releases, &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"})}}); err != nil {
 		t.Fatal(err)
 	}
 	event, err := stream.Recv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.GetSnapshot().GetRelease().GetVersion() != 1 || event.GetRevision() != active.GetActivationRevision() {
+	if event.GetTarget().GetRelease().GetVersion() != 1 || event.GetRevision() != active.GetActivationRevision() {
 		t.Fatalf("snapshot=%+v", event)
 	}
 	admin := kmsv1.NewAdminServiceClient(conn)
@@ -175,7 +175,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if subscriber.GetReleaseName() != "runtime" || subscriber.GetClientName() != "api" || subscriber.GetInstanceId() != "replica-1" || subscriber.GetReleaseState() != "" || subscriber.GetLastAckedRevision() != 0 || subscriber.GetConnectedAtUnixMs() == 0 {
 		t.Fatalf("new release subscriber = %+v", subscriber)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{SchemaVersion: pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: &kmsv1.ReleaseAcknowledgement{SchemaVersion: pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", SessionId: "replica-1-session", TargetRevision: event.GetTarget().GetTargetRevision(), Sequence: 1, State: "received", Diagnostic: "must-not-persist"}}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -185,7 +185,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		acknowledged := false
-		for _, subscriber := range states.GetSubscribers() {
+		for _, subscriber := range states.GetInstances() {
 			if subscriber.GetState() != domain.ReleaseStateReceived {
 				continue
 			}
@@ -209,7 +209,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("acknowledgement was not persisted")
+			t.Fatalf("acknowledgement was not persisted: %+v", states)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -221,7 +221,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, adminCtx(), releases, &kmsv1.ReleaseWatchRegistration{SchemaVersion: &pinnedSchema.Version, Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"})}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := duplicate.Recv(); err != nil {
@@ -254,62 +254,13 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(states.GetSubscribers()) == 1 && !states.GetSubscribers()[0].GetConnected() {
+		if len(states.GetInstances()) == 1 && !states.GetInstances()[0].GetConnected() {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("last duplicate stream close left subscriber connected: %+v", states.GetSubscribers())
+			t.Fatalf("last duplicate stream close left subscriber connected: %+v", states.GetInstances())
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func TestReleaseConnectionOverlapDoesNotReportPrematureDisconnect(t *testing.T) {
-	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]*releaseConnectionState)}
-	key := releaseConnectionKey{namespace: domain.NamespaceRef{Env: "prod", App: "app"}, name: "runtime", clientName: "api", instanceID: "replica-1"}
-	first := h.addConnection(key)
-	if err := h.persistConnection(key, first, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	second := h.addConnection(key)
-	if err := h.persistConnection(key, second, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if last, _ := h.removeConnection(key, second); last {
-		t.Fatal("newer overlapping stream was treated as the last connection")
-	}
-	last, persistedID := h.removeConnection(key, first)
-	if !last {
-		t.Fatal("last stream disconnect was not detected")
-	}
-	if persistedID != second {
-		t.Fatalf("disconnect generation=%d, want most recently persisted generation %d", persistedID, second)
-	}
-}
-
-func TestReleaseConnectionGenerationsAreScopedByIdentity(t *testing.T) {
-	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]*releaseConnectionState)}
-	base := releaseConnectionKey{
-		namespace: domain.NamespaceRef{Env: "prod", App: "app"},
-		name:      "runtime", clientName: "api", instanceID: "replica-1",
-	}
-	alice := base
-	alice.identity = "alice"
-	bob := base
-	bob.identity = "bob"
-	aliceID := h.addConnection(alice)
-	bobID := h.addConnection(bob)
-	if err := h.persistConnection(alice, aliceID, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.persistConnection(bob, bobID, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if last, persisted := h.removeConnection(alice, aliceID); !last || persisted != aliceID {
-		t.Fatalf("alice removal = last %v persisted %d, want true/%d", last, persisted, aliceID)
-	}
-	if last, persisted := h.removeConnection(bob, bobID); !last || persisted != bobID {
-		t.Fatalf("bob removal = last %v persisted %d, want true/%d", last, persisted, bobID)
 	}
 }
 
@@ -452,13 +403,13 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: registerTestReleaseSession(t, adminCtx(), releases, &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)), Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"})}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stream.Recv(); err != nil {
 		t.Fatal(err)
 	}
-	ack := &kmsv1.ReleaseAcknowledgement{Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion(), ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 2}
+	ack := &kmsv1.ReleaseAcknowledgement{Namespace: pNS("prod", "app"), Name: "runtime", Version: created.GetRelease().GetVersion(), ActivationRevision: active.GetActivationRevision(), ClientName: "api", InstanceId: "replica-1", SessionId: "replica-1-session", TargetRevision: active.GetActivationRevision(), Sequence: 1, State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 2}
 	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: ack}}); err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +421,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 			t.Fatal(err)
 		}
 		var applied *kmsv1.ReleaseSubscriberState
-		for _, subscriber := range states.GetSubscribers() {
+		for _, subscriber := range states.GetInstances() {
 			if subscriber.GetState() == domain.ReleaseStateApplied {
 				applied = subscriber
 			}
@@ -489,6 +440,7 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 	// Divergence on a non-applied state is rejected and tears the stream down
 	// with InvalidArgument.
 	ack.State, ack.AppliedDivergent, ack.DivergentFieldCount = domain.ReleaseStatePrepared, true, 1
+	ack.Sequence++
 	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{Acknowledgement: ack}}); err != nil {
 		t.Fatal(err)
 	}

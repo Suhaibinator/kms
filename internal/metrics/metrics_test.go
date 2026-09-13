@@ -7,9 +7,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/kms/internal/core"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestReleaseAcknowledgementOutcomesAreBounded(t *testing.T) {
+	m := newTestMetrics(t)
+	for _, outcome := range core.ReleaseAcknowledgementOutcomes {
+		if got := testutil.ToFloat64(m.releaseAcknowledgements.WithLabelValues(outcome)); got != 0 {
+			t.Fatalf("%s initial count = %v", outcome, got)
+		}
+		m.ReleaseAcknowledgementOutcome(outcome)
+		if got := testutil.ToFloat64(m.releaseAcknowledgements.WithLabelValues(outcome)); got != 1 {
+			t.Fatalf("%s count = %v", outcome, got)
+		}
+	}
+	m.ReleaseAcknowledgementOutcome("secret-diagnostic-session-123")
+	if got := testutil.ToFloat64(m.releaseAcknowledgements.WithLabelValues(ValueOther)); got != 1 {
+		t.Fatalf("unknown outcome count = %v", got)
+	}
+	if strings.Contains(gather(t, m), "secret-diagnostic-session-123") {
+		t.Fatal("caller-controlled outcome leaked into metrics")
+	}
+}
 
 // fixedClock returns a deterministic clock for the timestamp gauges.
 func fixedClock(t time.Time) func() time.Time { return func() time.Time { return t } }

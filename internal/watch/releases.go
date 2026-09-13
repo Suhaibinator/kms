@@ -19,6 +19,7 @@ type ReleaseRegistration struct {
 	SchemaVersion    uint64
 	ClientName       string
 	InstanceID       string
+	SessionID        string
 	Identity         string
 	LastSeenRevision uint64
 }
@@ -60,12 +61,13 @@ type ReleaseSubscription struct {
 	acknowledgement domain.ReleaseAcknowledgement
 }
 
-// RecordAcknowledgement records a validated lifecycle acknowledgement for the live registry.
-func (s *ReleaseSubscription) RecordAcknowledgement(a domain.ReleaseAcknowledgement) {
+// RecordEffectiveAcknowledgement publishes the authoritative persisted snapshot.
+// This registry deliberately has no acknowledgement ordering/reduction rules.
+func (s *ReleaseSubscription) RecordEffectiveAcknowledgement(a domain.ReleaseAcknowledgement) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if a.Namespace == s.reg.Namespace && a.ReleaseName == s.reg.Name && a.SchemaVersion == s.reg.SchemaVersion && max(a.ActivationRevision, a.TargetRevision) >= max(s.acknowledgement.ActivationRevision, s.acknowledgement.TargetRevision) {
-		s.acknowledgement = domain.ReleaseAcknowledgement{State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, TargetRevision: a.TargetRevision}
+	if a.Namespace == s.reg.Namespace && a.ReleaseName == s.reg.Name && a.SchemaVersion == s.reg.SchemaVersion && a.SessionID == s.reg.SessionID {
+		s.acknowledgement = a
 	}
 }
 
@@ -73,7 +75,7 @@ func (s *ReleaseSubscription) describe() domain.Subscriber {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return domain.Subscriber{
-		ClientName: s.reg.ClientName, InstanceID: s.reg.InstanceID, Identity: s.reg.Identity,
+		ClientName: s.reg.ClientName, InstanceID: s.reg.InstanceID, SessionID: s.reg.SessionID, Identity: s.reg.Identity,
 		Namespaces: []domain.NamespaceRef{s.reg.Namespace}, RemoteAddr: s.reg.RemoteAddr, ConnectedAt: s.connectedAt,
 		ReleaseName: s.reg.Name, SchemaVersion: s.reg.SchemaVersion, ReleaseState: s.acknowledgement.State,
 		ReleaseVersion: s.acknowledgement.ReleaseVersion, ReleaseRevision: s.acknowledgement.ActivationRevision,

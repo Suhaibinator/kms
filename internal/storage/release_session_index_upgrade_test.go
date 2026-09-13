@@ -20,13 +20,14 @@ func TestReleaseSessionIndexUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
+	createReleaseBaseline4(t, st)
 	seedNS(t, st, "prod", "app")
 	if _, _, err := st.PutParameter(context.Background(), ref("prod", "app", "value"), "retained", "", "", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	putSecret(t, st, ref("prod", "app", "secret"), false)
 	// Include session state and secret ciphertext in the all-table comparison.
-	if err := st.db.Create(&releaseSessionModel{SessionID: "session", NamespaceID: 1, ReleaseName: "runtime", ClientName: "client", InstanceID: "instance", Identity: "identity", ServerTimestamp: "retained", DisconnectedAt: "retained"}).Error; err != nil {
+	if err := st.db.Exec(`INSERT INTO release_sessions (session_id, namespace_id, release_name, schema_version, client_name, instance_id, identity, server_timestamp, disconnected_at) VALUES ('session', 1, 'runtime', 1, 'client', 'instance', 'identity', 'retained', 'retained')`).Error; err != nil {
 		t.Fatal(err)
 	}
 	rows := func() map[string][]map[string]any {
@@ -40,6 +41,16 @@ func TestReleaseSessionIndexUpgrade(t *testing.T) {
 			var values []map[string]any
 			if err := st.db.Table(table).Find(&values).Error; err != nil {
 				t.Fatal(err)
+			}
+			if table == "schema_migrations" || table == "release_session_events" {
+				continue
+			}
+			if table == "release_sessions" {
+				for _, row := range values {
+					for _, column := range []string{"last_applied_sequence", "pruned_ack_sequence", "diagnostic", "client_timestamp"} {
+						delete(row, column)
+					}
+				}
 			}
 			result[table] = values
 		}
@@ -95,7 +106,7 @@ func TestReleaseSessionIndexUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(beforeRows, rows()) {
-			t.Fatal("upgrade changed stored rows or schema stamp")
+			t.Fatal("upgrade changed pre-existing stored rows")
 		}
 		if err := st.Close(); err != nil {
 			t.Fatal(err)
@@ -117,6 +128,7 @@ func TestReleaseSessionIndexUpgradeRejectsDriftWithoutMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			createReleaseBaseline4(t, st)
 			if err := st.db.Exec("DROP INDEX " + releaseSessionDisconnectIndexName).Error; err != nil {
 				t.Fatal(err)
 			}

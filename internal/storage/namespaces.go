@@ -136,6 +136,9 @@ func deleteNamespaceTx(tx *gorm.DB, ref domain.NamespaceRef) error {
 	// application-owned history. Retire all rows whose identity is scoped to
 	// this namespace before removing the namespace itself. Audit/change-log
 	// rows are denormalized and intentionally remain readable.
+	if err := tx.Exec(`DELETE FROM release_session_events WHERE session_id IN (SELECT session_id FROM release_sessions WHERE namespace_id = ?)`, id).Error; err != nil {
+		return err
+	}
 	if err := tx.Exec(`DELETE FROM release_target_deliveries WHERE session_id IN (SELECT session_id FROM release_sessions WHERE namespace_id = ?)`, id).Error; err != nil {
 		return err
 	}

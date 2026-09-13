@@ -712,74 +712,93 @@ func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, tra
 }
 
 func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Principal, ack domain.ReleaseAcknowledgement) error {
+	_, err := s.AcknowledgeConfigurationReleaseResult(ctx, pr, ack)
+	return err
+}
+
+// AcknowledgeConfigurationReleaseResult is the single acknowledgement ingress.
+// Callers must publish only the persisted Effective snapshot, never the input.
+func (s *Service) AcknowledgeConfigurationReleaseResult(ctx context.Context, pr Principal, ack domain.ReleaseAcknowledgement) (domain.ReleaseAcknowledgementResult, error) {
 	ctx = withReleaseAuditTrack(ctx, ack.Track())
 	if err := validateReleaseAddress(ack.Namespace, ack.ReleaseName); err != nil {
-		return err
+		return domain.ReleaseAcknowledgementResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseWatch, domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName})
 	if err != nil {
-		return err
+		return domain.ReleaseAcknowledgementResult{}, err
 	}
 	if ack.ReleaseVersion == 0 || (ack.ActivationRevision == 0 && ack.TargetRevision == 0) || ack.ClientName == "" || ack.InstanceID == "" || ack.ConnectionID == "" {
-		return domain.Errorf(domain.ErrInvalidArgument, "release acknowledgement is incomplete")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "release acknowledgement is incomplete")
 	}
 	if len(ack.ClientName) > maxReleaseClientIDBytes || len(ack.InstanceID) > maxReleaseClientIDBytes {
-		return domain.Errorf(domain.ErrInvalidArgument, "release client_name or instance_id is too long")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "release client_name or instance_id is too long")
 	}
 	if len(ack.Diagnostic) > maxAckDiagnosticBytes {
-		return domain.Errorf(domain.ErrInvalidArgument, "release diagnostic exceeds %d bytes", maxAckDiagnosticBytes)
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "release diagnostic exceeds %d bytes", maxAckDiagnosticBytes)
 	}
 	if !validReleaseState(ack.State) {
-		return domain.Errorf(domain.ErrInvalidArgument, "invalid release acknowledgement state")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release acknowledgement state")
 	}
 	if ack.State == domain.ReleaseStateRejected {
 		if !validRejectCategory(ack.RejectionCategory) {
-			return domain.Errorf(domain.ErrInvalidArgument, "invalid rejection category")
+			return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "invalid rejection category")
 		}
 	} else if ack.RejectionCategory != "" {
-		return domain.Errorf(domain.ErrInvalidArgument, "rejection category is only valid for rejected state")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "rejection category is only valid for rejected state")
 	}
 	// Divergence is a property of an applied generation only: it reports that
 	// the running configuration differs from source-owned defaults, never that
 	// a candidate was refused. The count is bounded so the column stays small.
 	if (ack.AppliedDivergent || ack.DivergentFieldCount > 0) && ack.State != domain.ReleaseStateApplied {
-		return domain.Errorf(domain.ErrInvalidArgument, "applied_divergent is only valid for applied state")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "applied_divergent is only valid for applied state")
 	}
 	if ack.DivergentFieldCount > 0 && !ack.AppliedDivergent {
-		return domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count requires applied_divergent")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count requires applied_divergent")
 	}
 	if ack.DivergentFieldCount > maxDivergentFieldCount {
-		return domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count exceeds %d", maxDivergentFieldCount)
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count exceeds %d", maxDivergentFieldCount)
 	}
+	// Retain only a digest of the original payload for conflict detection;
+	// sanitizing diagnostics must not turn distinct events into duplicates.
+	ack.PayloadFingerprint = storage.ReleaseAcknowledgementFingerprint(ack)
 	ack.Diagnostic = sanitizeDiagnostic(ack.Diagnostic)
 	ack.Identity = pr.Identity.Name
 	ack.ServerTimestamp = s.now()
-	if ack.ClientTimestamp.IsZero() {
-		ack.ClientTimestamp = ack.ServerTimestamp
+	if ack.SessionID == "" {
+		s.RecordReleaseAcknowledgementOutcome("legacy_rejected")
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrFailedPrecondition, "release acknowledgement upgrade required: use an updated SDK with release sessions")
 	}
-	rs, err := s.releaseStore()
+	if ack.Sequence == 0 || ack.TargetRevision == 0 {
+		return domain.ReleaseAcknowledgementResult{}, domain.Errorf(domain.ErrInvalidArgument, "session acknowledgement requires nonzero sequence and target_revision")
+	}
+	st, err := s.sessionStore()
 	if err != nil {
-		return err
+		s.RecordReleaseAcknowledgementOutcome("unavailable")
+		return domain.ReleaseAcknowledgementResult{}, err
 	}
-	// Storage checks activation identity and stream ownership atomically with
-	// persistence, so retention or a disconnect cannot invalidate either proof
-	// between validation and the write.
-	var persistErr error
-	if ack.SessionID != "" {
-		st, err := s.sessionStore()
-		if err != nil {
-			return err
-		}
-		persistErr = st.AcknowledgeReleaseSession(ctx, domain.ReleaseSessionRef{Track: ack.Track(), ClientName: ack.ClientName, InstanceID: ack.InstanceID, Identity: pr.Identity.Name, SessionID: ack.SessionID}, ack)
-	} else {
-		persistErr = rs.UpsertReleaseAcknowledgement(ctx, ack)
-	}
-	if err := persistErr; err != nil {
-		return err
+	// Target validity, connection fencing, duplicate identity and causal
+	// selection are one transaction. Receipt time is freshness, not event order.
+	result, err := st.ReduceReleaseSessionAcknowledgement(ctx, domain.ReleaseSessionRef{Track: ack.Track(), ClientName: ack.ClientName, InstanceID: ack.InstanceID, Identity: pr.Identity.Name, SessionID: ack.SessionID}, ack)
+	s.RecordReleaseAcknowledgementOutcome(result.Disposition)
+	if err != nil {
+		return result, err
 	}
 	s.notifyReleaseSubscribers(ack.Track())
 	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", releaseAuditMetadata(ack.SchemaVersion, ack.ActivationRevision, map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)}))
-	return nil
+	return result, nil
+}
+
+// ReleaseSessionAcknowledgement reads persisted state for an authenticated session.
+func (s *Service) ReleaseSessionAcknowledgement(ctx context.Context, pr Principal, ref domain.ReleaseSessionRef) (domain.ReleaseAcknowledgement, error) {
+	ctx, err := s.authorizeSession(ctx, pr, ref, false)
+	if err != nil {
+		return domain.ReleaseAcknowledgement{}, err
+	}
+	st, err := s.sessionStore()
+	if err != nil {
+		return domain.ReleaseAcknowledgement{}, err
+	}
+	return st.GetReleaseSessionAcknowledgement(ctx, ref)
 }
 
 func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, track domain.ReleaseTrack, clientName, instanceID, identity, connectionID string, connected bool) error {
@@ -820,7 +839,6 @@ func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, filt
 	if err != nil {
 		return nil, "", 0, err
 	}
-	page.DepartedBefore = s.now().Add(-departAfter)
 	rows, next, err := rs.ListReleaseAcknowledgements(ctx, filter, page)
 	if err != nil {
 		return nil, "", 0, err

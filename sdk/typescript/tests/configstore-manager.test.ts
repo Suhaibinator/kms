@@ -614,6 +614,23 @@ class FakeReleaseTransport implements ReleaseTransport {
     return Promise.resolve(this.active);
   }
 
+  async registerReleaseSession(): Promise<boolean> {
+    return true;
+  }
+
+  async getInstanceRelease() {
+    const active = await this.getActiveRelease();
+    return {
+      release: active.release,
+      targetRevision: active.activationRevision,
+      activationRevision: active.activationRevision,
+      pinned: false,
+      pinRevision: 0n,
+      pinnedBy: "",
+      pinnedAtUnixMs: 0n,
+    };
+  }
+
   fetchParameter(ref: ResourceRef): Promise<Parameter> {
     this.calls.push(`parameter:${pathOf(ref)}`);
     const parameter = this.parameters.get(pathOf(ref));
@@ -643,7 +660,18 @@ class FakeReleaseTransport implements ReleaseTransport {
       previousVersion: this.active.release?.version ?? 0n,
     };
     this.stream?.push({
-      event: { $case: "activation", value: { release } },
+      event: {
+        $case: "target",
+        value: {
+          release,
+          targetRevision: revision,
+          activationRevision: revision,
+          pinned: false,
+          pinRevision: 0n,
+          pinnedBy: "",
+          pinnedAtUnixMs: 0n,
+        },
+      },
       revision,
     });
   }

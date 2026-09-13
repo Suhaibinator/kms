@@ -21,6 +21,7 @@ type ReleaseReference struct {
 // separate from Store so data-plane-only stores and focused test doubles do
 // not need to implement the release-management surface.
 type ReleaseStore interface {
+	ReadReleaseProjection(context.Context, domain.ReleaseFilter) ([]domain.ReleaseAcknowledgement, map[domain.ReleaseTrack]domain.ActiveConfigurationRelease, error)
 	CreateConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error)
 	GetConfigurationRelease(ctx context.Context, track domain.ReleaseTrack, version uint64) (domain.ConfigurationRelease, error)
 	GetActiveConfigurationRelease(ctx context.Context, track domain.ReleaseTrack) (domain.ActiveConfigurationRelease, error)

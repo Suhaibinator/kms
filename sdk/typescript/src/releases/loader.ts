@@ -219,9 +219,8 @@ class ResolutionError extends Error {
  * the single pending slot. After the first commit, failures preserve LKG.
  */
 export class ReleaseLoader {
-  readonly #sessionId = randomUUID();
+  #sessionId = "";
   #sessionRegistered = false;
-  #legacySession = false;
   readonly #transport: ReleaseTransport;
   readonly #options: NormalizedOptions;
   readonly #status: MutableStatus = {
@@ -300,6 +299,24 @@ export class ReleaseLoader {
     if (signal?.aborted) throw abortReason(signal);
 
     this.#running = true;
+    // A new run is a new loader execution. Transport reconnects within this
+    // run retain this identity and replay its original acknowledgement events.
+    this.#sessionId = randomUUID();
+    this.#sessionRegistered = false;
+    this.#pendingAcknowledgements.clear();
+    this.#acknowledgementWaiters.clear();
+    this.#ackGeneration = 0n;
+    this.#lastSeenRevision = 0n;
+    this.#flushChain = Promise.resolve();
+    this.#status.state = "idle";
+    this.#status.observedVersion = 0n;
+    this.#status.observedRevision = 0n;
+    this.#status.observedActivationRevision = 0n;
+    this.#status.appliedVersion = 0n;
+    this.#status.appliedRevision = 0n;
+    this.#status.appliedActivationRevision = 0n;
+    delete this.#status.lastFailureCategory;
+    delete this.#status.lastFailureAt;
     const runController = new AbortController();
     this.#stopController = runController;
     const unlinkSignal = linkAbort(signal, runController);
@@ -732,10 +749,10 @@ export class ReleaseLoader {
     };
   }
   async #registerSession(signal: AbortSignal): Promise<void> {
-    if (this.#legacySession) return;
     if (!this.#transport.registerReleaseSession || !this.#transport.getInstanceRelease) {
-      this.#legacySession = true;
-      return;
+      throw new Error(
+        "KMS release sessions are required; upgrade the KMS server and SDK transport",
+      );
     }
     const capable = await this.#transport.registerReleaseSession(
       this.#sessionRef(),
@@ -743,8 +760,7 @@ export class ReleaseLoader {
       signal,
     );
     if (!capable) {
-      this.#legacySession = true;
-      return;
+      throw new Error("KMS release sessions are required; upgrade the KMS server");
     }
     this.#sessionRegistered = true;
   }
@@ -755,7 +771,7 @@ export class ReleaseLoader {
     if (this.#sessionRegistered && this.#transport.getInstanceRelease) {
       const target = await this.#transport.getInstanceRelease(this.#sessionRef(), signal);
       if (target.release && !releaseMatchesTrack(target.release, this.#options))
-        throw new Error("instance target track mismatch");
+        throw new Error("KMS instance target belongs to a different release track");
       return {
         release: target.release,
         activationRevision: target.targetRevision,
@@ -763,23 +779,7 @@ export class ReleaseLoader {
         fleetRevision: target.activationRevision,
       };
     }
-    throwIfAborted(signal);
-    const response = await this.#transport.getActiveRelease(
-      { ...this.#options.namespace },
-      this.#options.name,
-      this.#options.schemaVersion,
-      signal,
-    );
-    const release = response.release ? cloneRelease(response.release) : undefined;
-    if (release && !releaseMatchesTrack(release, this.#options)) {
-      throw new Error("KMS active release response belongs to a different release track");
-    }
-    return {
-      release,
-      activationRevision: response.activationRevision,
-      fleetRevision: response.activationRevision,
-      previousVersion: response.previousVersion,
-    };
+    throw new Error("KMS release sessions are required; upgrade the KMS server and SDK transport");
   }
 
   async #watchLoop(
@@ -822,6 +822,7 @@ export class ReleaseLoader {
             const target = payload.value;
             if (target.release && releaseMatchesTrack(target.release, this.#options)) {
               receivedEvent = true;
+              if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
               offer(
                 makeCandidate(
                   target.release,
@@ -832,21 +833,6 @@ export class ReleaseLoader {
                 ),
               );
             }
-            continue;
-          }
-          if (payload?.$case === "snapshot" || payload?.$case === "activation") {
-            const release = payload.value.release;
-            if (!release || !releaseMatchesTrack(release, this.#options)) continue;
-            receivedEvent = true;
-            if (event.revision > this.#lastSeenRevision) this.#lastSeenRevision = event.revision;
-            offer(
-              makeCandidate(
-                release,
-                event.revision,
-                payload.$case === "snapshot" ? "reconciliation" : "activation",
-                0n,
-              ),
-            );
           }
         }
       } catch (error) {
@@ -946,8 +932,8 @@ export class ReleaseLoader {
       retained?.generation !== event.sequence ||
       retained.acknowledgement.sequence !== event.sequence ||
       retained.acknowledgement.version !== event.version ||
-      (retained.acknowledgement.targetRevision || retained.acknowledgement.activationRevision) !==
-        (event.targetRevision || event.activationRevision) ||
+      retained.acknowledgement.targetRevision !== event.targetRevision ||
+      retained.acknowledgement.activationRevision !== event.activationRevision ||
       retained.acknowledgement.state !== event.state
     ) {
       return;
@@ -983,11 +969,7 @@ export class ReleaseLoader {
       sequence,
     };
     const current = this.#pendingAcknowledgements.get(state);
-    if (
-      !current ||
-      (current.acknowledgement.targetRevision || current.acknowledgement.activationRevision) <=
-        candidate.revision
-    ) {
+    if (!current || current.acknowledgement.targetRevision <= candidate.revision) {
       this.#pendingAcknowledgements.set(state, {
         acknowledgement,
         generation: sequence,
@@ -1014,11 +996,20 @@ export class ReleaseLoader {
   async #flushAcknowledgements(stream: ReleaseWatchStream, replay: boolean): Promise<void> {
     const pending = [...this.#pendingAcknowledgements.entries()]
       .filter(([, item]) => replay || item.dirty)
-      .sort(([left], [right]) => left.localeCompare(right))
+      // Replay the original causal events, never alphabetic lifecycle order.
+      .sort(([, left], [, right]) =>
+        left.generation < right.generation ? -1 : left.generation > right.generation ? 1 : 0,
+      )
       .map(([state, item]) => ({ state, ...item }));
     for (const item of pending) {
       await stream.send({
-        request: { $case: "acknowledgement", value: { ...item.acknowledgement } },
+        request: {
+          $case: "acknowledgement",
+          value: {
+            ...item.acknowledgement,
+            namespace: { ...this.#options.namespace },
+          },
+        },
       });
       const current = this.#pendingAcknowledgements.get(item.state);
       if (current?.generation === item.generation) {

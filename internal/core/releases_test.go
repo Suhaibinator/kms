@@ -219,15 +219,23 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	r2 := create()
+	session := domain.ReleaseSessionRef{Track: r1.Track(), ClientName: "api", InstanceID: "replica-1", Identity: pr.Identity.Name, SessionID: "core-session"}
+	if err := svc.RegisterReleaseSession(ctx, pr, session, false); err != nil {
+		t.Fatal(err)
+	}
+	target, err := svc.GetInstanceRelease(ctx, pr, session)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a2, changed, err := svc.ActivateConfigurationRelease(ctx, pr, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: r2.SchemaVersion}, r2.Version, nil)
 	if err != nil || !changed {
 		t.Fatalf("activate2=%+v changed=%v err=%v", a2, changed, err)
 	}
 	const connectionID = "core-test-connection"
-	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: schema.Version}, "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
+	if err := svc.ConnectReleaseSession(ctx, session, connectionID, true); err != nil {
 		t.Fatal(err)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SessionID: session.SessionID, TargetRevision: target.TargetRevision, Sequence: 1, SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
 	if err != nil {
 		t.Fatalf("historical superseded acknowledgement: %v", err)
 	}
@@ -244,7 +252,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if activeRevision != a2.ActivationRevision {
 		t.Fatalf("subscriber current revision=%d want active release revision %d", activeRevision, a2.ActivationRevision)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{SessionID: session.SessionID, TargetRevision: target.TargetRevision + 999, Sequence: 2, SchemaVersion: schema.Version, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("fabricated revision err=%v", err)
 	}
@@ -678,10 +686,18 @@ func TestAcknowledgeConfigurationReleaseDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 	const connectionID = "divergence-connection"
-	if err := svc.SetReleaseSubscriberConnected(ctx, domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 0}, "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
+	session := domain.ReleaseSessionRef{Track: rel.Track(), ClientName: "api", InstanceID: "replica-1", Identity: pr.Identity.Name, SessionID: "divergence-session"}
+	if err := svc.RegisterReleaseSession(ctx, pr, session, false); err != nil {
 		t.Fatal(err)
 	}
-	base := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID}
+	target, err := svc.GetInstanceRelease(ctx, pr, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ConnectReleaseSession(ctx, session, connectionID, true); err != nil {
+		t.Fatal(err)
+	}
+	base := domain.ReleaseAcknowledgement{SessionID: session.SessionID, Sequence: 1, TargetRevision: target.TargetRevision, Namespace: ns, ReleaseName: "runtime", ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID}
 
 	prepared := base
 	prepared.State, prepared.AppliedDivergent, prepared.DivergentFieldCount = domain.ReleaseStatePrepared, true, 1
@@ -717,5 +733,40 @@ func TestAcknowledgeConfigurationReleaseDivergence(t *testing.T) {
 	}
 	if !strings.Contains(events[0].Metadata, `"divergent":"true"`) {
 		t.Fatalf("audit metadata missing divergent flag: %s", events[0].Metadata)
+	}
+	// Replay reports the persisted applied snapshot, including metadata, even
+	// if a delayed earlier lifecycle event arrives after successful application.
+	applied.Sequence = 3
+	if _, err := svc.AcknowledgeConfigurationReleaseResult(ctx, pr, applied); err != nil {
+		t.Fatal(err)
+	}
+	replayed := base
+	replayed.Sequence, replayed.State = 2, domain.ReleaseStateReceived
+	result, err := svc.AcknowledgeConfigurationReleaseResult(ctx, pr, replayed)
+	if err != nil || result.Disposition != "stale" || result.Effective.State != domain.ReleaseStateApplied || result.Effective.Sequence != 3 || !result.Effective.AppliedDivergent || result.Effective.DivergentFieldCount != 3 {
+		t.Fatalf("stale ingress result=%+v err=%v", result, err)
+	}
+	result, err = svc.AcknowledgeConfigurationReleaseResult(ctx, pr, applied)
+	if err != nil || result.Disposition != "duplicate" || result.Effective.Sequence != 3 {
+		t.Fatalf("duplicate=%+v err=%v", result, err)
+	}
+	applied.DivergentFieldCount = 4
+	result, err = svc.AcknowledgeConfigurationReleaseResult(ctx, pr, applied)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || result.Disposition != "conflict" {
+		t.Fatalf("conflict=%+v err=%v", result, err)
+	}
+	replayed.Sequence, replayed.Diagnostic = 4, "first-sensitive-diagnostic"
+	if _, err := svc.AcknowledgeConfigurationReleaseResult(ctx, pr, replayed); err != nil {
+		t.Fatal(err)
+	}
+	replayed.Diagnostic = "different-sensitive-diagnostic"
+	result, err = svc.AcknowledgeConfigurationReleaseResult(ctx, pr, replayed)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || result.Disposition != "conflict" {
+		t.Fatalf("redaction masked payload conflict=%+v err=%v", result, err)
+	}
+	legacy := base
+	legacy.SessionID, legacy.State = "", domain.ReleaseStateReceived
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, legacy); !errors.Is(err, domain.ErrFailedPrecondition) || !strings.Contains(err.Error(), "upgrade required") {
+		t.Fatalf("legacy ingress=%v", err)
 	}
 }

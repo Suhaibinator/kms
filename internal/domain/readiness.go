@@ -24,6 +24,8 @@ const (
 	EnvStatusRolling    = "rolling"
 	EnvStatusDrift      = "drift"
 	EnvStatusReady      = "ready"
+	EnvStatusUnknown    = "unknown"
+	EnvStatusPinned     = "pinned"
 )
 
 const (
@@ -44,6 +46,8 @@ const (
 	RolloutStateApplied       = "applied"
 	RolloutStateRolling       = "rolling"
 	RolloutStateDegraded      = "degraded"
+	RolloutStatePinned        = "pinned"
+	RolloutStateUnknown       = "unknown"
 )
 
 const (

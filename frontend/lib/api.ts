@@ -1180,6 +1180,9 @@ async function openSubscriberStream(
 }
 
 export interface ReleaseSubscribersPage {
+  instances?: import("@/lib/types").SubscriberInstance[];
+  summary?: import("@/lib/types").OverviewRollout;
+  projection_revision?: string;
   subscribers: ReleaseSubscriberState[];
   current_revision: number;
   next_page_token: string;

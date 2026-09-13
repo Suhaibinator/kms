@@ -46,7 +46,8 @@ const COLUMNS: ReadonlyArray<SortColumn<Subscriber>> = [
   {
     id: "revision",
     label: "Status",
-    value: (s) => (s.release_name ? (s.release_state ?? "connected") : s.last_acked_revision),
+    value: (s) =>
+      s.release_name ? (s.effective?.classification ?? "unknown") : s.last_acked_revision,
   },
 ];
 
@@ -351,9 +352,9 @@ export default function SubscribersPage() {
                                 schemaVersion: s.schema_version ?? 0,
                               })}
                             >
-                              {s.release_state
-                                ? `${s.release_state} · v${s.release_version} · revision ${s.release_revision}`
-                                : "Connected · awaiting lifecycle report"}
+                              {s.effective
+                                ? `${s.effective.classification || "unknown"} · last applied ${s.effective.last_applied_version ? `v${s.effective.last_applied_version}` : "unconfirmed"} · target revision ${s.effective.desired_revision ?? "unknown"}`
+                                : "Unknown · status unavailable"}
                             </Link>
                           ) : stale ? (
                             <Badge kind="warning">

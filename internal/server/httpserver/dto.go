@@ -449,27 +449,35 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 // --- subscribers -----------------------------------------------------------
 
 type subscriberDTO struct {
-	ReleaseName         string            `json:"release_name,omitempty"`
-	SchemaVersion       uint64            `json:"schema_version,omitempty"`
-	ReleaseState        string            `json:"release_state,omitempty"`
-	ReleaseVersion      uint64            `json:"release_version,omitempty"`
-	ReleaseRevision     uint64            `json:"release_revision,omitempty"`
-	ClientName          string            `json:"client_name"`
-	InstanceID          string            `json:"instance_id"`
-	Identity            string            `json:"identity"`
-	Namespaces          []namespaceRefDTO `json:"namespaces"`
-	RemoteAddr          string            `json:"remote_addr"`
-	ConnectedAtUnixMS   int64             `json:"connected_at_unix_ms"`
-	LastHeartbeatUnixMS int64             `json:"last_heartbeat_unix_ms"`
-	LastAckedRevision   uint64            `json:"last_acked_revision"`
+	SessionID           string                 `json:"session_id,omitempty"`
+	Effective           *subscriberInstanceDTO `json:"effective,omitempty"`
+	ReleaseName         string                 `json:"release_name,omitempty"`
+	SchemaVersion       uint64                 `json:"schema_version,omitempty"`
+	ReleaseState        string                 `json:"release_state,omitempty"`
+	ReleaseVersion      uint64                 `json:"release_version,omitempty"`
+	ReleaseRevision     uint64                 `json:"release_revision,omitempty"`
+	ClientName          string                 `json:"client_name"`
+	InstanceID          string                 `json:"instance_id"`
+	Identity            string                 `json:"identity"`
+	Namespaces          []namespaceRefDTO      `json:"namespaces"`
+	RemoteAddr          string                 `json:"remote_addr"`
+	ConnectedAtUnixMS   int64                  `json:"connected_at_unix_ms"`
+	LastHeartbeatUnixMS int64                  `json:"last_heartbeat_unix_ms"`
+	LastAckedRevision   uint64                 `json:"last_acked_revision"`
 }
 
 func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
+	var effective *subscriberInstanceDTO
+	if s.Effective != nil {
+		dto := toSubscriberInstanceDTO(*s.Effective)
+		effective = &dto
+	}
 	namespaces := make([]namespaceRefDTO, 0, len(s.Namespaces))
 	for _, ns := range s.Namespaces {
 		namespaces = append(namespaces, namespaceRefDTO{Env: ns.Env, App: ns.App})
 	}
 	return subscriberDTO{
+		SessionID: s.SessionID, Effective: effective,
 		ReleaseName: s.ReleaseName, SchemaVersion: s.SchemaVersion, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,

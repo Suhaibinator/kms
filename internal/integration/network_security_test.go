@@ -371,7 +371,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 	if _, err := admin.CreatePolicy(rootCtx, &kmsv1.CreatePolicyRequest{Policy: &kmsv1.Policy{
 		Name: "release-watchers", Subject: "*",
-		Allow: []*kmsv1.PolicyRule{{Operation: domain.OpConfigurationReleaseWatch, Env: "prod", App: "release-identity"}},
+		Allow: []*kmsv1.PolicyRule{{Operation: domain.OpConfigurationReleaseWatch, Env: "prod", App: "release-identity"}, {Operation: domain.OpConfigurationReleaseRead, Env: "prod", App: "release-identity"}},
 	}}); err != nil {
 		t.Fatalf("create release watch policy: %v", err)
 	}
@@ -384,6 +384,10 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	watchers := make([]watchedRelease, 0, 2)
 	for _, identity := range []string{"release-reader-a", "release-reader-b"} {
 		watchCtx, watchCancel := context.WithCancel(networkAuthContext(ctx, tokens[identity]))
+		if _, err := releases.RegisterReleaseSession(watchCtx, &kmsv1.RegisterReleaseSessionRequest{Session: &kmsv1.ReleaseSessionRef{Namespace: networkNS("prod", "release-identity"), Name: "runtime", SchemaVersion: new(uint64(0)), ClientName: "shared-client", InstanceId: "shared-instance", SessionId: identity}}); err != nil {
+			watchCancel()
+			t.Fatal(err)
+		}
 		stream, err := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn).WatchRelease(watchCtx)
 		if err != nil {
 			watchCancel()
@@ -392,13 +396,13 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{
 			Register: &kmsv1.ReleaseWatchRegistration{SchemaVersion: new(uint64(0)),
 				Namespace: networkNS("prod", "release-identity"), Name: "runtime",
-				ClientName: "shared-client", InstanceId: "shared-instance",
+				ClientName: "shared-client", InstanceId: "shared-instance", SessionId: identity,
 			},
 		}}); err != nil {
 			watchCancel()
 			t.Fatalf("register release watch for %s: %v", identity, err)
 		}
-		if event, err := stream.Recv(); err != nil || event.GetSnapshot() == nil {
+		if event, err := stream.Recv(); err != nil || event.GetTarget() == nil {
 			watchCancel()
 			t.Fatalf("release snapshot for %s = %+v err=%v", identity, event, err)
 		}
@@ -410,14 +414,17 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 		}
 	}()
 
+	sequences := map[string]uint64{}
 	ack := func(w watchedRelease, state string, clientTime time.Time) {
 		t.Helper()
+		sequences[w.identity]++
 		if err := w.stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{
 			Acknowledgement: &kmsv1.ReleaseAcknowledgement{
 				Namespace: networkNS("prod", "release-identity"), Name: "runtime",
 				Version: created.GetRelease().GetVersion(), ActivationRevision: active.GetActivationRevision(),
 				ClientName: "shared-client", InstanceId: "shared-instance", State: state,
 				TimestampUnixMs: clientTime.UnixMilli(),
+				SessionId:       w.identity, Sequence: sequences[w.identity], TargetRevision: active.GetActivationRevision(),
 			},
 		}}); err != nil {
 			t.Fatalf("send %s acknowledgement for %s: %v", state, w.identity, err)
@@ -425,7 +432,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 	}
 	ack(watchers[0], domain.ReleaseStateReceived, time.Now())
 	// An attacker-controlled future timestamp must not pin the row. The later
-	// message is ordered by server receipt and therefore replaces it.
+	// message is ordered by session sequence and therefore replaces it.
 	ack(watchers[1], domain.ReleaseStatePrepared, time.Now().Add(365*24*time.Hour))
 	wantClientTimestamp := time.Now().Add(-365 * 24 * time.Hour).Truncate(time.Millisecond)
 	ack(watchers[1], domain.ReleaseStatePrepared, wantClientTimestamp)
@@ -439,7 +446,7 @@ func TestLoopbackReleaseAcknowledgementsAreIdentityIsolated(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list release subscribers: %v", err)
 		}
-		rows = resp.GetSubscribers()
+		rows = resp.GetInstances()
 		observed := make(map[string]*kmsv1.ReleaseSubscriberState)
 		for _, row := range rows {
 			observed[row.GetIdentity()] = row

@@ -230,6 +230,17 @@ class _ReleaseStub:
             release=release, activation_revision=revision
         )
 
+    def RegisterReleaseSession(self, request, **_kwargs):
+        return kms_pb2.ReleaseSessionResponse(pin_capable=True)
+
+    def GetInstanceRelease(self, request, **kwargs):
+        active = self.GetActiveRelease(kms_pb2.GetActiveReleaseRequest(
+            namespace=request.session.namespace, name=request.session.name,
+            schema_version=request.session.schema_version), **kwargs)
+        return kms_pb2.InstanceReleaseTarget(release=active.release,
+            activation_revision=active.activation_revision,
+            target_revision=active.activation_revision)
+
     def WatchRelease(self, requests, **_kwargs):
         call = _Call(requests, self)
         with self.lock:
@@ -244,7 +255,8 @@ class _ReleaseStub:
             self.inactive = False
             calls = list(self.calls)
         event = kms_pb2.WatchReleaseEvent(
-            activation=kms_pb2.ReleaseActivationEvent(release=release), revision=revision
+            target=kms_pb2.InstanceReleaseTarget(release=release, target_revision=revision,
+                activation_revision=revision), revision=revision
         )
         for call in calls:
             call.push(event)
@@ -399,6 +411,8 @@ def _ack_rejection(loader, acknowledgement, *, sequence=None, revision=999):
             instance_id=loader.instance_id,
             state=acknowledgement.state,
             sequence=sequence if sequence is not None else acknowledgement.sequence,
+            session_id=acknowledgement.session_id,
+            target_revision=acknowledgement.target_revision,
             reason="activation_unavailable",
         ),
         revision=revision,
@@ -1473,6 +1487,7 @@ def test_sync_loader_dedupes_replayed_and_unchanged_active_identity(monkeypatch)
     thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
     assert wait_until(lambda: prepared.commits == 1)
     assert loader.stats().candidates == 1
+    ack_sequence = loader._ack_sequence
 
     # Both a replayed stream activation and a reconciliation offer carry the
     # already applied identity and must not resolve/prepare/commit it again.
@@ -1481,6 +1496,7 @@ def test_sync_loader_dedupes_replayed_and_unchanged_active_identity(monkeypatch)
     time.sleep(0.1)
     assert prepared.commits == 1
     assert loader.stats().candidates == 1
+    assert loader._ack_sequence == ack_sequence
 
     loader.stop()
     thread.join(timeout=2)

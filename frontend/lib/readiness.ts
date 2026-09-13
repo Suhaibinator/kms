@@ -14,6 +14,8 @@ export function isProductionEnvironment(env: string): boolean {
 }
 
 export const STATUS_LABEL: Record<AppStatus | EnvStatus, string> = {
+  unknown: "Unknown",
+  pinned: "Pinned",
   blocked: "Blocked",
   setup: "Setup",
   attention: "Needs attention",
@@ -27,6 +29,8 @@ export const STATUS_LABEL: Record<AppStatus | EnvStatus, string> = {
 };
 
 export const STATUS_TONE: Record<AppStatus | EnvStatus, BadgeKind> = {
+  unknown: "neutral",
+  pinned: "warning",
   blocked: "danger",
   setup: "neutral",
   attention: "warning",

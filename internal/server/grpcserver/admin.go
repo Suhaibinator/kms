@@ -372,15 +372,19 @@ func (h *adminServer) ListReleaseSubscribers(ctx context.Context, req *kmsv1.Lis
 	if err != nil {
 		return nil, err
 	}
-	rows, next, rev, err := h.s.svc.ListReleaseSubscribers(ctx, pr, domain.ReleaseFilter{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetReleaseName(), SchemaVersion: req.SchemaVersion}, pageFrom(req.GetPageSize(), req.GetPageToken()))
+	snapshot, next, err := h.s.svc.ListReleaseSubscriberProjection(ctx, pr, domain.ReleaseFilter{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetReleaseName(), SchemaVersion: req.SchemaVersion}, pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	out := make([]*kmsv1.ReleaseSubscriberState, 0, len(rows))
-	for _, row := range rows {
+	out := make([]*kmsv1.ReleaseSubscriberState, 0, len(snapshot.Subscribers))
+	for _, row := range snapshot.Subscribers {
 		out = append(out, toProtoReleaseSubscriber(row))
 	}
-	return &kmsv1.ListReleaseSubscribersResponse{Subscribers: out, NextPageToken: next, CurrentRevision: rev}, nil
+	instances := make([]*kmsv1.ReleaseSubscriberState, 0, len(snapshot.Instances))
+	for _, row := range snapshot.Instances {
+		instances = append(instances, toProtoSubscriberInstance(row))
+	}
+	return &kmsv1.ListReleaseSubscribersResponse{Subscribers: out, Instances: instances, Summary: toProtoSubscriberSummary(snapshot.Summary), ProjectionRevision: snapshot.ProjectionRevision, NextPageToken: next, CurrentRevision: snapshot.CurrentRevision}, nil
 }
 
 // Health is public: it reports liveness and readiness without requiring

@@ -134,6 +134,7 @@ var RouteLabels = []string{
 	"GET /api/v1/posture",
 	"GET /api/v1/subscribers",
 	"GET /api/v1/release-subscribers",
+	"GET /api/v1/release-subscribers/history",
 	"POST /api/v1/release-subscribers/pin",
 	"GET /api/v1/release-subscribers/stream",
 
@@ -370,6 +371,16 @@ func AuthFailureReasonLabel(reason string) string {
 func ReleaseOutcomeLabel(outcome string) string {
 	if _, ok := releaseOutcomeSet[outcome]; ok {
 		return outcome
+	}
+	return ValueOther
+}
+
+// ReleaseAcknowledgementOutcomeLabel never admits arbitrary payload labels.
+func ReleaseAcknowledgementOutcomeLabel(outcome string) string {
+	for _, allowed := range core.ReleaseAcknowledgementOutcomes {
+		if outcome == allowed {
+			return outcome
+		}
 	}
 	return ValueOther
 }

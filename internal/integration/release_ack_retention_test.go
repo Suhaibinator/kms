@@ -94,9 +94,10 @@ type retentionAcknowledgementStore struct {
 	fourthApplied chan struct{}
 }
 
-func (s *retentionAcknowledgementStore) AcknowledgeReleaseSession(ctx context.Context, ref domain.ReleaseSessionRef, ack domain.ReleaseAcknowledgement) error {
-	if err := s.SQLStore.AcknowledgeReleaseSession(ctx, ref, ack); err != nil {
-		return err
+func (s *retentionAcknowledgementStore) ReduceReleaseSessionAcknowledgement(ctx context.Context, ref domain.ReleaseSessionRef, ack domain.ReleaseAcknowledgement) (domain.ReleaseAcknowledgementResult, error) {
+	result, err := s.SQLStore.ReduceReleaseSessionAcknowledgement(ctx, ref, ack)
+	if err != nil {
+		return result, err
 	}
 	if ack.State == domain.ReleaseStateApplied && ack.ReleaseVersion == 4 {
 		select {
@@ -104,10 +105,10 @@ func (s *retentionAcknowledgementStore) AcknowledgeReleaseSession(ctx context.Co
 		default:
 		}
 	}
-	return nil
+	return result, nil
 }
 
-func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T) {
+func TestSDKReconnectReplaysRetainedIdentityAfterTargetRetention(t *testing.T) {
 	fourthApplied := make(chan struct{}, 1)
 	env := newLoopbackTLSEnvWithStoreWrapper(t, func(st *storage.SQLStore) storage.Store {
 		return &retentionAcknowledgementStore{SQLStore: st, fourthApplied: fourthApplied}
@@ -181,7 +182,7 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 		if err != nil {
 			return false
 		}
-		for _, row := range result.GetSubscribers() {
+		for _, row := range result.GetInstances() {
 			if row.GetClientName() == "retention-sdk" && row.GetState() == "rejected" && row.GetReleaseVersion() == 2 {
 				return true
 			}
@@ -204,8 +205,8 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	if err != nil {
 		t.Fatalf("read acknowledged subscriber before pruning: %v", err)
 	}
-	if len(rows.Subscribers) != 1 || rows.Subscribers[0].State != "applied" || rows.Subscribers[0].ReleaseVersion != 4 || rows.Subscribers[0].LastAppliedVersion != 4 {
-		t.Fatalf("fourth applied acknowledgement did not remain current: %v", rows.Subscribers)
+	if len(rows.Instances) != 1 || rows.Instances[0].State != "applied" || rows.Instances[0].ReleaseVersion != 4 || rows.Instances[0].LastAppliedVersion != 4 {
+		t.Fatalf("fourth applied acknowledgement did not remain current: %v", rows.Instances)
 	}
 	beforeReconnect := probe.rejectedSends.Load()
 	if _, err := env.store.PruneConfigurationReleases(ctx, time.Nanosecond, 100); err != nil {
@@ -220,17 +221,12 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	case <-ctx.Done():
 		t.Fatal("no live stream to reset")
 	}
-	select {
-	case event := <-probe.rejections:
-		if event.GetReason() != "target_unavailable" || event.GetVersion() != 2 || event.GetSchemaVersion() != schema.Version || event.GetSequence() == 0 {
-			t.Fatalf("invalid ACK rejection: %v", event)
-		}
-	case <-ctx.Done():
-		t.Fatal("server did not reject expired replay without closing stream")
-	}
+	// The event identity is still retained even though the target was pruned.
+	// Its exact replay is an idempotent duplicate, not a new unavailable event.
+	waitForManagedState(t, func() bool { return probe.rejectedSends.Load() == beforeReconnect+1 }, "retained rejection replay")
 	activate()
 	waitForManagedState(t, func() bool { return applied.Load() == 5 }, "release after retention/reconnect")
-	// A second real stream reset must not replay the discarded rejection again.
+	// A second replay remains harmless and must not close the subscription.
 	select {
 	case probe.reset <- struct{}{}:
 	case <-ctx.Done():
@@ -240,8 +236,13 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 		select {
 		case generation := <-probe.heartbeats:
 			if generation >= 3 {
-				if got := probe.rejectedSends.Load(); got != beforeReconnect+1 {
-					t.Fatalf("expired ACK replayed again: %d sends, want %d initial sends + one replay", got, beforeReconnect)
+				if got := probe.rejectedSends.Load(); got != beforeReconnect+2 {
+					t.Fatalf("retained ACK replay count: %d sends, want %d initial sends + two replays", got, beforeReconnect)
+				}
+				select {
+				case event := <-probe.rejections:
+					t.Fatalf("retained duplicate rejected: %v", event)
+				default:
 				}
 				return
 			}
@@ -251,7 +252,7 @@ func TestSDKReconnectDiscardsExpiredAcknowledgementAndKeepsWatching(t *testing.T
 	}
 }
 
-// Retain coverage of old SDK activation delivery after session support is added.
+// Simulate an older server that cannot negotiate the required session protocol.
 func legacyReleaseProtocol(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	if method == "/kms.v1.ConfigurationReleaseService/RegisterReleaseSession" {
 		return status.Error(codes.Unimplemented, "legacy release protocol")
