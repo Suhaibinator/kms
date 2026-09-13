@@ -101,13 +101,7 @@ export function ReleaseDiffStrip({
               <span className="faint">—</span>
             )
           }
-          sub={
-            rollout && rollout.pending > 0
-              ? `${rollout.pending} pending`
-              : rollout && rollout.stale > 0
-                ? `${rollout.stale} stale`
-                : undefined
-          }
+          sub={rollout && rollout.pending > 0 ? `${rollout.pending} pending` : undefined}
           testId="release-diff-rollout"
         />
       ) : null}

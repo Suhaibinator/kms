@@ -54,7 +54,6 @@ const snapshot = (
     applied_divergent: 0,
     rejected: 0,
     pending: 0,
-    stale: 0,
     other_release_names: [],
     rejected_instances: [],
     truncated: false,

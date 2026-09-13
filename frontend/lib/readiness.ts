@@ -93,7 +93,6 @@ export const FIX_FOR: Record<FindingCode, FixAction | null> = {
   instance_rejected: "open_subscribers",
   instance_divergent: "open_subscribers",
   instance_pending: "open_subscribers",
-  instance_stale: "open_subscribers",
   rolled_back: "open_release",
   previous_unavailable: null,
   production: null,
@@ -175,7 +174,6 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
     return `An instance applied the active release but runs values that differ from its source-owned defaults${n ? ` (${plural(n, "field", "fields")})` : ""}. Adopt the release values in code or restore the defaults.`;
   },
   instance_pending: () => "An instance is connected but has not applied the active release yet.",
-  instance_stale: () => "An instance disconnected before applying the active release.",
   rolled_back: (p) =>
     `This environment was rolled back${str(p, "from") ? ` from version ${str(p, "from")}` : ""}. The newer release is still available to re-activate.`,
   previous_unavailable: () => "There is no previous release to roll back to.",

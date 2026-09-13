@@ -789,7 +789,7 @@ export type ValuesState = "empty" | "incomplete" | "complete";
 
 export type ReleaseState = "none" | "active" | "drift" | "blocked";
 
-export type RolloutState = "no_subscribers" | "applied" | "rolling" | "degraded" | "stale";
+export type RolloutState = "no_subscribers" | "applied" | "rolling" | "degraded";
 
 export type FindingCode =
   | "no_environments"
@@ -814,7 +814,6 @@ export type FindingCode =
   | "instance_rejected"
   | "instance_divergent"
   | "instance_pending"
-  | "instance_stale"
   | "rolled_back"
   | "previous_unavailable"
   | "production"
@@ -896,7 +895,6 @@ export interface OverviewRollout {
   applied_divergent: number;
   rejected: number;
   pending: number;
-  stale: number;
   other_release_names: string[];
   // At most 50; `truncated` says whether more were dropped.
   rejected_instances: SubscriberInstance[];

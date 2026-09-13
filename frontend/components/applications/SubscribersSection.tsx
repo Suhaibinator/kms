@@ -52,7 +52,6 @@ export function SubscribersSection({
           ) : null}
           {rollout.pending > 0 ? <Badge kind="accent">pending {rollout.pending}</Badge> : null}
           {rollout.rejected > 0 ? <Badge kind="danger">rejected {rollout.rejected}</Badge> : null}
-          {rollout.stale > 0 ? <Badge kind="warning">stale {rollout.stale}</Badge> : null}
         </div>
       )}
       {rollout.rejected_instances.length > 0 ? (

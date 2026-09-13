@@ -98,14 +98,17 @@ export function groupSubscriberInstances(
 
 export type SubscriberCounts = Pick<
   OverviewRollout,
-  "total" | "connected" | "applied_current" | "applied_divergent" | "rejected" | "pending" | "stale"
+  "total" | "connected" | "applied_current" | "applied_divergent" | "rejected" | "pending"
 > & { pinned?: number };
 
 /**
  * Rollout counts over grouped instances, matching the server's summary:
- * applied_current / rejected are connected instances at (or past) the current
- * activation revision; pending is every other connected instance; stale is a
- * disconnected instance that never applied the current revision.
+ * applied_current / rejected are instances at (or past) the current
+ * activation revision; pending is every other instance. Departed instances
+ * never arrive from the server (it drops a disconnected, unpinned instance
+ * after its grace period), so a briefly disconnected row keeps its last
+ * state and is bucketed exactly like a connected one; only `connected`
+ * tells them apart.
  */
 export function countSubscribers(
   instances: readonly SubscriberInstance[],
@@ -118,15 +121,16 @@ export function countSubscribers(
     applied_divergent: 0,
     rejected: 0,
     pending: 0,
-    stale: 0,
   };
   for (const instance of instances) {
+    if (instance.connected) counts.connected++;
     if (instance.session_id) {
-      if (!instance.connected) {
-        counts.stale++;
+      // A disconnected pinned session stays in the fleet as pinned until an
+      // operator removes the pin (server rule).
+      if (!instance.connected && instance.pin_version) {
+        counts.pinned = (counts.pinned ?? 0) + 1;
         continue;
       }
-      counts.connected++;
       const atTarget =
         instance.target_revision === instance.desired_revision &&
         instance.release_version === instance.desired_version;
@@ -145,11 +149,6 @@ export function countSubscribers(
     }
     const atCurrent = instance.activation_revision >= currentRevision;
     const applied = instance.state === "applied" && atCurrent;
-    if (!instance.connected) {
-      if (!applied) counts.stale += 1;
-      continue;
-    }
-    counts.connected += 1;
     if (applied) {
       counts.applied_current += 1;
       if (instance.applied_divergent) counts.applied_divergent += 1;

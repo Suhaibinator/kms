@@ -48,13 +48,7 @@ const ENV_STATUSES: EnvStatus[] = [
 ];
 const VALUES_STATES: ValuesState[] = ["empty", "incomplete", "complete"];
 const RELEASE_STATES: ReleaseState[] = ["none", "active", "drift", "blocked"];
-const ROLLOUT_STATES: RolloutState[] = [
-  "no_subscribers",
-  "applied",
-  "rolling",
-  "degraded",
-  "stale",
-];
+const ROLLOUT_STATES: RolloutState[] = ["no_subscribers", "applied", "rolling", "degraded"];
 const FINDING_CODES = Object.keys(FINDING_COPY) as FindingCode[];
 const DIFF_CHANGES: ReleaseDiffChange[] = ["added", "removed", "changed", "unchanged"];
 const DIFF_REASONS: ReleaseDiffReason[] = ["value", "pin", "key", "kind", "content_type"];
@@ -143,7 +137,6 @@ function assertEnvironment(env: unknown): asserts env is EnvironmentOverview {
     "applied_divergent",
     "rejected",
     "pending",
-    "stale",
   ]) {
     expect(typeof rollout[key]).toBe("number");
   }

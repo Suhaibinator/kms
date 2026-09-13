@@ -76,7 +76,6 @@ export function EnvironmentColumn({
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
   const findings = useMemo(() => columnFindings(environment), [environment]);
-  const staleFindings = findings.filter((finding) => finding.code === "instance_stale");
   const otherKeys = useMemo(() => countOtherKeys(environment, rows), [environment, rows]);
   // The overview already carries every parameter's value, so the filter can
   // search inside them without this column loading anything.
@@ -166,19 +165,7 @@ export function EnvironmentColumn({
       {ns.description ? (
         <div className="pipeline-description faint text-sm">{ns.description}</div>
       ) : null}
-      <FindingList
-        findings={findings.filter((f) => f.code !== "instance_stale")}
-        onFix={callbacks.onFix}
-        className="pipeline-findings"
-      />
-      {findings.some((f) => f.code === "instance_stale") && (
-        <details className="info-panel text-sm">
-          <summary className="cursor-pointer">
-            {staleFindings.length} stale instances · View details
-          </summary>
-          <FindingList findings={staleFindings} onFix={callbacks.onFix} />
-        </details>
-      )}
+      <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
         otherKeys={otherKeys}

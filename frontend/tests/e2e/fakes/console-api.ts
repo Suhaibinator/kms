@@ -607,28 +607,31 @@ function activeRelease(ns: FakeNamespace): ConfigurationRelease | null {
   return ns.releases.find((release) => release.version === ns.active) ?? null;
 }
 
+/** The rows the server would return: a disconnected, unpinned instance has
+ *  departed and is filtered out; a pinned one stays until it is unpinned. */
+function visibleSubscribers(ns: FakeNamespace): ReleaseSubscriberState[] {
+  return ns.subscribers.filter((row) => row.connected || Boolean(row.pin_version));
+}
+
 function rolloutOf(ns: FakeNamespace): OverviewRollout {
+  const visible = visibleSubscribers(ns);
   const rollout: OverviewRollout = {
-    total: ns.subscribers.length,
+    total: visible.length,
     connected: 0,
     applied_current: 0,
     applied_divergent: 0,
     rejected: 0,
     pending: 0,
-    stale: 0,
     other_release_names: [],
     rejected_instances: [],
     truncated: false,
   };
-  for (const row of ns.subscribers) {
+  for (const row of visible) {
     const atCurrent = row.activation_revision >= ns.activationRevision;
     const applied = row.state === "applied" && atCurrent;
-    if (!row.connected) {
-      if (!applied) rollout.stale += 1;
-      continue;
-    }
-    rollout.connected += 1;
-    if (applied) rollout.applied_current += 1;
+    if (row.connected) rollout.connected += 1;
+    if (row.pin_version) rollout.pinned = (rollout.pinned ?? 0) + 1;
+    else if (applied) rollout.applied_current += 1;
     else if (row.state === "rejected" && atCurrent) {
       rollout.rejected += 1;
       rollout.rejected_instances.push({
@@ -737,9 +740,7 @@ function environmentOverview(state: ConsoleState, ns: FakeNamespace): Environmen
           ? "degraded"
           : rollout.pending > 0
             ? "rolling"
-            : rollout.stale > 0
-              ? "stale"
-              : "applied",
+            : "applied",
     values,
     release: {
       active: active
@@ -1769,7 +1770,9 @@ export function handle(
       return {
         status: 200,
         body: {
-          subscribers: ns.subscribers.filter((row) => row.release_name === params.get("name")),
+          subscribers: visibleSubscribers(ns).filter(
+            (row) => row.release_name === params.get("name"),
+          ),
           current_revision: state.revision,
           next_page_token: "",
         },
