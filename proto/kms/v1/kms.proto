@@ -869,6 +869,7 @@ service AdminService {
   rpc ListReleaseSubscribers(ListReleaseSubscribersRequest) returns (ListReleaseSubscribersResponse);
   rpc ApplyApplicationDefaults(ApplyApplicationDefaultsRequest) returns (ApplyApplicationDefaultsResponse);
   rpc CreateApplicationRelease(CreateApplicationReleaseRequest) returns (CreateApplicationReleaseResponse);
+  rpc MigrateApplicationRelease(MigrateApplicationReleaseRequest) returns (MigrateApplicationReleaseResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -1312,4 +1313,69 @@ message CreateApplicationReleaseResponse {
   // Set after any successful execute, including an idempotent result that
   // returns an already-equivalent latest inactive release.
   ConfigurationRelease release = 12;
+}
+
+// ApplicationMigrationChange addresses one target contract alias when
+// migrating an active release to another schema track. from_alias carries
+// the active pin of a renamed alias; version pins an exact existing resource;
+// value (parameters only) writes a new version with that content. Aliases
+// with no change carry their active pin unchanged.
+message ApplicationMigrationChange {
+  string alias = 1;
+  string from_alias = 2;
+  string key = 3;
+  optional string value = 4;
+  string content_type = 5;
+  uint64 version = 6;
+}
+
+// MigrateApplicationReleaseRequest rebuilds the source track's active
+// release against the target schema's contract and, on execute, writes the
+// edited parameters, creates the release on the target track and activates
+// it in one transaction. Preview is the default; execute requires the exact
+// plan_digest returned by a preceding preview. contract is the complete
+// target definition, not a patch, and must match a registered contract when
+// the schema has one.
+message MigrateApplicationReleaseRequest {
+  NamespaceRef namespace = 1;
+  uint64 source_schema_version = 2;
+  uint64 schema_version = 3;
+  repeated ApplicationContractField contract = 4;
+  repeated ApplicationMigrationChange changes = 5;
+  string metadata_json = 6;
+  bool execute = 7;
+  string plan_digest = 8;
+  // Compare-and-swap on the source: supply both or neither.
+  optional uint64 expected_source_version = 9;
+  optional uint64 expected_source_activation_revision = 10;
+}
+
+message ApplicationMigrationEnvironment {
+  string environment = 1;
+  uint64 active_version = 2;
+  uint64 schema_version = 3;
+}
+
+message ApplicationMigrationActivation {
+  uint64 activation_revision = 1;
+  uint64 previous_version = 2;
+  bool changed = 3;
+}
+
+// MigrateApplicationReleaseResponse is value-free. entries.source is
+// preserved | renamed | edited | pinned | added | missing | removed.
+message MigrateApplicationReleaseResponse {
+  string plan_digest = 1;
+  bool valid = 2;
+  bool executed = 3;
+  bool definition_changed = 4;
+  string release_name = 5;
+  uint64 source_version = 6;
+  uint64 source_activation_revision = 7;
+  uint64 schema_version = 8;
+  repeated ApplicationReleasePlanEntry entries = 9;
+  repeated ReleaseValidationError validation = 10;
+  repeated ApplicationMigrationEnvironment affected_environments = 11;
+  ConfigurationRelease release = 12;
+  ApplicationMigrationActivation activation = 13;
 }
