@@ -1806,6 +1806,7 @@ const (
 	AdminService_ListReleaseSubscribers_FullMethodName    = "/kms.v1.AdminService/ListReleaseSubscribers"
 	AdminService_ApplyApplicationDefaults_FullMethodName  = "/kms.v1.AdminService/ApplyApplicationDefaults"
 	AdminService_CreateApplicationRelease_FullMethodName  = "/kms.v1.AdminService/CreateApplicationRelease"
+	AdminService_MigrateApplicationRelease_FullMethodName = "/kms.v1.AdminService/MigrateApplicationRelease"
 	AdminService_Health_FullMethodName                    = "/kms.v1.AdminService/Health"
 )
 
@@ -1834,6 +1835,7 @@ type AdminServiceClient interface {
 	ListReleaseSubscribers(ctx context.Context, in *ListReleaseSubscribersRequest, opts ...grpc.CallOption) (*ListReleaseSubscribersResponse, error)
 	ApplyApplicationDefaults(ctx context.Context, in *ApplyApplicationDefaultsRequest, opts ...grpc.CallOption) (*ApplyApplicationDefaultsResponse, error)
 	CreateApplicationRelease(ctx context.Context, in *CreateApplicationReleaseRequest, opts ...grpc.CallOption) (*CreateApplicationReleaseResponse, error)
+	MigrateApplicationRelease(ctx context.Context, in *MigrateApplicationReleaseRequest, opts ...grpc.CallOption) (*MigrateApplicationReleaseResponse, error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -2055,6 +2057,16 @@ func (c *adminServiceClient) CreateApplicationRelease(ctx context.Context, in *C
 	return out, nil
 }
 
+func (c *adminServiceClient) MigrateApplicationRelease(ctx context.Context, in *MigrateApplicationReleaseRequest, opts ...grpc.CallOption) (*MigrateApplicationReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MigrateApplicationReleaseResponse)
+	err := c.cc.Invoke(ctx, AdminService_MigrateApplicationRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *adminServiceClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -2090,6 +2102,7 @@ type AdminServiceServer interface {
 	ListReleaseSubscribers(context.Context, *ListReleaseSubscribersRequest) (*ListReleaseSubscribersResponse, error)
 	ApplyApplicationDefaults(context.Context, *ApplyApplicationDefaultsRequest) (*ApplyApplicationDefaultsResponse, error)
 	CreateApplicationRelease(context.Context, *CreateApplicationReleaseRequest) (*CreateApplicationReleaseResponse, error)
+	MigrateApplicationRelease(context.Context, *MigrateApplicationReleaseRequest) (*MigrateApplicationReleaseResponse, error)
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
@@ -2163,6 +2176,9 @@ func (UnimplementedAdminServiceServer) ApplyApplicationDefaults(context.Context,
 }
 func (UnimplementedAdminServiceServer) CreateApplicationRelease(context.Context, *CreateApplicationReleaseRequest) (*CreateApplicationReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateApplicationRelease not implemented")
+}
+func (UnimplementedAdminServiceServer) MigrateApplicationRelease(context.Context, *MigrateApplicationReleaseRequest) (*MigrateApplicationReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MigrateApplicationRelease not implemented")
 }
 func (UnimplementedAdminServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
@@ -2566,6 +2582,24 @@ func _AdminService_CreateApplicationRelease_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_MigrateApplicationRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MigrateApplicationReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).MigrateApplicationRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_MigrateApplicationRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).MigrateApplicationRelease(ctx, req.(*MigrateApplicationReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AdminService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -2674,6 +2708,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateApplicationRelease",
 			Handler:    _AdminService_CreateApplicationRelease_Handler,
+		},
+		{
+			MethodName: "MigrateApplicationRelease",
+			Handler:    _AdminService_MigrateApplicationRelease_Handler,
 		},
 		{
 			MethodName: "Health",
