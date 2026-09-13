@@ -1764,3 +1764,93 @@ class CreateApplicationReleaseResponse(_message.Message):
     validation: _containers.RepeatedCompositeFieldContainer[ReleaseValidationError]
     release: ConfigurationRelease
     def __init__(self, profile: _Optional[str] = ..., plan_digest: _Optional[str] = ..., valid: _Optional[bool] = ..., executed: _Optional[bool] = ..., created: _Optional[bool] = ..., release_name: _Optional[str] = ..., schema_version: _Optional[int] = ..., base_release_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ApplicationReleasePlanEntry, _Mapping]]] = ..., missing_secrets: _Optional[_Iterable[str]] = ..., validation: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ..., release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
+
+class ApplicationMigrationChange(_message.Message):
+    __slots__ = ("alias", "from_alias", "key", "value", "content_type", "version")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    FROM_ALIAS_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    from_alias: str
+    key: str
+    value: str
+    content_type: str
+    version: int
+    def __init__(self, alias: _Optional[str] = ..., from_alias: _Optional[str] = ..., key: _Optional[str] = ..., value: _Optional[str] = ..., content_type: _Optional[str] = ..., version: _Optional[int] = ...) -> None: ...
+
+class MigrateApplicationReleaseRequest(_message.Message):
+    __slots__ = ("namespace", "source_schema_version", "schema_version", "contract", "changes", "metadata_json", "execute", "plan_digest", "expected_source_version", "expected_source_activation_revision")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_FIELD_NUMBER: _ClassVar[int]
+    CHANGES_FIELD_NUMBER: _ClassVar[int]
+    METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    EXECUTE_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_SOURCE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_SOURCE_ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    source_schema_version: int
+    schema_version: int
+    contract: _containers.RepeatedCompositeFieldContainer[ApplicationContractField]
+    changes: _containers.RepeatedCompositeFieldContainer[ApplicationMigrationChange]
+    metadata_json: str
+    execute: bool
+    plan_digest: str
+    expected_source_version: int
+    expected_source_activation_revision: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., source_schema_version: _Optional[int] = ..., schema_version: _Optional[int] = ..., contract: _Optional[_Iterable[_Union[ApplicationContractField, _Mapping]]] = ..., changes: _Optional[_Iterable[_Union[ApplicationMigrationChange, _Mapping]]] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., expected_source_version: _Optional[int] = ..., expected_source_activation_revision: _Optional[int] = ...) -> None: ...
+
+class ApplicationMigrationEnvironment(_message.Message):
+    __slots__ = ("environment", "active_version", "schema_version")
+    ENVIRONMENT_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    environment: str
+    active_version: int
+    schema_version: int
+    def __init__(self, environment: _Optional[str] = ..., active_version: _Optional[int] = ..., schema_version: _Optional[int] = ...) -> None: ...
+
+class ApplicationMigrationActivation(_message.Message):
+    __slots__ = ("activation_revision", "previous_version", "changed")
+    ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PREVIOUS_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_FIELD_NUMBER: _ClassVar[int]
+    activation_revision: int
+    previous_version: int
+    changed: bool
+    def __init__(self, activation_revision: _Optional[int] = ..., previous_version: _Optional[int] = ..., changed: _Optional[bool] = ...) -> None: ...
+
+class MigrateApplicationReleaseResponse(_message.Message):
+    __slots__ = ("plan_digest", "valid", "executed", "definition_changed", "release_name", "source_version", "source_activation_revision", "schema_version", "entries", "validation", "affected_environments", "release", "activation")
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    VALID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTED_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_CHANGED_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    VALIDATION_FIELD_NUMBER: _ClassVar[int]
+    AFFECTED_ENVIRONMENTS_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_FIELD_NUMBER: _ClassVar[int]
+    plan_digest: str
+    valid: bool
+    executed: bool
+    definition_changed: bool
+    release_name: str
+    source_version: int
+    source_activation_revision: int
+    schema_version: int
+    entries: _containers.RepeatedCompositeFieldContainer[ApplicationReleasePlanEntry]
+    validation: _containers.RepeatedCompositeFieldContainer[ReleaseValidationError]
+    affected_environments: _containers.RepeatedCompositeFieldContainer[ApplicationMigrationEnvironment]
+    release: ConfigurationRelease
+    activation: ApplicationMigrationActivation
+    def __init__(self, plan_digest: _Optional[str] = ..., valid: _Optional[bool] = ..., executed: _Optional[bool] = ..., definition_changed: _Optional[bool] = ..., release_name: _Optional[str] = ..., source_version: _Optional[int] = ..., source_activation_revision: _Optional[int] = ..., schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ApplicationReleasePlanEntry, _Mapping]]] = ..., validation: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ..., affected_environments: _Optional[_Iterable[_Union[ApplicationMigrationEnvironment, _Mapping]]] = ..., release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ..., activation: _Optional[_Union[ApplicationMigrationActivation, _Mapping]] = ...) -> None: ...

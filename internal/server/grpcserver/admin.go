@@ -141,6 +141,96 @@ func toProtoApplicationReleaseCreateResult(result domain.ApplicationReleaseCreat
 	return response
 }
 
+// MigrateApplicationRelease previews or, with the preview's plan digest,
+// atomically applies a reviewed migration of the active release onto another
+// schema track. Parameter values travel only in the request; the response is
+// value-free like CreateApplicationRelease.
+func (h *adminServer) MigrateApplicationRelease(ctx context.Context, req *kmsv1.MigrateApplicationReleaseRequest) (*kmsv1.MigrateApplicationReleaseResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.MigrateApplicationRelease(ctx, pr, applicationReleaseMigrationInputFromProto(req))
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return toProtoApplicationReleaseMigrationResult(result), nil
+}
+
+// applicationReleaseMigrationInputFromProto maps the wire request 1:1 onto the
+// core input. Proto presence is preserved: an unset change value stays nil
+// (keep the pin), while an explicitly empty value arrives as a pointer to "".
+func applicationReleaseMigrationInputFromProto(req *kmsv1.MigrateApplicationReleaseRequest) domain.ApplicationReleaseMigrationInput {
+	contract := make([]domain.ApplicationContractField, 0, len(req.GetContract()))
+	for _, f := range req.GetContract() {
+		contract = append(contract, domain.ApplicationContractField{Alias: f.GetAlias(), Kind: f.GetKind(), ContentType: f.GetContentType()})
+	}
+	changes := make([]domain.ApplicationMigrationChange, 0, len(req.GetChanges()))
+	for _, c := range req.GetChanges() {
+		change := domain.ApplicationMigrationChange{
+			Alias: c.GetAlias(), FromAlias: c.GetFromAlias(), Key: c.GetKey(),
+			ContentType: c.GetContentType(), Version: c.GetVersion(),
+		}
+		if c.Value != nil {
+			value := c.GetValue()
+			change.Value = &value
+		}
+		changes = append(changes, change)
+	}
+	in := domain.ApplicationReleaseMigrationInput{
+		Namespace:           nsRefFromProto(req.GetNamespace()),
+		SourceSchemaVersion: req.GetSourceSchemaVersion(), SchemaVersion: req.GetSchemaVersion(),
+		Contract: contract, Changes: changes, Metadata: req.GetMetadataJson(),
+		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
+	}
+	if req.ExpectedSourceVersion != nil {
+		v := req.GetExpectedSourceVersion()
+		in.ExpectedSourceVersion = &v
+	}
+	if req.ExpectedSourceActivationRevision != nil {
+		v := req.GetExpectedSourceActivationRevision()
+		in.ExpectedSourceActivationRevision = &v
+	}
+	return in
+}
+
+func toProtoApplicationReleaseMigrationResult(result domain.ApplicationReleaseMigrationResult) *kmsv1.MigrateApplicationReleaseResponse {
+	entries := make([]*kmsv1.ApplicationReleasePlanEntry, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		entries = append(entries, &kmsv1.ApplicationReleasePlanEntry{
+			Alias: entry.Alias, Kind: entry.Kind, Ref: refToProto(entry.Ref),
+			FromVersion: entry.FromVersion, ToVersion: entry.ToVersion, Source: entry.Source,
+		})
+	}
+	validation := make([]*kmsv1.ReleaseValidationError, 0, len(result.Validation))
+	for _, violation := range result.Validation {
+		validation = append(validation, toProtoReleaseValidationError(violation))
+	}
+	environments := make([]*kmsv1.ApplicationMigrationEnvironment, 0, len(result.AffectedEnvironments))
+	for _, env := range result.AffectedEnvironments {
+		environments = append(environments, &kmsv1.ApplicationMigrationEnvironment{
+			Environment: env.Environment, ActiveVersion: env.ActiveVersion, SchemaVersion: env.SchemaVersion,
+		})
+	}
+	response := &kmsv1.MigrateApplicationReleaseResponse{
+		PlanDigest: result.PlanDigest, Valid: result.Valid, Executed: result.Executed,
+		DefinitionChanged: result.DefinitionChanged, ReleaseName: result.ReleaseName,
+		SourceVersion: result.SourceVersion, SourceActivationRevision: result.SourceActivationRevision,
+		SchemaVersion: result.SchemaVersion, Entries: entries, Validation: validation,
+		AffectedEnvironments: environments,
+	}
+	if result.Release != nil {
+		response.Release = toProtoConfigurationRelease(*result.Release)
+	}
+	if result.Activation != nil {
+		response.Activation = &kmsv1.ApplicationMigrationActivation{
+			ActivationRevision: result.Activation.ActivationRevision,
+			PreviousVersion:    result.Activation.PreviousVersion, Changed: result.Activation.Changed,
+		}
+	}
+	return response
+}
+
 // --- policies --------------------------------------------------------------
 
 func (h *adminServer) CreatePolicy(ctx context.Context, req *kmsv1.CreatePolicyRequest) (*kmsv1.CreatePolicyResponse, error) {
