@@ -9,6 +9,7 @@ import type {
   SchemaMigrationResponse,
 } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
+import { chooseSelectOption, visibleSelectOptions } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   listSchemas: vi.fn(),
@@ -142,7 +143,7 @@ describe("SchemaMigrationModal regressions", () => {
     );
     const dialog = screen.getByRole("dialog");
     await waitFor(() =>
-      expect(within(dialog).getByLabelText("Target registered schema")).toHaveValue("2"),
+      expect(within(dialog).getByLabelText("Target registered schema")).toHaveTextContent("v2"),
     );
     await reachPreview(dialog);
     expect(mocks.migrateApplicationSchema.mock.calls[0][1]).toMatchObject({ schema_version: 2 });
@@ -157,9 +158,10 @@ describe("SchemaMigrationModal regressions", () => {
     const dialog = screen.getByRole("dialog");
     await reachContract(dialog);
     const row = within(dialog)
-      .getByDisplayValue("database")
-      .closest(".migration-contract-row") as HTMLElement;
-    fireEvent.change(within(row).getByLabelText("Source alias"), { target: { value: "" } });
+      .getAllByLabelText("Alias")
+      .find((element) => (element as HTMLInputElement).value === "database")
+      ?.closest(".migration-contract-row") as HTMLElement;
+    await chooseSelectOption(within(row).getByLabelText("Source alias"), "New field");
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     expect(within(dialog).getByLabelText("database value")).toHaveValue("");
     fireEvent.click(within(dialog).getByRole("button", { name: /Preview migration/ }));
@@ -212,10 +214,11 @@ describe("SchemaMigrationModal regressions", () => {
       .getAllByDisplayValue("database")
       .find((node) => node.closest(".migration-contract-row"))
       ?.closest(".migration-contract-row") as HTMLElement;
-    fireEvent.change(within(mappingRow).getByLabelText("Source alias"), { target: { value: "" } });
-    fireEvent.change(within(mappingRow).getByLabelText("Source alias"), {
-      target: { value: "database" },
-    });
+    await chooseSelectOption(within(mappingRow).getByLabelText("Source alias"), "New field");
+    await chooseSelectOption(
+      within(mappingRow).getByLabelText("Source alias"),
+      "database · parameter v1",
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     await waitFor(() => expect(count).toHaveValue("3"));
     previewButton = within(dialog).getByRole("button", { name: /Preview migration/ });
@@ -245,7 +248,7 @@ describe("SchemaMigrationModal regressions", () => {
       .getAllByLabelText("Alias")
       .find((element) => (element as HTMLInputElement).value === "new_setting")
       ?.closest(".migration-contract-row") as HTMLElement;
-    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "secret" } });
+    await chooseSelectOption(within(row).getByLabelText("Kind"), "Secret");
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     fireEvent.change(within(dialog).getByLabelText("new_setting exact version"), {
       target: { value: "1" },
@@ -544,8 +547,8 @@ describe("SchemaMigrationModal regressions", () => {
     });
     render(<SchemaMigrationModal {...modalProps({ initialSchemaVersion: undefined })} />);
     const select = await screen.findByLabelText("Target registered schema");
-    expect(within(select).queryByRole("option", { name: /v1/ })).not.toBeInTheDocument();
-    expect(select).toHaveValue("2");
+    expect(await visibleSelectOptions(select)).not.toContainEqual(expect.stringMatching(/v1/));
+    expect(select).toHaveTextContent("v2");
   });
   it("blocks an upgrade when there is no newer registered schema", async () => {
     mocks.listSchemas.mockResolvedValue({ schemas: [registeredSchema(1)], next_page_token: "" });
@@ -646,7 +649,7 @@ describe("SchemaMigrationModal regressions", () => {
       .find((node) => node.closest(".migration-contract-row"))
       ?.closest(".migration-contract-row");
     if (!(secretRow instanceof HTMLElement)) throw new Error("secret row missing");
-    fireEvent.change(within(secretRow).getByLabelText("Source alias"), { target: { value: "" } });
+    await chooseSelectOption(within(secretRow).getByLabelText("Source alias"), "New field");
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     expect(within(dialog).getByText(/exact version for a secret/)).toBeVisible();
     expect(within(dialog).getByRole("button", { name: /Preview migration/ })).toBeDisabled();
@@ -677,13 +680,16 @@ describe("SchemaMigrationModal regressions", () => {
     render(<SchemaMigrationModal {...modalProps()} />);
     const dialog = screen.getByRole("dialog");
     await reachContract(dialog);
-    const row = within(dialog).getByDisplayValue("database").closest(".migration-contract-row");
+    const row = within(dialog)
+      .getAllByLabelText("Alias")
+      .find((element) => (element as HTMLInputElement).value === "database")
+      ?.closest(".migration-contract-row");
     if (!(row instanceof HTMLElement)) throw new Error("database row missing");
 
-    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "secret" } });
-    expect(within(row).getByLabelText("Source alias")).toHaveValue("");
-    fireEvent.change(within(row).getByLabelText("Kind"), { target: { value: "parameter" } });
-    expect(within(row).getByLabelText("Source alias")).toHaveValue("");
+    await chooseSelectOption(within(row).getByLabelText("Kind"), "Secret");
+    expect(within(row).getByLabelText("Source alias")).toHaveTextContent("New field");
+    await chooseSelectOption(within(row).getByLabelText("Kind"), "Parameter");
+    expect(within(row).getByLabelText("Source alias")).toHaveTextContent("New field");
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     expect(within(dialog).getByLabelText("database resource key")).toHaveValue("database");
     expect(within(dialog).getByLabelText("database exact version")).toHaveValue("");
@@ -835,9 +841,10 @@ describe("SchemaMigrationModal regressions", () => {
     expect(aliases[0]).toHaveValue("new_token");
     expect(aliases[0]).toBeDisabled();
     const secret = dev.release.active!.entries.find((entry) => entry.kind === "secret")!;
-    fireEvent.change(within(dialog).getByLabelText("Source alias"), {
-      target: { value: secret.alias },
-    });
+    await chooseSelectOption(
+      within(dialog).getByLabelText("Source alias"),
+      `${secret.alias} · secret v${secret.version}`,
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: /Preview migration/ }));
     await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
@@ -870,7 +877,7 @@ describe("SchemaMigrationModal regressions", () => {
     render(<SchemaMigrationModal {...modalProps()} />);
     const dialog = screen.getByRole("dialog");
     await reachContract(dialog);
-    expect(within(dialog).getByLabelText("Content type")).toHaveValue("json");
+    expect(within(dialog).getByLabelText("Content type")).toHaveTextContent("json");
     expect(within(dialog).getByLabelText("Content type")).toBeDisabled();
     expect(within(dialog).getAllByLabelText("Alias")).toHaveLength(1);
   });

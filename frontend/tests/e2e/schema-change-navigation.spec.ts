@@ -44,7 +44,8 @@ test("switches duplicate release versions by the schema URL identity", async ({ 
 
   await page.goto("/applications?app=gradethis&schema_version=1");
   await expect(page.getByText("schema track 1")).toBeVisible();
-  await page.getByRole("combobox", { name: "Schema version" }).selectOption("2");
+  await page.getByRole("combobox", { name: "Schema version" }).click();
+  await page.getByRole("option", { name: "v2" }).click();
   await expect(page).toHaveURL(/schema_version=2/);
   await expect(page.getByText("schema track 2")).toBeVisible();
   await expect(page.getByText("schema track 1")).toHaveCount(0);
@@ -165,7 +166,9 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   await contractCard.scrollIntoViewIfNeeded();
   const cardGeometry = await contractCard.evaluate((card) => {
     const bounds = card.getBoundingClientRect();
-    const remove = card.querySelector("button")!.getBoundingClientRect();
+    const remove = card
+      .querySelector<HTMLButtonElement>('button[aria-label^="Remove "]')!
+      .getBoundingClientRect();
     return { deleteOffset: remove.top - bounds.top, overflow: card.scrollWidth - card.clientWidth };
   });
   expect(cardGeometry.deleteOffset).toBeLessThan(32);
@@ -303,16 +306,17 @@ test("registry upgrades explicitly choose an active source before opening the de
     .click();
   await page.getByRole("link", { name: "Set up an upgrade" }).click();
   await expect(page.getByRole("heading", { name: "Choose upgrade source" })).toBeVisible();
-  await page
-    .getByRole("combobox", { name: "Source track and environment" })
-    .selectOption(JSON.stringify([1, "dev"]));
+  await page.getByRole("combobox", { name: "Source track and environment" }).click();
+  await page.getByRole("option", { name: /schema v1 · dev/ }).click();
   await page.getByRole("button", { name: "Continue upgrade" }).click();
   await expect(page).toHaveURL(/schema_version=1/);
   await expect(page).toHaveURL(/migrate=2/);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("combobox", { name: "Target registered schema" })).toHaveValue("2");
-  await expect(dialog.getByRole("combobox", { name: "Destination environment" })).toHaveValue(
+  await expect(dialog.getByRole("combobox", { name: "Target registered schema" })).toContainText(
+    "v2",
+  );
+  await expect(dialog.getByRole("combobox", { name: "Destination environment" })).toContainText(
     "dev",
   );
   await page.goto("/applications?app=gradethis&schema_version=0&env=dev&migrate=2");

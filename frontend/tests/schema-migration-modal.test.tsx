@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SchemaMigrationModal } from "@/components/applications/SchemaMigrationModal";
 import type { ApplicationOverview, SchemaMigrationRequest } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   listSchemas: vi.fn(),
@@ -83,8 +84,8 @@ describe("SchemaMigrationModal", () => {
 
     const dialog = screen.getByRole("dialog");
     await waitFor(() =>
-      expect(within(dialog).getByLabelText("Target registered schema")).toHaveValue(
-        String(schema.version),
+      expect(within(dialog).getByLabelText("Target registered schema")).toHaveTextContent(
+        `v${schema.version}`,
       ),
     );
     fireEvent.click(within(dialog).getByRole("button", { name: /Review contract/ }));
@@ -96,9 +97,10 @@ describe("SchemaMigrationModal", () => {
       .getByDisplayValue("renamed_rate_limits")
       .closest(".migration-contract-row");
     if (!(renamedRow instanceof HTMLElement)) throw new Error("contract row missing");
-    fireEvent.change(within(renamedRow).getByLabelText("Source alias"), {
-      target: { value: source.alias },
-    });
+    await chooseSelectOption(
+      within(renamedRow).getByLabelText("Source alias"),
+      `${source.alias} · ${source.kind} v${source.version}`,
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: /Edit values/ }));
     await waitFor(() =>
       expect(mocks.getParameter).toHaveBeenCalledWith(

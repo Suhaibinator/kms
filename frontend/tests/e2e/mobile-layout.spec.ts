@@ -51,8 +51,10 @@ for (const width of [320, 390, 400, 640, 641, 768, 769, 1280, 1440]) {
         expect((await select.boundingBox())?.height).toBeGreaterThanOrEqual(44);
       }
       await expect(page.getByRole("columnheader")).toHaveCount(0);
-      await toolbar.getByRole("combobox", { name: "Sort by", exact: true }).selectOption("key");
-      await toolbar.getByRole("combobox", { name: "Direction" }).selectOption("desc");
+      await toolbar.getByRole("combobox", { name: "Sort by", exact: true }).click();
+      await page.getByRole("option", { name: "Key" }).click();
+      await toolbar.getByRole("combobox", { name: "Direction" }).click();
+      await page.getByRole("option", { name: "Descending" }).click();
       await expect(page).toHaveURL(/sort=key.*dir=desc/);
       await toolbar.getByRole("checkbox", { name: /Select all secrets/ }).check();
       await expect(page.getByRole("region", { name: "Bulk actions" })).toContainText("selected");

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, EmptyState, Field, PageHeader } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { api, isAbortError } from "@/lib/api";
 import { useSchemaRegistry } from "@/lib/useSchemaRegistry";
 
@@ -97,23 +98,21 @@ export function SchemaUpgradeSource({
           </EmptyState>
         ) : (
           <Field label="Source track and environment">
-            <select
+            <AppSelect
               aria-label="Source track and environment"
               value={selection}
-              onChange={(event) => setSelection(event.target.value)}
-            >
-              <option value="">Choose an active source</option>
-              {current.sources.map((source) => {
+              onValueChange={setSelection}
+              placeholder="Choose an active source"
+              options={current.sources.map((source) => {
                 const key = JSON.stringify([source.schemaVersion, source.environment]);
-                return (
-                  <option key={key} value={key}>
-                    schema v{source.schemaVersion}
-                    {source.schemaVersion === 0 ? " (schema-free)" : ""} · {source.environment} ·
-                    release v{source.releaseVersion}
-                  </option>
-                );
+                return {
+                  value: key,
+                  label: `schema v${source.schemaVersion}${
+                    source.schemaVersion === 0 ? " (schema-free)" : ""
+                  } · ${source.environment} · release v${source.releaseVersion}`,
+                };
               })}
-            </select>
+            />
           </Field>
         )}
         <div className="row-wrap">

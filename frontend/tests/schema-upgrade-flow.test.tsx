@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SchemaMigrationModal } from "@/components/applications/SchemaMigrationModal";
 import type { ApplicationOverview, SchemaMigrationRequest } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   listSchemas: vi.fn(),
@@ -81,7 +82,7 @@ describe("Schema upgrade defaults source", () => {
       />,
     );
     await screen.findByLabelText("Starting values");
-    fireEvent.change(screen.getByLabelText("Starting values"), { target: { value: "artifact" } });
+    await chooseSelectOption(screen.getByLabelText("Starting values"), "Import defaults file");
     const value = '{"id":90071992547409931234}';
     const artifact = {
       format: "kms-config-defaults/v1",
@@ -131,7 +132,7 @@ describe("Schema upgrade defaults source", () => {
       />,
     );
     await screen.findByLabelText("Starting values");
-    fireEvent.change(screen.getByLabelText("Starting values"), { target: { value: "artifact" } });
+    await chooseSelectOption(screen.getByLabelText("Starting values"), "Import defaults file");
     fireEvent.change(screen.getByLabelText("Defaults artifact"), {
       target: {
         files: [
@@ -171,7 +172,7 @@ describe("Schema upgrade defaults source", () => {
       />,
     );
     await screen.findByLabelText("Starting values");
-    fireEvent.change(screen.getByLabelText("Starting values"), { target: { value: "artifact" } });
+    await chooseSelectOption(screen.getByLabelText("Starting values"), "Import defaults file");
     const file = new File(
       [
         JSON.stringify({

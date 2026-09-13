@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, expect, it, vi } from "vitest";
 import { SchemaUpgradeSource } from "@/components/applications/SchemaUpgradeSource";
 import ready from "./fixtures/backend/overview-ready.json";
+import { chooseSelectOption, visibleSelectOptions } from "./select-test-utils";
 const mocks = vi.hoisted(() => ({ listSchemas: vi.fn(), applicationOverview: vi.fn() }));
 vi.mock("@/lib/api", async (original) => ({
   ...(await original<typeof import("@/lib/api")>()),
@@ -36,8 +37,10 @@ it("requires an explicit source and offers older tracks including schema-free", 
   );
   const select = await screen.findByRole("combobox", { name: "Source track and environment" });
   expect(screen.getByRole("button", { name: "Continue upgrade" })).toBeDisabled();
-  expect(screen.getByRole("option", { name: /schema v1 · dev/ })).toBeInTheDocument();
-  fireEvent.change(select, { target: { value: JSON.stringify([0, "dev"]) } });
+  expect(await visibleSelectOptions(select)).toContainEqual(
+    expect.stringMatching(/schema v1 · dev/),
+  );
+  await chooseSelectOption(select, "schema v0 (schema-free) · dev · release v1");
   fireEvent.click(screen.getByRole("button", { name: "Continue upgrade" }));
   expect(onSelect).toHaveBeenCalledWith(0, "dev");
   expect(mocks.applicationOverview.mock.calls.map((call) => call[3])).toEqual([2, 1, 0]);

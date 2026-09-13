@@ -82,7 +82,8 @@ test("URL track changes discard description drafts and unadopted setup reaches f
   });
   await page.goto("/applications?app=gradethis&schema_version=1&env=prod");
   await expect(page.getByRole("region", { name: "Definition" })).toBeVisible();
-  await page.getByRole("combobox", { name: "Schema version" }).selectOption("2");
+  await page.getByRole("combobox", { name: "Schema version" }).click();
+  await page.getByRole("option", { name: "v2" }).click();
   await expect(page).toHaveURL(/schema_version=2/);
   await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Edit definition", exact: true }).click();

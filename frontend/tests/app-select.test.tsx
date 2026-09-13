@@ -3,6 +3,7 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { chooseSelectOption } from "./select-test-utils";
 
 const resources = [
   { value: "app_agents", label: "app_agents" },
@@ -84,5 +85,23 @@ describe("AppSelect", () => {
     expect(trigger).toHaveTextContent("Nothing available");
     fireEvent.click(trigger);
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("allows a selected value to be reset with an explicit empty option", async () => {
+    const onChange = vi.fn();
+    render(
+      <Field label="Order">
+        <AppSelect
+          value="name"
+          onValueChange={onChange}
+          options={[{ value: "name", label: "Name" }]}
+          placeholder="Default order"
+          emptyOptionLabel="Default order"
+        />
+      </Field>,
+    );
+
+    await chooseSelectOption(screen.getByRole("combobox", { name: "Order" }), "Default order");
+    expect(onChange).toHaveBeenCalledWith("");
   });
 });
