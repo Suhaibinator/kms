@@ -166,6 +166,8 @@ type SubscriberInstance struct {
 	Diagnostic         string
 	Connected          bool
 	ServerTimestamp    time.Time
+	// LiveTimestamp is the newest LiveTimestamp across the instance's rows.
+	LiveTimestamp time.Time
 	// AppliedDivergent reports an applied generation that differs from the
 	// application's source-owned defaults (see ReleaseAcknowledgement).
 	AppliedDivergent    bool
@@ -185,7 +187,6 @@ type RolloutSummary struct {
 	AppliedDivergent  int
 	Rejected          int
 	Pending           int
-	Stale             int
 	OtherReleaseNames []string
 	RejectedInstances []SubscriberInstance
 	Truncated         bool

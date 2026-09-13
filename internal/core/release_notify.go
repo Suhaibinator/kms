@@ -95,7 +95,7 @@ func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, t
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
-	acks, _, err := rs.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: name, SchemaVersion: &track.SchemaVersion}, storage.ListPage{Limit: maxRolloutSnapshotAcks})
+	acks, _, err := rs.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: name, SchemaVersion: &track.SchemaVersion}, storage.ListPage{Limit: maxRolloutSnapshotAcks, DepartedBefore: s.now().Add(-departAfter)})
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}

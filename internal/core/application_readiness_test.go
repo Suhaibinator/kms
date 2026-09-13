@@ -139,7 +139,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		}
 	})
 
-	t.Run("degraded, rolling and stale", func(t *testing.T) {
+	t.Run("degraded, rolling and departed", func(t *testing.T) {
 		in := base("prod")
 		in.Active = readinessActive("prod", 3, 42, 2, 1, 1)
 		in.Acks = []domain.ReleaseAcknowledgement{
@@ -155,7 +155,8 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("degraded env = %s/%s", out.Status, out.RolloutState)
 		}
 		r := out.Rollout
-		if r.Total != 4 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || r.Stale != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
+		// "gone" disconnected five minutes ago without a pin: it has left the fleet.
+		if r.Total != 3 || r.Connected != 3 || r.AppliedCurrent != 1 || r.Rejected != 1 || r.Pending != 1 || len(r.RejectedInstances) != 1 || r.RejectedInstances[0].InstanceID != "rejecting" {
 			t.Fatalf("rollout = %+v", r)
 		}
 		if len(r.OtherReleaseNames) != 1 || r.OtherReleaseNames[0] != "batch" {
@@ -165,9 +166,14 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		if !ok || f.Scope.Instance != "rejecting" || f.Params["category"] != domain.ReleaseRejectConfigValidationFailed {
 			t.Fatalf("instance_rejected = %+v", f)
 		}
-		for _, code := range []string{domain.FindingInstancePending, domain.FindingInstanceStale, domain.FindingSubscriberOtherRelease} {
+		for _, code := range []string{domain.FindingInstancePending, domain.FindingSubscriberOtherRelease} {
 			if _, ok := hasFinding(out.Findings, code); !ok {
 				t.Fatalf("missing %s: %v", code, findingCodes(out.Findings))
+			}
+		}
+		for _, f := range out.Findings {
+			if f.Scope.Instance == "gone" {
+				t.Fatalf("departed instance must not produce findings: %v", findingCodes(out.Findings))
 			}
 		}
 		in.Acks = in.Acks[1:4]
@@ -175,10 +181,60 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		if out.Status != domain.EnvStatusRolling || out.RolloutState != domain.RolloutStateRolling {
 			t.Fatalf("rolling env = %s/%s", out.Status, out.RolloutState)
 		}
-		in.Acks = []domain.ReleaseAcknowledgement{ack("gone", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-5*time.Minute))}
+
+		// Only departed instances: the environment has no subscribers, and an
+		// other-release name backed solely by departed instances is dropped too.
+		in.Acks = []domain.ReleaseAcknowledgement{
+			ack("gone", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-5*time.Minute)),
+			{Namespace: in.Namespace.NamespaceRef, ReleaseName: "batch", ClientName: "worker", InstanceID: "w1", Identity: "svc", State: domain.ReleaseStateApplied, ActivationRevision: 42, Connected: false, ServerTimestamp: readinessNow.Add(-5 * time.Minute)},
+		}
 		out = computeEnvironmentReadiness(in)
-		if out.Status != domain.EnvStatusReady || out.RolloutState != domain.RolloutStateStale {
-			t.Fatalf("stale env = %s/%s", out.Status, out.RolloutState)
+		if out.Status != domain.EnvStatusReady || out.RolloutState != domain.RolloutStateNoSubscribers || out.Rollout.Total != 0 || len(out.Rollout.OtherReleaseNames) != 0 {
+			t.Fatalf("departed-only env = %s/%s %+v", out.Status, out.RolloutState, out.Rollout)
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingNoSubscribers); !ok {
+			t.Fatalf("missing no_subscribers: %v", findingCodes(out.Findings))
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingSubscriberOtherRelease); ok {
+			t.Fatalf("departed other-release instance must not be reported: %v", findingCodes(out.Findings))
+		}
+
+		// Within the grace window a disconnected instance keeps its last state.
+		in.Acks = []domain.ReleaseAcknowledgement{ack("blip", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-10*time.Second))}
+		out = computeEnvironmentReadiness(in)
+		if out.Rollout.Total != 1 || out.Rollout.Connected != 0 || out.Rollout.Pending != 1 || out.RolloutState != domain.RolloutStateRolling {
+			t.Fatalf("briefly disconnected legacy instance = %+v/%s", out.Rollout, out.RolloutState)
+		}
+		// Liveness follows the connection row's timestamp, not the last ack.
+		stayed := ack("quiet", domain.ReleaseStateApplied, 2, 41, false, readinessNow.Add(-time.Hour))
+		stayed.LiveTimestamp = readinessNow.Add(-10 * time.Second)
+		in.Acks = []domain.ReleaseAcknowledgement{stayed}
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 1 || out.Rollout.Pending != 1 {
+			t.Fatalf("recently disconnected legacy instance with an old ack = %+v", out.Rollout)
+		}
+
+		// A session that applied the current release and then disconnected is
+		// still applied inside the grace window and gone after it.
+		session := ack("restarting", domain.ReleaseStateApplied, 3, 42, false, readinessNow.Add(-10*time.Second))
+		session.SessionID, session.TargetRevision, session.DesiredRevision, session.DesiredVersion = "s1", 42, 42, 3
+		in.Acks = []domain.ReleaseAcknowledgement{session}
+		out = computeEnvironmentReadiness(in)
+		if out.Rollout.Total != 1 || out.Rollout.AppliedCurrent != 1 || out.RolloutState != domain.RolloutStateApplied {
+			t.Fatalf("briefly disconnected session = %+v/%s", out.Rollout, out.RolloutState)
+		}
+		session.ServerTimestamp = readinessNow.Add(-2 * time.Minute)
+		in.Acks = []domain.ReleaseAcknowledgement{session}
+		if out = computeEnvironmentReadiness(in); out.Rollout.Total != 0 || out.RolloutState != domain.RolloutStateNoSubscribers {
+			t.Fatalf("departed session = %+v/%s", out.Rollout, out.RolloutState)
+		}
+
+		// A pinned session never departs: the pin stays visible until removed.
+		pinned := session
+		pinned.PinVersion, pinned.PinRevision, pinned.ServerTimestamp = 2, 50, readinessNow.Add(-5*24*time.Hour)
+		in.Acks = []domain.ReleaseAcknowledgement{pinned}
+		out = computeEnvironmentReadiness(in)
+		if out.Rollout.Total != 1 || out.Rollout.Pinned != 1 || out.RolloutState != domain.RolloutStateRolling {
+			t.Fatalf("departed pinned session = %+v/%s", out.Rollout, out.RolloutState)
 		}
 	})
 

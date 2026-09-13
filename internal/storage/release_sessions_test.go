@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -399,5 +400,65 @@ func TestReleaseSessionConcurrentGuardsAndConnectionFencing(t *testing.T) {
 	var count int64
 	if err := st.db.Model(&releaseTargetDeliveryModel{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("retired namespace retained delivery evidence: %d %v", count, err)
+	}
+}
+
+func TestListReleaseAcknowledgementsOmitsDepartedSessions(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "prod", "app")
+	ns := nsRef("prod", "app")
+	track := domain.ReleaseTrack{Namespace: ns, Name: "runtime"}
+	r, e := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: track.Name, Digest: "digest", Metadata: "{}"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = st.ActivateConfigurationRelease(ctx, track, r.Version, nil); e != nil {
+		t.Fatal(e)
+	}
+	session := func(id string) domain.ReleaseSessionRef {
+		return domain.ReleaseSessionRef{Track: track, Identity: "client", ClientName: "api", InstanceID: id, SessionID: id}
+	}
+	live, gone, pinned := session("live"), session("gone"), session("pinned")
+	for _, ref := range []domain.ReleaseSessionRef{live, gone, pinned} {
+		if e := st.RegisterReleaseSession(ctx, ref, false); e != nil {
+			t.Fatal(e)
+		}
+		if e := st.ConnectReleaseSession(ctx, ref, "connection", true); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e := st.SetReleasePin(ctx, pinned, r.Version, 0, domain.AuditEvent{ActorIdentity: "operator", EventType: "configuration_release.pin"}); e != nil {
+		t.Fatal(e)
+	}
+	for _, ref := range []domain.ReleaseSessionRef{gone, pinned} {
+		if e := st.ConnectReleaseSession(ctx, ref, "connection", false); e != nil {
+			t.Fatal(e)
+		}
+	}
+	filter := domain.ReleaseFilter{Namespace: ns, Name: track.Name}
+	ids := func(page ListPage) []string {
+		rows, _, e := st.ListReleaseAcknowledgements(ctx, filter, page)
+		if e != nil {
+			t.Fatal(e)
+		}
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.InstanceID)
+		}
+		sort.Strings(out)
+		return out
+	}
+	all := []string{"gone", "live", "pinned"}
+	if got := ids(ListPage{}); !reflect.DeepEqual(got, all) {
+		t.Fatalf("no cutoff = %v", got)
+	}
+	if got := ids(ListPage{DepartedBefore: time.Now().Add(-time.Minute)}); !reflect.DeepEqual(got, all) {
+		t.Fatalf("cutoff before the disconnects = %v", got)
+	}
+	// Past the cutoff only the unpinned disconnected session leaves the list;
+	// the connected one and the pinned one stay.
+	if got := ids(ListPage{DepartedBefore: time.Now().Add(time.Minute)}); !reflect.DeepEqual(got, []string{"live", "pinned"}) {
+		t.Fatalf("cutoff after the disconnects = %v", got)
 	}
 }

@@ -60,7 +60,7 @@ func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.Re
 		return facts, err
 	}
 	if withAcks {
-		if facts.Acks, _, err = rs.ListReleaseAcknowledgements(ctx, trackFilter(track), storage.ListPage{Limit: maxOverviewAcks}); err != nil {
+		if facts.Acks, _, err = rs.ListReleaseAcknowledgements(ctx, trackFilter(track), storage.ListPage{Limit: maxOverviewAcks, DepartedBefore: s.now().Add(-departAfter)}); err != nil {
 			return facts, err
 		}
 	}

@@ -28,7 +28,7 @@ type releaseSessionModel struct {
 	Connected           int64 `gorm:"not null;default:0"`
 	ConnectionID        string
 	ServerTimestamp     string `gorm:"not null"`
-	DisconnectedAt      string
+	DisconnectedAt      string `gorm:"index"`
 	State               string
 	ReleaseVersion      uint64 `gorm:"not null;default:0"`
 	TargetRevision      uint64 `gorm:"not null;default:0"`

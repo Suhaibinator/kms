@@ -79,7 +79,6 @@ type rolloutDTO struct {
 	AppliedDivergent  int                     `json:"applied_divergent"`
 	Rejected          int                     `json:"rejected"`
 	Pending           int                     `json:"pending"`
-	Stale             int                     `json:"stale"`
 	OtherReleaseNames []string                `json:"other_release_names"`
 	RejectedInstances []subscriberInstanceDTO `json:"rejected_instances"`
 	Truncated         bool                    `json:"truncated"`
@@ -100,7 +99,7 @@ func toRolloutDTO(r domain.RolloutSummary) rolloutDTO {
 			AppliedDivergent:      inst.AppliedDivergent, DivergentFieldCount: inst.DivergentFieldCount,
 		})
 	}
-	return rolloutDTO{Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, Stale: r.Stale, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
+	return rolloutDTO{Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
 }
 
 type environmentReleaseDTO struct {

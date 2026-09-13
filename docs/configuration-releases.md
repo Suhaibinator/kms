@@ -605,10 +605,13 @@ A pin belongs to a random SDK loader session, independent of a configured
 instance name. Network reconnects and **KMS server restarts preserve the pin**.
 Restarting the **client application** creates a new session and follows the
 active track, even when it reuses the same instance name. Do not persist or
-copy session IDs in deployment configuration. Disconnected session history,
-including its pin, is retained using `watch.release_subscriber_retain_duration`
-(default 30 days). A client trying to resume an expired session receives an
-explicit failure and must restart; it never silently loses its pin.
+copy session IDs in deployment configuration. A session disconnected for more
+than 90 s without a pin has departed: it leaves the rollout summary and the
+subscriber lists, while a pinned session stays listed until unpinned.
+Disconnected session history, including its pin, is retained using
+`watch.release_subscriber_retain_duration` (default 30 days) so a process that
+reconnects late can still resume. A client trying to resume an expired session
+receives an explicit failure and must restart; it never silently loses its pin.
 
 Assignment is separate from application. The console shows the desired target,
 last applied release, pin actor/time, and rejection state. A client that cannot

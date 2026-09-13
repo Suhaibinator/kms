@@ -240,7 +240,7 @@ Taken from the `overview-incident.json` fixture (abridged):
       },
       "rollout": {
         "total": 3, "connected": 3, "applied_current": 2, "applied_divergent": 0,
-        "rejected": 1, "pending": 0, "stale": 0, "other_release_names": [],
+        "rejected": 1, "pending": 0, "other_release_names": [],
         "rejected_instances": [
           { "identity": "admin", "client_name": "api", "instance_id": "prod-3",
             "state": "rejected", "release_version": 2, "activation_revision": 12,
@@ -283,8 +283,13 @@ whether more were dropped; the full list comes from
 row for one `(identity, client_name, instance_id)`: the per-state subscriber
 rows collapsed to the highest lifecycle state at the instance's newest
 activation revision, `connected` if any row is, sorted by identity, client,
-instance (the same grouping as `frontend/lib/subscribers.ts`). `diagnostic`
-is the persisted redaction marker, never the client's text (see
+instance (the same grouping as `frontend/lib/subscribers.ts`). An instance
+disconnected for more than 90 s without a pin has **departed**: a restarted
+process never resumes its session, so departed rows are omitted from the
+overview, the paged list, and the stream, and do not count toward
+`rollout.total`. A briefly disconnected instance keeps its last state with
+`connected: false`; a pinned session stays listed until it is unpinned.
+`diagnostic` is the persisted redaction marker, never the client's text (see
 [`configuration-releases.md`](configuration-releases.md#release-contents-and-digest)).
 `other_release_names` lists release names, sorted, that instances of this
 namespace subscribe to other than the application's `release_name` (an SDK
@@ -324,8 +329,7 @@ Three column states per environment:
 | `rollout_state` | `no_subscribers` | no instance has registered for this release name |
 | | `applied` | every instance applied the current activation revision |
 | | `degraded` | any instance rejected the current activation revision |
-| | `rolling` | otherwise, any instance is below `applied` at the current revision and is connected or was seen within the last 90 s (`rollout.pending`) |
-| | `stale` | otherwise, any instance has been disconnected for more than 90 s without applying the current revision (`rollout.stale`) |
+| | `rolling` | otherwise, any instance is below `applied` at the current revision (`rollout.pending`) or holds a pin (`rollout.pinned`) |
 
 `rollout` counts and `rollout_state` are always populated, but rollout
 **findings** (`no_subscribers`, `subscriber_other_release`, `instance_*`) are
@@ -386,7 +390,6 @@ blocking → warning → info and, within a severity, in emission order
 | `instance_rejected` | warning | env + instance | `client_name`, `instance_id`, `identity`, `category` | open subscribers |
 | `instance_divergent` | warning | env + instance | `client_name`, `instance_id`, `identity`, `divergent_fields` | open subscribers |
 | `instance_pending` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
-| `instance_stale` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
 | `rolled_back` | info | env | `from` | open release |
 | `previous_unavailable` | info | env | — | — (no `previous` label yet) |
 | `production` | info | env | — | — |
@@ -832,7 +835,7 @@ poll-friendly form. Admin-only, like the list.
 
 ```text
 event: snapshot
-data: {"summary":{"total":3,"connected":3,"applied_current":2,"rejected":1,"pending":0,"stale":0,"other_release_names":[],"rejected_instances":[…],"truncated":false},"subscribers":[ReleaseSubscriberState…],"current_revision":12,"server_time_unix_ms":1755000000000}
+data: {"summary":{"total":3,"connected":3,"applied_current":2,"rejected":1,"pending":0,"other_release_names":[],"rejected_instances":[…],"truncated":false},"subscribers":[ReleaseSubscriberState…],"current_revision":12,"server_time_unix_ms":1755000000000}
 
 : keep-alive
 
@@ -1554,7 +1557,7 @@ Scoped subscriber list/stream rows add `session_id`, `target_revision`,
 `pin_version`, `pin_revision`, `pinned_by`, `pinned_at_unix_ms`,
 `last_applied_version`, `desired_version`, and `desired_revision`. A missing
 session ID means the client cannot be pinned. A rollout's `pinned` count denotes
-connected instances successfully applied to their pinned target. Rejected and
-disconnected pins remain failures/pending connectivity, rather than counting as
-applied to the fleet. Namespace-scoped list/stream inspection accepts the new
+instances successfully applied to their pinned target plus disconnected pinned
+sessions, which stay in the rollout until unpinned. Rejected pins remain
+failures rather than counting as applied to the fleet. Namespace-scoped list/stream inspection accepts the new
 management permission; global subscriber listing remains admin-only.

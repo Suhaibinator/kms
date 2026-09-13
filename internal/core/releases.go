@@ -820,6 +820,7 @@ func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, filt
 	if err != nil {
 		return nil, "", 0, err
 	}
+	page.DepartedBefore = s.now().Add(-departAfter)
 	rows, next, err := rs.ListReleaseAcknowledgements(ctx, filter, page)
 	if err != nil {
 		return nil, "", 0, err
