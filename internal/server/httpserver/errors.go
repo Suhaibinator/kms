@@ -84,6 +84,7 @@ func releaseValidationErrorDTOs(validationErrors []domain.ReleaseValidationError
 		out[i] = releaseValidationErrorDTO{
 			Alias: validationErr.Alias, Code: validationErr.Code,
 			SchemaPointer: validationErr.SchemaPointer, Message: validationErr.Message,
+			InstancePointer: validationErr.InstancePointer,
 		}
 	}
 	return out

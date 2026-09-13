@@ -292,17 +292,21 @@ type releaseValidationErrorJSON struct {
 	Alias         string `json:"alias"`
 	Code          string `json:"code"`
 	SchemaPointer string `json:"schema_pointer"`
-	Message       string `json:"message"`
+	// InstancePointer locates the failing value inside the release object
+	// (keys only, never values); empty for release-level errors.
+	InstancePointer string `json:"instance_pointer,omitempty"`
+	Message         string `json:"message"`
 }
 
 func releaseValidationErrorsJSON(validationErrors []*kmsv1.ReleaseValidationError) []releaseValidationErrorJSON {
 	out := make([]releaseValidationErrorJSON, 0, len(validationErrors))
 	for _, validationErr := range validationErrors {
 		out = append(out, releaseValidationErrorJSON{
-			Alias:         validationErr.GetAlias(),
-			Code:          validationErr.GetCode(),
-			SchemaPointer: validationErr.GetSchemaPointer(),
-			Message:       validationErr.GetMessage(),
+			Alias:           validationErr.GetAlias(),
+			Code:            validationErr.GetCode(),
+			SchemaPointer:   validationErr.GetSchemaPointer(),
+			InstancePointer: validationErr.GetInstancePointer(),
+			Message:         validationErr.GetMessage(),
 		})
 	}
 	return out

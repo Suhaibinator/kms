@@ -115,7 +115,7 @@ func BenchmarkHTTPDTOJSONV2(b *testing.B) {
 		Code:    "invalid_argument",
 		Message: "invalid JSON body",
 		ValidationErrors: []releaseValidationErrorDTO{
-			{Alias: "runtime", Code: "required", SchemaPointer: "/properties/limit", Message: "missing property"},
+			{Alias: "runtime", Code: "required", SchemaPointer: "/properties/limit", Message: "missing property", InstancePointer: "/runtime"},
 		},
 	}}
 	b.ReportAllocs()

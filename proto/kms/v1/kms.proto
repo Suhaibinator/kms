@@ -519,6 +519,7 @@ message ReleaseValidationError {
   string code = 2;         // bounded machine-readable category
   string schema_pointer = 3;
   string message = 4;      // sanitized; never contains resource values
+  string instance_pointer = 5; // JSON pointer to the failing value inside the release object; keys only, never values
 }
 
 message ValidateReleaseResponse {

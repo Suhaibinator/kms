@@ -79,7 +79,7 @@ func TestToProtoApplicationReleaseCreateResult(t *testing.T) {
 		},
 		MissingSecrets: []string{},
 		Validation: []domain.ReleaseValidationError{
-			{Alias: "runtime", Code: "schema_violation", SchemaPointer: "/properties/runtime", Message: "value does not match schema"},
+			{Alias: "runtime", Code: "schema_violation", SchemaPointer: "/properties/runtime", Message: "value does not match schema", InstancePointer: "/runtime/limit"},
 		},
 		Release: &release,
 	}
@@ -97,7 +97,7 @@ func TestToProtoApplicationReleaseCreateResult(t *testing.T) {
 	if got.GetEntries()[1].GetFromVersion() != 4 || got.GetEntries()[1].GetToVersion() != 4 || got.GetEntries()[1].GetRef().GetKey() != "db" {
 		t.Fatalf("secret plan entry = %+v", got.GetEntries()[1])
 	}
-	if len(got.GetValidation()) != 1 || got.GetValidation()[0].GetCode() != "schema_violation" {
+	if len(got.GetValidation()) != 1 || got.GetValidation()[0].GetCode() != "schema_violation" || got.GetValidation()[0].GetInstancePointer() != "/runtime/limit" {
 		t.Fatalf("response validation = %+v", got.GetValidation())
 	}
 	if got.GetRelease() == nil || got.GetRelease().GetVersion() != 1 || got.GetRelease().GetEntries()[1].GetVersion() != 4 {

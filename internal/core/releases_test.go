@@ -472,7 +472,7 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(validation) != 1 || validation[0].Alias != "settings" || validation[0].Code != domain.ReleaseValidationSchema || validation[0].SchemaPointer != "/minimum" {
+	if len(validation) != 1 || validation[0].Alias != "settings" || validation[0].Code != domain.ReleaseValidationSchema || validation[0].SchemaPointer != "/minimum" || validation[0].InstancePointer != "/settings" {
 		t.Fatalf("override validation = %+v", validation)
 	}
 	for _, v := range validation {

@@ -3491,13 +3491,14 @@ func (x *ValidateReleaseRequest) GetSchemaVersion() uint64 {
 }
 
 type ReleaseValidationError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"` // empty for release-level errors
-	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`   // bounded machine-readable category
-	SchemaPointer string                 `protobuf:"bytes,3,opt,name=schema_pointer,json=schemaPointer,proto3" json:"schema_pointer,omitempty"`
-	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"` // sanitized; never contains resource values
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Alias           string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"` // empty for release-level errors
+	Code            string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`   // bounded machine-readable category
+	SchemaPointer   string                 `protobuf:"bytes,3,opt,name=schema_pointer,json=schemaPointer,proto3" json:"schema_pointer,omitempty"`
+	Message         string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`                                        // sanitized; never contains resource values
+	InstancePointer string                 `protobuf:"bytes,5,opt,name=instance_pointer,json=instancePointer,proto3" json:"instance_pointer,omitempty"` // JSON pointer to the failing value inside the release object; keys only, never values
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ReleaseValidationError) Reset() {
@@ -3554,6 +3555,13 @@ func (x *ReleaseValidationError) GetSchemaPointer() string {
 func (x *ReleaseValidationError) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *ReleaseValidationError) GetInstancePointer() string {
+	if x != nil {
+		return x.InstancePointer
 	}
 	return ""
 }
@@ -10254,12 +10262,13 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\x04R\aversion\x12*\n" +
 	"\x0eschema_version\x18\x04 \x01(\x04H\x00R\rschemaVersion\x88\x01\x01B\x11\n" +
-	"\x0f_schema_version\"\x83\x01\n" +
+	"\x0f_schema_version\"\xae\x01\n" +
 	"\x16ReleaseValidationError\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12%\n" +
 	"\x0eschema_pointer\x18\x03 \x01(\tR\rschemaPointer\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"g\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12)\n" +
+	"\x10instance_pointer\x18\x05 \x01(\tR\x0finstancePointer\"g\n" +
 	"\x17ValidateReleaseResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x126\n" +
 	"\x06errors\x18\x02 \x03(\v2\x1e.kms.v1.ReleaseValidationErrorR\x06errors\"\x95\x02\n" +
