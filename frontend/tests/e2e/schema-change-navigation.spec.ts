@@ -1,5 +1,5 @@
-import type { ApplicationOverview } from "@/lib/types";
 import { expect, test } from "@playwright/test";
+import type { ApplicationOverview } from "@/lib/types";
 import ready from "../fixtures/backend/overview-ready.json";
 import { incidentState, mockConsole } from "./fakes/console-api";
 
@@ -157,6 +157,27 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
   const dialog = page.getByRole("dialog", { name: "Upgrade application schema" });
   await dialog.getByRole("button", { name: "Review contract", exact: true }).click();
   await expect(dialog.locator(".migration-contract-row").first()).toContainText("database");
+  // Before any preview, the local checks already name the nested fields the
+  // preserved `database` value must gain (and the key it must lose).
+  const readiness = dialog.getByRole("region", { name: "Release readiness" });
+  await expect(readiness).toContainText("Update to satisfy schema v2");
+  await expect(
+    readiness.getByRole("button", { name: /^database · 3 fields fail the target schema/ }),
+  ).toBeVisible();
+  await expect(readiness).toContainText("database.client_id · is required · new required field");
+  await expect(readiness).toContainText(
+    "database.go_auth_config · is required · new required field",
+  );
+  await expect(readiness).toContainText("database.per_minute · is not a declared property");
+  await expect(dialog.getByRole("list", { name: "Validation problems" })).toHaveCount(0);
+  await expect(dialog.getByTestId("migration-blocked-reason")).toHaveText(
+    "1 value fails local schema checks; the preview will report them.",
+  );
+  await readiness.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("readiness-checklist.png"),
+    animations: "disabled",
+  });
   await dialog.getByRole("region", { name: "Field changes" }).scrollIntoViewIfNeeded();
   await page.screenshot({
     path: info.outputPath("change-toolbar-dark.png"),
@@ -231,6 +252,9 @@ test("finds changed fields and fixes a validation problem in a large upgrade", a
     ),
   );
   expect(beforeTable).toBe(true);
+  // The server's `/required` problem names `client_id`; the card shows the
+  // nested path and Fix field lands on that control via its `data-path`.
+  await expect(dialog.getByTestId("migration-problem-path")).toHaveText("database.client_id");
   await dialog.getByRole("button", { name: "database · Fix field" }).click();
   const value = dialog.getByRole("textbox", { name: "client_id", exact: true });
   await expect(arrayField.getByText("No items · Empty list []")).toBeVisible();

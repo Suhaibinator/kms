@@ -1,4 +1,6 @@
-import { schemaDifferences } from "@/lib/schema-diff";
+import { useMemo } from "react";
+import { describeSchemaEffect, structuredSchemaDifferences } from "@/lib/schema-diff";
+import { parseSchema } from "@/lib/schema-form";
 import type { ConfigurationSchema } from "@/lib/types";
 
 export function SchemaComparison({
@@ -10,31 +12,43 @@ export function SchemaComparison({
   target?: ConfigurationSchema;
   currentVersion: number;
 }) {
+  const currentJson = current?.schema_json;
+  const targetJson = target?.schema_json;
+  const comparable = Boolean(current) || currentVersion === 0;
+  const rows = useMemo(() => {
+    if (targetJson === undefined || !comparable) return null;
+    const before = parseSchema(currentJson ?? "{}");
+    const after = parseSchema(targetJson);
+    return structuredSchemaDifferences(currentJson ?? "{}", targetJson).map((difference) => ({
+      ...difference,
+      effect: describeSchemaEffect(difference, before, after).text,
+    }));
+  }, [currentJson, targetJson, comparable]);
   if (!target) return null;
-  const differences =
-    current || currentVersion === 0
-      ? schemaDifferences(current?.schema_json ?? "{}", target.schema_json)
-      : null;
   return (
     <details className="card p-4">
       <summary className="cursor-pointer">
         Compare current v{currentVersion} → target v{target.version}
       </summary>
-      {differences ? (
-        differences.length > 0 ? (
+      {rows ? (
+        rows.length > 0 ? (
           <div className="table-wrap">
             <table className="data">
               <thead>
                 <tr>
                   <th>Field or schema path</th>
                   <th>Change</th>
+                  <th>Effect on values</th>
                 </tr>
               </thead>
               <tbody>
-                {differences.map((d) => (
+                {rows.map((d) => (
                   <tr key={`${d.path}:${d.change}`}>
-                    <td className="mono">{d.path}</td>
-                    <td>{d.change}</td>
+                    <td className="mono" data-label="Field or schema path">
+                      {d.path}
+                    </td>
+                    <td data-label="Change">{d.change}</td>
+                    <td data-label="Effect on values">{d.effect}</td>
                   </tr>
                 ))}
               </tbody>

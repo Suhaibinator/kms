@@ -294,7 +294,10 @@ describe("SchemaMigrationModal regressions", () => {
     const editor = within(dialog)
       .getByRole("group", { name: "database value", hidden: true })
       .closest("details")!;
-    fireEvent.click(editor.querySelector("summary")!);
+    // The loaded value fails the target schema (obsolete key, missing
+    // `urls`), so the row opened itself once its readiness was known.
+    expect(editor).toHaveAttribute("open");
+    expect(editor.querySelector("summary")).toHaveTextContent("Fails target schema");
     expect(within(dialog).queryByRole("textbox", { name: "old" })).toBeNull();
     expect(within(dialog).getByText("Target schema v2")).toBeVisible();
     const prepare = within(dialog).getByRole("region", { name: "Prepare database" });
@@ -694,7 +697,9 @@ describe("SchemaMigrationModal regressions", () => {
     expect(within(dialog).getByLabelText("database resource key")).toHaveValue("database");
     expect(within(dialog).getByLabelText("database exact version")).toHaveValue("");
     expect(within(dialog).getByLabelText("database value")).toHaveValue("");
-    expect(mocks.getParameter).not.toHaveBeenCalled();
+    // The pin loaded once at Review contract (for the readiness checklist);
+    // the kind changes cleared it and must not fetch it again.
+    expect(mocks.getParameter).toHaveBeenCalledTimes(1);
   });
 
   it("warns only for different-schema environments using definite activation language", async () => {

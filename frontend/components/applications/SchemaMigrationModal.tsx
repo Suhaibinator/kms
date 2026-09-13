@@ -4,14 +4,14 @@ import { Modal } from "@/components/Modal";
 import { ParameterValueInput } from "@/components/ParameterValueInput";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { Badge, Button, Checkbox, Field, Input, Loading } from "@/components/ui";
-import { FileInput } from "@/components/ui/file-input";
 import { AppSelect } from "@/components/ui/app-select";
+import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict, isUnreachableError } from "@/lib/api";
 import { contractsMatch, schemaUpgradeContract } from "@/lib/contract-derive";
 import { type PreparedUpgradeValue, prepareUpgradeValue } from "@/lib/prepare-upgrade-value";
-import { structuredSchemaDifferences } from "@/lib/schema-diff";
-import { aliasSchema } from "@/lib/schema-form";
+import { describeSchemaEffect, structuredSchemaDifferences } from "@/lib/schema-diff";
+import { aliasSchema, parseSchema, pathKey } from "@/lib/schema-form";
 import type {
   Application,
   ConfigurationReleaseEntry,
@@ -28,12 +28,20 @@ import {
   type UpgradeDraftField,
   upgradeFieldChanges,
 } from "@/lib/upgrade-field-changes";
+import {
+  createReadinessCache,
+  matchProblemPath,
+  READINESS_LABEL,
+  READINESS_TONE,
+} from "@/lib/upgrade-readiness";
 import { SchemaComparison } from "./SchemaComparison";
 import {
+  issuePath,
   matchesUpgradeSearch,
   UpgradeChangeLabels,
   UpgradeChangeNavigator,
 } from "./UpgradeChangeNavigator";
+import { UpgradeReadinessChecklist } from "./UpgradeReadinessChecklist";
 
 type Step = 0 | 1 | 2 | 3 | 4;
 type DraftField = UpgradeDraftField;
@@ -96,6 +104,8 @@ export function SchemaMigrationModal({
   const [jumpTarget, setJumpTarget] = useState<{
     id: number;
     control: boolean;
+    /** Nested path inside the value editor to focus, when known. */
+    path?: string[];
     tick: number;
   } | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
@@ -149,14 +159,33 @@ export function SchemaMigrationModal({
         : [],
     [selectedSchema, currentSchema, sourceSchemaVersion],
   );
+  // Memoised per field on its inputs, so rows keep the same readiness object
+  // between renders; the cache keys on `schemaChanges` identity, which the
+  // useMemo above keeps stable while the schema pair is unchanged.
+  const readinessFor = useRef(createReadinessCache()).current;
+  const targetSchemaJson = selectedSchema?.schema_json;
   const changes = upgradeFieldChanges(
     fields,
     application.contract,
     sourceEntries,
     schemaChanges,
     fieldProblems,
+    (field) => readinessFor(field, targetSchemaJson, schemaChanges, fieldValidity[field.id]),
   );
   const changeById = new Map(changes.map((change) => [change.id, change]));
+  const effectByPath = useMemo(() => {
+    const before = parseSchema(currentSchema?.schema_json ?? "{}");
+    const after = parseSchema(targetSchemaJson);
+    return new Map(
+      schemaChanges.map((difference) => [
+        difference.path,
+        describeSchemaEffect(difference, before, after).text,
+      ]),
+    );
+  }, [schemaChanges, currentSchema?.schema_json, targetSchemaJson]);
+  const pinsLoading = changes.some((change) => change.readiness?.status === "loading");
+  const countStatus = (status: "needs_value" | "fails_schema") =>
+    changes.filter((change) => change.readiness?.status === status).length;
   const removed = [
     ...new Set([
       ...removedUpgradeAliases(fields, application.contract, sourceEntries),
@@ -184,11 +213,11 @@ export function SchemaMigrationModal({
     const body = stepTop.current?.closest<HTMLElement>("[data-modal-body]");
     if (body) body.scrollTop = 0;
   }, [step]);
-  function jumpToField(id: number, control = false) {
+  function jumpToField(id: number, control = false, path?: string[]) {
     setFieldSearch("");
     setExpandedRows((rows) => ({ ...rows, [id]: true }));
     if (control) setStep(2);
-    setJumpTarget((last) => ({ id, control, tick: (last?.tick ?? 0) + 1 }));
+    setJumpTarget((last) => ({ id, control, path, tick: (last?.tick ?? 0) + 1 }));
   }
   useEffect(() => {
     if (!jumpTarget) return;
@@ -196,8 +225,24 @@ export function SchemaMigrationModal({
     if (!row) return;
     if (row instanceof HTMLDetailsElement) row.open = true;
     const heading = row.querySelector<HTMLElement>("[data-field-heading]") ?? row;
+    // A nested target: the schema form marks each field's root with the
+    // path key, so the first enabled control inside it is the one to focus.
+    // Compared as data rather than via a selector so no escaping is needed.
+    const nested = jumpTarget.path
+      ? Array.from(row.querySelectorAll<HTMLElement>("[data-path]")).find(
+          (element) => element.dataset.path === pathKey(jumpTarget.path ?? []),
+        )
+      : undefined;
+    const nestedControl = nested
+      ? (Array.from(
+          nested.querySelectorAll<HTMLElement>(
+            "input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [role=combobox]:not([disabled]), [role=checkbox]:not([disabled]), button:not([disabled])",
+          ),
+        ).find((element) => !element.closest(".schema-form-toolbar")) ?? nested)
+      : undefined;
     const target = jumpTarget.control
-      ? (row.querySelector<HTMLElement>(
+      ? (nestedControl ??
+        row.querySelector<HTMLElement>(
           "[aria-invalid=true]:not([disabled]):is(input, textarea, button, select, [role=combobox], [role=checkbox])",
         ) ??
         row.querySelector<HTMLElement>(
@@ -402,8 +447,10 @@ export function SchemaMigrationModal({
     establishedContract,
   ]);
 
+  // Pins load from Review contract on, so the readiness checklist can check
+  // preserved values before the operator reaches the editors.
   useEffect(() => {
-    if (!open || step < 2 || !selectedEnvironment) return;
+    if (!open || step < 1 || !selectedEnvironment) return;
     for (const field of fields) {
       if (
         field.kind !== "parameter" ||
@@ -605,6 +652,20 @@ export function SchemaMigrationModal({
   }
 
   const dirty = step > 0 || fields.some((field) => field.alias !== field.fromAlias);
+  const blockedReason = (() => {
+    if (step < 1 || step > 2) return null;
+    if (pinsLoading) return "Loading pinned values…";
+    if (!valuesValid) return "Fix the invalid drafts to preview.";
+    const missing = countStatus("needs_value");
+    if (missing) {
+      return `${missing} value${missing === 1 ? " still needs" : "s still need"} a value.`;
+    }
+    const failing = countStatus("fails_schema");
+    if (failing) {
+      return `${failing} value${failing === 1 ? " fails" : "s fail"} local schema checks; the preview will report them.`;
+    }
+    return null;
+  })();
   return (
     <Modal
       open={open}
@@ -621,6 +682,11 @@ export function SchemaMigrationModal({
           <Button onClick={close}>Done</Button>
         ) : (
           <>
+            {/* Always rendered so the footer keeps its height and the live
+                region announces the reason changing, as in ShipModal. */}
+            <p className="footer-note" role="status" data-testid="migration-blocked-reason">
+              {blockedReason ?? "\u00a0"}
+            </p>
             <Button
               variant="outline"
               disabled={previewing || applying || reloadingSource}
@@ -714,36 +780,48 @@ export function SchemaMigrationModal({
             <ul className="stack" aria-label="Validation problems">
               {preview.validation
                 .filter((problem) => fields.some((field) => field.alias === problem.alias))
-                .map((problem, index) => (
-                  <li className="card p-4 stack" key={`${problem.alias}-${problem.code}-${index}`}>
-                    {fields.some((field) => field.alias === problem.alias) ? (
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          jumpToField(
-                            fields.find((field) => field.alias === problem.alias)!.id,
-                            true,
-                          )
-                        }
-                      >
-                        {problem.alias} · Fix field
-                      </Button>
-                    ) : (
-                      <strong>Release-wide error</strong>
-                    )}
-                    <p>{problem.message}</p>
-                    {problem.schema_pointer && (
-                      <details>
-                        <summary className="cursor-pointer text-sm">Schema rule</summary>
-                        <code>{problem.schema_pointer}</code>
-                      </details>
-                    )}
-                  </li>
-                ))}
+                .map((problem, index) => {
+                  const field = fields.find((item) => item.alias === problem.alias);
+                  // The nested field the server means: its instance pointer
+                  // when sent, else the local issue matching its keyword.
+                  const target = matchProblemPath(
+                    problem,
+                    (field && changeById.get(field.id)?.readiness?.issues) ?? [],
+                  );
+                  return (
+                    <li
+                      className="card p-4 stack"
+                      key={`${problem.alias}-${problem.code}-${index}`}
+                    >
+                      {field ? (
+                        <div className="upgrade-problem-heading">
+                          <Button
+                            variant="outline"
+                            onClick={() => jumpToField(field.id, true, target ?? undefined)}
+                          >
+                            {problem.alias} · Fix field
+                          </Button>
+                          <span className="mono" data-testid="migration-problem-path">
+                            {issuePath(problem.alias, { path: target ?? [] })}
+                          </span>
+                        </div>
+                      ) : (
+                        <strong>Release-wide error</strong>
+                      )}
+                      <p>{problem.message}</p>
+                      {problem.schema_pointer && (
+                        <details>
+                          <summary className="cursor-pointer text-sm">Schema rule</summary>
+                          <code>{problem.schema_pointer}</code>
+                        </details>
+                      )}
+                    </li>
+                  );
+                })}
             </ul>
           ) : null}
           {releaseProblems.length > 0 && (
-            <section className="warning-panel" aria-label="Release-wide problems">
+            <section className="warn-panel" aria-label="Release-wide problems">
               <strong>Release-wide problems</strong>
               <ul>
                 {releaseProblems.map((problem, index) => (
@@ -910,6 +988,16 @@ export function SchemaMigrationModal({
       )}
       {step >= 1 && step <= 3 && (
         <>
+          {/* Steps 1 and 2 only: at step 3 the server's validation result is
+              the single list, so two "needs attention" counts never compete. */}
+          {step <= 2 ? (
+            <UpgradeReadinessChecklist
+              changes={changes}
+              targetVersion={schemaVersion}
+              loading={pinsLoading}
+              onJump={jumpToField}
+            />
+          ) : null}
           <UpgradeChangeNavigator
             changes={fieldOrder
               .map((id) => changeById.get(id))
@@ -985,7 +1073,7 @@ export function SchemaMigrationModal({
             </p>
           ) : null}
           {derivationNotes.length ? (
-            <div className="warning-panel" role="note">
+            <div className="warn-panel" role="note">
               <AlertTriangle size={17} />
               <div>
                 <strong>Suggested contract changes</strong>
@@ -1009,7 +1097,11 @@ export function SchemaMigrationModal({
                 <h3 data-field-heading tabIndex={-1}>
                   {field.alias || "Unnamed field"}
                 </h3>
-                <UpgradeChangeLabels change={changeById.get(field.id)!} />
+                <UpgradeChangeLabels
+                  change={changeById.get(field.id)!}
+                  effects={effectByPath}
+                  onJumpPath={(path) => jumpToField(field.id, true, path)}
+                />
               </div>
               <Field label="Alias">
                 <Input
@@ -1139,7 +1231,7 @@ export function SchemaMigrationModal({
           style={step !== 2 ? { display: "none" } : undefined}
         >
           {sourceConflict ? (
-            <div className="warning-panel">
+            <div className="warn-panel">
               <AlertTriangle size={17} />
               <div>
                 <strong>The active source changed</strong>
@@ -1178,8 +1270,21 @@ export function SchemaMigrationModal({
                     ? `preserve v${field.version}`
                     : "new value needed"}{" "}
                 · Edit
+                {(() => {
+                  const status = changeById.get(field.id)!.readiness?.status;
+                  return status ? (
+                    <>
+                      {" "}
+                      <Badge kind={READINESS_TONE[status]}>{READINESS_LABEL[status]}</Badge>
+                    </>
+                  ) : null;
+                })()}
               </summary>
-              <UpgradeChangeLabels change={changeById.get(field.id)!} />
+              <UpgradeChangeLabels
+                change={changeById.get(field.id)!}
+                effects={effectByPath}
+                onJumpPath={(path) => jumpToField(field.id, true, path)}
+              />
               {changeById.get(field.id)!.problems.map((problem, index) => (
                 <p role="alert" key={`${problem.code}-${index}`}>
                   {problem.message}
@@ -1368,6 +1473,7 @@ export function SchemaMigrationModal({
                         {changes.find((c) => c.alias === entry.alias) && (
                           <UpgradeChangeLabels
                             change={changes.find((c) => c.alias === entry.alias)!}
+                            effects={effectByPath}
                           />
                         )}
                       </td>
@@ -1395,7 +1501,7 @@ export function SchemaMigrationModal({
 
           {mismatchedSchemaEnvironments.length ||
           (preview.definition_changed && affectedActiveEnvironments.length) ? (
-            <div className="warning-panel">
+            <div className="warn-panel">
               <AlertTriangle size={17} />
               <div>
                 <strong>Global schema pin affects other environments</strong>
