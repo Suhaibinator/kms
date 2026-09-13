@@ -191,7 +191,7 @@ func TestV03RejectsIncompatibleDatabasesWithoutMutation(t *testing.T) {
 			if opened, err := storage.Open(path); err == nil {
 				_ = opened.Close()
 				t.Fatal("incompatible database was accepted")
-			} else if !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			} else if !strings.Contains(err.Error(), "incompatible KMS database schema") {
 				t.Fatalf("rejection error = %v, want incompatible baseline", err)
 			}
 

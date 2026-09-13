@@ -420,7 +420,7 @@ func TestReopenAndVersionGuard(t *testing.T) {
 	_ = st2.Close()
 	if _, err := Open(p); err == nil {
 		t.Fatal("expected Open to refuse a non-baseline schema version")
-	} else if !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+	} else if !strings.Contains(err.Error(), "incompatible KMS database schema") {
 		t.Fatalf("unexpected incompatibility error: %v", err)
 	}
 }
@@ -490,7 +490,7 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 			if store, err := Open(path); err == nil {
 				_ = store.Close()
 				t.Fatal("legacy database was accepted")
-			} else if !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			} else if !strings.Contains(err.Error(), "incompatible KMS database schema") {
 				t.Fatalf("unexpected incompatibility error: %v", err)
 			}
 			after, err := os.ReadFile(path)
@@ -540,7 +540,7 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 			}
 			return verifyBaselineDB(tx)
 		})
-		if err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+		if err == nil || !strings.Contains(err.Error(), "incompatible KMS database schema") {
 			t.Fatalf("initialization err = %v, want exact-baseline failure", err)
 		}
 		var count int64
@@ -563,7 +563,7 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 		if err := db.Exec("DROP INDEX idx_secret_ns_name").Error; err != nil {
 			t.Fatal(err)
 		}
-		if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+		if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible KMS database schema") {
 			t.Fatalf("schema drift err = %v, want incompatibility", err)
 		}
 	})
@@ -624,7 +624,7 @@ func TestBaselineSchemaDoesNotHideSQLiteWildcardLookalikes(t *testing.T) {
 					t.Fatalf("execute setup statement %q: %v", statement, err)
 				}
 			}
-			if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			if _, err := inspectBaselineDB(db); err == nil || !strings.Contains(err.Error(), "incompatible KMS database schema") {
 				t.Fatalf("schema lookalike err = %v, want incompatibility", err)
 			}
 		})
@@ -636,7 +636,7 @@ func TestBaselineSchemaDoesNotHideSQLiteWildcardLookalikes(t *testing.T) {
 					t.Fatalf("execute setup statement %q: %v", statement, err)
 				}
 			}
-			if err := initializeBaseline(db); err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			if err := initializeBaseline(db); err == nil || !strings.Contains(err.Error(), "incompatible KMS database schema") {
 				t.Fatalf("initialization err = %v, want incompatibility", err)
 			}
 			if db.Migrator().HasTable("schema_migrations") {
