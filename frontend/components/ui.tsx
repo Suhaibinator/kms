@@ -323,6 +323,7 @@ export function Field({
   required,
   className,
   children,
+  "data-path": dataPath,
 }: {
   label: ReactNode;
   hint?: ReactNode;
@@ -337,6 +338,11 @@ export function Field({
   required?: boolean;
   className?: string;
   children: ReactNode;
+  /**
+   * Space-joined schema path of the value this field edits (see `pathKey`),
+   * set on the rendered root so a jump can find the control for a nested path.
+   */
+  "data-path"?: string;
 }) {
   const generatedId = useId();
   const controlId = htmlFor ?? `${generatedId}-control`;
@@ -398,6 +404,7 @@ export function Field({
       className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       aria-describedby={describedBy}
       data-invalid={error ? true : undefined}
+      data-path={dataPath}
     >
       {/* Muted + 600 matches the app's own .field-label, so forms that mix the
           two label systems render identically. */}
@@ -411,6 +418,7 @@ export function Field({
     <ShadcnField
       className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       data-invalid={error ? true : undefined}
+      data-path={dataPath}
     >
       <FieldLabel
         htmlFor={resolvedFor}

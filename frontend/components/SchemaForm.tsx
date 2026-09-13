@@ -713,6 +713,7 @@ export function SchemaForm({
               required={field.required}
               hint={hint}
               error={error}
+              data-path={key}
             >
               <AppSelect
                 id={controlId}
@@ -749,7 +750,14 @@ export function SchemaForm({
         const maxLength =
           typeof field.schema.maxLength === "number" ? field.schema.maxLength : undefined;
         return (
-          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+          <Field
+            key={key}
+            label={label}
+            required={field.required}
+            hint={hint}
+            error={error}
+            data-path={key}
+          >
             {long ? (
               <Textarea
                 id={controlId}
@@ -798,6 +806,7 @@ export function SchemaForm({
               required={field.required}
               hint={hint}
               error={error}
+              data-path={key}
             >
               <AppSelect
                 id={controlId}
@@ -813,7 +822,14 @@ export function SchemaForm({
           );
         }
         return (
-          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+          <Field
+            key={key}
+            label={label}
+            required={field.required}
+            hint={hint}
+            error={error}
+            data-path={key}
+          >
             <Input
               id={controlId}
               className="font-mono"
@@ -989,7 +1005,14 @@ export function SchemaForm({
         };
         if (field.item === "object" && field.itemField) {
           return (
-            <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+            <Field
+              key={key}
+              label={label}
+              required={field.required}
+              hint={hint}
+              error={error}
+              data-path={key}
+            >
               {stateControl}
               <ul className="schema-form-list" aria-label={`${label} items`}>
                 {items.map((_, index) => {
@@ -1017,7 +1040,14 @@ export function SchemaForm({
           );
         }
         return (
-          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+          <Field
+            key={key}
+            label={label}
+            required={field.required}
+            hint={hint}
+            error={error}
+            data-path={key}
+          >
             {stateControl}
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
@@ -1145,6 +1175,7 @@ export function SchemaForm({
             key={key}
             label={label}
             required={field.required}
+            data-path={key}
             hint={
               hintFor(field, current) ??
               `Edited as JSON — this property ${field.reason ?? "cannot be rendered as fields"}.`

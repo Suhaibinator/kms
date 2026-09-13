@@ -377,6 +377,17 @@ export default function ShipModal({
     (previewChanges.length > 0 || !hasActive) &&
     (!production || confirmText === environment);
 
+  // The aliases the preview's validation named, so the blocked reason can point
+  // at the rows to fix; release-level problems carry no alias.
+  const invalidAliases = Array.from(
+    new Set((preview?.validation.errors ?? []).map((error) => error.alias).filter(Boolean)),
+  );
+  const invalidAliasList =
+    invalidAliases.length === 0
+      ? "a release-level rule"
+      : invalidAliases.length <= 3
+        ? invalidAliases.join(", ")
+        : `${invalidAliases.slice(0, 3).join(", ")} +${invalidAliases.length - 3} more`;
   // The same conjuncts as canShip, in the order the user can act on them, so
   // a disabled Ship always says why.
   const shipBlockedReason: string | null =
@@ -395,7 +406,7 @@ export default function ShipModal({
                 : stale
                   ? "Edited since the last preview; it re-runs automatically."
                   : !preview.validation.valid
-                    ? "The candidate release is invalid."
+                    ? `The candidate release is invalid: fix ${invalidAliasList}.`
                     : previewChanges.length === 0 && hasActive
                       ? "Nothing to ship: no value changed."
                       : production && confirmText !== environment
@@ -703,6 +714,7 @@ export default function ShipModal({
                 blockers={blockers}
                 drift={drift}
                 optIns={optIns}
+                violations={stale || previewLoading ? [] : (preview?.validation.errors ?? [])}
                 disabled={disabled}
                 onToggleOptIn={toggleOptIn}
                 onEnvironmentChange={resetFor}

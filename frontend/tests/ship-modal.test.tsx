@@ -801,8 +801,93 @@ describe("ShipModal", () => {
       renderModal();
       await editRateLimits();
       await settlePreview();
-      await waitFor(() => expect(note()).toHaveTextContent("The candidate release is invalid."));
+      await waitFor(() =>
+        expect(note()).toHaveTextContent("The candidate release is invalid: fix rate_limits."),
+      );
       expect(shipButton()).toBeDisabled();
+    });
+
+    it("names the failing aliases and marks the row", async () => {
+      const invalid: ShipResult = {
+        ...preview,
+        preview: {
+          ...preview.preview,
+          validation: {
+            valid: false,
+            errors: [
+              {
+                alias: "rate_limits",
+                code: "schema_violation",
+                schema_pointer: "/properties/per_minute/minimum",
+                instance_pointer: "/rate_limits/per_minute",
+                message: "per_minute must be > 0",
+              },
+              {
+                alias: "",
+                code: "schema_violation",
+                schema_pointer: "/required",
+                message: 'Add the missing required field "feature_flags".',
+              },
+            ],
+          },
+        },
+      };
+      mocks.ship.mockImplementation(async () => invalid);
+      renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() =>
+        expect(note()).toHaveTextContent("The candidate release is invalid: fix rate_limits."),
+      );
+      const row = within(dialog()).getByTestId("ship-row-rate_limits");
+      expect(row).toHaveAttribute("data-alias", "rate_limits");
+      const marker = within(row).getByTestId("ship-row-violation");
+      expect(marker).toHaveAttribute("role", "alert");
+      expect(marker).toHaveTextContent("per_minute: per_minute must be > 0");
+      // The release-level problem has no row to sit on.
+      expect(within(dialog()).getAllByTestId("ship-row-violation")).toHaveLength(1);
+      expect(shipButton()).toBeDisabled();
+
+      // Editing again makes the preview stale: the marker and the reason go
+      // with it until the next dry run answers.
+      await editRateLimits(EDIT_B);
+      expect(note()).toHaveTextContent("Edited since the last preview; it re-runs automatically.");
+      expect(within(row).queryByTestId("ship-row-violation")).toBeNull();
+    });
+
+    it("falls back to a release-level rule, and caps the alias list at three", async () => {
+      const problem = (alias: string) => ({
+        alias,
+        code: "schema_violation",
+        schema_pointer: "/required",
+        message: `${alias || "release"} is invalid`,
+      });
+      const invalid = (aliases: string[]): ShipResult => ({
+        ...preview,
+        preview: {
+          ...preview.preview,
+          validation: { valid: false, errors: aliases.map(problem) },
+        },
+      });
+      mocks.ship.mockImplementation(async () => invalid([""]));
+      const { unmount } = renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() =>
+        expect(note()).toHaveTextContent(
+          "The candidate release is invalid: fix a release-level rule.",
+        ),
+      );
+      expect(within(dialog()).queryByTestId("ship-row-violation")).toBeNull();
+      unmount();
+
+      mocks.ship.mockImplementation(async () => invalid(["a", "b", "a", "c", "d", ""]));
+      renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() =>
+        expect(note()).toHaveTextContent("The candidate release is invalid: fix a, b, c +1 more."),
+      );
     });
 
     it("says there is nothing to ship, and dry-runs nothing, on an empty change set", async () => {

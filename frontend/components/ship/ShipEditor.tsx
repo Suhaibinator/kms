@@ -11,7 +11,13 @@ import { Badge, Button, Checkbox, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
 import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
-import type { Application, EnvironmentOverview, OverviewValue } from "@/lib/types";
+import type {
+  Application,
+  EnvironmentOverview,
+  OverviewValue,
+  ReleaseValidationError,
+} from "@/lib/types";
+import { matchProblemPath } from "@/lib/upgrade-readiness";
 import {
   addableAliases,
   type DriftCandidate,
@@ -39,6 +45,8 @@ export interface ShipEditorProps {
   drift: DriftCandidate[];
   /** The drifted aliases this release will pin at their current version. */
   optIns: string[];
+  /** The last preview's validation problems, shown on the row of the alias each names. */
+  violations?: ReleaseValidationError[];
   disabled: boolean;
   onToggleOptIn: (alias: string, include: boolean) => void;
   onEnvironmentChange: (environment: string) => void;
@@ -54,6 +62,12 @@ export interface ShipEditorProps {
   registerControl?: (alias: string, node: HTMLElement | null) => void;
 }
 
+/** "pool.min: message" when the server points at a nested value, else the message alone. */
+function violationText(problem: ReleaseValidationError): string {
+  const path = problem.instance_pointer ? matchProblemPath(problem, []) : null;
+  return path && path.length > 0 ? `${path.join(".")}: ${problem.message}` : problem.message;
+}
+
 function firstLine(value: string): string {
   const end = value.indexOf("\n");
   return end === -1 ? value : `${value.slice(0, end)} …`;
@@ -63,6 +77,7 @@ function RowCard({
   row,
   env,
   schema,
+  violations,
   disabled,
   collapsible,
   open,
@@ -74,6 +89,8 @@ function RowCard({
   row: ShipRow;
   env: EnvironmentOverview | null;
   schema: JsonSchema | null;
+  /** The preview's problems for this alias. */
+  violations: ReleaseValidationError[];
   disabled: boolean;
   collapsible: boolean;
   open: boolean;
@@ -268,6 +285,11 @@ function RowCard({
           ) : null}
         </div>
       )}
+      {violations.length > 0 ? (
+        <p className="field-error" role="alert" data-testid="ship-row-violation">
+          {violations.map(violationText).join(" ")}
+        </p>
+      ) : null}
     </li>
   );
 }
@@ -336,6 +358,7 @@ export function ShipEditor({
   blockers,
   drift,
   optIns,
+  violations = [],
   disabled,
   onToggleOptIn,
   onEnvironmentChange,
@@ -490,6 +513,7 @@ export function ShipEditor({
               row={row}
               env={env}
               schema={row.content_type === "json" ? aliasSchema(schemaJson, row.alias) : null}
+              violations={violations.filter((problem) => problem.alias === row.alias)}
               disabled={disabled}
               collapsible={collapsible}
               open={isOpen(row)}
