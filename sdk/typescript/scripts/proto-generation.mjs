@@ -58,6 +58,17 @@ export async function generateProtobuf(outputDirectory) {
     readPackageVersion(protocPackage),
     readPackageVersion(tsProtoPackage),
   ]);
+  const lock = JSON.parse(await readFile(join(sdkDirectory, "package-lock.json"), "utf8"));
+  for (const [name, installed] of [
+    ["protoc", protocVersion],
+    ["ts-proto", tsProtoVersion],
+  ]) {
+    if (lock.packages?.[`node_modules/${name}`]?.version !== installed) {
+      throw new Error(
+        `${name} ${installed} does not match package-lock.json; run npm ci before generating or checking bindings`,
+      );
+    }
+  }
   const canonicalGenerationConfig = {
     compiler: { package: "protoc", version: protocVersion },
     plugin: { package: "ts-proto", version: tsProtoVersion },

@@ -246,7 +246,8 @@ test("the application skeleton mirrors the loaded page", async ({ page }) => {
     await route.fallback();
   });
   const navigation = page.goto("/applications?app=gradethis");
-  await expect(page.locator('[aria-busy="true"]')).toBeVisible();
+  // The shell can be busy before the application-specific skeleton mounts.
+  await expect(page.locator('[aria-busy="true"] .definition-card')).toBeVisible();
   const before = await page.evaluate(() => ({
     header: document.querySelector(".page-header")?.getBoundingClientRect().height ?? 0,
     crumbs: Boolean(document.querySelector("nav.crumbs-nav")),

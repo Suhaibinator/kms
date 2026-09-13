@@ -548,6 +548,7 @@ function instanceRow(
   instance: SubscriberInstance,
 ): ReleaseSubscriberState {
   return {
+    ...instance,
     namespace: { env: ns.namespace.env, app: ns.namespace.app },
     release_name: releaseName,
     client_name: instance.client_name,
@@ -573,6 +574,13 @@ export function allApplied(ctx: ActivationContext): ReleaseSubscriberState[] {
     state: "applied",
     release_version: ctx.release.version,
     activation_revision: ctx.revision,
+    target_revision: ctx.revision,
+    desired_version: ctx.release.version,
+    desired_revision: ctx.revision,
+    sequence: (row.sequence ?? 0) + 3,
+    last_applied_version: ctx.release.version,
+    last_applied_revision: ctx.revision,
+    last_applied_sequence: (row.sequence ?? 0) + 3,
     rejection_category: "",
     diagnostic: "",
     server_timestamp_unix_ms: now(),
@@ -586,14 +594,22 @@ export function oneRejected(
   diagnostic: string,
 ): (ctx: ActivationContext) => ReleaseSubscriberState[] {
   return (ctx) =>
-    allApplied(ctx).map((row) =>
+    allApplied(ctx).map((row, index) =>
       row.instance_id === instanceId
         ? {
             ...row,
             state: "rejected",
-            release_version:
-              ctx.previous.find((p) => p.instance_id === instanceId)?.release_version ??
-              row.release_version,
+            last_applied_version:
+              ctx.previous[index].last_applied_version ??
+              (ctx.previous[index].state === "applied" ? ctx.previous[index].release_version : 0),
+            last_applied_revision:
+              ctx.previous[index].last_applied_revision ??
+              (ctx.previous[index].state === "applied"
+                ? (ctx.previous[index].target_revision ?? ctx.previous[index].activation_revision)
+                : 0),
+            last_applied_sequence:
+              ctx.previous[index].last_applied_sequence ??
+              (ctx.previous[index].state === "applied" ? (ctx.previous[index].sequence ?? 0) : 0),
             rejection_category: category,
             diagnostic,
           }
@@ -1794,6 +1810,7 @@ export function handle(
                       : "pending",
               reason: "fixture",
               desired_revision: ns.activationRevision,
+              desired_version: row.desired_version ?? ns.active,
               last_applied_version:
                 row.last_applied_version ?? (row.state === "applied" ? row.release_version : 0),
             })),
