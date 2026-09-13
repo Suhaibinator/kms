@@ -302,7 +302,7 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 	if row.ReleaseState != "" || row.LastAckedRevision != 0 || !row.LastHeartbeat.IsZero() {
 		t.Fatalf("registration fabricated progress: %+v", row)
 	}
-	sub.RecordAcknowledgement(domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: reg.Name, SchemaVersion: reg.SchemaVersion, State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
+	sub.RecordEffectiveAcknowledgement(domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: reg.Name, SchemaVersion: reg.SchemaVersion, State: domain.ReleaseStateRejected, ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision})
 	for _, r := range hub.Subscribers() {
 		if r.ReleaseName != "" {
 			row = r
@@ -314,6 +314,30 @@ func TestSubscribersIncludesNamespaceAndReleaseStreams(t *testing.T) {
 	sub.Close()
 	if rows := hub.Subscribers(); len(rows) != 1 || rows[0].ReleaseName != "" {
 		t.Fatalf("closed release remains: %+v", rows)
+	}
+}
+
+func TestReleaseRegistryPublishesPersistedSnapshotWithoutReduction(t *testing.T) {
+	ns := domain.NamespaceRef{App: "app", Env: "prod"}
+	sub := &ReleaseSubscription{reg: ReleaseRegistration{Namespace: ns, Name: "runtime", SchemaVersion: 4, SessionID: "session"}}
+	applied := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", SchemaVersion: 4, SessionID: "session", TargetRevision: 153, ActivationRevision: 153, Sequence: 3, State: domain.ReleaseStateApplied, ReleaseVersion: 4, AppliedDivergent: true, DivergentFieldCount: 2}
+	sub.RecordEffectiveAcknowledgement(applied)
+	if got := sub.acknowledgement; got.Sequence != 3 || !got.AppliedDivergent || got.DivergentFieldCount != 2 {
+		t.Fatalf("lost persisted metadata: %+v", got)
+	}
+	foreign := applied
+	foreign.SessionID, foreign.State = "another-session", domain.ReleaseStateRejected
+	sub.RecordEffectiveAcknowledgement(foreign)
+	if sub.acknowledgement.State != domain.ReleaseStateApplied {
+		t.Fatal("foreign session overwrote live state")
+	}
+	// A new authoritative snapshot may explicitly clear prior fields. There
+	// must not be a second lifecycle rank or revision comparator in the hub.
+	cleared := applied
+	cleared.State, cleared.Sequence, cleared.AppliedDivergent, cleared.DivergentFieldCount = domain.ReleaseStateReceived, 4, false, 0
+	sub.RecordEffectiveAcknowledgement(cleared)
+	if got := sub.acknowledgement; got.Sequence != 4 || got.AppliedDivergent || got.DivergentFieldCount != 0 {
+		t.Fatalf("metadata not replaced atomically: %+v", got)
 	}
 }
 

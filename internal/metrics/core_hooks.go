@@ -55,3 +55,10 @@ func (m *Metrics) DecryptFailed() { m.decryptFailures.Inc() }
 func (m *Metrics) ReleaseOutcome(outcome string) {
 	m.releaseOutcomes.WithLabelValues(ReleaseOutcomeLabel(outcome)).Inc()
 }
+
+var _ core.ReleaseAcknowledgementMetrics = (*Metrics)(nil)
+
+// ReleaseAcknowledgementOutcome records an authoritative reduction disposition.
+func (m *Metrics) ReleaseAcknowledgementOutcome(outcome string) {
+	m.releaseAcknowledgements.WithLabelValues(ReleaseAcknowledgementOutcomeLabel(outcome)).Inc()
+}

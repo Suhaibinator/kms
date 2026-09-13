@@ -57,21 +57,44 @@ type overviewActiveReleaseDTO struct {
 }
 
 type subscriberInstanceDTO struct {
-	Identity              string `json:"identity"`
-	ClientName            string `json:"client_name"`
-	InstanceID            string `json:"instance_id"`
-	State                 string `json:"state"`
-	ReleaseVersion        uint64 `json:"release_version"`
-	ActivationRevision    uint64 `json:"activation_revision"`
-	RejectionCategory     string `json:"rejection_category"`
-	Diagnostic            string `json:"diagnostic"`
-	Connected             bool   `json:"connected"`
-	ServerTimestampUnixMS int64  `json:"server_timestamp_unix_ms"`
-	AppliedDivergent      bool   `json:"applied_divergent"`
-	DivergentFieldCount   uint32 `json:"divergent_field_count"`
+	FleetVersion          uint64          `json:"fleet_version"`
+	Namespace             namespaceRefDTO `json:"namespace"`
+	ReleaseName           string          `json:"release_name"`
+	SchemaVersion         uint64          `json:"schema_version"`
+	Sequence              uint64          `json:"sequence"`
+	SessionID             string          `json:"session_id"`
+	Classification        string          `json:"classification"`
+	Reason                string          `json:"reason"`
+	TargetRevision        uint64          `json:"target_revision"`
+	DesiredRevision       uint64          `json:"desired_revision"`
+	DesiredVersion        uint64          `json:"desired_version"`
+	PinVersion            uint64          `json:"pin_version"`
+	PinRevision           uint64          `json:"pin_revision"`
+	PinnedBy              string          `json:"pinned_by"`
+	PinnedAtUnixMS        int64           `json:"pinned_at_unix_ms"`
+	LastAppliedVersion    uint64          `json:"last_applied_version"`
+	LastAppliedRevision   uint64          `json:"last_applied_revision"`
+	LastAppliedSequence   uint64          `json:"last_applied_sequence"`
+	Identity              string          `json:"identity"`
+	ClientName            string          `json:"client_name"`
+	InstanceID            string          `json:"instance_id"`
+	State                 string          `json:"state"`
+	ReleaseVersion        uint64          `json:"release_version"`
+	ActivationRevision    uint64          `json:"activation_revision"`
+	RejectionCategory     string          `json:"rejection_category"`
+	Diagnostic            string          `json:"diagnostic"`
+	Connected             bool            `json:"connected"`
+	ClientTimestampUnixMS int64           `json:"client_timestamp_unix_ms"`
+	ServerTimestampUnixMS int64           `json:"server_timestamp_unix_ms"`
+	AppliedDivergent      bool            `json:"applied_divergent"`
+	DivergentFieldCount   uint32          `json:"divergent_field_count"`
 }
 
 type rolloutDTO struct {
+	DifferentPins     int                     `json:"different_pins"`
+	Stale             int                     `json:"stale"`
+	Unknown           int                     `json:"unknown"`
+	Complete          bool                    `json:"complete"`
 	Pinned            int                     `json:"pinned"`
 	Total             int                     `json:"total"`
 	Connected         int                     `json:"connected"`
@@ -91,15 +114,26 @@ func toRolloutDTO(r domain.RolloutSummary) rolloutDTO {
 	}
 	rejected := make([]subscriberInstanceDTO, 0, len(r.RejectedInstances))
 	for _, inst := range r.RejectedInstances {
-		rejected = append(rejected, subscriberInstanceDTO{
-			Identity: inst.Identity, ClientName: inst.ClientName, InstanceID: inst.InstanceID, State: inst.State,
-			ReleaseVersion: inst.ReleaseVersion, ActivationRevision: inst.ActivationRevision,
-			RejectionCategory: inst.RejectionCategory, Diagnostic: inst.Diagnostic, Connected: inst.Connected,
-			ServerTimestampUnixMS: unixMS(inst.ServerTimestamp),
-			AppliedDivergent:      inst.AppliedDivergent, DivergentFieldCount: inst.DivergentFieldCount,
-		})
+		rejected = append(rejected, toSubscriberInstanceDTO(inst))
 	}
-	return rolloutDTO{Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
+	return rolloutDTO{DifferentPins: r.DifferentPins, Stale: r.Stale, Unknown: r.Unknown, Complete: r.Complete, Pinned: r.Pinned, Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
+}
+
+func toSubscriberInstanceDTO(inst domain.SubscriberInstance) subscriberInstanceDTO {
+	return subscriberInstanceDTO{
+		FleetVersion: inst.FleetVersion,
+		Namespace:    namespaceRefDTO{Env: inst.Namespace.Env, App: inst.Namespace.App}, ReleaseName: inst.ReleaseName,
+		SchemaVersion: inst.SchemaVersion, Sequence: inst.Sequence, SessionID: inst.SessionID,
+		Classification: inst.Classification, Reason: inst.Reason, TargetRevision: inst.TargetRevision,
+		DesiredRevision: inst.DesiredRevision, DesiredVersion: inst.DesiredVersion, PinVersion: inst.PinVersion,
+		PinRevision: inst.PinRevision, PinnedBy: inst.PinnedBy, PinnedAtUnixMS: unixMS(inst.PinnedAt),
+		LastAppliedVersion: inst.LastAppliedVersion, LastAppliedRevision: inst.LastAppliedRevision, LastAppliedSequence: inst.LastAppliedSequence,
+		Identity: inst.Identity, ClientName: inst.ClientName, InstanceID: inst.InstanceID, State: inst.State,
+		ReleaseVersion: inst.ReleaseVersion, ActivationRevision: inst.ActivationRevision,
+		RejectionCategory: inst.RejectionCategory, Diagnostic: inst.Diagnostic, Connected: inst.Connected,
+		ClientTimestampUnixMS: unixMS(inst.ClientTimestamp),
+		ServerTimestampUnixMS: unixMS(inst.ServerTimestamp), AppliedDivergent: inst.AppliedDivergent, DivergentFieldCount: inst.DivergentFieldCount,
+	}
 }
 
 type environmentReleaseDTO struct {
@@ -347,10 +381,12 @@ func toCloneEnvironmentDTO(r domain.CloneEnvironmentResult) cloneEnvironmentResp
 // --- live rollout stream ----------------------------------------------------
 
 type subscriberStreamSnapshotDTO struct {
-	Summary          rolloutDTO             `json:"summary"`
-	Subscribers      []releaseSubscriberDTO `json:"subscribers"`
-	CurrentRevision  uint64                 `json:"current_revision"`
-	ServerTimeUnixMS int64                  `json:"server_time_unix_ms"`
+	Instances          []subscriberInstanceDTO `json:"instances"`
+	ProjectionRevision string                  `json:"projection_revision"`
+	Summary            rolloutDTO              `json:"summary"`
+	Subscribers        []releaseSubscriberDTO  `json:"subscribers"`
+	CurrentRevision    uint64                  `json:"current_revision"`
+	ServerTimeUnixMS   int64                   `json:"server_time_unix_ms"`
 }
 
 func toSubscriberStreamSnapshotDTO(s domain.SubscriberStreamSnapshot) subscriberStreamSnapshotDTO {
@@ -358,7 +394,11 @@ func toSubscriberStreamSnapshotDTO(s domain.SubscriberStreamSnapshot) subscriber
 	for _, ack := range s.Subscribers {
 		subscribers = append(subscribers, toReleaseSubscriberDTO(ack))
 	}
-	return subscriberStreamSnapshotDTO{Summary: toRolloutDTO(s.Summary), Subscribers: subscribers, CurrentRevision: s.CurrentRevision, ServerTimeUnixMS: unixMS(s.ServerTime)}
+	instances := make([]subscriberInstanceDTO, 0, len(s.Instances))
+	for _, inst := range s.Instances {
+		instances = append(instances, toSubscriberInstanceDTO(inst))
+	}
+	return subscriberStreamSnapshotDTO{Instances: instances, ProjectionRevision: s.ProjectionRevision, Summary: toRolloutDTO(s.Summary), Subscribers: subscribers, CurrentRevision: s.CurrentRevision, ServerTimeUnixMS: unixMS(s.ServerTime)}
 }
 
 // --- Release diff -----------------------------------------------------------

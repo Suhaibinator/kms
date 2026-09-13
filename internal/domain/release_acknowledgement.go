@@ -1,5 +1,12 @@
 package domain
 
+// ReleaseAcknowledgementResult carries the authoritative persisted state, never
+// the incoming replay message. Only accepted events change effective state.
+type ReleaseAcknowledgementResult struct {
+	Disposition string
+	Effective   ReleaseAcknowledgement
+}
+
 // ReleaseAcknowledgementUnavailableError rejects an acknowledgement whose
 // activation identity is no longer available. It does not assert that the
 // acknowledgement was ever valid: retention may have removed the evidence.

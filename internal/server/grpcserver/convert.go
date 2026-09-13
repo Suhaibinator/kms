@@ -300,7 +300,8 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 // --- subscribers -----------------------------------------------------------
 
 func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
-	return &kmsv1.Subscriber{
+	out := &kmsv1.Subscriber{
+		SessionId:     s.SessionID,
 		SchemaVersion: s.SchemaVersion, ReleaseName: s.ReleaseName, ReleaseState: s.ReleaseState, ReleaseVersion: s.ReleaseVersion, ReleaseRevision: s.ReleaseRevision,
 		ClientName:          s.ClientName,
 		InstanceId:          s.InstanceID,
@@ -311,6 +312,37 @@ func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 		LastHeartbeatUnixMs: unixMS(s.LastHeartbeat),
 		LastAckedRevision:   s.LastAckedRevision,
 	}
+	if s.Effective != nil {
+		out.Effective = toProtoSubscriberInstance(*s.Effective)
+	}
+	return out
+}
+
+func toProtoSubscriberInstance(a domain.SubscriberInstance) *kmsv1.ReleaseSubscriberState {
+	return &kmsv1.ReleaseSubscriberState{
+		Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName,
+		FleetVersion: a.FleetVersion,
+		SessionId:    a.SessionID, SchemaVersion: a.SchemaVersion, ClientName: a.ClientName,
+		InstanceId: a.InstanceID, Identity: a.Identity, State: a.State,
+		ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision,
+		TargetRevision: a.TargetRevision, Sequence: a.Sequence,
+		Classification: a.Classification, Reason: a.Reason,
+		DesiredVersion: a.DesiredVersion, DesiredRevision: a.DesiredRevision,
+		LastAppliedVersion: a.LastAppliedVersion, LastAppliedRevision: a.LastAppliedRevision,
+		LastAppliedSequence: a.LastAppliedSequence, PinVersion: a.PinVersion,
+		PinRevision: a.PinRevision, PinnedBy: a.PinnedBy, PinnedAtUnixMs: unixMS(a.PinnedAt),
+		RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic,
+		ClientTimestampUnixMs: unixMS(a.ClientTimestamp),
+		Connected:             a.Connected, ServerTimestampUnixMs: unixMS(a.ServerTimestamp),
+		AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount,
+	}
+}
+
+func toProtoSubscriberSummary(s domain.RolloutSummary) *kmsv1.ReleaseSubscriberSummary {
+	return &kmsv1.ReleaseSubscriberSummary{Total: uint64(s.Total), Connected: uint64(s.Connected),
+		AppliedCurrent: uint64(s.AppliedCurrent), AppliedDivergent: uint64(s.AppliedDivergent),
+		Rejected: uint64(s.Rejected), Pending: uint64(s.Pending), Pinned: uint64(s.Pinned),
+		Stale: uint64(s.Stale), Unknown: uint64(s.Unknown), Complete: s.Complete, DifferentPins: uint64(s.DifferentPins)}
 }
 
 // --- configuration releases ----------------------------------------------

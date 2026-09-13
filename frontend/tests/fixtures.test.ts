@@ -37,6 +37,8 @@ import previewJson from "./fixtures/backend/ship-preview.json";
 
 const APP_STATUSES: AppStatus[] = ["blocked", "setup", "attention", "ready"];
 const ENV_STATUSES: EnvStatus[] = [
+  "unknown",
+  "pinned",
   "blocked",
   "empty",
   "incomplete",
@@ -265,7 +267,7 @@ describe("backend fixtures", () => {
     expect(fleetJson.applications.map((a) => [a.application.name, a.status])).toEqual([
       ["billing", "setup"],
       ["gradethis", "attention"],
-      ["reports", "ready"],
+      ["reports", "attention"],
     ]);
   });
 

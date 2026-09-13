@@ -244,28 +244,25 @@ revision. Any earlier immutable version can be activated directly as a
 rollback.
 
 The first `WatchReleaseRequest` registers the namespace, release name, exact
-`schema_version`, client name, stable process instance ID, and last-seen revision.
+`schema_version`, client name, stable process instance ID, and registered loader
+session ID.
 Schema selection is required, including explicit `0` for a schema-free track.
 An omitted version never selects the newest schema. Later messages are lifecycle
-acknowledgements carrying that same schema version. The server sends the track's
-current release immediately, replays only that track's retained activations
-after a resume point, or sends its current snapshot if replay was pruned. A
+acknowledgements carrying that same schema version and session. The server sends
+the session's assigned target, which follows the fleet unless explicitly pinned. A
 known schema without an active release stays subscribed and receives heartbeats
 until its first activation; an unknown schema fails registration. Heartbeats
 reauthorize the stream. A slow consumer's pending activation is replaced with
-the latest current activation rather than being permanently dropped. Delivery
-is at least once in monotonically increasing activation-revision order, so a
+the latest assigned target rather than being permanently dropped. Delivery
+is at least once in monotonically increasing target-revision order, so a
 client must accept an idempotent duplicate after reconnect.
 
-Lifecycle acknowledgements are idempotent by namespace, release name, schema
-version, authenticated identity, client, instance, state, and activation identity. The
-client timestamp is diagnostic; server receipt time orders retries for the same
-activation. The admin subscriber API stores the
-latest `received`, `prepared`, `applied`, and `rejected` rows separately, plus
-transport connection state. A newly registered instance is therefore visible
-as connected before it has acknowledged any lifecycle state. Within each schema track, UIs group
-instances by `(identity, client_name, instance_id)`; different authenticated
-identities and replicas do not overwrite one another.
+Lifecycle acknowledgements require the session protocol. Target revision and
+session event sequence establish causality; neither arrival time nor lifecycle
+rank determines the current outcome. A newly registered session is visible as
+connected before it acknowledges a target. All status surfaces consume the
+server's persisted effective session projection rather than regrouping raw
+history. See [the acknowledgement contract and upgrade procedure](release-session-protocol.md).
 
 An `applied` acknowledgement may additionally carry `applied_divergent` and
 `divergent_field_count`: the managed Go layer sets them when the generation it
@@ -578,10 +575,12 @@ bindings with the updated generator. Generated schemas include a sorted
 parameter content type. This metadata contains no secret values or binding keys
 and makes secret-contract changes part of schema identity.
 
-This change requires a **fresh database** and updated server, SDKs, and generated
+The earlier schema-track baseline change required a **fresh database** and updated server, SDKs, and generated
 clients. Previous database baselines are rejected without conversion or deletion.
 Create and provision a new database explicitly; retain any existing database
 separately. Unscoped old clients cannot subscribe to schema-backed releases.
+The session-consistency upgrade described below instead has an additive migration
+from the currently supported baseline; it does not require deleting that database.
 
 Existing database inspection uses a private temporary copy of the database and
 WAL so a rejected database and its sidecars remain untouched, including
@@ -605,9 +604,10 @@ A pin belongs to a random SDK loader session, independent of a configured
 instance name. Network reconnects and **KMS server restarts preserve the pin**.
 Restarting the **client application** creates a new session and follows the
 active track, even when it reuses the same instance name. Do not persist or
-copy session IDs in deployment configuration. A session disconnected for more
-than 90 s without a pin has departed: it leaves the rollout summary and the
-subscriber lists, while a pinned session stays listed until unpinned.
+copy session IDs in deployment configuration. A disconnected session immediately
+becomes stale history and cannot establish current environment health. Its
+last-applied evidence remains inspectable; an environment without connected
+release sessions is Unknown, not Ready.
 Disconnected session history, including its pin, is retained using
 `watch.release_subscriber_retain_duration` (default 30 days) so a process that
 reconnects late can still resume. A client trying to resume an expired session
@@ -636,11 +636,13 @@ application preparation, secret expiry/disable rules, and emergency purge
 bypasses still apply. This does not revoke already-loaded values from process
 memory or force an application to accept configuration.
 
-All release loaders (Go, generated Go, Python sync/async, and TypeScript) support
-sessions automatically. Deploy the server first. Older SDKs remain functional
-but cannot be pinned; updated SDKs fall back to following active releases when
-an older server reports the session RPC as unimplemented. Direct parameter
-watchers and `exec` workloads are not release-loader sessions.
+All release loaders (Go, generated Go, Python sync/async, and TypeScript) require
+sessions. Legacy release-watch registrations fail with an explicit
+upgrade-required error; updated loaders do not fall back when session
+registration is unavailable. Rebuild and verify consumers before upgrading KMS;
+follow the [coordinated upgrade procedure](release-session-protocol.md#coordinated-upgrade).
+Direct parameter watchers and `exec` workloads are not release-loader sessions
+and are unaffected by this compatibility boundary.
 
 `GetActiveRelease` continues reporting the fleet activation. `GetInstanceRelease`
 reports an effective target with a separate monotonic `target_revision`.

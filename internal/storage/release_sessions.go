@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"strconv"
@@ -39,7 +41,23 @@ type releaseSessionModel struct {
 	LastAppliedVersion  uint64 `gorm:"not null;default:0"`
 	LastAckSequence     uint64
 	LastAppliedRevision uint64
+	LastAppliedSequence uint64
+	PrunedAckSequence   uint64
+	Diagnostic          string
+	ClientTimestamp     string
 }
+
+// Keep the latest 256 event identities per session. Events below the persisted
+// pruning watermark cannot regain authority after their fingerprint expires.
+const releaseSessionEventRetention = 256
+
+type releaseSessionEventModel struct {
+	SessionID   string `gorm:"primaryKey"`
+	Sequence    uint64 `gorm:"primaryKey;autoIncrement:false"`
+	Fingerprint string `gorm:"not null"`
+}
+
+func (releaseSessionEventModel) TableName() string { return "release_session_events" }
 
 func (releaseSessionModel) TableName() string { return "release_sessions" }
 
@@ -59,6 +77,8 @@ type ReleaseSessionStore interface {
 	SetReleasePin(context.Context, domain.ReleaseSessionRef, uint64, uint64, domain.AuditEvent) (domain.InstanceReleaseTarget, error)
 	ConnectReleaseSession(context.Context, domain.ReleaseSessionRef, string, bool) error
 	AcknowledgeReleaseSession(context.Context, domain.ReleaseSessionRef, domain.ReleaseAcknowledgement) error
+	ReduceReleaseSessionAcknowledgement(context.Context, domain.ReleaseSessionRef, domain.ReleaseAcknowledgement) (domain.ReleaseAcknowledgementResult, error)
+	GetReleaseSessionAcknowledgement(context.Context, domain.ReleaseSessionRef) (domain.ReleaseAcknowledgement, error)
 }
 
 func sessionTx(tx *gorm.DB, ref domain.ReleaseSessionRef) (releaseSessionModel, error) {
@@ -205,13 +225,79 @@ func (s *SQLStore) ConnectReleaseSession(ctx context.Context, ref domain.Release
 	})
 }
 func (s *SQLStore) AcknowledgeReleaseSession(ctx context.Context, ref domain.ReleaseSessionRef, ack domain.ReleaseAcknowledgement) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	_, err := s.ReduceReleaseSessionAcknowledgement(ctx, ref, ack)
+	return err
+}
+
+func sessionAcknowledgement(ref domain.ReleaseSessionRef, m releaseSessionModel) domain.ReleaseAcknowledgement {
+	return domain.ReleaseAcknowledgement{Namespace: ref.Track.Namespace, ReleaseName: m.ReleaseName, SchemaVersion: m.SchemaVersion, SessionID: m.SessionID, ClientName: m.ClientName, InstanceID: m.InstanceID, Identity: m.Identity, ConnectionID: m.ConnectionID, Connected: m.Connected != 0, Sequence: m.LastAckSequence, State: m.State, ReleaseVersion: m.ReleaseVersion, TargetRevision: m.TargetRevision, ActivationRevision: m.ActivationRevision, LastAppliedVersion: m.LastAppliedVersion, LastAppliedRevision: m.LastAppliedRevision, LastAppliedSequence: m.LastAppliedSequence, RejectionCategory: m.RejectionCategory, Diagnostic: m.Diagnostic, AppliedDivergent: m.AppliedDivergent != 0, DivergentFieldCount: m.DivergentFieldCount, ClientTimestamp: parseTime(m.ClientTimestamp), ServerTimestamp: parseTime(m.ServerTimestamp), LiveTimestamp: parseTime(m.ServerTimestamp), PinVersion: m.PinVersion, PinRevision: m.PinRevision, PinnedBy: m.PinnedBy, PinnedAt: parseTime(m.PinnedAt)}
+}
+
+func (s *SQLStore) GetReleaseSessionAcknowledgement(ctx context.Context, ref domain.ReleaseSessionRef) (domain.ReleaseAcknowledgement, error) {
+	m, err := sessionTx(s.db.WithContext(ctx), ref)
+	return sessionAcknowledgement(ref, m), err
+}
+
+// ReleaseAcknowledgementFingerprint hashes immutable event content before
+// redaction. Only the digest is retained; raw diagnostics are never persisted.
+func ReleaseAcknowledgementFingerprint(ack domain.ReleaseAcknowledgement) string {
+	// Transport generation and server timestamps change on replay; event content does not.
+	payload, _ := json.Marshal(struct {
+		Target, Version, Activation            uint64
+		State, Category, Diagnostic, Timestamp string
+		Divergent                              bool
+		Fields                                 uint32
+	}{ack.TargetRevision, ack.ReleaseVersion, ack.ActivationRevision, ack.State, ack.RejectionCategory, ack.Diagnostic, fmtTime(ack.ClientTimestamp), ack.AppliedDivergent, ack.DivergentFieldCount})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *SQLStore) ReduceReleaseSessionAcknowledgement(ctx context.Context, ref domain.ReleaseSessionRef, ack domain.ReleaseAcknowledgement) (out domain.ReleaseAcknowledgementResult, err error) {
+	out.Disposition = "unavailable"
+	var previous domain.ReleaseAcknowledgement
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		m, e := sessionTx(tx, ref)
 		if e != nil {
 			return e
 		}
 		if m.Connected == 0 || m.ConnectionID != ack.ConnectionID {
 			return domain.Errorf(domain.ErrAborted, "release session connection changed")
+		}
+		out.Effective = sessionAcknowledgement(ref, m)
+		previous = out.Effective
+		if ack.Sequence == 0 || sessionStateRank(ack.State) == 0 {
+			return domain.Errorf(domain.ErrFailedPrecondition, "release acknowledgement requires a nonzero sequence and valid lifecycle state")
+		}
+		fingerprint := ack.PayloadFingerprint
+		if fingerprint == "" {
+			fingerprint = ReleaseAcknowledgementFingerprint(ack)
+		}
+		var retained releaseSessionEventModel
+		e = tx.Where("session_id = ? AND sequence = ?", m.SessionID, ack.Sequence).First(&retained).Error
+		if e == nil {
+			if retained.Fingerprint != fingerprint {
+				out.Disposition = "conflict"
+				return domain.Errorf(domain.ErrFailedPrecondition, "release acknowledgement sequence has conflicting payload")
+			}
+			out.Disposition = "duplicate"
+			m.ServerTimestamp = fmtTime(nowUTC())
+			if e := tx.Save(&m).Error; e != nil {
+				return e
+			}
+			out.Effective = sessionAcknowledgement(ref, m)
+			return nil
+		}
+		if !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+		if ack.Sequence <= m.PrunedAckSequence {
+			out.Disposition = "stale"
+			m.ServerTimestamp = fmtTime(nowUTC())
+			if e := tx.Save(&m).Error; e != nil {
+				return e
+			}
+			out.Effective = sessionAcknowledgement(ref, m)
+			return nil
 		}
 		var d releaseTargetDeliveryModel
 		e = tx.Where("session_id = ? AND revision = ?", m.SessionID, ack.TargetRevision).First(&d).Error
@@ -224,25 +310,54 @@ func (s *SQLStore) AcknowledgeReleaseSession(ctx context.Context, ref domain.Rel
 		if d.Version != ack.ReleaseVersion || d.ActivationRevision != ack.ActivationRevision {
 			return domain.Errorf(domain.ErrFailedPrecondition, "acknowledgement does not match assigned target")
 		}
+		if e := tx.Create(&releaseSessionEventModel{SessionID: m.SessionID, Sequence: ack.Sequence, Fingerprint: fingerprint}).Error; e != nil {
+			return e
+		}
 		sequence := ack.Sequence
-		newer := ack.TargetRevision > m.TargetRevision || (ack.TargetRevision == m.TargetRevision && (sequence > m.LastAckSequence || sequence == m.LastAckSequence && sessionStateRank(ack.State) >= sessionStateRank(m.State)))
+		newer := ack.TargetRevision > m.TargetRevision || (ack.TargetRevision == m.TargetRevision && sequence > m.LastAckSequence)
+		out.Disposition = "stale"
 		if newer {
+			out.Disposition = "accepted"
 			m.LastAckSequence = sequence
 			m.State = ack.State
 			m.ReleaseVersion = ack.ReleaseVersion
 			m.TargetRevision = ack.TargetRevision
 			m.ActivationRevision = ack.ActivationRevision
 			m.RejectionCategory = ack.RejectionCategory
+			m.Diagnostic = ack.Diagnostic
+			m.ClientTimestamp = fmtTime(ack.ClientTimestamp)
 			m.AppliedDivergent = b2i(ack.AppliedDivergent)
 			m.DivergentFieldCount = ack.DivergentFieldCount
 		}
-		if ack.State == domain.ReleaseStateApplied && ack.TargetRevision >= m.LastAppliedRevision {
+		if ack.State == domain.ReleaseStateApplied && (ack.TargetRevision > m.LastAppliedRevision || ack.TargetRevision == m.LastAppliedRevision && sequence > m.LastAppliedSequence) {
 			m.LastAppliedRevision = ack.TargetRevision
+			m.LastAppliedSequence = sequence
 			m.LastAppliedVersion = ack.ReleaseVersion
 		}
+		var expired []releaseSessionEventModel
+		if e := tx.Where("session_id = ?", m.SessionID).Order("sequence DESC").Offset(releaseSessionEventRetention).Find(&expired).Error; e != nil {
+			return e
+		}
+		if len(expired) > 0 {
+			m.PrunedAckSequence = max(m.PrunedAckSequence, expired[0].Sequence)
+			if e := tx.Where("session_id = ? AND sequence <= ?", m.SessionID, m.PrunedAckSequence).Delete(&releaseSessionEventModel{}).Error; e != nil {
+				return e
+			}
+		}
 		m.ServerTimestamp = fmtTime(nowUTC())
-		return tx.Save(&m).Error
+		if e := tx.Save(&m).Error; e != nil {
+			return e
+		}
+		out.Effective = sessionAcknowledgement(ref, m)
+		return nil
 	})
+	if err != nil {
+		if out.Disposition != "conflict" {
+			out.Disposition = "unavailable"
+		}
+		out.Effective = previous
+	}
+	return out, err
 }
 
 // Retire only disconnected sessions. A resumed expired session is rejected.
@@ -250,7 +365,10 @@ func pruneReleaseSessions(tx *gorm.DB, before time.Time) error {
 	if err := tx.Where("connected = 0 AND disconnected_at <> '' AND disconnected_at < ?", fmtTime(before)).Delete(&releaseSessionModel{}).Error; err != nil {
 		return err
 	}
-	return tx.Exec("DELETE FROM release_target_deliveries WHERE session_id NOT IN (SELECT session_id FROM release_sessions)").Error
+	if err := tx.Exec("DELETE FROM release_target_deliveries WHERE session_id NOT IN (SELECT session_id FROM release_sessions)").Error; err != nil {
+		return err
+	}
+	return tx.Exec("DELETE FROM release_session_events WHERE session_id NOT IN (SELECT session_id FROM release_sessions)").Error
 }
 
 func sessionStateRank(state string) int {

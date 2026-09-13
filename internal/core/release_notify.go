@@ -2,15 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"sync"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
-	"github.com/Suhaibinator/kms/internal/storage"
 )
-
-// maxRolloutSnapshotAcks bounds the acknowledgement rows one snapshot folds.
-const maxRolloutSnapshotAcks = 1000
 
 type releaseNotifyKey = domain.ReleaseTrack
 
@@ -95,20 +94,34 @@ func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, t
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
-	acks, _, err := rs.ListReleaseAcknowledgements(ctx, domain.ReleaseFilter{Namespace: ns, Name: name, SchemaVersion: &track.SchemaVersion}, storage.ListPage{Limit: maxRolloutSnapshotAcks, DepartedBefore: s.now().Add(-departAfter)})
+	filter := domain.ReleaseFilter{Namespace: ns, Name: name, SchemaVersion: &track.SchemaVersion}
+	acks, actives, err := rs.ReadReleaseProjection(ctx, filter)
 	if err != nil {
 		return domain.SubscriberStreamSnapshot{}, err
 	}
 	var currentRevision uint64
-	if active, err := rs.GetActiveConfigurationRelease(ctx, track); err == nil {
-		currentRevision = active.ActivationRevision
+	active, exists := actives[track]
+	if !exists && len(acks) == 0 {
+		return domain.SubscriberStreamSnapshot{}, domain.Errorf(domain.ErrNotFound, "release track has no active target or sessions")
 	}
+	currentRevision = active.ActivationRevision
 	now := s.now()
-	summary, _ := computeRollout(acks, name, currentRevision, now)
+	summary, _ := computeRollout(acks, name, currentRevision, now, active.Release.Version)
 	if acks == nil {
 		acks = []domain.ReleaseAcknowledgement{}
 	}
-	return domain.SubscriberStreamSnapshot{Summary: summary, Subscribers: acks, CurrentRevision: currentRevision, ServerTime: now}, nil
+	instances := ProjectSubscriberInstances(acks, currentRevision, now, active.Release.Version)
+	return domain.SubscriberStreamSnapshot{Summary: summary, Subscribers: []domain.ReleaseAcknowledgement{}, Instances: instances, ProjectionRevision: projectionRevision(instances, currentRevision, filter), CurrentRevision: currentRevision, ServerTime: now}, nil
+}
+
+func projectionRevision(instances []domain.SubscriberInstance, revision uint64, filter domain.ReleaseFilter) string {
+	data, _ := json.Marshal(struct {
+		Instances []domain.SubscriberInstance
+		Revision  uint64
+		Scope     domain.ReleaseFilter
+	}{instances, revision, filter})
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
 }
 
 // AuditReleaseStreamRejected records a live-stream request refused by the

@@ -548,6 +548,7 @@ function instanceRow(
   instance: SubscriberInstance,
 ): ReleaseSubscriberState {
   return {
+    ...instance,
     namespace: { env: ns.namespace.env, app: ns.namespace.app },
     release_name: releaseName,
     client_name: instance.client_name,
@@ -573,6 +574,13 @@ export function allApplied(ctx: ActivationContext): ReleaseSubscriberState[] {
     state: "applied",
     release_version: ctx.release.version,
     activation_revision: ctx.revision,
+    target_revision: ctx.revision,
+    desired_version: ctx.release.version,
+    desired_revision: ctx.revision,
+    sequence: (row.sequence ?? 0) + 3,
+    last_applied_version: ctx.release.version,
+    last_applied_revision: ctx.revision,
+    last_applied_sequence: (row.sequence ?? 0) + 3,
     rejection_category: "",
     diagnostic: "",
     server_timestamp_unix_ms: now(),
@@ -586,14 +594,22 @@ export function oneRejected(
   diagnostic: string,
 ): (ctx: ActivationContext) => ReleaseSubscriberState[] {
   return (ctx) =>
-    allApplied(ctx).map((row) =>
+    allApplied(ctx).map((row, index) =>
       row.instance_id === instanceId
         ? {
             ...row,
             state: "rejected",
-            release_version:
-              ctx.previous.find((p) => p.instance_id === instanceId)?.release_version ??
-              row.release_version,
+            last_applied_version:
+              ctx.previous[index].last_applied_version ??
+              (ctx.previous[index].state === "applied" ? ctx.previous[index].release_version : 0),
+            last_applied_revision:
+              ctx.previous[index].last_applied_revision ??
+              (ctx.previous[index].state === "applied"
+                ? (ctx.previous[index].target_revision ?? ctx.previous[index].activation_revision)
+                : 0),
+            last_applied_sequence:
+              ctx.previous[index].last_applied_sequence ??
+              (ctx.previous[index].state === "applied" ? (ctx.previous[index].sequence ?? 0) : 0),
             rejection_category: category,
             diagnostic,
           }
@@ -607,15 +623,18 @@ function activeRelease(ns: FakeNamespace): ConfigurationRelease | null {
   return ns.releases.find((release) => release.version === ns.active) ?? null;
 }
 
-/** The rows the server would return: a disconnected, unpinned instance has
- *  departed and is filtered out; a pinned one stays until it is unpinned. */
+/** Effective sessions include disconnected history but never count it as current health. */
 function visibleSubscribers(ns: FakeNamespace): ReleaseSubscriberState[] {
-  return ns.subscribers.filter((row) => row.connected || Boolean(row.pin_version));
+  return ns.subscribers;
 }
 
 function rolloutOf(ns: FakeNamespace): OverviewRollout {
   const visible = visibleSubscribers(ns);
   const rollout: OverviewRollout = {
+    complete: true,
+    stale: 0,
+    pinned: 0,
+    unknown: 0,
     total: visible.length,
     connected: 0,
     applied_current: 0,
@@ -630,7 +649,8 @@ function rolloutOf(ns: FakeNamespace): OverviewRollout {
     const atCurrent = row.activation_revision >= ns.activationRevision;
     const applied = row.state === "applied" && atCurrent;
     if (row.connected) rollout.connected += 1;
-    if (row.pin_version) rollout.pinned = (rollout.pinned ?? 0) + 1;
+    if (!row.connected) rollout.stale = (rollout.stale ?? 0) + 1;
+    else if (row.pin_version && applied) rollout.pinned = (rollout.pinned ?? 0) + 1;
     else if (applied) rollout.applied_current += 1;
     else if (row.state === "rejected" && atCurrent) {
       rollout.rejected += 1;
@@ -720,9 +740,13 @@ function environmentOverview(state: ConsoleState, ns: FakeNamespace): Environmen
         ? "degraded"
         : rollout.pending > 0
           ? "rolling"
-          : drift
-            ? "drift"
-            : "ready";
+          : rollout.pinned
+            ? "pinned"
+            : rollout.connected === 0
+              ? "unknown"
+              : drift
+                ? "drift"
+                : "ready";
   return {
     namespace: {
       ...ns.namespace,
@@ -1770,6 +1794,28 @@ export function handle(
       return {
         status: 200,
         body: {
+          instances: visibleSubscribers(ns)
+            .filter((row) => row.release_name === params.get("name"))
+            .map((row, index) => ({
+              ...row,
+              session_id: row.session_id ?? `fixture-session-${index}`,
+              classification: !row.connected
+                ? "stale"
+                : row.state === "rejected"
+                  ? "rejected"
+                  : row.state === "applied" && row.pin_version
+                    ? "pinned"
+                    : row.state === "applied" && row.activation_revision === ns.activationRevision
+                      ? "applied"
+                      : "pending",
+              reason: "fixture",
+              desired_revision: ns.activationRevision,
+              desired_version: row.desired_version ?? ns.active,
+              last_applied_version:
+                row.last_applied_version ?? (row.state === "applied" ? row.release_version : 0),
+            })),
+          summary: rolloutOf(ns),
+          projection_revision: `fixture-${state.revision}`,
           subscribers: visibleSubscribers(ns).filter(
             (row) => row.release_name === params.get("name"),
           ),

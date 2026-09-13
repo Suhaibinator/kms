@@ -24,7 +24,7 @@ import (
 )
 
 // Baseline 4 adds process-scoped release sessions; baseline 3 upgrades atomically.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has

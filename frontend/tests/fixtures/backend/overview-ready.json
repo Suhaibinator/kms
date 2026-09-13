@@ -119,14 +119,18 @@
       "rollout": {
         "applied_current": 1,
         "applied_divergent": 0,
+        "complete": true,
         "connected": 1,
+        "different_pins": 0,
         "other_release_names": [],
         "pending": 0,
         "pinned": 0,
         "rejected": 0,
         "rejected_instances": [],
+        "stale": 0,
         "total": 1,
-        "truncated": false
+        "truncated": false,
+        "unknown": 0
       },
       "rollout_state": "applied",
       "status": "ready",
@@ -263,14 +267,18 @@
       "rollout": {
         "applied_current": 2,
         "applied_divergent": 0,
+        "complete": true,
         "connected": 2,
+        "different_pins": 0,
         "other_release_names": [],
         "pending": 0,
         "pinned": 0,
         "rejected": 0,
         "rejected_instances": [],
+        "stale": 0,
         "total": 2,
-        "truncated": false
+        "truncated": false,
+        "unknown": 0
       },
       "rollout_state": "applied",
       "status": "ready",

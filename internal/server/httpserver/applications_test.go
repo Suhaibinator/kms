@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -81,17 +80,22 @@ func (e *testEnv) ackInstance(env, instance, state, category string) {
 	ns := domain.NamespaceRef{Env: env, App: "gradethis"}
 	pr := consoleAdmin()
 	track := domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, track)
+	ref := domain.ReleaseSessionRef{Track: track, ClientName: "api", InstanceID: instance, Identity: pr.Identity.Name, SessionID: "session-" + instance}
+	if err := e.svc.RegisterReleaseSession(ctx, pr, ref, false); err != nil {
+		e.t.Fatal(err)
+	}
+	active, err := e.svc.GetInstanceRelease(ctx, pr, ref)
 	if err != nil {
 		e.t.Fatalf("active release for ack: %v", err)
 	}
 	conn := "conn-" + instance
-	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", instance, pr.Identity.Name, conn, true); err != nil {
+	if err := e.svc.ConnectReleaseSession(ctx, ref, conn, true); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
 		Namespace: ns, ReleaseName: "runtime", SchemaVersion: 1, ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: instance, ConnectionID: conn, State: state, RejectionCategory: category,
+		SessionID: ref.SessionID, Sequence: 1, TargetRevision: active.TargetRevision,
 	}); err != nil {
 		e.t.Fatal(err)
 	}
@@ -145,22 +149,33 @@ func TestApplicationOverviewRecoversAfterRestartHTTP(t *testing.T) {
 	ctx := context.Background()
 	track := domain.ReleaseTrack{Namespace: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Name: "runtime", SchemaVersion: 1}
 	pr := consoleAdmin()
-	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", "replica", pr.Identity.Name, "conn-replica", false); err != nil {
+	oldRef := domain.ReleaseSessionRef{Track: track, ClientName: "api", InstanceID: "replica", Identity: pr.Identity.Name, SessionID: "session-replica"}
+	if err := e.svc.ConnectReleaseSession(ctx, oldRef, "conn-replica", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.SetReleaseSubscriberConnected(ctx, track, "api", "replica", pr.Identity.Name, "restarted-replica", true); err != nil {
+	if disconnected := read(); disconnected["status"] != "unknown" {
+		t.Fatalf("disconnected = %v", disconnected)
+	}
+	ref := oldRef
+	ref.SessionID = "restarted-session-replica"
+	if err := e.svc.RegisterReleaseSession(ctx, pr, ref, false); err != nil {
 		t.Fatal(err)
 	}
-	active, err := e.svc.GetActiveConfigurationRelease(ctx, pr, track)
+	if err := e.svc.ConnectReleaseSession(ctx, ref, "restarted-replica", true); err != nil {
+		t.Fatal(err)
+	}
+	active, err := e.svc.GetInstanceRelease(ctx, pr, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cross the timestamp precision boundary before recording recovery.
-	time.Sleep(2 * time.Millisecond)
+	if pending := read(); pending["status"] != "rolling" {
+		t.Fatalf("restarted pending = %v", pending)
+	}
 	if err := e.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{
 		Namespace: track.Namespace, ReleaseName: track.Name, SchemaVersion: track.SchemaVersion,
 		ReleaseVersion: active.Release.Version, ActivationRevision: active.ActivationRevision,
 		ClientName: "api", InstanceID: "replica", ConnectionID: "restarted-replica", State: domain.ReleaseStateApplied,
+		SessionID: ref.SessionID, Sequence: 1, TargetRevision: active.TargetRevision,
 	}); err != nil {
 		t.Fatal(err)
 	}

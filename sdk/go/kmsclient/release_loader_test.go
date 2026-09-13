@@ -229,6 +229,18 @@ func (s *releaseLoaderServer) GetActiveRelease(_ context.Context, _ *kmsv1.GetAc
 	return s.active, nil
 }
 
+func (s *releaseLoaderServer) RegisterReleaseSession(context.Context, *kmsv1.RegisterReleaseSessionRequest) (*kmsv1.ReleaseSessionResponse, error) {
+	return &kmsv1.ReleaseSessionResponse{PinCapable: true}, nil
+}
+
+func (s *releaseLoaderServer) GetInstanceRelease(ctx context.Context, _ *kmsv1.GetInstanceReleaseRequest) (*kmsv1.InstanceReleaseTarget, error) {
+	active, err := s.GetActiveRelease(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &kmsv1.InstanceReleaseTarget{Release: active.Release, TargetRevision: active.ActivationRevision, ActivationRevision: active.ActivationRevision}, nil
+}
+
 func (s *releaseLoaderServer) ResolveReleaseSchema(_ context.Context, req *kmsv1.ResolveReleaseSchemaRequest) (*kmsv1.ResolveReleaseSchemaResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,6 +281,18 @@ func (s *releaseLoaderServer) WatchRelease(stream kmsv1.ConfigurationReleaseServ
 	for {
 		select {
 		case event := <-s.watchEvents:
+			if first.GetRegister().GetSessionId() != "" {
+				var release *kmsv1.ConfigurationRelease
+				switch payload := event.GetEvent().(type) {
+				case *kmsv1.WatchReleaseEvent_Snapshot:
+					release = payload.Snapshot.GetRelease()
+				case *kmsv1.WatchReleaseEvent_Activation:
+					release = payload.Activation.GetRelease()
+				}
+				if release != nil {
+					event = &kmsv1.WatchReleaseEvent{Revision: event.Revision, Event: &kmsv1.WatchReleaseEvent_Target{Target: &kmsv1.InstanceReleaseTarget{Release: release, TargetRevision: event.Revision, ActivationRevision: event.Revision}}}
+				}
+			}
 			if err := stream.Send(event); err != nil {
 				return err
 			}
@@ -1315,6 +1339,7 @@ func rejectionForAcknowledgement(ack *kmsv1.ReleaseAcknowledgement) *kmsv1.Relea
 		Version: ack.GetVersion(), ActivationRevision: ack.GetActivationRevision(),
 		ClientName: ack.GetClientName(), InstanceId: ack.GetInstanceId(), State: ack.GetState(),
 		Sequence: ack.GetSequence(), Reason: "activation_unavailable",
+		SessionId: ack.GetSessionId(), TargetRevision: ack.GetTargetRevision(),
 	}
 }
 

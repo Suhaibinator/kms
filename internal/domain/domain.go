@@ -386,6 +386,8 @@ type ChangeLogEntry struct {
 // the (env, app) namespaces the stream is subscribed to. ReleaseName is set
 // for release streams; their lifecycle is separate from transport acknowledgements.
 type Subscriber struct {
+	SessionID       string
+	Effective       *SubscriberInstance
 	SchemaVersion   uint64
 	ReleaseName     string
 	ReleaseState    string

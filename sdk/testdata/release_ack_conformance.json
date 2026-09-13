@@ -1,0 +1,7 @@
+{
+  "cases": [
+    {"name":"normal", "states":["received","prepared","applied"], "retained_sequences":[1,2,3]},
+    {"name":"rejected_then_retry", "states":["received","rejected","received","prepared","applied"], "retained_sequences":[2,3,4,5]},
+    {"name":"repeated_rejection_then_recovery", "states":["received","rejected","received","rejected","received","prepared","applied"], "retained_sequences":[4,5,6,7]}
+  ]
+}

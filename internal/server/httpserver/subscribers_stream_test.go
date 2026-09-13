@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -117,7 +118,11 @@ func TestReleaseSubscriberStream(t *testing.T) {
 
 	// A subscriber connecting wakes the stream into a fresh snapshot.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
-	if err := e.svc.SetReleaseSubscriberConnected(context.Background(), domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, "api", "i1", "admin", "conn-1", true); err != nil {
+	ref := domain.ReleaseSessionRef{Track: domain.ReleaseTrack{Namespace: ns, Name: "runtime", SchemaVersion: 1}, ClientName: "api", InstanceID: "i1", Identity: "admin", SessionID: "stream-session"}
+	if err := e.svc.RegisterReleaseSession(context.Background(), consoleAdmin(), ref, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.ConnectReleaseSession(context.Background(), ref, "conn-1", true); err != nil {
 		t.Fatal(err)
 	}
 	frame, err = readFrame(t, reader)
@@ -128,8 +133,16 @@ func TestReleaseSubscriberStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary = snapshot["summary"].(map[string]any)
-	if summary["total"].(float64) != 1 || summary["connected"].(float64) != 1 || summary["pending"].(float64) != 1 || len(snapshot["subscribers"].([]any)) != 1 {
+	if summary["total"].(float64) != 1 || summary["connected"].(float64) != 1 || summary["pending"].(float64) != 1 || len(snapshot["instances"].([]any)) != 1 {
 		t.Fatalf("snapshot after connect = %v", snapshot)
+	}
+	poll := e.admin(http.MethodGet, "/api/v1/release-subscribers?env=dev&app=gradethis&name=runtime&schema_version=1", nil)
+	mustStatus(t, poll, http.StatusOK)
+	polled := decodeBody(t, poll)
+	for _, field := range []string{"instances", "summary", "projection_revision", "current_revision"} {
+		if !reflect.DeepEqual(polled[field], snapshot[field]) {
+			t.Fatalf("poll/stream %s disagreement: %v vs %v", field, polled[field], snapshot[field])
+		}
 	}
 
 	// The lifetime cap ends the stream with an `end` event and frees the slot.
@@ -364,6 +377,19 @@ func TestReleaseSubscriberStreamEndsOnCertificateRevocation(t *testing.T) {
 func TestReleaseSubscriberStreamLimitAuditPreservesSelectedSchema(t *testing.T) {
 	e := newReleaseTestEnv(t)
 	e.seedConsoleApp("dev")
+	e.ship("dev", "rate_limits", "7", false)
+	// Both selected tracks need a real active target before stream admission.
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	legacy, err := e.svc.CreateConfigurationRelease(t.Context(), consoleAdmin(), domain.CreateConfigurationReleaseInput{
+		Namespace: ns, Name: "runtime", Metadata: "{}",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "rate_limits", Kind: "parameter", Ref: domain.Ref{NS: ns, Key: "rate_limits"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.ActivateConfigurationRelease(t.Context(), consoleAdmin(), domain.ReleaseTrack{Namespace: ns, Name: "runtime"}, legacy.Version, nil); err != nil {
+		t.Fatal(err)
+	}
 	s := newServer(e.svc, Config{Addr: ":0", Version: "test"})
 	// Exhaust the real limiter without opening a long-lived stream.
 	s.stream.global = 0
@@ -396,4 +422,8 @@ func TestReleaseSubscriberStreamLimitAuditPreservesSelectedSchema(t *testing.T) 
 	if !seen["0"] || !seen["1"] {
 		t.Fatalf("stream rejection schemas: %v", seen)
 	}
+	// A real lookup failure must be returned before stream admission; it must
+	// never be replaced by a fabricated revision-zero snapshot.
+	w := e.admin(http.MethodGet, "/api/v1/release-subscribers/stream?env=dev&app=gradethis&name=runtime&schema_version=99", nil)
+	mustStatus(t, w, http.StatusNotFound)
 }
