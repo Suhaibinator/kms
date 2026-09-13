@@ -42,6 +42,11 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		{"CreateSchemaRequest", fields("schema_json", "metadata_json", "application")},
 		{"GetSchemaRequest", fields("version", "application", "release_name")},
 		{"ListSchemasRequest", fields("page_size", "page_token", "application", "release_name")},
+		{"ApplicationMigrationChange", fields("alias", "from_alias", "key", "value", "content_type", "version")},
+		{"MigrateApplicationReleaseRequest", fields("namespace", "source_schema_version", "schema_version", "contract", "changes", "metadata_json", "execute", "plan_digest", "expected_source_version", "expected_source_activation_revision")},
+		{"ApplicationMigrationEnvironment", fields("environment", "active_version", "schema_version")},
+		{"ApplicationMigrationActivation", fields("activation_revision", "previous_version", "changed")},
+		{"MigrateApplicationReleaseResponse", fields("plan_digest", "valid", "executed", "definition_changed", "release_name", "source_version", "source_activation_revision", "schema_version", "entries", "validation", "affected_environments", "release", "activation")},
 	}
 
 	messages := File_kms_v1_kms_proto.Messages()

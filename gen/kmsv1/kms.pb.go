@@ -10208,6 +10208,481 @@ func (x *CreateApplicationReleaseResponse) GetRelease() *ConfigurationRelease {
 	return nil
 }
 
+// ApplicationMigrationChange addresses one target contract alias when
+// migrating an active release to another schema track. from_alias carries
+// the active pin of a renamed alias; version pins an exact existing resource;
+// value (parameters only) writes a new version with that content. Aliases
+// with no change carry their active pin unchanged.
+type ApplicationMigrationChange struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`
+	FromAlias     string                 `protobuf:"bytes,2,opt,name=from_alias,json=fromAlias,proto3" json:"from_alias,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	Value         *string                `protobuf:"bytes,4,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	ContentType   string                 `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Version       uint64                 `protobuf:"varint,6,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplicationMigrationChange) Reset() {
+	*x = ApplicationMigrationChange{}
+	mi := &file_kms_v1_kms_proto_msgTypes[148]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplicationMigrationChange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplicationMigrationChange) ProtoMessage() {}
+
+func (x *ApplicationMigrationChange) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[148]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplicationMigrationChange.ProtoReflect.Descriptor instead.
+func (*ApplicationMigrationChange) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{148}
+}
+
+func (x *ApplicationMigrationChange) GetAlias() string {
+	if x != nil {
+		return x.Alias
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationChange) GetFromAlias() string {
+	if x != nil {
+		return x.FromAlias
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationChange) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationChange) GetValue() string {
+	if x != nil && x.Value != nil {
+		return *x.Value
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationChange) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationChange) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+// MigrateApplicationReleaseRequest rebuilds the source track's active
+// release against the target schema's contract and, on execute, writes the
+// edited parameters, creates the release on the target track and activates
+// it in one transaction. Preview is the default; execute requires the exact
+// plan_digest returned by a preceding preview. contract is the complete
+// target definition, not a patch, and must match a registered contract when
+// the schema has one.
+type MigrateApplicationReleaseRequest struct {
+	state               protoimpl.MessageState        `protogen:"open.v1"`
+	Namespace           *NamespaceRef                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	SourceSchemaVersion uint64                        `protobuf:"varint,2,opt,name=source_schema_version,json=sourceSchemaVersion,proto3" json:"source_schema_version,omitempty"`
+	SchemaVersion       uint64                        `protobuf:"varint,3,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Contract            []*ApplicationContractField   `protobuf:"bytes,4,rep,name=contract,proto3" json:"contract,omitempty"`
+	Changes             []*ApplicationMigrationChange `protobuf:"bytes,5,rep,name=changes,proto3" json:"changes,omitempty"`
+	MetadataJson        string                        `protobuf:"bytes,6,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	Execute             bool                          `protobuf:"varint,7,opt,name=execute,proto3" json:"execute,omitempty"`
+	PlanDigest          string                        `protobuf:"bytes,8,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
+	// Compare-and-swap on the source: supply both or neither.
+	ExpectedSourceVersion            *uint64 `protobuf:"varint,9,opt,name=expected_source_version,json=expectedSourceVersion,proto3,oneof" json:"expected_source_version,omitempty"`
+	ExpectedSourceActivationRevision *uint64 `protobuf:"varint,10,opt,name=expected_source_activation_revision,json=expectedSourceActivationRevision,proto3,oneof" json:"expected_source_activation_revision,omitempty"`
+	unknownFields                    protoimpl.UnknownFields
+	sizeCache                        protoimpl.SizeCache
+}
+
+func (x *MigrateApplicationReleaseRequest) Reset() {
+	*x = MigrateApplicationReleaseRequest{}
+	mi := &file_kms_v1_kms_proto_msgTypes[149]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrateApplicationReleaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrateApplicationReleaseRequest) ProtoMessage() {}
+
+func (x *MigrateApplicationReleaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[149]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrateApplicationReleaseRequest.ProtoReflect.Descriptor instead.
+func (*MigrateApplicationReleaseRequest) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{149}
+}
+
+func (x *MigrateApplicationReleaseRequest) GetNamespace() *NamespaceRef {
+	if x != nil {
+		return x.Namespace
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseRequest) GetSourceSchemaVersion() uint64 {
+	if x != nil {
+		return x.SourceSchemaVersion
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseRequest) GetSchemaVersion() uint64 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseRequest) GetContract() []*ApplicationContractField {
+	if x != nil {
+		return x.Contract
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseRequest) GetChanges() []*ApplicationMigrationChange {
+	if x != nil {
+		return x.Changes
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseRequest) GetMetadataJson() string {
+	if x != nil {
+		return x.MetadataJson
+	}
+	return ""
+}
+
+func (x *MigrateApplicationReleaseRequest) GetExecute() bool {
+	if x != nil {
+		return x.Execute
+	}
+	return false
+}
+
+func (x *MigrateApplicationReleaseRequest) GetPlanDigest() string {
+	if x != nil {
+		return x.PlanDigest
+	}
+	return ""
+}
+
+func (x *MigrateApplicationReleaseRequest) GetExpectedSourceVersion() uint64 {
+	if x != nil && x.ExpectedSourceVersion != nil {
+		return *x.ExpectedSourceVersion
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseRequest) GetExpectedSourceActivationRevision() uint64 {
+	if x != nil && x.ExpectedSourceActivationRevision != nil {
+		return *x.ExpectedSourceActivationRevision
+	}
+	return 0
+}
+
+type ApplicationMigrationEnvironment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Environment   string                 `protobuf:"bytes,1,opt,name=environment,proto3" json:"environment,omitempty"`
+	ActiveVersion uint64                 `protobuf:"varint,2,opt,name=active_version,json=activeVersion,proto3" json:"active_version,omitempty"`
+	SchemaVersion uint64                 `protobuf:"varint,3,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplicationMigrationEnvironment) Reset() {
+	*x = ApplicationMigrationEnvironment{}
+	mi := &file_kms_v1_kms_proto_msgTypes[150]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplicationMigrationEnvironment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplicationMigrationEnvironment) ProtoMessage() {}
+
+func (x *ApplicationMigrationEnvironment) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[150]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplicationMigrationEnvironment.ProtoReflect.Descriptor instead.
+func (*ApplicationMigrationEnvironment) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{150}
+}
+
+func (x *ApplicationMigrationEnvironment) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *ApplicationMigrationEnvironment) GetActiveVersion() uint64 {
+	if x != nil {
+		return x.ActiveVersion
+	}
+	return 0
+}
+
+func (x *ApplicationMigrationEnvironment) GetSchemaVersion() uint64 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+type ApplicationMigrationActivation struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ActivationRevision uint64                 `protobuf:"varint,1,opt,name=activation_revision,json=activationRevision,proto3" json:"activation_revision,omitempty"`
+	PreviousVersion    uint64                 `protobuf:"varint,2,opt,name=previous_version,json=previousVersion,proto3" json:"previous_version,omitempty"`
+	Changed            bool                   `protobuf:"varint,3,opt,name=changed,proto3" json:"changed,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ApplicationMigrationActivation) Reset() {
+	*x = ApplicationMigrationActivation{}
+	mi := &file_kms_v1_kms_proto_msgTypes[151]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplicationMigrationActivation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplicationMigrationActivation) ProtoMessage() {}
+
+func (x *ApplicationMigrationActivation) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[151]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplicationMigrationActivation.ProtoReflect.Descriptor instead.
+func (*ApplicationMigrationActivation) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{151}
+}
+
+func (x *ApplicationMigrationActivation) GetActivationRevision() uint64 {
+	if x != nil {
+		return x.ActivationRevision
+	}
+	return 0
+}
+
+func (x *ApplicationMigrationActivation) GetPreviousVersion() uint64 {
+	if x != nil {
+		return x.PreviousVersion
+	}
+	return 0
+}
+
+func (x *ApplicationMigrationActivation) GetChanged() bool {
+	if x != nil {
+		return x.Changed
+	}
+	return false
+}
+
+// MigrateApplicationReleaseResponse is value-free. entries.source is
+// preserved | renamed | edited | pinned | added | missing | removed.
+type MigrateApplicationReleaseResponse struct {
+	state                    protoimpl.MessageState             `protogen:"open.v1"`
+	PlanDigest               string                             `protobuf:"bytes,1,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
+	Valid                    bool                               `protobuf:"varint,2,opt,name=valid,proto3" json:"valid,omitempty"`
+	Executed                 bool                               `protobuf:"varint,3,opt,name=executed,proto3" json:"executed,omitempty"`
+	DefinitionChanged        bool                               `protobuf:"varint,4,opt,name=definition_changed,json=definitionChanged,proto3" json:"definition_changed,omitempty"`
+	ReleaseName              string                             `protobuf:"bytes,5,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	SourceVersion            uint64                             `protobuf:"varint,6,opt,name=source_version,json=sourceVersion,proto3" json:"source_version,omitempty"`
+	SourceActivationRevision uint64                             `protobuf:"varint,7,opt,name=source_activation_revision,json=sourceActivationRevision,proto3" json:"source_activation_revision,omitempty"`
+	SchemaVersion            uint64                             `protobuf:"varint,8,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Entries                  []*ApplicationReleasePlanEntry     `protobuf:"bytes,9,rep,name=entries,proto3" json:"entries,omitempty"`
+	Validation               []*ReleaseValidationError          `protobuf:"bytes,10,rep,name=validation,proto3" json:"validation,omitempty"`
+	AffectedEnvironments     []*ApplicationMigrationEnvironment `protobuf:"bytes,11,rep,name=affected_environments,json=affectedEnvironments,proto3" json:"affected_environments,omitempty"`
+	Release                  *ConfigurationRelease              `protobuf:"bytes,12,opt,name=release,proto3" json:"release,omitempty"`
+	Activation               *ApplicationMigrationActivation    `protobuf:"bytes,13,opt,name=activation,proto3" json:"activation,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *MigrateApplicationReleaseResponse) Reset() {
+	*x = MigrateApplicationReleaseResponse{}
+	mi := &file_kms_v1_kms_proto_msgTypes[152]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrateApplicationReleaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrateApplicationReleaseResponse) ProtoMessage() {}
+
+func (x *MigrateApplicationReleaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kms_v1_kms_proto_msgTypes[152]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrateApplicationReleaseResponse.ProtoReflect.Descriptor instead.
+func (*MigrateApplicationReleaseResponse) Descriptor() ([]byte, []int) {
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{152}
+}
+
+func (x *MigrateApplicationReleaseResponse) GetPlanDigest() string {
+	if x != nil {
+		return x.PlanDigest
+	}
+	return ""
+}
+
+func (x *MigrateApplicationReleaseResponse) GetValid() bool {
+	if x != nil {
+		return x.Valid
+	}
+	return false
+}
+
+func (x *MigrateApplicationReleaseResponse) GetExecuted() bool {
+	if x != nil {
+		return x.Executed
+	}
+	return false
+}
+
+func (x *MigrateApplicationReleaseResponse) GetDefinitionChanged() bool {
+	if x != nil {
+		return x.DefinitionChanged
+	}
+	return false
+}
+
+func (x *MigrateApplicationReleaseResponse) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *MigrateApplicationReleaseResponse) GetSourceVersion() uint64 {
+	if x != nil {
+		return x.SourceVersion
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseResponse) GetSourceActivationRevision() uint64 {
+	if x != nil {
+		return x.SourceActivationRevision
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseResponse) GetSchemaVersion() uint64 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *MigrateApplicationReleaseResponse) GetEntries() []*ApplicationReleasePlanEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseResponse) GetValidation() []*ReleaseValidationError {
+	if x != nil {
+		return x.Validation
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseResponse) GetAffectedEnvironments() []*ApplicationMigrationEnvironment {
+	if x != nil {
+		return x.AffectedEnvironments
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseResponse) GetRelease() *ConfigurationRelease {
+	if x != nil {
+		return x.Release
+	}
+	return nil
+}
+
+func (x *MigrateApplicationReleaseResponse) GetActivation() *ApplicationMigrationActivation {
+	if x != nil {
+		return x.Activation
+	}
+	return nil
+}
+
 var File_kms_v1_kms_proto protoreflect.FileDescriptor
 
 const file_kms_v1_kms_proto_rawDesc = "" +
@@ -11060,7 +11535,59 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"validation\x18\v \x03(\v2\x1e.kms.v1.ReleaseValidationErrorR\n" +
 	"validation\x126\n" +
-	"\arelease\x18\f \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease2\xb0\x03\n" +
+	"\arelease\x18\f \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\"\xc5\x01\n" +
+	"\x1aApplicationMigrationChange\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x1d\n" +
+	"\n" +
+	"from_alias\x18\x02 \x01(\tR\tfromAlias\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x04 \x01(\tH\x00R\x05value\x88\x01\x01\x12!\n" +
+	"\fcontent_type\x18\x05 \x01(\tR\vcontentType\x12\x18\n" +
+	"\aversion\x18\x06 \x01(\x04R\aversionB\b\n" +
+	"\x06_value\"\xe2\x04\n" +
+	" MigrateApplicationReleaseRequest\x122\n" +
+	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x122\n" +
+	"\x15source_schema_version\x18\x02 \x01(\x04R\x13sourceSchemaVersion\x12%\n" +
+	"\x0eschema_version\x18\x03 \x01(\x04R\rschemaVersion\x12<\n" +
+	"\bcontract\x18\x04 \x03(\v2 .kms.v1.ApplicationContractFieldR\bcontract\x12<\n" +
+	"\achanges\x18\x05 \x03(\v2\".kms.v1.ApplicationMigrationChangeR\achanges\x12#\n" +
+	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJson\x12\x18\n" +
+	"\aexecute\x18\a \x01(\bR\aexecute\x12\x1f\n" +
+	"\vplan_digest\x18\b \x01(\tR\n" +
+	"planDigest\x12;\n" +
+	"\x17expected_source_version\x18\t \x01(\x04H\x00R\x15expectedSourceVersion\x88\x01\x01\x12R\n" +
+	"#expected_source_activation_revision\x18\n" +
+	" \x01(\x04H\x01R expectedSourceActivationRevision\x88\x01\x01B\x1a\n" +
+	"\x18_expected_source_versionB&\n" +
+	"$_expected_source_activation_revision\"\x91\x01\n" +
+	"\x1fApplicationMigrationEnvironment\x12 \n" +
+	"\venvironment\x18\x01 \x01(\tR\venvironment\x12%\n" +
+	"\x0eactive_version\x18\x02 \x01(\x04R\ractiveVersion\x12%\n" +
+	"\x0eschema_version\x18\x03 \x01(\x04R\rschemaVersion\"\x96\x01\n" +
+	"\x1eApplicationMigrationActivation\x12/\n" +
+	"\x13activation_revision\x18\x01 \x01(\x04R\x12activationRevision\x12)\n" +
+	"\x10previous_version\x18\x02 \x01(\x04R\x0fpreviousVersion\x12\x18\n" +
+	"\achanged\x18\x03 \x01(\bR\achanged\"\xb1\x05\n" +
+	"!MigrateApplicationReleaseResponse\x12\x1f\n" +
+	"\vplan_digest\x18\x01 \x01(\tR\n" +
+	"planDigest\x12\x14\n" +
+	"\x05valid\x18\x02 \x01(\bR\x05valid\x12\x1a\n" +
+	"\bexecuted\x18\x03 \x01(\bR\bexecuted\x12-\n" +
+	"\x12definition_changed\x18\x04 \x01(\bR\x11definitionChanged\x12!\n" +
+	"\frelease_name\x18\x05 \x01(\tR\vreleaseName\x12%\n" +
+	"\x0esource_version\x18\x06 \x01(\x04R\rsourceVersion\x12<\n" +
+	"\x1asource_activation_revision\x18\a \x01(\x04R\x18sourceActivationRevision\x12%\n" +
+	"\x0eschema_version\x18\b \x01(\x04R\rschemaVersion\x12=\n" +
+	"\aentries\x18\t \x03(\v2#.kms.v1.ApplicationReleasePlanEntryR\aentries\x12>\n" +
+	"\n" +
+	"validation\x18\n" +
+	" \x03(\v2\x1e.kms.v1.ReleaseValidationErrorR\n" +
+	"validation\x12\\\n" +
+	"\x15affected_environments\x18\v \x03(\v2'.kms.v1.ApplicationMigrationEnvironmentR\x14affectedEnvironments\x126\n" +
+	"\arelease\x18\f \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\x12F\n" +
+	"\n" +
+	"activation\x18\r \x01(\v2&.kms.v1.ApplicationMigrationActivationR\n" +
+	"activation2\xb0\x03\n" +
 	"\x10ParameterService\x12I\n" +
 	"\fGetParameter\x12\x1b.kms.v1.GetParameterRequest\x1a\x1c.kms.v1.GetParameterResponse\x12I\n" +
 	"\fPutParameter\x12\x1b.kms.v1.PutParameterRequest\x1a\x1c.kms.v1.PutParameterResponse\x12O\n" +
@@ -11104,7 +11631,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x1aConfigurationSchemaService\x12I\n" +
 	"\fCreateSchema\x12\x1b.kms.v1.CreateSchemaRequest\x1a\x1c.kms.v1.CreateSchemaResponse\x12@\n" +
 	"\tGetSchema\x12\x18.kms.v1.GetSchemaRequest\x1a\x19.kms.v1.GetSchemaResponse\x12F\n" +
-	"\vListSchemas\x12\x1a.kms.v1.ListSchemasRequest\x1a\x1b.kms.v1.ListSchemasResponse2\xf3\x0e\n" +
+	"\vListSchemas\x12\x1a.kms.v1.ListSchemasRequest\x1a\x1b.kms.v1.ListSchemasResponse2\xe5\x0f\n" +
 	"\fAdminService\x12R\n" +
 	"\x0fCreateNamespace\x12\x1e.kms.v1.CreateNamespaceRequest\x1a\x1f.kms.v1.CreateNamespaceResponse\x12R\n" +
 	"\x0fUpdateNamespace\x12\x1e.kms.v1.UpdateNamespaceRequest\x1a\x1f.kms.v1.UpdateNamespaceResponse\x12R\n" +
@@ -11126,7 +11653,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x0fListSubscribers\x12\x1e.kms.v1.ListSubscribersRequest\x1a\x1f.kms.v1.ListSubscribersResponse\x12g\n" +
 	"\x16ListReleaseSubscribers\x12%.kms.v1.ListReleaseSubscribersRequest\x1a&.kms.v1.ListReleaseSubscribersResponse\x12m\n" +
 	"\x18ApplyApplicationDefaults\x12'.kms.v1.ApplyApplicationDefaultsRequest\x1a(.kms.v1.ApplyApplicationDefaultsResponse\x12m\n" +
-	"\x18CreateApplicationRelease\x12'.kms.v1.CreateApplicationReleaseRequest\x1a(.kms.v1.CreateApplicationReleaseResponse\x127\n" +
+	"\x18CreateApplicationRelease\x12'.kms.v1.CreateApplicationReleaseRequest\x1a(.kms.v1.CreateApplicationReleaseResponse\x12p\n" +
+	"\x19MigrateApplicationRelease\x12(.kms.v1.MigrateApplicationReleaseRequest\x1a).kms.v1.MigrateApplicationReleaseResponse\x127\n" +
 	"\x06Health\x12\x15.kms.v1.HealthRequest\x1a\x16.kms.v1.HealthResponseB'Z%github.com/Suhaibinator/kms/gen/kmsv1b\x06proto3"
 
 var (
@@ -11141,7 +11669,7 @@ func file_kms_v1_kms_proto_rawDescGZIP() []byte {
 	return file_kms_v1_kms_proto_rawDescData
 }
 
-var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 151)
+var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 156)
 var file_kms_v1_kms_proto_goTypes = []any{
 	(*NamespaceRef)(nil),                        // 0: kms.v1.NamespaceRef
 	(*ResourceRef)(nil),                         // 1: kms.v1.ResourceRef
@@ -11291,16 +11819,21 @@ var file_kms_v1_kms_proto_goTypes = []any{
 	(*CreateApplicationReleaseRequest)(nil),     // 145: kms.v1.CreateApplicationReleaseRequest
 	(*ApplicationReleasePlanEntry)(nil),         // 146: kms.v1.ApplicationReleasePlanEntry
 	(*CreateApplicationReleaseResponse)(nil),    // 147: kms.v1.CreateApplicationReleaseResponse
-	nil,                                         // 148: kms.v1.Parameter.LabelsEntry
-	nil,                                         // 149: kms.v1.SecretMetadata.LabelsEntry
-	nil,                                         // 150: kms.v1.GetParameterMetadataResponse.LabelsEntry
+	(*ApplicationMigrationChange)(nil),          // 148: kms.v1.ApplicationMigrationChange
+	(*MigrateApplicationReleaseRequest)(nil),    // 149: kms.v1.MigrateApplicationReleaseRequest
+	(*ApplicationMigrationEnvironment)(nil),     // 150: kms.v1.ApplicationMigrationEnvironment
+	(*ApplicationMigrationActivation)(nil),      // 151: kms.v1.ApplicationMigrationActivation
+	(*MigrateApplicationReleaseResponse)(nil),   // 152: kms.v1.MigrateApplicationReleaseResponse
+	nil, // 153: kms.v1.Parameter.LabelsEntry
+	nil, // 154: kms.v1.SecretMetadata.LabelsEntry
+	nil, // 155: kms.v1.GetParameterMetadataResponse.LabelsEntry
 }
 var file_kms_v1_kms_proto_depIdxs = []int32{
 	0,   // 0: kms.v1.ResourceRef.namespace:type_name -> kms.v1.NamespaceRef
 	1,   // 1: kms.v1.Parameter.ref:type_name -> kms.v1.ResourceRef
-	148, // 2: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
+	153, // 2: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
 	1,   // 3: kms.v1.SecretMetadata.ref:type_name -> kms.v1.ResourceRef
-	149, // 4: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
+	154, // 4: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
 	5,   // 5: kms.v1.SecretMetadata.versions:type_name -> kms.v1.SecretVersionInfo
 	1,   // 6: kms.v1.GetParameterRequest.ref:type_name -> kms.v1.ResourceRef
 	2,   // 7: kms.v1.GetParameterResponse.parameter:type_name -> kms.v1.Parameter
@@ -11310,7 +11843,7 @@ var file_kms_v1_kms_proto_depIdxs = []int32{
 	1,   // 11: kms.v1.DeleteParameterRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 12: kms.v1.GetParameterMetadataRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 13: kms.v1.GetParameterMetadataResponse.ref:type_name -> kms.v1.ResourceRef
-	150, // 14: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
+	155, // 14: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
 	3,   // 15: kms.v1.GetParameterMetadataResponse.versions:type_name -> kms.v1.ParameterVersionInfo
 	1,   // 16: kms.v1.GetSecretRequest.ref:type_name -> kms.v1.ResourceRef
 	1,   // 17: kms.v1.GetSecretResponse.ref:type_name -> kms.v1.ResourceRef
@@ -11419,129 +11952,139 @@ var file_kms_v1_kms_proto_depIdxs = []int32{
 	146, // 120: kms.v1.CreateApplicationReleaseResponse.entries:type_name -> kms.v1.ApplicationReleasePlanEntry
 	54,  // 121: kms.v1.CreateApplicationReleaseResponse.validation:type_name -> kms.v1.ReleaseValidationError
 	50,  // 122: kms.v1.CreateApplicationReleaseResponse.release:type_name -> kms.v1.ConfigurationRelease
-	6,   // 123: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
-	8,   // 124: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
-	10,  // 125: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
-	12,  // 126: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
-	14,  // 127: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
-	16,  // 128: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
-	18,  // 129: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
-	18,  // 130: kms.v1.SecretService.PutSecretV03:input_type -> kms.v1.PutSecretRequest
-	20,  // 131: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
-	22,  // 132: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
-	24,  // 133: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
-	26,  // 134: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
-	28,  // 135: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
-	30,  // 136: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
-	32,  // 137: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
-	33,  // 138: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
-	35,  // 139: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
-	36,  // 140: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
-	37,  // 141: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
-	39,  // 142: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
-	40,  // 143: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
-	86,  // 144: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
-	43,  // 145: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:input_type -> kms.v1.RegisterReleaseSessionRequest
-	45,  // 146: kms.v1.ConfigurationReleaseService.GetInstanceRelease:input_type -> kms.v1.GetInstanceReleaseRequest
-	46,  // 147: kms.v1.ConfigurationReleaseService.SetReleasePin:input_type -> kms.v1.SetReleasePinRequest
-	51,  // 148: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
-	53,  // 149: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
-	56,  // 150: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
-	58,  // 151: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
-	60,  // 152: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
-	61,  // 153: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:input_type -> kms.v1.ResolveReleaseSchemaRequest
-	64,  // 154: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
-	73,  // 155: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
-	68,  // 156: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
-	80,  // 157: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
-	82,  // 158: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
-	84,  // 159: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
-	96,  // 160: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
-	98,  // 161: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
-	100, // 162: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
-	102, // 163: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
-	109, // 164: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
-	111, // 165: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
-	113, // 166: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
-	115, // 167: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
-	117, // 168: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
-	119, // 169: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
-	121, // 170: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
-	123, // 171: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
-	125, // 172: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
-	127, // 173: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
-	129, // 174: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
-	131, // 175: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
-	134, // 176: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
-	137, // 177: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
-	140, // 178: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
-	104, // 179: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
-	145, // 180: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
-	143, // 181: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
-	7,   // 182: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
-	9,   // 183: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
-	11,  // 184: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
-	13,  // 185: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
-	15,  // 186: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
-	17,  // 187: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
-	19,  // 188: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
-	19,  // 189: kms.v1.SecretService.PutSecretV03:output_type -> kms.v1.PutSecretResponse
-	21,  // 190: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
-	23,  // 191: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
-	25,  // 192: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
-	27,  // 193: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
-	29,  // 194: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
-	31,  // 195: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
-	34,  // 196: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	34,  // 197: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 198: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	34,  // 199: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
-	38,  // 200: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
-	41,  // 201: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	41,  // 202: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
-	87,  // 203: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
-	44,  // 204: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:output_type -> kms.v1.ReleaseSessionResponse
-	47,  // 205: kms.v1.ConfigurationReleaseService.GetInstanceRelease:output_type -> kms.v1.InstanceReleaseTarget
-	47,  // 206: kms.v1.ConfigurationReleaseService.SetReleasePin:output_type -> kms.v1.InstanceReleaseTarget
-	52,  // 207: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
-	55,  // 208: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
-	57,  // 209: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
-	59,  // 210: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
-	63,  // 211: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
-	62,  // 212: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:output_type -> kms.v1.ResolveReleaseSchemaResponse
-	66,  // 213: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
-	77,  // 214: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
-	70,  // 215: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
-	81,  // 216: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
-	83,  // 217: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
-	85,  // 218: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
-	97,  // 219: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
-	99,  // 220: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
-	101, // 221: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
-	103, // 222: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
-	110, // 223: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
-	112, // 224: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
-	114, // 225: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
-	116, // 226: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
-	118, // 227: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
-	120, // 228: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
-	122, // 229: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
-	124, // 230: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
-	126, // 231: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
-	128, // 232: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
-	130, // 233: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
-	132, // 234: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
-	135, // 235: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
-	138, // 236: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
-	141, // 237: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
-	106, // 238: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
-	147, // 239: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
-	144, // 240: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
-	182, // [182:241] is the sub-list for method output_type
-	123, // [123:182] is the sub-list for method input_type
-	123, // [123:123] is the sub-list for extension type_name
-	123, // [123:123] is the sub-list for extension extendee
-	0,   // [0:123] is the sub-list for field type_name
+	0,   // 123: kms.v1.MigrateApplicationReleaseRequest.namespace:type_name -> kms.v1.NamespaceRef
+	78,  // 124: kms.v1.MigrateApplicationReleaseRequest.contract:type_name -> kms.v1.ApplicationContractField
+	148, // 125: kms.v1.MigrateApplicationReleaseRequest.changes:type_name -> kms.v1.ApplicationMigrationChange
+	146, // 126: kms.v1.MigrateApplicationReleaseResponse.entries:type_name -> kms.v1.ApplicationReleasePlanEntry
+	54,  // 127: kms.v1.MigrateApplicationReleaseResponse.validation:type_name -> kms.v1.ReleaseValidationError
+	150, // 128: kms.v1.MigrateApplicationReleaseResponse.affected_environments:type_name -> kms.v1.ApplicationMigrationEnvironment
+	50,  // 129: kms.v1.MigrateApplicationReleaseResponse.release:type_name -> kms.v1.ConfigurationRelease
+	151, // 130: kms.v1.MigrateApplicationReleaseResponse.activation:type_name -> kms.v1.ApplicationMigrationActivation
+	6,   // 131: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
+	8,   // 132: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
+	10,  // 133: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
+	12,  // 134: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
+	14,  // 135: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
+	16,  // 136: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
+	18,  // 137: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
+	18,  // 138: kms.v1.SecretService.PutSecretV03:input_type -> kms.v1.PutSecretRequest
+	20,  // 139: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
+	22,  // 140: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
+	24,  // 141: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
+	26,  // 142: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
+	28,  // 143: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
+	30,  // 144: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
+	32,  // 145: kms.v1.SecretService.BindSecret:input_type -> kms.v1.BindSecretRequest
+	33,  // 146: kms.v1.SecretService.UnbindSecret:input_type -> kms.v1.UnbindSecretRequest
+	35,  // 147: kms.v1.SecretService.PreviewSecretBindingCohort:input_type -> kms.v1.PreviewSecretBindingCohortRequest
+	36,  // 148: kms.v1.SecretService.RotateSecretBindingKey:input_type -> kms.v1.RotateSecretBindingKeyRequest
+	37,  // 149: kms.v1.SecretService.PurgeSecretBindingCohort:input_type -> kms.v1.PurgeSecretBindingCohortRequest
+	39,  // 150: kms.v1.SecretService.PreviewSecretUnboundVersions:input_type -> kms.v1.PreviewSecretUnboundVersionsRequest
+	40,  // 151: kms.v1.SecretService.PurgeSecretUnboundVersions:input_type -> kms.v1.PurgeSecretUnboundVersionsRequest
+	86,  // 152: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
+	43,  // 153: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:input_type -> kms.v1.RegisterReleaseSessionRequest
+	45,  // 154: kms.v1.ConfigurationReleaseService.GetInstanceRelease:input_type -> kms.v1.GetInstanceReleaseRequest
+	46,  // 155: kms.v1.ConfigurationReleaseService.SetReleasePin:input_type -> kms.v1.SetReleasePinRequest
+	51,  // 156: kms.v1.ConfigurationReleaseService.CreateRelease:input_type -> kms.v1.CreateReleaseRequest
+	53,  // 157: kms.v1.ConfigurationReleaseService.ValidateRelease:input_type -> kms.v1.ValidateReleaseRequest
+	56,  // 158: kms.v1.ConfigurationReleaseService.ActivateRelease:input_type -> kms.v1.ActivateReleaseRequest
+	58,  // 159: kms.v1.ConfigurationReleaseService.GetRelease:input_type -> kms.v1.GetReleaseRequest
+	60,  // 160: kms.v1.ConfigurationReleaseService.GetActiveRelease:input_type -> kms.v1.GetActiveReleaseRequest
+	61,  // 161: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:input_type -> kms.v1.ResolveReleaseSchemaRequest
+	64,  // 162: kms.v1.ConfigurationReleaseService.ListReleases:input_type -> kms.v1.ListReleasesRequest
+	73,  // 163: kms.v1.ConfigurationReleaseService.WatchRelease:input_type -> kms.v1.WatchReleaseRequest
+	68,  // 164: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:input_type -> kms.v1.VerifyReleaseDefaultsRequest
+	80,  // 165: kms.v1.ConfigurationSchemaService.CreateSchema:input_type -> kms.v1.CreateSchemaRequest
+	82,  // 166: kms.v1.ConfigurationSchemaService.GetSchema:input_type -> kms.v1.GetSchemaRequest
+	84,  // 167: kms.v1.ConfigurationSchemaService.ListSchemas:input_type -> kms.v1.ListSchemasRequest
+	96,  // 168: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
+	98,  // 169: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
+	100, // 170: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
+	102, // 171: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
+	109, // 172: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
+	111, // 173: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
+	113, // 174: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
+	115, // 175: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
+	117, // 176: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
+	119, // 177: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
+	121, // 178: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
+	123, // 179: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
+	125, // 180: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
+	127, // 181: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
+	129, // 182: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
+	131, // 183: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
+	134, // 184: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
+	137, // 185: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
+	140, // 186: kms.v1.AdminService.ListReleaseSubscribers:input_type -> kms.v1.ListReleaseSubscribersRequest
+	104, // 187: kms.v1.AdminService.ApplyApplicationDefaults:input_type -> kms.v1.ApplyApplicationDefaultsRequest
+	145, // 188: kms.v1.AdminService.CreateApplicationRelease:input_type -> kms.v1.CreateApplicationReleaseRequest
+	149, // 189: kms.v1.AdminService.MigrateApplicationRelease:input_type -> kms.v1.MigrateApplicationReleaseRequest
+	143, // 190: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
+	7,   // 191: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
+	9,   // 192: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
+	11,  // 193: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
+	13,  // 194: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
+	15,  // 195: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
+	17,  // 196: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
+	19,  // 197: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
+	19,  // 198: kms.v1.SecretService.PutSecretV03:output_type -> kms.v1.PutSecretResponse
+	21,  // 199: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
+	23,  // 200: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
+	25,  // 201: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
+	27,  // 202: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
+	29,  // 203: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
+	31,  // 204: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
+	34,  // 205: kms.v1.SecretService.BindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	34,  // 206: kms.v1.SecretService.UnbindSecret:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 207: kms.v1.SecretService.PreviewSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	34,  // 208: kms.v1.SecretService.RotateSecretBindingKey:output_type -> kms.v1.SecretVersionTransitionResponse
+	38,  // 209: kms.v1.SecretService.PurgeSecretBindingCohort:output_type -> kms.v1.SecretBindingCohortResponse
+	41,  // 210: kms.v1.SecretService.PreviewSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	41,  // 211: kms.v1.SecretService.PurgeSecretUnboundVersions:output_type -> kms.v1.SecretVersionSetResponse
+	87,  // 212: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
+	44,  // 213: kms.v1.ConfigurationReleaseService.RegisterReleaseSession:output_type -> kms.v1.ReleaseSessionResponse
+	47,  // 214: kms.v1.ConfigurationReleaseService.GetInstanceRelease:output_type -> kms.v1.InstanceReleaseTarget
+	47,  // 215: kms.v1.ConfigurationReleaseService.SetReleasePin:output_type -> kms.v1.InstanceReleaseTarget
+	52,  // 216: kms.v1.ConfigurationReleaseService.CreateRelease:output_type -> kms.v1.CreateReleaseResponse
+	55,  // 217: kms.v1.ConfigurationReleaseService.ValidateRelease:output_type -> kms.v1.ValidateReleaseResponse
+	57,  // 218: kms.v1.ConfigurationReleaseService.ActivateRelease:output_type -> kms.v1.ActivateReleaseResponse
+	59,  // 219: kms.v1.ConfigurationReleaseService.GetRelease:output_type -> kms.v1.GetReleaseResponse
+	63,  // 220: kms.v1.ConfigurationReleaseService.GetActiveRelease:output_type -> kms.v1.GetActiveReleaseResponse
+	62,  // 221: kms.v1.ConfigurationReleaseService.ResolveReleaseSchema:output_type -> kms.v1.ResolveReleaseSchemaResponse
+	66,  // 222: kms.v1.ConfigurationReleaseService.ListReleases:output_type -> kms.v1.ListReleasesResponse
+	77,  // 223: kms.v1.ConfigurationReleaseService.WatchRelease:output_type -> kms.v1.WatchReleaseEvent
+	70,  // 224: kms.v1.ConfigurationReleaseService.VerifyReleaseDefaults:output_type -> kms.v1.VerifyReleaseDefaultsResponse
+	81,  // 225: kms.v1.ConfigurationSchemaService.CreateSchema:output_type -> kms.v1.CreateSchemaResponse
+	83,  // 226: kms.v1.ConfigurationSchemaService.GetSchema:output_type -> kms.v1.GetSchemaResponse
+	85,  // 227: kms.v1.ConfigurationSchemaService.ListSchemas:output_type -> kms.v1.ListSchemasResponse
+	97,  // 228: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
+	99,  // 229: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
+	101, // 230: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
+	103, // 231: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
+	110, // 232: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
+	112, // 233: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
+	114, // 234: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
+	116, // 235: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
+	118, // 236: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
+	120, // 237: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
+	122, // 238: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
+	124, // 239: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
+	126, // 240: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
+	128, // 241: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
+	130, // 242: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
+	132, // 243: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
+	135, // 244: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
+	138, // 245: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
+	141, // 246: kms.v1.AdminService.ListReleaseSubscribers:output_type -> kms.v1.ListReleaseSubscribersResponse
+	106, // 247: kms.v1.AdminService.ApplyApplicationDefaults:output_type -> kms.v1.ApplyApplicationDefaultsResponse
+	147, // 248: kms.v1.AdminService.CreateApplicationRelease:output_type -> kms.v1.CreateApplicationReleaseResponse
+	152, // 249: kms.v1.AdminService.MigrateApplicationRelease:output_type -> kms.v1.MigrateApplicationReleaseResponse
+	144, // 250: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
+	191, // [191:251] is the sub-list for method output_type
+	131, // [131:191] is the sub-list for method input_type
+	131, // [131:131] is the sub-list for extension type_name
+	131, // [131:131] is the sub-list for extension extendee
+	0,   // [0:131] is the sub-list for field type_name
 }
 
 func init() { file_kms_v1_kms_proto_init() }
@@ -11579,13 +12122,15 @@ func file_kms_v1_kms_proto_init() {
 	file_kms_v1_kms_proto_msgTypes[104].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[140].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[145].OneofWrappers = []any{}
+	file_kms_v1_kms_proto_msgTypes[148].OneofWrappers = []any{}
+	file_kms_v1_kms_proto_msgTypes[149].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kms_v1_kms_proto_rawDesc), len(file_kms_v1_kms_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   151,
+			NumMessages:   156,
 			NumExtensions: 0,
 			NumServices:   6,
 		},
