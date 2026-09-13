@@ -697,6 +697,7 @@ track:
 | `release activate`, `release rollback` | `{namespace, name, schema_version, version, previous_version, revision, changed}` |
 | `release subscribers` | items of `{identity, client, instance, schema_version, received, prepared, applied, rejected, lag, connected}` — each lifecycle state is `{release_version, activation_revision, rejection_category}` or `null`; `lag` is the difference between the track's active global revision and the newest revision reported by the instance |
 | `release verify-defaults` | `{name, schema_version, version, activation_revision, schema, clean, entries, counts}`, entry `{alias, verdict}`, counts `{match, differs, missing_in_release, unknown_alias, secret_alias, unsupported_content_type, unverified}` |
+| `release migrate` | `{dry_run, plan_digest, valid, executed, definition_changed, release_name, source_version, source_activation_revision, schema_version, source_schema_version, entries, validation, affected_environments, release, activation, skipped_overrides}`, entry `{alias, kind, key, from_version, to_version, source}`, validation as `release validate` errors plus `instance_pointer`; `release` and `activation` (`{activation_revision, previous_version, changed}`) are `null` until executed. With `--execute` the preview goes to stderr and stdout carries only the executed document |
 | `release schema create` | `{application, release_name, version, digest}` |
 | `release schema show` | `{application, release_name, version, digest, schema}` — `schema` is the schema document itself, not a string |
 | `release schema list` | items of `{application, release_name, version, digest, created_at}` |
@@ -1595,6 +1596,66 @@ parameter-store admin identity create gradethis-ci-verify --auth token \
 parameter-store admin policy create gradethis-ci-verify --subject gradethis-ci-verify \
   --allow configuration-release:verify-defaults@prod/gradethis \
   --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+```
+
+`migrate ENV/APP --from-schema N [--to-schema N] [--from FILE|-]` is the CLI
+counterpart of the console's **Migrate to schema** wizard. It rebuilds the
+source track's active release against a newer registered schema, carries
+every pin the target contract still names, and overrides only what a defaults
+artifact says differs ("carry over everything we can; on conflict use our
+version"). A dry run is the default: the command previews the plan, prints
+it, and writes nothing until `--execute`.
+
+- `--from-schema N` (required; `0` is the schema-free track) names the source
+  track. A namespace may hold an active release on several tracks, so the
+  CLI never guesses; `release list ENV/APP` shows them.
+- `--to-schema N` names the target registered schema. It defaults to the
+  newest registered schema newer than the source track and fails when there
+  is none.
+- `--from FILE|-` supplies a `kms-config-defaults/v1` artifact. Its
+  `contract[]` becomes the complete target contract, and its `schema_sha256`
+  must equal the target schema's digest (a mismatch is a usage error naming
+  both digests). Each `parameters[]` value is hashed locally and checked
+  against the source release with the value-free `verify-defaults` RPC: a
+  `match` keeps the carried pin (reported under `skipped_overrides`), any
+  other verdict sends the artifact value so the plan shows the alias as
+  `edited` or `added`. No parameter value is ever printed. Without `--from`,
+  the target schema's registered contract is used and nothing is overridden;
+  a schema without an established contract requires `--from`.
+- `--rename NEW=OLD` (repeatable) carries `OLD`'s active pin under `NEW`;
+  `--pin ALIAS=VERSION` (repeatable) pins an exact existing version and wins
+  over the artifact's value for that alias. `--metadata-json` replaces the
+  source release's metadata.
+- `--execute` re-sends the previewed plan by its `plan_digest` together with
+  the previewed source version and activation revision, so only the plan the
+  operator saw can be written. It asks `[y/N]` unless `--yes`, refuses on a
+  non-interactive stdin without `--yes` (exit `2`), and needs
+  `--confirm-production ENV` for a production environment.
+
+The plan lists every target alias with its kind, key, carried and resulting
+versions, and a source of `preserved`, `renamed`, `edited`, `pinned`,
+`added`, `missing`, or `removed`. Aliases the contract names but neither the
+artifact nor the active release provides are `missing` and make the plan
+invalid; validation problems carry the `instance_pointer` of the failing
+value. An invalid plan exits `7` (also on a dry run); a plan that went stale
+between preview and execute exits `6` with "preview again".
+
+```bash
+parameter-store release migrate dev/gradethis --from-schema 1 --from ./gen/defaults.json \
+  --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+# Source: dev/gradethis runtime@12 (schema v1, activation 7)
+# Target: schema v2
+# Plan: 3f9c1d2ab7e0
+# ALIAS        KIND       KEY              FROM  TO  SOURCE
+# db_password  secret     db-password      2     2   preserved
+# greeting     parameter  config/greeting  1     1   preserved
+# rate_limits  parameter  config/limits    3     4   edited
+# Summary: preserved=2 renamed=0 edited=1 pinned=0 added=0 missing=0 removed=0; valid=true
+# Dry run: nothing was written. Re-run with --execute to apply.
+parameter-store release migrate dev/gradethis --from-schema 1 --from ./gen/defaults.json \
+  --execute --yes --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+# ...
+# Activated runtime@13 on schema v2 (revision 8)
 ```
 
 `show` and `diff` print aliases, references, exact versions, content types,

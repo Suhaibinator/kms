@@ -326,6 +326,10 @@ func TestInvocationErrorsExitUsage(t *testing.T) {
 		{[]string{"release", "schema", "frobnicate"}, "unknown release schema command"},
 		{[]string{"release", "schema", "create", "app"}, "requires APPLICATION FILE"},
 		{[]string{"release", "schema", "show", "app"}, "requires APPLICATION RELEASE VERSION"},
+		{[]string{"release", "migrate"}, "requires ENV/APP"},
+		{[]string{"release", "migrate", "prod/app"}, "requires --from-schema"},
+		{[]string{"release", "migrate", "prod/app", "extra", "--from-schema", "1"}, `unexpected argument "extra"`},
+		{[]string{"release", "migrate", "prod/app", "--from-schema", "1", "--execute", "--yes", "false"}, `unexpected argument "false"`},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()
