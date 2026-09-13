@@ -15,7 +15,7 @@ import { tokenizeJson } from "@/lib/json-text";
 export type JsonSchema = { [keyword: string]: unknown };
 export type JsonObject = { [key: string]: unknown };
 
-export type FieldKind = "string" | "number" | "boolean" | "object" | "list" | "json";
+export type FieldKind = "string" | "number" | "boolean" | "object" | "list" | "map" | "json";
 
 export interface FormField {
   kind: FieldKind;
@@ -33,9 +33,12 @@ export interface FormField {
   fields?: FormField[];
   /** Object fields: whether keys outside `fields` are allowed. */
   allowsExtra?: boolean;
-  /** List fields: the item kind. Object items render as repeated sub-forms. */
+  /** List and map fields: the item kind. Object items render as repeated sub-forms. */
   item?: "string" | "number" | "boolean" | "object";
-  /** List fields with object items: the item's form, rooted at a placeholder path (see `itemAt`). */
+  /**
+   * List and map fields with object items: the item's form, rooted at a
+   * placeholder path (see `itemAt` and `entryAt`).
+   */
   itemField?: FormField;
   /** JSON fallback fields: why the subtree is not rendered as inputs. */
   reason?: string;
@@ -234,6 +237,34 @@ function buildField(
       if (depth >= MAX_FORM_DEPTH) return { ...base, reason: "is nested too deeply" };
       const properties = isObject(schema.properties) ? schema.properties : null;
       if (!properties || Object.keys(properties).length === 0) {
+        // A map (`map[string]T` in the generator): keys are free, every value
+        // shares one schema. Scalar values render as key/value rows, object
+        // values as a keyed sub-form each.
+        if (isSchema(schema.additionalProperties)) {
+          const valueSchema = schema.additionalProperties;
+          const item = scalarItem(valueSchema);
+          if (item) {
+            const inner = unwrapNullable(valueSchema) ?? valueSchema;
+            return {
+              ...base,
+              kind: "map",
+              item,
+              integer: typeOf(inner).type === "integer",
+              enumValues: enumValues(inner),
+            };
+          }
+          // An entry exists by being present, so its key is never "required".
+          const entryField = buildField(
+            name,
+            [...path, ENTRY_PLACEHOLDER],
+            valueSchema,
+            false,
+            depth + 1,
+          );
+          if (entryField.kind === "object") {
+            return { ...base, kind: "map", item: "object", itemField: entryField };
+          }
+        }
         return { ...base, reason: "has no declared properties" };
       }
       const requiredKeys = new Set(
@@ -282,6 +313,7 @@ function buildField(
 }
 
 const ITEM_PLACEHOLDER = "\0item";
+const ENTRY_PLACEHOLDER = "\0entry";
 
 /** Re-roots a field tree built at `from` so its paths start at `to` instead. */
 function rebase(field: FormField, from: string[], to: string[]): FormField {
@@ -299,6 +331,26 @@ export function itemAt(field: FormField, index: number): FormField | null {
   if (field.kind !== "list" || !field.itemField) return null;
   const item = rebase(field.itemField, field.itemField.path, [...field.path, String(index)]);
   return { ...item, name: `${field.name} ${index + 1}` };
+}
+
+/** The sub-form for entry `key` of an object map: `field.itemField` with real paths. */
+export function entryAt(field: FormField, key: string): FormField | null {
+  if (field.kind !== "map" || !field.itemField) return null;
+  const entry = rebase(field.itemField, field.itemField.path, [...field.path, key]);
+  return { ...entry, name: key };
+}
+
+/**
+ * Whether the schema accepts `null` here: the generator's nullable wrapper, or
+ * a `type` list that names null and passes the local checks for it.
+ */
+export function isNullableField(field: FormField): boolean {
+  return (
+    field.nullable === true ||
+    (Array.isArray(field.schema.type) &&
+      field.schema.type.includes("null") &&
+      validateValue(field.schema, null).length === 0)
+  );
 }
 
 /** The root field for an alias, or null when the alias cannot be rendered as a form at all. */
@@ -349,6 +401,8 @@ export function initialValue(field: FormField): unknown {
     }
     case "list":
       return arrayAllowsEmpty(field.schema) ? [] : undefined;
+    case "map":
+      return {};
     case "string":
       return field.enumValues ? undefined : "";
     default:

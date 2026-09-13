@@ -5,6 +5,7 @@ import { SchemaForm, VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaFo
 import {
   aliasSchema,
   buildForm,
+  entryAt,
   extraKeys,
   getAt,
   initialValue,
@@ -950,5 +951,132 @@ describe("raw schema numeric provenance", () => {
     render(<Harness initial='{"n":1}' schema={pinned} />);
     await chooseSelectOption(screen.getByRole("combobox", { name: "n" }), "2.5");
     expect(out()).toEqual({ n: 2.5 });
+  });
+});
+
+describe("nullable scalars and maps", () => {
+  const billing: JsonSchema = {
+    type: "object",
+    required: ["addon_credit_expiry_days", "pricing_plans", "credit_weights"],
+    properties: {
+      addon_credit_expiry_days: {
+        anyOf: [{ type: "integer", minimum: -2147483648, maximum: 2147483647 }, { type: "null" }],
+        description: "nil means paid top-up credits never expire.",
+      },
+      label: { anyOf: [{ type: "string" }, { type: "null" }] },
+      credit_weights: {
+        type: "object",
+        additionalProperties: { type: "integer", minimum: 0 },
+      },
+      pricing_plans: {
+        anyOf: [
+          {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              additionalProperties: false,
+              required: ["monthly_cents"],
+              properties: {
+                monthly_cents: { type: "integer" },
+                stripe_price_monthly: { type: "string" },
+              },
+            },
+          },
+          { type: "null" },
+        ],
+      },
+    },
+  };
+  it("models maps and nullable scalars", () => {
+    const root = buildForm(billing);
+    const byName = Object.fromEntries((root?.fields ?? []).map((f) => [f.name, f]));
+    expect(byName.addon_credit_expiry_days).toMatchObject({ kind: "number", nullable: true });
+    expect(byName.credit_weights).toMatchObject({ kind: "map", item: "number", integer: true });
+    expect(byName.pricing_plans).toMatchObject({ kind: "map", item: "object", nullable: true });
+    const entry = entryAt(byName.pricing_plans, "pro");
+    expect(entry?.path).toEqual(["pricing_plans", "pro"]);
+    expect(entry?.fields?.map((f) => f.path)).toEqual([
+      ["pricing_plans", "pro", "monthly_cents"],
+      ["pricing_plans", "pro", "stripe_price_monthly"],
+    ]);
+    expect(initialValue(root!)).toEqual({ credit_weights: {}, pricing_plans: {} });
+  });
+  it("sets a required nullable integer to null and back", () => {
+    render(<Harness schema={billing} />);
+    const input = screen.getByRole("textbox", { name: "addon_credit_expiry_days" });
+    expect(screen.getByText("is required")).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "Set addon_credit_expiry_days to null" });
+    fireEvent.click(toggle);
+    expect(out()).toMatchObject({ addon_credit_expiry_days: null });
+    expect(input).toBeDisabled();
+    expect(input).toHaveAttribute("placeholder", "null");
+    expect(screen.queryByText("is required")).toBeNull();
+    fireEvent.click(toggle);
+    expect((out() as Record<string, unknown>).addon_credit_expiry_days).toBeUndefined();
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "30" } });
+    expect(out()).toMatchObject({ addon_credit_expiry_days: 30 });
+    expect(toggle).not.toBeChecked();
+  });
+  it("restores an empty string when a nullable string leaves null", () => {
+    render(
+      <Harness schema={billing} initial='{"label":null,"credit_weights":{},"pricing_plans":{}}' />,
+    );
+    const toggle = screen.getByRole("checkbox", { name: "Set label to null" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "label" })).toBeDisabled();
+    fireEvent.click(toggle);
+    expect(out()).toMatchObject({ label: "" });
+  });
+  it("edits a scalar map as key/value rows", () => {
+    render(
+      <Harness schema={billing} initial='{"credit_weights":{"PARSE":2},"pricing_plans":{}}' />,
+    );
+    expect(screen.getByText("1 entry")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "credit_weights entry PARSE" }), {
+      target: { value: "3" },
+    });
+    expect(out()).toMatchObject({ credit_weights: { PARSE: 3 } });
+    fireEvent.click(screen.getByRole("button", { name: "Add credit_weights entry" }));
+    const keyInput = screen.getByRole("textbox", { name: "New credit_weights key" });
+    fireEvent.change(keyInput, { target: { value: "PARSE" } });
+    expect(screen.getByText("An entry with this key exists.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add new credit_weights entry" })).toBeDisabled();
+    fireEvent.change(keyInput, { target: { value: "GRADE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add new credit_weights entry" }));
+    expect(out()).toMatchObject({ credit_weights: { PARSE: 3, GRADE: 0 } });
+    fireEvent.change(screen.getByRole("textbox", { name: "credit_weights entry GRADE" }), {
+      target: { value: "-1" },
+    });
+    expect(screen.getByText("must be at least 0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove credit_weights entry PARSE" }));
+    expect(out()).toMatchObject({ credit_weights: { GRADE: -1 } });
+    expect(
+      (out() as { credit_weights: Record<string, unknown> }).credit_weights.PARSE,
+    ).toBeUndefined();
+  });
+  it("edits an object map as keyed sub-forms and can set it to null", () => {
+    render(<Harness schema={billing} initial='{"credit_weights":{},"pricing_plans":{}}' />);
+    expect(screen.getAllByText("No entries · Empty object {}")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Add pricing_plans entry" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "New pricing_plans key" }), {
+      target: { value: "pro" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add new pricing_plans entry" }));
+    expect(out()).toMatchObject({ pricing_plans: { pro: {} } });
+    const group = screen.getByRole("group", { name: /^pro/ });
+    expect(within(group).getByText("is required")).toBeInTheDocument();
+    fireEvent.change(within(group).getByRole("textbox", { name: "monthly_cents" }), {
+      target: { value: "1900" },
+    });
+    expect(out()).toMatchObject({ pricing_plans: { pro: { monthly_cents: 1900 } } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove pricing_plans entry pro" }));
+    expect(out()).toMatchObject({ pricing_plans: {} });
+    fireEvent.click(screen.getByText("More options"));
+    fireEvent.click(screen.getByRole("button", { name: "Set pricing_plans to null" }));
+    expect(out()).toMatchObject({ pricing_plans: null });
+    expect(screen.getByText("Explicit null · null")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use empty object for pricing_plans" }));
+    expect(out()).toMatchObject({ pricing_plans: {} });
   });
 });
