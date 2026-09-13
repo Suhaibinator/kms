@@ -371,6 +371,10 @@ export function ApplicationHome({
               <AppSelect
                 id="application-schema-track"
                 aria-label="Schema version"
+                // Inline beside its label: the trigger's default w-full would
+                // fill the row-wrap label and push "Schema" onto its own line,
+                // growing the header 20px past the skeleton that mirrors it.
+                className="w-auto"
                 value={String(schemaVersion)}
                 onValueChange={(value) => {
                   actions.closeAll();
