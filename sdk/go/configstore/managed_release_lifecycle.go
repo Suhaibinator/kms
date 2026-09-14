@@ -40,7 +40,7 @@ func runManagedReleaseLifecycle[P ~string, T any](args []string, stdout, stderr 
 	addManagedScopeFlags(set, &scope)
 	set.Usage = func() {
 		if stdout != nil {
-			fmt.Fprintf(stdout, "Usage: managed-config release %s --profile PROFILE --schema-version VERSION --version VERSION [flags]\n", command)
+			_, _ = fmt.Fprintf(stdout, "Usage: managed-config release %s --profile PROFILE --schema-version VERSION --version VERSION [flags]\n", command)
 			old := set.Output()
 			set.SetOutput(stdout)
 			set.PrintDefaults()

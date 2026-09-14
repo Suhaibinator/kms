@@ -27,7 +27,7 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 	addManagedConnectionFlags(set, &connection)
 	set.Usage = func() {
 		if stdout != nil {
-			fmt.Fprintln(stdout, "Usage: managed-config defaults drift --profile PROFILE [--namespace ENV/APP] [--schema-version N] [--release NAME] [--output table|json]\nCompares the selected active release to the defaults compiled into this executable.\nExit codes: 0 match, 1 drift or failure, 2 usage. No values or secrets are read.\nConnection flags: --endpoint, --insecure, --ca, --cert, --key; identity token: KMS_TOKEN.")
+			_, _ = fmt.Fprintln(stdout, "Usage: managed-config defaults drift --profile PROFILE [--namespace ENV/APP] [--schema-version N] [--release NAME] [--output table|json]\nCompares the selected active release to the defaults compiled into this executable.\nExit codes: 0 match, 1 drift or failure, 2 usage. No values or secrets are read.\nConnection flags: --endpoint, --insecure, --ca, --cert, --key; identity token: KMS_TOKEN.")
 		}
 	}
 	if err := set.Parse(args); err != nil {
@@ -84,7 +84,7 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 		writeManagedConfigError(stderr, err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	verifier, ok := client.(VerifyClient)
 	if !ok {
 		writeManagedConfigError(stderr, errors.New("client does not support defaults verification"))
