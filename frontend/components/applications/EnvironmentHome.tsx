@@ -5,7 +5,6 @@ import {
   GitCompare,
   MoreHorizontal,
   Pencil,
-  RefreshCw,
   RotateCcw,
   Send,
   Trash2,
@@ -13,10 +12,12 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ContextBar } from "@/components/ContextBar";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
+import { InlineField } from "@/components/InlineField";
+import { RefreshControl } from "@/components/RefreshControl";
 import { StatusChip } from "@/components/StatusChip";
-import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, PageHeader } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -301,43 +302,43 @@ export function EnvironmentHome({
       <PageHeader
         breadcrumbs={breadcrumbs}
         documentTitle={`${env} · ${ns.app}`}
+        // No .row-wrap wrapper: .page-title is itself the centred, wrapping,
+        // control-height row now, and the extra span only nested one flex
+        // container in another.
         title={
-          <span className="row-wrap">
+          <>
             <Ident kind="env" value={env} production={environment.production} tooltip={false} />
             <StatusChip status={environment.status} production={environment.production} />
             {environment.production ? <Badge kind="warning">production</Badge> : null}
-          </span>
+          </>
         }
         subtitle={ns.description || `One environment of ${ns.app}.`}
         actions={
+          // Layout rule 9: status/refresh, then the secondary actions, then
+          // the one primary, then the overflow.
           <>
-            {freshness ? (
-              <TransportBadge
-                transport="poll"
-                stale={freshness.staleReason !== null}
-                lastUpdatedAt={freshness.lastLoadedAt}
-                title="Checked every 30 seconds while this tab is visible; changes are announced, not applied."
-                staleTitle={
-                  freshness.staleReason === "changed"
-                    ? "A release was activated since this loaded. Refresh to see it."
-                    : "The last refresh failed; what is shown may be behind."
-                }
-              />
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Refresh"
-              title="Refresh"
-              onClick={() => void reload()}
-              disabled={loading}
-            >
-              <RefreshCw size={15} aria-hidden />
-            </Button>
-            <Button type="button" disabled={archived} onClick={() => actions.openShip(env)}>
-              <Send size={15} aria-hidden />
-              Ship to {env}…
+            <RefreshControl
+              loading={loading}
+              onRefresh={() => void reload()}
+              freshness={
+                freshness
+                  ? {
+                      transport: "poll",
+                      stale: freshness.staleReason !== null,
+                      lastUpdatedAt: freshness.lastLoadedAt,
+                      title:
+                        "Checked every 30 seconds while this tab is visible; changes are announced, not applied.",
+                      staleTitle:
+                        freshness.staleReason === "changed"
+                          ? "A release was activated since this loaded. Refresh to see it."
+                          : "The last refresh failed; what is shown may be behind.",
+                    }
+                  : undefined
+              }
+            />
+            <Button type="button" variant="outline" onClick={() => actions.openConnect(env)}>
+              <Cable size={16} aria-hidden />
+              Connect SDK
             </Button>
             <Button
               type="button"
@@ -345,19 +346,24 @@ export function EnvironmentHome({
               disabled={archived || !canRollback}
               onClick={() => actions.openRollback(env)}
             >
-              <RotateCcw size={15} aria-hidden />
+              <RotateCcw size={16} aria-hidden />
               {active?.is_rolled_back ? `Re-activate v${active.previous_version}` : "Roll back"}
             </Button>
-            <Button type="button" variant="outline" onClick={() => actions.openConnect(env)}>
-              <Cable size={15} aria-hidden />
-              Connect SDK
+            <Button type="button" disabled={archived} onClick={() => actions.openShip(env)}>
+              <Send size={16} aria-hidden />
+              Ship to {env}…
             </Button>
             <ActionMenu
               items={moreItems}
               trigger={
-                <Button type="button" variant="outline" aria-label="More actions">
-                  <MoreHorizontal size={15} aria-hidden />
-                  More
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="More actions"
+                  title="More actions"
+                >
+                  <MoreHorizontal size={16} aria-hidden />
                 </Button>
               }
             />
@@ -365,12 +371,14 @@ export function EnvironmentHome({
         }
       />
 
-      <div className="environment-switcher">
-        <label className="row-wrap" htmlFor="environment-switcher-select">
-          <span className="muted">Environment</span>
+      <ContextBar>
+        <InlineField label="Environment" htmlFor="environment-switcher-select">
           <AppSelect
             id="environment-switcher-select"
-            className="min-w-[200px]"
+            // w-auto: the trigger ships `w-full`, which filled the row and
+            // pushed the caption onto a line of its own — which is what left
+            // "All environments" centred against a two-line block.
+            className="w-auto min-w-[200px]"
             value={env}
             onValueChange={(next) => {
               if (next && next !== env) void router.push(links.environment(ns.app, next));
@@ -382,11 +390,11 @@ export function EnvironmentHome({
                 : candidate.namespace.env,
             }))}
           />
-        </label>
+        </InlineField>
         <ButtonLink variant="outline" href={links.application(ns.app, { schemaVersion, env })}>
           All environments
         </ButtonLink>
-      </div>
+      </ContextBar>
 
       {archived ? (
         <div className="info-panel mb-4" role="status">

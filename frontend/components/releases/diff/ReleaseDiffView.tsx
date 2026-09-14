@@ -304,6 +304,7 @@ export function ReleaseDiffView({
         <>
           <div className="release-diff-toolbar">
             <SearchField
+              labelHidden
               value={q}
               onChange={setQ}
               onClear={() => setQ("")}

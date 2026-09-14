@@ -53,7 +53,12 @@
    7. Spacing is `--space-*`; a raw px value needs a comment naming the optical
       alignment that forced it.
    8. A skeleton renders the loaded layout's structure (columns, toolbar,
-      description), not an approximation of it. */
+      description), not an approximation of it.
+   9. Page chrome uses PageHeader → ContextBar → SectionHeader; a `.between`
+      beside a heading is a SectionHeader. Header actions run
+      status/refresh → secondary → primary → destructive → overflow, one
+      primary per page, all `size="default"`; selects that change what the
+      page *shows* belong in the ContextBar, not the action row. */
 
 :root {
   color-scheme: light;
@@ -590,9 +595,23 @@
     margin-bottom: var(--space-6);
     flex-wrap: wrap;
   }
+  /* One control height, contents centred inside it: .page-header aligns its
+     two columns to flex-start, so a 24px badge title left the 38px buttons
+     beside it centred 7px lower. Giving the first title line the buttons'
+     own height puts both centrelines on the same y without touching the
+     header's alignment (which a subtitle still relies on). */
   .page-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h);
     font-size: var(--text-xl);
     overflow-wrap: anywhere;
+  }
+  /* Layout rule 2: titles hold idents, mono paths and status chips. */
+  .page-title > * {
+    min-width: 0;
   }
   .page-subtitle {
     color: var(--text-muted);
@@ -617,6 +636,95 @@
        their own line space-between leaves them at the far left. The auto
        margin holds the right edge on every line. */
     margin-left: auto;
+  }
+  /* A visible seam between "how fresh is this" and "what can I do here": the
+     row's own 8px gap made the freshness control read as the first button. */
+  .page-actions > .refresh-control {
+    margin-right: var(--space-2);
+  }
+
+  /* ---------- Page chrome: context bar and section heads ---------- */
+
+  /* Row 2 of the chrome (layout rule 9). A select that changes *what the page
+     shows* — the environment being viewed, the schema track — is not an
+     action, so it leaves the header's button row and lands here with the
+     navigation links that go with it. */
+  .context-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+  .context-bar > * {
+    min-width: 0;
+  }
+
+  /* A labelled control on one row: caption left, control right, the whole
+     thing one control tall. <Field> stacks its label, which is right in a
+     form and wrong in page chrome — inside a flex row the stacked block adds
+     a second line and drops everything beside it out of alignment by one
+     label block. */
+  .inline-field {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h);
+    min-width: 0;
+  }
+  .inline-field > * {
+    min-width: 0;
+  }
+  /* Matches .field-label and <Field>'s [data-slot=field-label] except for the
+     block margin, which a caption beside its control must not have. */
+  .inline-field-label {
+    font-size: var(--text-sm);
+    line-height: 1.375;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* Row 3 of the chrome: a section's heading with its own toolbar on one
+     centred row. `align-items: center` (not the flex-end the ad-hoc rows
+     used): every control in the toolbar hides its label, so there is no
+     stacked label block left to bottom-align against. */
+  .section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-height: var(--control-h-sm);
+    margin-bottom: var(--space-2);
+  }
+  .section-head > * {
+    min-width: 0;
+  }
+  /* A description makes the text column two lines tall, and centring then
+     floats the toolbar ~12px below the heading its buttons belong to. */
+  .section-head:has(.section-head-description) {
+    align-items: flex-start;
+  }
+  /* Same reason as the .between note above: the row wraps on the text's
+     *hypothetical* main size, so the text column needs a basis or a long
+     description drops the toolbar to a second line at every width. */
+  .section-head-text {
+    flex: 1 1 20rem;
+  }
+  .section-head-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .section-head-tools > * {
+    min-width: 0;
+  }
+  .section-head-description {
+    color: var(--text-faint);
+    font-size: var(--text-sm);
   }
 
   /* ---------- Cards ---------- */
@@ -751,7 +859,8 @@
   .release-builder-basics .field,
   .filters .field,
   .release-context-bar .field,
-  .application-list-toolbar .field,
+  .release-diff-toolbar .field,
+  .section-head-tools .field,
   .rule-row .field {
     margin-bottom: 0;
   }
@@ -1341,11 +1450,12 @@
   .rule-row > .rule-remove {
     margin-top: var(--label-offset);
   }
-  /* A label used as a row/heading caption, not stacked above its control. A
-     `m-0` utility on the element would also work — .field-label is layered, so
-     it does not outrank one — but the caption is a property of the row, and
-     every caller would otherwise have to remember the class. */
-  .between > .field-label,
+  /* A label used as a row caption, not stacked above its control. A `m-0`
+     utility on the element would also work — .field-label is layered, so it
+     does not outrank one — but the caption is a property of the row, and
+     every caller would otherwise have to remember the class.
+     `.between > .field-label` stood here too; its one caller is a
+     SectionHeader now, and that one does carry the utility. */
   .row-wrap > .field-label {
     margin: 0;
   }
@@ -2565,7 +2675,9 @@
     display: block;
     overflow-wrap: anywhere;
   }
-  .section-toolbar,
+  /* `.section-toolbar` stood here too. It was one caller (the schema
+     registry's head) of what is now SectionHeader, and folding it in left
+     nothing to define. */
   .release-workspace-toolbar,
   .schema-viewer-meta {
     display: flex;
@@ -2585,9 +2697,6 @@
      `.secret-workspace-toolbar` — see the workspace toolbar block further down.
      The rule, the bleed and the sticky inset all live there, so nothing is
      restated here. */
-  .section-toolbar h2 {
-    margin-bottom: 0;
-  }
   .schema-filters > .field {
     flex-basis: 360px;
     width: min(360px, 100%);
@@ -2750,11 +2859,15 @@
       width: 100%;
     }
     .release-workspace-toolbar,
-    .section-toolbar,
     .schema-viewer-meta,
     .release-builder-review {
       align-items: stretch;
       flex-direction: column;
+    }
+    /* flex-basis is the main axis: stacked, .section-head-text's 20rem would
+       be a 320px *height* instead of a wrapping width. */
+    .release-workspace-toolbar > .section-head-text {
+      flex: 0 0 auto;
     }
     /* Stacks like the toolbars, but does not stretch: `stretch` would blow the
        compact Copy digest button out to the full width of the modal. */
@@ -3452,8 +3565,8 @@
   /* The clearance below the buttons is the toolbar's padding, not a margin on
      the row: a margin joins the flex line's alignment and staggered the buttons
      9px above the tab list under `align-items: flex-end`. */
-  .secret-workspace-toolbar > .row-wrap,
-  [data-modal-body] .release-workspace-toolbar > .row-wrap {
+  .secret-workspace-toolbar > .section-head-tools,
+  [data-modal-body] .release-workspace-toolbar > .section-head-tools {
     margin-bottom: 0;
   }
 
@@ -3490,8 +3603,14 @@
       padding: var(--space-2) var(--modal-pad) var(--space-3);
     }
 
-    .secret-workspace-toolbar > .row-wrap {
+    .secret-workspace-toolbar > .section-head-tools {
       justify-content: flex-end;
+    }
+    /* See the note in the max-sm block above: stacked, the text column's
+       flex-basis would set its height. */
+    .secret-workspace-toolbar > .section-head-text,
+    [data-modal-body] .release-workspace-toolbar > .section-head-text {
+      flex: 0 0 auto;
     }
   }
 
@@ -3846,9 +3965,9 @@
   /* ---------- Rollout transport (components/TransportBadge.tsx) ---------- */
 
   /* The label goes "Loading…" → "Loaded · just now" on arrival, and the badge
-     sits in .page-actions beside buttons whose `loading` overlay already keeps
-     them still: without a floor the row grew 56px and slid sideways under the
-     cursor. 18ch is "Loaded · just now" at this font — the dashboard's own
+     is the left segment of a .refresh-control whose button already keeps
+     itself still: without a floor the row grew 56px and slid sideways under
+     the cursor. 18ch is "Loaded · just now" at this font — the dashboard's own
      longest string, and "just now" is the longest relative time — so the badge
      reaches its loaded width before the data does. min-, not width: a longer
      label ("Polling ·") still expands rather than clipping. */
@@ -3890,6 +4009,58 @@
   }
   .transport-time {
     color: var(--text-faint);
+  }
+
+  /* ---------- Freshness + refresh (components/RefreshControl.tsx) ---------- */
+
+  /* Status is not an action. Loose in the button row the 22px pill read as a
+     sixth button of a different size; fused with the Refresh it belongs to,
+     the pair is one segmented control — "how fresh, and how to make it
+     fresher" — and the row is left with actions only.
+
+     The two segments share top and bottom edges: the badge takes the button's
+     control height here (its own pill height is for the rollout panel's
+     status line, where it stands alone). The seam is one border, not two —
+     the badge drops its right border and the button's own left border draws
+     it. The button's square inner corners are a `rounded-*-none` utility on
+     the element, since a radius here cannot reach a shadcn primitive
+     (layout rule 5). */
+  .refresh-control {
+    display: inline-flex;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .refresh-control > .transport-badge {
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border-right: 0;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+  }
+  /* --input, not --border: the outline Button beside it draws its edge with
+     --input, and two segments of one control cannot outline in two colours.
+     :not(.is-stale) so the warning edge still wins — it is the same
+     specificity as this rule and stands earlier in the file. */
+  .refresh-control > .transport-badge:not(.is-stale) {
+    border-color: var(--input);
+  }
+  .refresh-control[data-size="sm"] > .transport-badge {
+    min-height: var(--control-h-sm);
+    padding: 0 var(--space-2);
+  }
+  /* The label swaps "Refresh" → "Refreshing…" in place, and the button is at
+     the left edge of the action row, so an 18px growth shoves every action
+     right at the moment the pointer is over one of them. The ghost holds the
+     longer string's width at all times; a ch-based min-width would have to
+     guess it, and this cannot drift when the string changes. */
+  .refresh-label {
+    display: inline-grid;
+    justify-items: center;
+  }
+  .refresh-label > * {
+    grid-area: 1 / 1;
+  }
+  .refresh-label-ghost {
+    visibility: hidden;
   }
 
   /* ---------- Readiness findings (components/FindingList.tsx) ---------- */

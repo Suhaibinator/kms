@@ -2,6 +2,7 @@ import { Check, Wrench } from "lucide-react";
 import { useMemo } from "react";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
+import { SectionHeader } from "@/components/SectionHeader";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { type AlignmentIssue, checkContractAlignment } from "@/lib/contract-derive";
@@ -141,30 +142,36 @@ export function DefinitionCard({
         </div>
       </div>
       <div className="definition-alignment">
-        <div className="between">
-          <span className="faint text-sm">Alignment</span>
-          <ActionMenu
-            trigger={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={application.archived_at_unix_ms > 0}
-              >
-                <Wrench size={13} />
-                Fix
-              </Button>
-            }
-            items={[
-              {
-                key: "derive-schema",
-                label: "Derive schema from contract",
-                onSelect: onDeriveSchema,
-              },
-              { key: "releases", label: "Manage releases", onSelect: onManageReleases },
-            ]}
-          />
-        </div>
+        {/* mb-0: .definition-alignment is a gap grid, so the section head's
+            own margin would stack on the gap. */}
+        <SectionHeader
+          className="mb-0"
+          as="none"
+          title={<span className="faint text-sm">Alignment</span>}
+          actions={
+            <ActionMenu
+              trigger={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={application.archived_at_unix_ms > 0}
+                >
+                  <Wrench size={13} />
+                  Fix
+                </Button>
+              }
+              items={[
+                {
+                  key: "derive-schema",
+                  label: "Derive schema from contract",
+                  onSelect: onDeriveSchema,
+                },
+                { key: "releases", label: "Manage releases", onSelect: onManageReleases },
+              ]}
+            />
+          }
+        />
         {alignment.aligned ? (
           <div className="definition-aligned text-sm text-success">
             <Check size={14} aria-hidden /> Aligned

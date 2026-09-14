@@ -20,6 +20,7 @@ import {
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   Badge,
   Checkbox,
@@ -1885,13 +1886,15 @@ function CredentialsModal({
                   value={language}
                   onValueChange={(value) => setLanguage(value as SnippetLanguage)}
                 >
-                  <div className="between mb-2">
-                    <h2 className="section-title">SDK configuration</h2>
-                    <CopyButton
-                      label={`Copy ${language} snippet`}
-                      value={() => snippets[language]}
-                    />
-                  </div>
+                  <SectionHeader
+                    title="SDK configuration"
+                    actions={
+                      <CopyButton
+                        label={`Copy ${language} snippet`}
+                        value={() => snippets[language]}
+                      />
+                    }
+                  />
                   <TabsList variant="line" aria-label="SDK language" className="mb-4">
                     {SNIPPET_LANGUAGES.map((item) => (
                       <TabsTrigger key={item} value={item} className="min-w-24 px-3 py-2">

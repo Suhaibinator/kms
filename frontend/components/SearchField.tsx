@@ -17,6 +17,7 @@ export function SearchField({
   placeholder,
   disabled = false,
   hint,
+  labelHidden = false,
   className,
 }: {
   value: string;
@@ -28,13 +29,20 @@ export function SearchField({
   disabled?: boolean;
   /** A note under the box, e.g. how much of the namespace was searched. */
   hint?: ReactNode;
+  /**
+   * Renders the label `sr-only`. For a section toolbar, where the box is the
+   * only control on the row and a floating caption above it is what stopped
+   * the heading and the input sharing a centreline. `getByLabelText` still
+   * resolves — the label is hidden, not removed.
+   */
+  labelHidden?: boolean;
   className?: string;
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
   const id = useId();
   useSearchShortcut(ref);
   return (
-    <Field label={label} hint={hint} htmlFor={id} className={className}>
+    <Field label={label} labelHidden={labelHidden} hint={hint} htmlFor={id} className={className}>
       <div className="search-field">
         <Search size={15} className="search-field-icon" aria-hidden />
         <Input

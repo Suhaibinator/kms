@@ -1,14 +1,13 @@
-import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { RefreshControl } from "@/components/RefreshControl";
 import {
   headerLabels,
   MobileListToolbar,
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
-import { TransportBadge } from "@/components/TransportBadge";
 import {
   Badge,
   EmptyState,
@@ -163,17 +162,14 @@ export default function SubscribersPage() {
         title="Subscribers"
         subtitle="Applications currently live-subscribed to configuration."
         actions={
-          <>
-            <TransportBadge
-              transport="poll"
-              stale={loadError !== null}
-              lastUpdatedAt={lastUpdated || null}
-            />
-            <Button variant="outline" onClick={() => void refresh(false)}>
-              <RefreshCw size={16} aria-hidden />
-              Refresh
-            </Button>
-          </>
+          <RefreshControl
+            onRefresh={() => void refresh(false)}
+            freshness={{
+              transport: "poll",
+              stale: loadError !== null,
+              lastUpdatedAt: lastUpdated || null,
+            }}
+          />
         }
       />
 

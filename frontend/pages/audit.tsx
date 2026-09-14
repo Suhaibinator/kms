@@ -1,7 +1,7 @@
-import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { RefreshControl } from "@/components/RefreshControl";
 import { ReleaseDiffSummary } from "@/components/releases/diff/ReleaseDiffSummary";
 import {
   headerLabels,
@@ -17,7 +17,6 @@ import {
   JsonView,
   PageHeader,
   Pagination,
-  Spinner,
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
@@ -487,14 +486,10 @@ function AuditLog({
         title="Audit log"
         subtitle="Authorization decisions and administrative actions."
         actions={
-          <Button
-            variant="outline"
-            onClick={() => void load(paging.pageToken, applied)}
-            disabled={loading}
-          >
-            {loading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
+          <RefreshControl
+            loading={loading}
+            onRefresh={() => void load(paging.pageToken, applied)}
+          />
         }
       />
 

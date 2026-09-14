@@ -1,4 +1,4 @@
-import { ArrowRight, Plus, RefreshCw } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -8,7 +8,7 @@ import FirstRunChecklist from "@/components/onboarding/FirstRunChecklist";
 import FleetGrid from "@/components/overview/FleetGrid";
 import ServiceStrip, { type Count } from "@/components/overview/ServiceStrip";
 import { StatusChip } from "@/components/StatusChip";
-import { TransportBadge } from "@/components/TransportBadge";
+import { RefreshControl } from "@/components/RefreshControl";
 import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
@@ -485,21 +485,17 @@ export default function DashboardPage() {
       : fleet.applications.filter((app) => app.status === statusFilter);
   const presentStatuses = FLEET_STATUS_ORDER.filter((status) => statusCounts[status] > 0);
 
-  const freshness = (
-    <TransportBadge
-      transport="manual"
-      stale={data.failed.length > 0 || fleet.fleetFailed}
-      lastUpdatedAt={lastLoadedAt}
-      staleTitle="Part of the last refresh failed; the cards say which."
-    />
-  );
-  // `loading` overlays the spinner on an invisible label, so the button keeps
-  // its width and the freshness badge beside it does not shift.
   const refresh = (
-    <Button variant="outline" loading={loading} onClick={() => void load()}>
-      <RefreshCw size={16} aria-hidden />
-      Refresh
-    </Button>
+    <RefreshControl
+      loading={loading}
+      onRefresh={() => void load()}
+      freshness={{
+        transport: "manual",
+        stale: data.failed.length > 0 || fleet.fleetFailed,
+        lastUpdatedAt: lastLoadedAt,
+        staleTitle: "Part of the last refresh failed; the cards say which.",
+      }}
+    />
   );
 
   const strip = (layout: "grid" | "strip") => (
@@ -524,12 +520,7 @@ export default function DashboardPage() {
         <PageHeader
           title="Overview"
           subtitle="Service status and configuration at a glance."
-          actions={
-            <>
-              {freshness}
-              {refresh}
-            </>
-          }
+          actions={<>{refresh}</>}
         />
         {strip("grid")}
         <RecentActivity
@@ -566,7 +557,6 @@ export default function DashboardPage() {
         }
         actions={
           <>
-            {freshness}
             {refresh}
             {!firstRun ? (
               <Button onClick={() => setWizardOpen(true)}>

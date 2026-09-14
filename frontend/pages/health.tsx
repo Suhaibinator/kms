@@ -1,16 +1,8 @@
-import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
+import { RefreshControl } from "@/components/RefreshControl";
 import { headerLabels, SortHeaderRow, staticController } from "@/components/SortableTable";
-import {
-  Badge,
-  EmptyState,
-  PageHeader,
-  Spinner,
-  StatSkeleton,
-  TableSkeleton,
-} from "@/components/ui";
-import { Button } from "@/components/ui/button";
+import { Badge, EmptyState, PageHeader, StatSkeleton, TableSkeleton } from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatRelative, formatUnixMs } from "@/lib/format";
@@ -82,13 +74,7 @@ export default function HealthPage() {
       <PageHeader
         title="Health & keys"
         subtitle="Service status and key metadata (never key material)."
-        actions={
-          <Button variant="outline" onClick={() => void load()} disabled={loading}>
-            {loading ? <Spinner /> : null}
-            {!loading ? <RefreshCw size={16} aria-hidden /> : null}
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
-        }
+        actions={<RefreshControl loading={loading} onRefresh={() => void load()} />}
       />
 
       {loading && health === null ? (

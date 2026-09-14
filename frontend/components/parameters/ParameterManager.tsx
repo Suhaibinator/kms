@@ -8,6 +8,7 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { JsonView, ValueView } from "@/components/JsonView";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   Badge,
   EmptyState,
@@ -509,24 +510,31 @@ export default function ParameterManager({
           // change height when the data arrives. Hidden from the accessibility
           // tree because none of these placeholders can be operated.
           <Tabs defaultValue="overview">
-            <div className="secret-workspace-toolbar" aria-hidden>
-              <TabsList variant="line">
-                <TabsTrigger value="overview" disabled>
-                  Overview
-                </TabsTrigger>
-                <TabsTrigger value="versions" disabled>
-                  Versions
-                </TabsTrigger>
-              </TabsList>
-              <div className="row-wrap">
-                <Button size="sm" disabled>
-                  New version
-                </Button>
-                <Button variant="destructive" size="sm" disabled>
-                  Delete
-                </Button>
-              </div>
-            </div>
+            <SectionHeader
+              aria-hidden
+              className="secret-workspace-toolbar"
+              as="none"
+              title={
+                <TabsList variant="line">
+                  <TabsTrigger value="overview" disabled>
+                    Overview
+                  </TabsTrigger>
+                  <TabsTrigger value="versions" disabled>
+                    Versions
+                  </TabsTrigger>
+                </TabsList>
+              }
+              actions={
+                <>
+                  <Button size="sm" disabled>
+                    New version
+                  </Button>
+                  <Button variant="destructive" size="sm" disabled>
+                    Delete
+                  </Button>
+                </>
+              }
+            />
             <TabsContent value="overview" className="secret-workspace-stack">
               <div className="card">
                 <div className="card-title">Current value</div>
@@ -1078,28 +1086,35 @@ export default function ParameterManager({
         dismissible={!saving && !deleting}
       >
         <Tabs defaultValue="overview">
-          <div className="secret-workspace-toolbar">
-            <TabsList variant="line" aria-label="Parameter details">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="versions">Versions</TabsTrigger>
-            </TabsList>
-            {/* `sm` so the row fits beside the 31px tab list. */}
-            <div className="row-wrap">
-              <Button size="sm" onClick={() => openNewVersion()}>
-                New version
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => {
-                  setDeleteRefKey(refKey);
-                  setDeleteOpen(true);
-                }}
-              >
-                Delete
-              </Button>
-            </div>
-          </div>
+          <SectionHeader
+            // The sticky/bleed rules for the modal body key off this class.
+            className="secret-workspace-toolbar"
+            as="none"
+            title={
+              <TabsList variant="line" aria-label="Parameter details">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="versions">Versions</TabsTrigger>
+              </TabsList>
+            }
+            // `sm` so the row fits beside the 31px tab list.
+            actions={
+              <>
+                <Button size="sm" onClick={() => openNewVersion()}>
+                  New version
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    setDeleteRefKey(refKey);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              </>
+            }
+          />
           <TabsContent value="overview" className="secret-workspace-stack">
             {overview}
           </TabsContent>

@@ -3,6 +3,7 @@ import CopyButton from "@/components/CopyButton";
 import { NamespaceIdent, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
+import { SectionHeader } from "@/components/SectionHeader";
 import { Badge, Button, Field, JsonView } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { ButtonLink } from "@/components/ui/button";
@@ -125,42 +126,50 @@ export function ReleaseWorkspace({
     >
       {release && summary ? (
         <Tabs value={section} onValueChange={(value) => setSection(String(value))}>
-          <div className="release-workspace-toolbar">
-            <TabsList variant="line" aria-label="Release details">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="entries">Entries</TabsTrigger>
-              <TabsTrigger value="compare">Compare</TabsTrigger>
-              <TabsTrigger value="rollout">Rollout status</TabsTrigger>
-            </TabsList>
-            <div className="row-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={Boolean(busyAction)}
-                loading={busyAction === `validate:${releaseKey(release)}`}
-                onClick={() => onValidate(release)}
-              >
-                Validate
-              </Button>
-              {onRollback && summary.current && previousSummary ? (
+          <SectionHeader
+            // The sticky/bleed rules for this toolbar inside a modal body key
+            // off the class name, so it rides along on the SectionHeader root.
+            className="release-workspace-toolbar"
+            as="none"
+            title={
+              <TabsList variant="line" aria-label="Release details">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="entries">Entries</TabsTrigger>
+                <TabsTrigger value="compare">Compare</TabsTrigger>
+                <TabsTrigger value="rollout">Rollout status</TabsTrigger>
+              </TabsList>
+            }
+            actions={
+              <>
                 <Button
-                  variant="destructive"
+                  variant="outline"
                   size="sm"
                   disabled={Boolean(busyAction)}
-                  onClick={() => onRollback(summary, previousSummary)}
+                  loading={busyAction === `validate:${releaseKey(release)}`}
+                  onClick={() => onValidate(release)}
                 >
-                  Roll back to previous
+                  Validate
                 </Button>
-              ) : null}
-              <Button
-                size="sm"
-                disabled={summary.current || Boolean(busyAction)}
-                onClick={() => onActivate(summary)}
-              >
-                Activate
-              </Button>
-            </div>
-          </div>
+                {onRollback && summary.current && previousSummary ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={Boolean(busyAction)}
+                    onClick={() => onRollback(summary, previousSummary)}
+                  >
+                    Roll back to previous
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  disabled={summary.current || Boolean(busyAction)}
+                  onClick={() => onActivate(summary)}
+                >
+                  Activate
+                </Button>
+              </>
+            }
+          />
 
           {activationFailure ? (
             <ActivationFailurePanel
@@ -289,25 +298,31 @@ export function ReleaseWorkspace({
               <div className="faint">No other loaded version is available for comparison.</div>
             ) : (
               <>
-                <div className="between mb-3">
-                  <span className="faint text-sm">
-                    {releaseKey(comparison)} → {releaseKey(release)}
-                  </span>
-                  <ButtonLink
-                    variant="outline"
-                    size="sm"
-                    href={links.releaseCompare({
-                      app: release.namespace.app,
-                      env: release.namespace.env,
-                      name: release.name,
-                      schemaVersion: release.schema_version,
-                      from: comparison.version,
-                      to: release.version,
-                    })}
-                  >
-                    Open full comparison
-                  </ButtonLink>
-                </div>
+                <SectionHeader
+                  className="mb-3"
+                  as="none"
+                  title={
+                    <span className="faint text-sm">
+                      {releaseKey(comparison)} → {releaseKey(release)}
+                    </span>
+                  }
+                  actions={
+                    <ButtonLink
+                      variant="outline"
+                      size="sm"
+                      href={links.releaseCompare({
+                        app: release.namespace.app,
+                        env: release.namespace.env,
+                        name: release.name,
+                        schemaVersion: release.schema_version,
+                        from: comparison.version,
+                        to: release.version,
+                      })}
+                    >
+                      Open full comparison
+                    </ButtonLink>
+                  }
+                />
                 {/* Values and authorship come from the diff endpoint; the
                     manifest-only table this replaced could not show why an
                     alias changed. */}
