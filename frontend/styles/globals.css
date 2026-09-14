@@ -859,7 +859,7 @@
   .release-builder-basics .field,
   .filters .field,
   .release-context-bar .field,
-  .application-list-toolbar .field,
+  .section-head-tools .field,
   .rule-row .field {
     margin-bottom: 0;
   }
@@ -1449,11 +1449,12 @@
   .rule-row > .rule-remove {
     margin-top: var(--label-offset);
   }
-  /* A label used as a row/heading caption, not stacked above its control. A
-     `m-0` utility on the element would also work — .field-label is layered, so
-     it does not outrank one — but the caption is a property of the row, and
-     every caller would otherwise have to remember the class. */
-  .between > .field-label,
+  /* A label used as a row caption, not stacked above its control. A `m-0`
+     utility on the element would also work — .field-label is layered, so it
+     does not outrank one — but the caption is a property of the row, and
+     every caller would otherwise have to remember the class.
+     `.between > .field-label` stood here too; its one caller is a
+     SectionHeader now, and that one does carry the utility. */
   .row-wrap > .field-label {
     margin: 0;
   }
@@ -2857,11 +2858,15 @@
       width: 100%;
     }
     .release-workspace-toolbar,
-    .section-toolbar,
     .schema-viewer-meta,
     .release-builder-review {
       align-items: stretch;
       flex-direction: column;
+    }
+    /* flex-basis is the main axis: stacked, .section-head-text's 20rem would
+       be a 320px *height* instead of a wrapping width. */
+    .release-workspace-toolbar > .section-head-text {
+      flex: 0 0 auto;
     }
     /* Stacks like the toolbars, but does not stretch: `stretch` would blow the
        compact Copy digest button out to the full width of the modal. */
@@ -3599,6 +3604,12 @@
 
     .secret-workspace-toolbar > .section-head-tools {
       justify-content: flex-end;
+    }
+    /* See the note in the max-sm block above: stacked, the text column's
+       flex-basis would set its height. */
+    .secret-workspace-toolbar > .section-head-text,
+    [data-modal-body] .release-workspace-toolbar > .section-head-text {
+      flex: 0 0 auto;
     }
   }
 

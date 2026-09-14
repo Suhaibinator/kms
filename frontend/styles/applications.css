@@ -549,14 +549,11 @@
   }
 
   @variant max-md {
-    /* .page-actions is flex-shrink: 0, so six actions keep their ~800px
-       max-content width and overflow the viewport; at full row width the
-       buttons wrap onto as many lines as they need instead. */
-    .application-home .page-actions {
-      flex-shrink: 1;
-      width: 100%;
-      min-width: 0;
-    }
+    /* A `.application-home .page-actions { flex-shrink: 1; width: 100%;
+       min-width: 0 }` patch stood here, from when .page-actions was
+       flex-shrink: 0 and six actions kept their ~800px max-content width.
+       .page-actions shrinks and wraps on its own now, and the row is down to
+       four after the schema picker moved to the context bar. */
     .application-home .page-header > div:first-child {
       min-width: 0;
     }

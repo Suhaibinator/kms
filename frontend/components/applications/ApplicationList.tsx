@@ -66,7 +66,7 @@ export function ApplicationList({
         subtitle="One application owns a shared configuration contract; each environment supplies isolated values."
         actions={
           <Button onClick={onCreate}>
-            <Plus size={15} />
+            <Plus size={16} />
             New application
           </Button>
         }

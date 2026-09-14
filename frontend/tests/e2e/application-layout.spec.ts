@@ -216,7 +216,9 @@ test("the matrix key column stays capped and the page never scrolls sideways", a
 
 // Field's cva base carries `w-full`, which no rule in the component layer can
 // beat, so the Lifecycle select took a full-width line of its own and the
-// toolbar was 109px tall instead of one 38px row.
+// toolbar was 109px tall instead of one 38px row. It is an InlineField now —
+// caption beside the select, not above it — so the two controls share a
+// centreline rather than merely a line.
 test("the applications list toolbar is one row at 1280", async ({ page }) => {
   await desktop(page);
   await mockConsole(page, incidentState());
@@ -224,11 +226,9 @@ test("the applications list toolbar is one row at 1280", async ({ page }) => {
   const toolbar = page.locator(".application-list-toolbar");
   await expect(toolbar).toBeVisible();
   const input = await box(toolbar.locator(".application-list-filter"));
-  const field = await box(toolbar.locator('[data-slot="field"]'));
+  const field = await box(toolbar.locator(".inline-field"));
   expect(field.width).toBeLessThan(400);
-  // Same line: the field is a label over a select, so its box is taller than
-  // the input's — the centres are what has to agree.
-  expect(Math.abs(field.y + field.height / 2 - (input.y + input.height / 2))).toBeLessThan(16);
+  expect(Math.abs(field.y + field.height / 2 - (input.y + input.height / 2))).toBeLessThan(1);
   expect((await box(toolbar)).height).toBeLessThan(70);
 });
 
