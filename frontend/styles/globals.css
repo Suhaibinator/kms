@@ -859,6 +859,7 @@
   .release-builder-basics .field,
   .filters .field,
   .release-context-bar .field,
+  .release-diff-toolbar .field,
   .section-head-tools .field,
   .rule-row .field {
     margin-bottom: 0;
