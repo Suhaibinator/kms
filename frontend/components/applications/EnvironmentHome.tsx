@@ -12,10 +12,12 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ContextBar } from "@/components/ContextBar";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
-import { StatusChip } from "@/components/StatusChip";
+import { InlineField } from "@/components/InlineField";
 import { RefreshControl } from "@/components/RefreshControl";
+import { StatusChip } from "@/components/StatusChip";
 import { Badge, PageHeader } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -300,12 +302,15 @@ export function EnvironmentHome({
       <PageHeader
         breadcrumbs={breadcrumbs}
         documentTitle={`${env} · ${ns.app}`}
+        // No .row-wrap wrapper: .page-title is itself the centred, wrapping,
+        // control-height row now, and the extra span only nested one flex
+        // container in another.
         title={
-          <span className="row-wrap">
+          <>
             <Ident kind="env" value={env} production={environment.production} tooltip={false} />
             <StatusChip status={environment.status} production={environment.production} />
             {environment.production ? <Badge kind="warning">production</Badge> : null}
-          </span>
+          </>
         }
         subtitle={ns.description || `One environment of ${ns.app}.`}
         actions={
@@ -366,12 +371,14 @@ export function EnvironmentHome({
         }
       />
 
-      <div className="environment-switcher">
-        <label className="row-wrap" htmlFor="environment-switcher-select">
-          <span className="muted">Environment</span>
+      <ContextBar>
+        <InlineField label="Environment" htmlFor="environment-switcher-select">
           <AppSelect
             id="environment-switcher-select"
-            className="min-w-[200px]"
+            // w-auto: the trigger ships `w-full`, which filled the row and
+            // pushed the caption onto a line of its own — which is what left
+            // "All environments" centred against a two-line block.
+            className="w-auto min-w-[200px]"
             value={env}
             onValueChange={(next) => {
               if (next && next !== env) void router.push(links.environment(ns.app, next));
@@ -383,11 +390,11 @@ export function EnvironmentHome({
                 : candidate.namespace.env,
             }))}
           />
-        </label>
+        </InlineField>
         <ButtonLink variant="outline" href={links.application(ns.app, { schemaVersion, env })}>
           All environments
         </ButtonLink>
-      </div>
+      </ContextBar>
 
       {archived ? (
         <div className="info-panel mb-4" role="status">

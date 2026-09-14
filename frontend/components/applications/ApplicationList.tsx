@@ -2,15 +2,8 @@ import { ChevronRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
-import {
-  Badge,
-  EmptyState,
-  Field,
-  Input,
-  PageHeader,
-  Pagination,
-  TableSkeleton,
-} from "@/components/ui";
+import { InlineField } from "@/components/InlineField";
+import { Badge, EmptyState, Input, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import type { Application } from "@/lib/types";
@@ -97,12 +90,15 @@ export function ApplicationList({
             onChange={(event) => setQuery(event.target.value)}
             disabled={loading && applications.length === 0}
           />
-          {/* Field's cva base is `w-full`, a utility no rule in the component
-              layer can beat, so the toolbar's one-row shape has to be set here
-              or the select takes a full-width line of its own. */}
+          {/* An InlineField, not a Field: the search box beside it has an
+              sr-only label, so a stacked "Lifecycle" caption offset the select
+              from it by one label block. */}
           {onArchiveFilterChange ? (
-            <Field label="Lifecycle" className="w-auto min-w-[200px] shrink-0">
+            <InlineField label="Lifecycle" className="shrink-0">
               <AppSelect
+                // The trigger's own `w-full` is a utility, so the width has to
+                // be one too (layout rule 5).
+                className="w-auto min-w-[200px]"
                 value={archiveFilter}
                 onValueChange={(value) => onArchiveFilterChange(value as ApplicationArchiveFilter)}
                 options={[
@@ -111,7 +107,7 @@ export function ApplicationList({
                   { value: "only", label: "Archived applications" },
                 ]}
               />
-            </Field>
+            </InlineField>
           ) : null}
           {query && !loading ? (
             <span className="faint text-sm" role="status">

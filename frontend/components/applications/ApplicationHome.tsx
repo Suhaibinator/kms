@@ -11,13 +11,15 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetupAction } from "@/components/applications/contracts";
+import { ContextBar } from "@/components/ContextBar";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
+import { InlineField } from "@/components/InlineField";
 import SetupPanel from "@/components/onboarding/SetupPanel";
+import { RefreshControl } from "@/components/RefreshControl";
 import { SearchField } from "@/components/SearchField";
 import { StatusChip } from "@/components/StatusChip";
-import { RefreshControl } from "@/components/RefreshControl";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { AppSelect } from "@/components/ui/app-select";
@@ -354,12 +356,14 @@ export function ApplicationHome({
     <div className="application-home">
       <PageHeader
         breadcrumbs={crumbs.application(application.name, schemaVersion)}
+        // No .row-wrap wrapper: .page-title is itself the centred, wrapping,
+        // control-height row now.
         title={
-          <span className="row-wrap">
+          <>
             <Ident kind="app" value={application.name} tooltip={false} />
             <StatusChip status={overview.status} />
             {archived ? <Badge>archived</Badge> : null}
-          </span>
+          </>
         }
         documentTitle={application.name}
         subtitle={application.description || "Application configuration across environments."}
@@ -367,36 +371,6 @@ export function ApplicationHome({
           // Layout rule 9: status/refresh, then the secondary actions, then
           // the one primary, then the overflow.
           <>
-            <label className="row-wrap" htmlFor="application-schema-track">
-              <span className="muted">Schema</span>
-              <AppSelect
-                id="application-schema-track"
-                aria-label="Schema version"
-                // Inline beside its label: the trigger's default w-full would
-                // fill the row-wrap label and push "Schema" onto its own line,
-                // growing the header 20px past the skeleton that mirrors it.
-                className="w-auto"
-                value={String(schemaVersion)}
-                onValueChange={(value) => {
-                  actions.closeAll();
-                  void replaceQuery({
-                    schema_version: value,
-                    ship: "",
-                    rollback: "",
-                    migrate: migrate ?? "",
-                  });
-                }}
-                options={[
-                  ...schemas.map((schema) => ({
-                    value: String(schema.version),
-                    label: `v${schema.version}`,
-                  })),
-                  ...(!schemas.some((schema) => schema.version === 0)
-                    ? [{ value: "0", label: "v0 · schema-free" }]
-                    : []),
-                ]}
-              />
-            </label>
             <RefreshControl
               loading={loading}
               onRefresh={() => void reload()}
@@ -448,6 +422,36 @@ export function ApplicationHome({
           </>
         }
       />
+      <ContextBar>
+        <InlineField label="Schema" htmlFor="application-schema-track">
+          <AppSelect
+            id="application-schema-track"
+            aria-label="Schema version"
+            // Inline beside its caption: the trigger's default w-full would
+            // fill the row and push "Schema" onto a line of its own.
+            className="w-auto"
+            value={String(schemaVersion)}
+            onValueChange={(value) => {
+              actions.closeAll();
+              void replaceQuery({
+                schema_version: value,
+                ship: "",
+                rollback: "",
+                migrate: migrate ?? "",
+              });
+            }}
+            options={[
+              ...schemas.map((schema) => ({
+                value: String(schema.version),
+                label: `v${schema.version}`,
+              })),
+              ...(!schemas.some((schema) => schema.version === 0)
+                ? [{ value: "0", label: "v0 · schema-free" }]
+                : []),
+            ]}
+          />
+        </InlineField>
+      </ContextBar>
       {archived ? (
         <div className="info-panel mb-4" role="status">
           This application is archived and read-only. Its schema history remains available.

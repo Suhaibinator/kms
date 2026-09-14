@@ -514,12 +514,6 @@
   .environment-home > * + * {
     margin-top: var(--space-4);
   }
-  .environment-switcher {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-3);
-  }
   /* Release and Subscribers read side by side once the page is wide enough for
      two readable columns; below that they stack in the order they matter. */
   .environment-panels {

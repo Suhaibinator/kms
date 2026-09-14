@@ -1,4 +1,6 @@
+import { ContextBar } from "@/components/ContextBar";
 import { Ident } from "@/components/Ident";
+import { InlineField } from "@/components/InlineField";
 import { PageHeader, Skeleton } from "@/components/ui";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { crumbs } from "@/lib/crumbs";
@@ -21,16 +23,26 @@ export function ApplicationHomeSkeleton({ name }: { name: string }) {
       <PageHeader
         breadcrumbs={crumbs.application(name)}
         title={
-          <span className="row-wrap">
+          <>
             <Ident kind="app" value={name} tooltip={false} />
             {/* The status chip's box, reserved at its loaded height. */}
             <Skeleton width={84} height={22} />
-          </span>
+          </>
         }
         documentTitle={name}
         subtitle={<Skeleton width="42%" height="1em" />}
-        actions={<Skeleton width={320} height={38} />}
+        // Narrower than it was: the schema picker left this row for the
+        // context bar below, which the next element mirrors.
+        actions={<Skeleton width={244} height={38} />}
       />
+      {/* Layout rule 8: the loaded page's context bar, at its own height, so
+          nothing below it moves when the schema list arrives. `as="span"`
+          because a placeholder is not a labelable control. */}
+      <ContextBar>
+        <InlineField as="span" label="Schema">
+          <Skeleton width={96} height={38} />
+        </InlineField>
+      </ContextBar>
       <section className="card definition-card" aria-hidden>
         <div className="definition-grid">
           {["Release name", "Schema", "Contract"].map((label) => (

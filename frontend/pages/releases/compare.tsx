@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Icon } from "@/components/icons";
+import { InlineField } from "@/components/InlineField";
 import { ReleaseDiffView } from "@/components/releases/diff/ReleaseDiffView";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
@@ -462,7 +463,6 @@ export default function ReleaseComparePage() {
           <>
             <Button
               variant="outline"
-              size="sm"
               onClick={swap}
               data-testid="release-diff-swap"
               aria-label="Swap from and to"
@@ -475,7 +475,7 @@ export default function ReleaseComparePage() {
               <>
                 <Button
                   variant="outline"
-                  size="icon-sm"
+                  size="icon"
                   aria-label="Compare with the older version"
                   title="Older version"
                   disabled={stepIndex === -1 || stepIndex >= trackVersions.length - 1}
@@ -483,33 +483,34 @@ export default function ReleaseComparePage() {
                 >
                   <ChevronLeft size={16} aria-hidden />
                 </Button>
-                {/* Not a Field: its w-full utility stretched each select across the
-                    whole page and stacked the action row three lines tall. */}
-                <span className="release-diff-pick">
-                  <label htmlFor={`${pickId}-from`}>From</label>
+                <InlineField label="From" htmlFor={`${pickId}-from`}>
                   <AppSelect
                     id={`${pickId}-from`}
+                    // w-auto over the trigger's own w-full, and a width that
+                    // holds the longest "v12 · 3 Jan" without stretching the
+                    // action row into three lines.
+                    className="w-auto min-w-[13.5rem]"
                     value={resolvedFrom === undefined ? "" : String(resolvedFrom)}
                     onValueChange={(value) => pick("from", value)}
                     options={options}
                     disabled={options.length === 0}
                     placeholder={String(from)}
                   />
-                </span>
-                <span className="release-diff-pick">
-                  <label htmlFor={`${pickId}-to`}>To</label>
+                </InlineField>
+                <InlineField label="To" htmlFor={`${pickId}-to`}>
                   <AppSelect
                     id={`${pickId}-to`}
+                    className="w-auto min-w-[13.5rem]"
                     value={resolvedTo === undefined ? "" : String(resolvedTo)}
                     onValueChange={(value) => pick("to", value)}
                     options={options}
                     disabled={options.length === 0}
                     placeholder={String(to)}
                   />
-                </span>
+                </InlineField>
                 <Button
                   variant="outline"
-                  size="icon-sm"
+                  size="icon"
                   aria-label="Compare with the newer version"
                   title="Newer version"
                   disabled={stepIndex <= 0}
@@ -522,7 +523,6 @@ export default function ReleaseComparePage() {
             {canRollback && diff ? (
               <Button
                 variant={rolledBack ? "default" : "destructive"}
-                size="sm"
                 onClick={() => setRollbackOpen(true)}
               >
                 {rolledBack
