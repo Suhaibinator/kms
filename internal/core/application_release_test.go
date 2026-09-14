@@ -25,7 +25,7 @@ func applicationPlanEntry(t *testing.T, result domain.ApplicationReleaseCreateRe
 func TestBuildApplicationReleasePlanRejectsInvalidContractSize(t *testing.T) {
 	oversized := make([]domain.ApplicationContractField, maxReleaseEntries+1)
 	for _, contract := range [][]domain.ApplicationContractField{nil, oversized} {
-		_, err := (&Service{}).buildApplicationReleasePlan(context.Background(), adminPrincipal(), domain.Namespace{Env: "dev", App: "app"}, domain.Application{Name: "app", Contract: contract}, configstore.DefaultsArtifact{}, nil, "{}")
+		_, err := (&Service{}).buildApplicationReleasePlan(context.Background(), adminPrincipal(), domain.Namespace{Env: "dev", App: "app"}, domain.Application{Name: "app", Contract: contract}, configstore.DefaultsArtifact{}, nil, "{}", nil)
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("contract size %d error = %v", len(contract), err)
 		}
@@ -342,5 +342,189 @@ func TestCreateApplicationReleaseOmitsRemovedAliasAndResolvesNewSecretCurrent(t 
 	newSecret := applicationPlanEntry(t, preview, "signing_key")
 	if newSecret.Source != domain.ApplicationReleaseSourceResolvedCurrentSecret || newSecret.FromVersion != 0 || newSecret.ToVersion != 1 {
 		t.Fatalf("new secret pin = %+v", newSecret)
+	}
+}
+
+func TestCreateApplicationReleaseExplicitSourceSchema(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newConsoleTestService(t)
+	admin := adminPrincipal()
+	app := seedConsoleApp(t, svc, admin, "dev")
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	artifactBytes := consoleDefaultsArtifact(t, `{"host":"db.internal"}`, "5")
+	input := domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: artifactBytes}
+	p, err := svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Execute, input.PlanDigest = true, p.PlanDigest
+	baseline, err := svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := uint64(0)
+	active, _, err := svc.ActivateConfigurationRelease(ctx, admin, baseline.Release.Track(), baseline.Release.Version, &zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutSecret(ctx, admin, PutSecretInput{Ref: domain.Ref{NS: ns, Key: "db_password"}, Value: []byte("rotated"), ContentType: "text/plain", Metadata: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"target"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := configstore.ParseDefaultsArtifact(artifactBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.SchemaSHA256 = schema.Digest
+	artifactBytes, err = configstore.EncodeDefaultsArtifact(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := domain.DefaultsApplyInput{Namespace: ns, Artifact: artifactBytes, UpdateDefinition: true}
+	dp, err := svc.ApplyApplicationDefaults(ctx, admin, apply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply.Execute, apply.PlanDigest = true, dp.PlanDigest
+	if _, err := svc.ApplyApplicationDefaults(ctx, admin, apply); err != nil {
+		t.Fatal(err)
+	}
+	// Inactive target history resolves the rotated current secret; explicit source must ignore it.
+	input = domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: artifactBytes}
+	p, err = svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Execute, input.PlanDigest = true, p.PlanDigest
+	if _, err = svc.CreateApplicationRelease(ctx, admin, input); err != nil {
+		t.Fatal(err)
+	}
+	input = domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: artifactBytes, SourceSchemaVersion: &app.SchemaVersion}
+	p, err = svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := applicationPlanEntry(t, p, "db_password")
+	if !p.Valid || secret.ToVersion != 1 || secret.Source != domain.ApplicationReleaseSourceCarriedActiveSecret || p.SourceReleaseVersion != baseline.Release.Version || p.SourceActivationRevision != active.ActivationRevision || p.BaseReleaseVersion != 1 {
+		t.Fatalf("source preview=%+v secret=%+v", p, secret)
+	}
+	input.Execute, input.PlanDigest = true, p.PlanDigest
+	created, err := svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil || !created.Created || created.Release == nil || created.Release.SchemaVersion != schema.Version {
+		t.Fatalf("created source release=%+v err=%v", created, err)
+	}
+	if _, err := store.GetActiveConfigurationRelease(ctx, created.Release.Track()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("target should remain inactive: %v", err)
+	}
+	input.Execute, input.PlanDigest = false, ""
+	p, err = svc.CreateApplicationRelease(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Capture the transaction too, to test the race after planning and before the write.
+	namespace, err := store.GetNamespace(ctx, ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetApp, err := store.GetApplication(ctx, app.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildApplicationReleasePlan(ctx, admin, namespace, targetApp, artifact, artifactBytes, "{}", &app.SchemaVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := *baseline.Release
+	old.Version = 0
+	old.Digest = ""
+	old.Metadata = `{"second":true}`
+	next, err := store.CreateConfigurationRelease(ctx, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.ActivateConfigurationRelease(ctx, next.Track(), next.Version, &baseline.Release.Version); err != nil {
+		t.Fatal(err)
+	}
+	input.Execute, input.PlanDigest = true, p.PlanDigest
+	if _, err = svc.CreateApplicationRelease(ctx, admin, input); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale preview error=%v", err)
+	}
+	if _, _, err = store.CreateLatestApplicationRelease(ctx, plan.transaction); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale transaction error=%v", err)
+	}
+	missing := uint64(99)
+	input = domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: artifactBytes, SourceSchemaVersion: &missing}
+	if _, err = svc.CreateApplicationRelease(ctx, admin, input); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("missing source error=%v", err)
+	}
+}
+
+func TestSourceSchemaKeepsTargetParameterMappings(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newConsoleTestService(t)
+	admin := adminPrincipal()
+	app := seedConsoleApp(t, svc, admin, "dev")
+	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
+	for _, key := range []string{"old-db", "new-db"} {
+		if _, _, err := store.PutParameter(ctx, domain.Ref{NS: ns, Key: key}, `{"host":"before"}`, "json", "{}", "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selectors := func(key string) []domain.ReleaseEntrySelector {
+		return []domain.ReleaseEntrySelector{
+			{Alias: "database", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: key}, Label: domain.LabelCurrent},
+			{Alias: "db_password", Kind: domain.ReleaseEntrySecret, Ref: domain.Ref{NS: ns, Key: "db_password"}, Label: domain.LabelCurrent},
+			{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "rate_limits"}, Label: domain.LabelCurrent},
+		}
+	}
+	old, err := svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: app.ReleaseName, SchemaVersion: app.SchemaVersion, Entries: selectors("old-db"), Metadata: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := uint64(0)
+	if _, _, err = svc.ActivateConfigurationRelease(ctx, admin, old.Track(), old.Version, &zero); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.PutSecret(ctx, admin, PutSecretInput{Ref: domain.Ref{NS: ns, Key: "db_password"}, Value: []byte("new"), ContentType: "text/plain", Metadata: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := svc.CreateConfigurationSchema(ctx, admin, app.Name, `{"type":"object","description":"new parameter keys"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: app.ReleaseName, SchemaVersion: schema.Version, Entries: selectors("new-db"), Metadata: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := configstore.ParseDefaultsArtifact(consoleDefaultsArtifact(t, `{"host":"desired"}`, "5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.SchemaSHA256 = schema.Digest
+	raw, err := configstore.EncodeDefaultsArtifact(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := domain.DefaultsApplyInput{Namespace: ns, Artifact: raw, Overwrite: true, UpdateDefinition: true}
+	preview, err := svc.ApplyApplicationDefaults(ctx, admin, apply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry := defaultsEntry(t, preview, "database"); entry.Key != "new-db" {
+		t.Fatalf("defaults key=%+v", entry)
+	}
+	apply.Execute, apply.PlanDigest = true, preview.PlanDigest
+	if _, err = svc.ApplyApplicationDefaults(ctx, admin, apply); err != nil {
+		t.Fatal(err)
+	}
+	release, err := svc.CreateApplicationRelease(ctx, admin, domain.ApplicationReleaseCreateInput{Namespace: ns, Artifact: raw, SourceSchemaVersion: &app.SchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameter, secret := applicationPlanEntry(t, release, "database"), applicationPlanEntry(t, release, "db_password")
+	if !release.Valid || parameter.Ref.Key != "new-db" || parameter.ToVersion != 2 || secret.ToVersion != 1 || secret.Source != domain.ApplicationReleaseSourceCarriedActiveSecret {
+		t.Fatalf("release=%+v parameter=%+v secret=%+v", release, parameter, secret)
 	}
 }

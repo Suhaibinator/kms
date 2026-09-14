@@ -34,6 +34,7 @@ type applicationReleasePlanDigest struct {
 	Metadata             string                                 `json:"metadata"`
 	Entries              []domain.ApplicationReleasePlanEntry   `json:"entries"`
 	Pins                 []domain.ConfigurationReleaseEntry     `json:"pins"`
+	Source               *storage.ApplicationReleaseSourceState `json:"source,omitempty"`
 	CurrentPins          []storage.ApplicationReleaseCurrentPin `json:"current_pins"`
 	MissingSecrets       []string                               `json:"missing_secrets"`
 	Validation           []domain.ReleaseValidationError        `json:"validation"`
@@ -79,7 +80,7 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
-	plan, err := s.buildApplicationReleasePlan(ctx, pr, namespace, app, artifact, in.Artifact, metadata)
+	plan, err := s.buildApplicationReleasePlan(ctx, pr, namespace, app, artifact, in.Artifact, metadata, in.SourceSchemaVersion)
 	if err != nil {
 		return domain.ApplicationReleaseCreateResult{}, err
 	}
@@ -111,7 +112,7 @@ func (s *Service) CreateApplicationRelease(ctx context.Context, pr Principal, in
 	return plan.result, nil
 }
 
-func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal, namespace domain.Namespace, app domain.Application, artifact configstore.DefaultsArtifact, rawArtifact []byte, metadata string) (applicationReleasePlan, error) {
+func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal, namespace domain.Namespace, app domain.Application, artifact configstore.DefaultsArtifact, rawArtifact []byte, metadata string, sourceSchema *uint64) (applicationReleasePlan, error) {
 	if !app.ArchivedAt.IsZero() {
 		return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
 	}
@@ -182,7 +183,26 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		activationRevision = facts.Active.ActivationRevision
 		activeDigest = facts.Active.Release.Digest
 	}
+	// Parameter keys follow the target track, exactly as defaults apply does.
 	refs := resolveContractRefs(app, namespace.Env, activeRelease, facts.Latest, otherActive, rows)
+	targetByAlias := make(map[string]domain.ConfigurationReleaseEntry)
+	if activeRelease != nil {
+		for _, entry := range activeRelease.Entries {
+			targetByAlias[entry.Alias] = entry
+		}
+	}
+	var source *domain.ActiveConfigurationRelease
+	if sourceSchema != nil {
+		selected, sourceErr := rs.GetActiveConfigurationRelease(ctx, domain.ReleaseTrack{Namespace: namespace.NamespaceRef, Name: app.ReleaseName, SchemaVersion: *sourceSchema})
+		if errors.Is(sourceErr, domain.ErrNotFound) {
+			return applicationReleasePlan{}, domain.Errorf(domain.ErrFailedPrecondition, "source schema %d has no active release", *sourceSchema)
+		}
+		if sourceErr != nil {
+			return applicationReleasePlan{}, sourceErr
+		}
+		source = &selected
+		activeRelease = &selected.Release
+	}
 	// With no active release, inactive history must not select a secret pin.
 	bootstrapRefs := resolveContractRefs(app, namespace.Env, nil, nil, otherActive, rows)
 	activeByAlias := make(map[string]domain.ConfigurationReleaseEntry)
@@ -195,7 +215,11 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 	planEntries := make([]domain.ApplicationReleasePlanEntry, 0, len(app.Contract))
 	for _, field := range app.Contract {
 		from := uint64(0)
-		if active, ok := activeByAlias[field.Alias]; ok && active.Kind == field.Kind {
+		previous := activeByAlias
+		if field.Kind == domain.ReleaseEntryParameter {
+			previous = targetByAlias
+		}
+		if active, ok := previous[field.Alias]; ok && active.Kind == field.Kind {
 			from = active.Version
 		}
 		entry := domain.ApplicationReleasePlanEntry{Alias: field.Alias, Kind: field.Kind, FromVersion: from}
@@ -295,7 +319,14 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		SchemaVersion: app.SchemaVersion, BaseReleaseVersion: facts.LatestVersion,
 		Entries: planEntries, MissingSecrets: missingSecrets, Validation: validation,
 	}
-	digestInput := applicationReleasePlanDigest{
+	var sourceState *storage.ApplicationReleaseSourceState
+	if source != nil {
+		result.SourceSchemaVersion = sourceSchema
+		result.SourceReleaseVersion = source.Release.Version
+		result.SourceActivationRevision = source.ActivationRevision
+		sourceState = &storage.ApplicationReleaseSourceState{SchemaVersion: *sourceSchema, Version: source.Release.Version, ActivationRevision: source.ActivationRevision, Digest: source.Release.Digest}
+	}
+	digestInput := applicationReleasePlanDigest{Source: sourceState,
 		ArtifactDigest: sha256Hex(rawArtifact), NamespaceID: namespace.ID, ReleaseName: app.ReleaseName,
 		SchemaVersion: app.SchemaVersion, SchemaDigest: schema.Digest, Contract: app.Contract,
 		BaseReleaseVersion: facts.LatestVersion, BaseReleaseDigest: baseDigest,
@@ -312,7 +343,7 @@ func (s *Service) buildApplicationReleasePlan(ctx context.Context, pr Principal,
 		Release: candidate, NamespaceID: namespace.ID, Contract: append([]domain.ApplicationContractField(nil), app.Contract...),
 		SchemaDigest: schema.Digest, ExpectedLatestVersion: facts.LatestVersion,
 		ExpectedActiveVersion: activeVersion, ExpectedActivationRevision: activationRevision,
-		CurrentPins: currentPins,
+		CurrentPins: currentPins, Source: sourceState,
 	}
 	return applicationReleasePlan{result: result, transaction: transaction}, nil
 }

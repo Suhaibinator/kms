@@ -687,7 +687,7 @@ candidates cannot displace last-known-good.
 ### Expose schema, defaults, and release commands from the application
 
 Generated bindings embed the exact emitted schema and return a fresh copy from
-`GeneratedSchema()`. An application can expose all three source-owned operations
+`GeneratedSchema()`. An application can expose the source-owned configuration workflow
 without teaching each consumer how to construct KMS requests:
 
 ```go
@@ -705,25 +705,75 @@ os.Exit(configstore.RunManagedConfigCommand(
 ))
 ```
 
-Use `managed-config schema upload` to register a new immutable version. It has
-no profile because the schema belongs to the application's release stream and
-is shared by every profile. Use `managed-config defaults apply --profile ...`
-to preview or apply profile-specific values. Add `--update-definition` on the
-previewed defaults operation to repin the application to an already uploaded
-matching schema. Uploading alone never changes the pin, and uploading an exact
-duplicate fails.
-
-After defaults are applied, use `managed-config release create --profile ...`
-to preview the exact immutable release KMS would create, then repeat it with
-`--execute` to create the release. Parameter values must still match the
-generated defaults. Existing secret aliases retain the active release's exact
-secret pins even when their `current` labels have moved; first-release and new
-secret aliases resolve `current`. Missing secrets fail closed. This command
-never activates a release—the new inactive version is reviewed and activated
-in the web console. All three commands read `KMS_TOKEN`; endpoint, CA,
-certificate, and key resolve from flags, then their standard `KMS_*`
-environment variables, then the built-in endpoint default. `RunDefaultsApplier`
+The command runner owns schema upload, defaults apply/drift, and release
+create/validate/activate. Updating the KMS Go dependency brings these commands
+into existing application entrypoints without adding an exporter, script, or
+separate CLI. All commands read `KMS_TOKEN`; endpoint, CA, certificate, and key
+resolve from flags, then their standard `KMS_*` environment variables, then the
+built-in endpoint default. `--insecure` remains flag-only. `RunDefaultsApplier`
 remains available as a standalone API.
+
+`--profile` selects code defaults. `--namespace ENV/APP` overrides only the
+namespace environment, so `--profile docker --namespace prod-linkie/gradethis`
+uses docker defaults in that deployment. Cross-application overrides are rejected.
+Production confirmation always uses the actual destination environment.
+
+Use `schema upload` to register the embedded schema; it has no profile and writes
+immediately. Defaults apply and release create select the schema by the embedded
+artifact digest unless `--schema-version N` explicitly selects a matching track.
+For defaults apply, `--update-definition` updates the application's default schema
+selection and is incompatible with `--schema-version`; this is rejected locally
+before connecting. An explicit track needs no `--update-definition`.
+
+```sh
+# Use your application's runner in place of managed-config.
+managed-config schema upload
+managed-config defaults drift --profile docker --namespace prod-linkie/gradethis --schema-version 5
+managed-config defaults apply --profile docker --namespace prod-linkie/gradethis --schema-version 7 --overwrite
+managed-config defaults apply --profile docker --namespace prod-linkie/gradethis --schema-version 7 --overwrite --execute --confirm-production prod-linkie
+managed-config release create --profile docker --namespace prod-linkie/gradethis --schema-version 7 --from-schema 5
+managed-config release create --profile docker --namespace prod-linkie/gradethis --schema-version 7 --from-schema 5 --execute
+# Replace 2 with the release version returned by create.
+managed-config release validate --profile docker --namespace prod-linkie/gradethis --schema-version 7 --version 2
+managed-config release activate --profile docker --namespace prod-linkie/gradethis --schema-version 7 --version 2
+managed-config release activate --profile docker --namespace prod-linkie/gradethis --schema-version 7 --version 2 --execute --confirm-production prod-linkie
+```
+
+`defaults drift` reuses value-free verification: it sends canonical parameter
+hashes and reports per-group verdicts, never parameter or secret values. It
+compares active release pins, not unpublished current parameter edits. Exit codes
+are 0 for a complete match, 1 for drift or failure, and 2 for usage errors;
+`--output json` provides a machine-readable report. An explicit schema selects
+that track but still compares the defaults compiled into the running executable.
+To measure drift against historical defaults, run the historical application
+checkout; selecting an older schema does not reconstruct its code defaults.
+`--release NAME` overrides the application's release name for drift.
+
+Defaults apply writes parameters only. `--overwrite` replaces whole differing
+groups; it does not merge missing nested fields. It never changes secret values
+or existing release pins. Create a new release after changing parameters.
+
+Release creation requires current parameters to match the embedded defaults and
+creates an inactive immutable release. Without `--from-schema`, existing secret
+aliases retain the target track's active release pins. With `--from-schema N`,
+KMS instead carries exact secret references and pins from that
+namespace's active release on schema N, even when secret `current` labels have
+moved or inactive target releases exist. The source must have an active release;
+new secret aliases resolve `current`, and missing secrets fail closed. Preview
+and execution guard source activation and target state against concurrent changes.
+The preview displays source schema, release version, and activation revision.
+Parameter keys follow the target track, matching defaults application.
+Cross-schema carry requires a server supporting the new source-schema field;
+the Go SDK rejects a preview response from an older server that ignores it.
+
+Validation reads an existing release without resolving secret plaintext.
+Activation validates first, previews by default, and requires `--execute` to
+activate with the current-version concurrency guard. Production activation also
+requires `--confirm-production ENV`. Lifecycle commands require explicit
+`--schema-version` and `--version`, and default to release `runtime`; use
+`--release NAME` for another release name. No create or defaults command activates
+implicitly. Schema upload and inactive release creation retain their existing
+execution semantics.
 
 ### Check the generated contract
 

@@ -1354,7 +1354,11 @@ export interface CreateApplicationReleaseRequest {
   metadataJson: string;
   execute: boolean;
   planDigest: string;
-  schemaVersion?: bigint | undefined;
+  schemaVersion?:
+    | bigint
+    | undefined;
+  /** Carry exact secret pins from this track's active release. */
+  sourceSchemaVersion?: bigint | undefined;
 }
 
 /**
@@ -1392,6 +1396,9 @@ export interface CreateApplicationReleaseResponse {
    * returns an already-equivalent latest inactive release.
    */
   release: ConfigurationRelease | undefined;
+  sourceSchemaVersion?: bigint | undefined;
+  sourceReleaseVersion: bigint;
+  sourceActivationRevision: bigint;
 }
 
 /**
@@ -20555,6 +20562,7 @@ function createBaseCreateApplicationReleaseRequest(): CreateApplicationReleaseRe
     execute: false,
     planDigest: "",
     schemaVersion: undefined,
+    sourceSchemaVersion: undefined,
   };
 }
 
@@ -20580,6 +20588,12 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
         throw new globalThis.Error("value provided for field message.schemaVersion of type uint64 too large");
       }
       writer.uint32(48).uint64(message.schemaVersion);
+    }
+    if (message.sourceSchemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.sourceSchemaVersion) !== message.sourceSchemaVersion) {
+        throw new globalThis.Error("value provided for field message.sourceSchemaVersion of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.sourceSchemaVersion);
     }
     return writer;
   },
@@ -20645,6 +20659,14 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
             message.schemaVersion = reader.uint64() as bigint;
             continue;
           }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.sourceSchemaVersion = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -20677,6 +20699,11 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
         : isSet(object.schema_version)
         ? BigInt(object.schema_version)
         : undefined,
+      sourceSchemaVersion: isSet(object.sourceSchemaVersion)
+        ? BigInt(object.sourceSchemaVersion)
+        : isSet(object.source_schema_version)
+        ? BigInt(object.source_schema_version)
+        : undefined,
     };
   },
 
@@ -20700,6 +20727,9 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
     if (message.schemaVersion !== undefined) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
+    if (message.sourceSchemaVersion !== undefined) {
+      obj.sourceSchemaVersion = message.sourceSchemaVersion.toString();
+    }
     return obj;
   },
 
@@ -20717,6 +20747,9 @@ export const CreateApplicationReleaseRequest: MessageFns<CreateApplicationReleas
     message.planDigest = object.planDigest ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
+      : undefined;
+    message.sourceSchemaVersion = (object.sourceSchemaVersion !== undefined && object.sourceSchemaVersion !== null)
+      ? BigInt(object.sourceSchemaVersion)
       : undefined;
     return message;
   },
@@ -20901,6 +20934,9 @@ function createBaseCreateApplicationReleaseResponse(): CreateApplicationReleaseR
     missingSecrets: [],
     validation: [],
     release: undefined,
+    sourceSchemaVersion: undefined,
+    sourceReleaseVersion: 0n,
+    sourceActivationRevision: 0n,
   };
 }
 
@@ -20947,6 +20983,26 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
     }
     if (message.release !== undefined) {
       ConfigurationRelease.encode(message.release, writer.uint32(98).fork()).join();
+    }
+    if (message.sourceSchemaVersion !== undefined) {
+      if (BigInt.asUintN(64, message.sourceSchemaVersion) !== message.sourceSchemaVersion) {
+        throw new globalThis.Error("value provided for field message.sourceSchemaVersion of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.sourceSchemaVersion);
+    }
+    if (message.sourceReleaseVersion !== 0n) {
+      if (BigInt.asUintN(64, message.sourceReleaseVersion) !== message.sourceReleaseVersion) {
+        throw new globalThis.Error("value provided for field message.sourceReleaseVersion of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.sourceReleaseVersion);
+    }
+    if (message.sourceActivationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.sourceActivationRevision) !== message.sourceActivationRevision) {
+        throw new globalThis.Error(
+          "value provided for field message.sourceActivationRevision of type uint64 too large",
+        );
+      }
+      writer.uint32(120).uint64(message.sourceActivationRevision);
     }
     return writer;
   },
@@ -21060,6 +21116,30 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
             message.release = ConfigurationRelease.decode(reader, reader.uint32());
             continue;
           }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.sourceSchemaVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.sourceReleaseVersion = reader.uint64() as bigint;
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.sourceActivationRevision = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -21110,6 +21190,21 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
         ? object.validation.map((e: any) => ReleaseValidationError.fromJSON(e))
         : [],
       release: isSet(object.release) ? ConfigurationRelease.fromJSON(object.release) : undefined,
+      sourceSchemaVersion: isSet(object.sourceSchemaVersion)
+        ? BigInt(object.sourceSchemaVersion)
+        : isSet(object.source_schema_version)
+        ? BigInt(object.source_schema_version)
+        : undefined,
+      sourceReleaseVersion: isSet(object.sourceReleaseVersion)
+        ? BigInt(object.sourceReleaseVersion)
+        : isSet(object.source_release_version)
+        ? BigInt(object.source_release_version)
+        : 0n,
+      sourceActivationRevision: isSet(object.sourceActivationRevision)
+        ? BigInt(object.sourceActivationRevision)
+        : isSet(object.source_activation_revision)
+        ? BigInt(object.source_activation_revision)
+        : 0n,
     };
   },
 
@@ -21151,6 +21246,15 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
     if (message.release !== undefined) {
       obj.release = ConfigurationRelease.toJSON(message.release);
     }
+    if (message.sourceSchemaVersion !== undefined) {
+      obj.sourceSchemaVersion = message.sourceSchemaVersion.toString();
+    }
+    if (message.sourceReleaseVersion !== 0n) {
+      obj.sourceReleaseVersion = message.sourceReleaseVersion.toString();
+    }
+    if (message.sourceActivationRevision !== 0n) {
+      obj.sourceActivationRevision = message.sourceActivationRevision.toString();
+    }
     return obj;
   },
 
@@ -21177,6 +21281,16 @@ export const CreateApplicationReleaseResponse: MessageFns<CreateApplicationRelea
     message.release = (object.release !== undefined && object.release !== null)
       ? ConfigurationRelease.fromPartial(object.release)
       : undefined;
+    message.sourceSchemaVersion = (object.sourceSchemaVersion !== undefined && object.sourceSchemaVersion !== null)
+      ? BigInt(object.sourceSchemaVersion)
+      : undefined;
+    message.sourceReleaseVersion = (object.sourceReleaseVersion !== undefined && object.sourceReleaseVersion !== null)
+      ? BigInt(object.sourceReleaseVersion)
+      : 0n;
+    message.sourceActivationRevision =
+      (object.sourceActivationRevision !== undefined && object.sourceActivationRevision !== null)
+        ? BigInt(object.sourceActivationRevision)
+        : 0n;
     return message;
   },
 };
@@ -23024,5 +23138,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: c531d826bd52735b3b8549bf15a5f900afc0be120a188f22e12923e08e1ba381
+// source-sha256: 4b507d3c87b90dfbd6bf9e156980a07df4e2fa716920c23967377aa224b9f165
 // generation-sha256: 2a1ecb1d357c44fd566c75ddfde66638e2ef127c268c9da6bbd4667140ee7865

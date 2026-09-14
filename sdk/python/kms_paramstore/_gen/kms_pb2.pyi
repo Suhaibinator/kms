@@ -1706,20 +1706,22 @@ class HealthResponse(_message.Message):
     def __init__(self, healthy: _Optional[bool] = ..., ready: _Optional[bool] = ..., version: _Optional[str] = ..., current_revision: _Optional[int] = ..., details_json: _Optional[str] = ...) -> None: ...
 
 class CreateApplicationReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "artifact", "metadata_json", "execute", "plan_digest", "schema_version")
+    __slots__ = ("namespace", "artifact", "metadata_json", "execute", "plan_digest", "schema_version", "source_schema_version")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
     PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     artifact: bytes
     metadata_json: str
     execute: bool
     plan_digest: str
     schema_version: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., schema_version: _Optional[int] = ...) -> None: ...
+    source_schema_version: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., schema_version: _Optional[int] = ..., source_schema_version: _Optional[int] = ...) -> None: ...
 
 class ApplicationReleasePlanEntry(_message.Message):
     __slots__ = ("alias", "kind", "ref", "from_version", "to_version", "source")
@@ -1738,7 +1740,7 @@ class ApplicationReleasePlanEntry(_message.Message):
     def __init__(self, alias: _Optional[str] = ..., kind: _Optional[str] = ..., ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., source: _Optional[str] = ...) -> None: ...
 
 class CreateApplicationReleaseResponse(_message.Message):
-    __slots__ = ("profile", "plan_digest", "valid", "executed", "created", "release_name", "schema_version", "base_release_version", "entries", "missing_secrets", "validation", "release")
+    __slots__ = ("profile", "plan_digest", "valid", "executed", "created", "release_name", "schema_version", "base_release_version", "entries", "missing_secrets", "validation", "release", "source_schema_version", "source_release_version", "source_activation_revision")
     PROFILE_FIELD_NUMBER: _ClassVar[int]
     PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
     VALID_FIELD_NUMBER: _ClassVar[int]
@@ -1751,6 +1753,9 @@ class CreateApplicationReleaseResponse(_message.Message):
     MISSING_SECRETS_FIELD_NUMBER: _ClassVar[int]
     VALIDATION_FIELD_NUMBER: _ClassVar[int]
     RELEASE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
     profile: str
     plan_digest: str
     valid: bool
@@ -1763,7 +1768,10 @@ class CreateApplicationReleaseResponse(_message.Message):
     missing_secrets: _containers.RepeatedScalarFieldContainer[str]
     validation: _containers.RepeatedCompositeFieldContainer[ReleaseValidationError]
     release: ConfigurationRelease
-    def __init__(self, profile: _Optional[str] = ..., plan_digest: _Optional[str] = ..., valid: _Optional[bool] = ..., executed: _Optional[bool] = ..., created: _Optional[bool] = ..., release_name: _Optional[str] = ..., schema_version: _Optional[int] = ..., base_release_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ApplicationReleasePlanEntry, _Mapping]]] = ..., missing_secrets: _Optional[_Iterable[str]] = ..., validation: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ..., release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...
+    source_schema_version: int
+    source_release_version: int
+    source_activation_revision: int
+    def __init__(self, profile: _Optional[str] = ..., plan_digest: _Optional[str] = ..., valid: _Optional[bool] = ..., executed: _Optional[bool] = ..., created: _Optional[bool] = ..., release_name: _Optional[str] = ..., schema_version: _Optional[int] = ..., base_release_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ApplicationReleasePlanEntry, _Mapping]]] = ..., missing_secrets: _Optional[_Iterable[str]] = ..., validation: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ..., release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ..., source_schema_version: _Optional[int] = ..., source_release_version: _Optional[int] = ..., source_activation_revision: _Optional[int] = ...) -> None: ...
 
 class ApplicationMigrationChange(_message.Message):
     __slots__ = ("alias", "from_alias", "key", "value", "content_type", "version")

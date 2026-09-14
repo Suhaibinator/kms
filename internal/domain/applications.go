@@ -81,12 +81,13 @@ type DefaultsApplyResult struct {
 // application's canonical release from one generated defaults artifact.
 // Execute never activates the release; the exact preview digest is required.
 type ApplicationReleaseCreateInput struct {
-	SchemaVersion *uint64
-	Namespace     NamespaceRef
-	Artifact      []byte
-	Metadata      string
-	Execute       bool
-	PlanDigest    string
+	SchemaVersion       *uint64
+	SourceSchemaVersion *uint64
+	Namespace           NamespaceRef
+	Artifact            []byte
+	Metadata            string
+	Execute             bool
+	PlanDigest          string
 }
 
 const (
@@ -105,18 +106,21 @@ type ApplicationReleasePlanEntry struct {
 }
 
 type ApplicationReleaseCreateResult struct {
-	Profile            string
-	PlanDigest         string
-	Valid              bool
-	Executed           bool
-	Created            bool
-	ReleaseName        string
-	SchemaVersion      uint64
-	BaseReleaseVersion uint64
-	Entries            []ApplicationReleasePlanEntry
-	MissingSecrets     []string
-	Validation         []ReleaseValidationError
-	Release            *ConfigurationRelease
+	Profile                  string
+	PlanDigest               string
+	Valid                    bool
+	Executed                 bool
+	Created                  bool
+	ReleaseName              string
+	SchemaVersion            uint64
+	BaseReleaseVersion       uint64
+	SourceSchemaVersion      *uint64
+	SourceReleaseVersion     uint64
+	SourceActivationRevision uint64
+	Entries                  []ApplicationReleasePlanEntry
+	MissingSecrets           []string
+	Validation               []ReleaseValidationError
+	Release                  *ConfigurationRelease
 }
 
 // --- console read models ----------------------------------------------------
