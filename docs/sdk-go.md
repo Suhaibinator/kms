@@ -500,12 +500,17 @@ os.Exit(configstore.RunManagedConfigCommand(
 ))
 ```
 
-It exposes `schema upload` (no profile), `defaults apply --profile ...`, and
-`release create --profile ...`. Release creation previews by default and uses
-`--execute` to persist an inactive immutable release. It requires current
-parameters to match the generated defaults, carries the active release's exact
-secret pins forward, and never activates. `RunDefaultsApplier` remains
-available when only defaults import is wanted.
+It exposes `schema upload` (no profile), `defaults apply`, `defaults drift`,
+and `release create`, `release validate`, and `release activate`. Profile-based
+commands accept `--namespace ENV/APP` for another environment of the same
+application. Defaults and create accept `--schema-version N`; defaults rejects
+combining it with `--update-definition`. `release create --from-schema N` carries
+exact secret pins from that older track's active release while creating an
+inactive release on the target schema. Activation remains a separate preview/
+`--execute` operation, with production confirmation and a current-version guard.
+See the [operator workflow](managed-go-configuration.md#operator-workflow) for
+complete commands, drift semantics, and compatibility requirements.
+`RunDefaultsApplier` remains available when only defaults import is wanted.
 For custom tooling, `Client.CreateApplicationSchema` accepts an application,
 schema bytes, and optional metadata directly. KMS derives the release name and
 returns the assigned coordinates and digest; an identical registration wraps

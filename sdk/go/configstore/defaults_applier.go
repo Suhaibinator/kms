@@ -31,6 +31,7 @@ type defaultsApplyClient interface {
 type defaultsApplyClientFactory func(kmsclient.Config) (defaultsApplyClient, error)
 
 type defaultsApplierFlags struct {
+	managedScopeFlags
 	managedConnectionFlags
 	profile           string
 	overwrite         bool
@@ -100,6 +101,15 @@ func runDefaultsApplier[P ~string, T any](
 		writeDefaultsApplierError(stderr, "resolve namespace", errors.New("resolver failed"))
 		return 1
 	}
+	namespace, err = resolveManagedNamespace(namespace, flags.namespace)
+	if err != nil {
+		writeDefaultsApplierError(stderr, "resolve namespace", err)
+		return 2
+	}
+	if _, err := fmt.Fprintf(stdout, "Namespace: %s\n", namespace); err != nil {
+		return 1
+	}
+
 	environment, _, ok := strings.Cut(namespace, "/")
 	if !ok || environment == "" {
 		writeDefaultsApplierError(stderr, "resolve namespace", errors.New("resolver returned an invalid namespace"))
@@ -125,7 +135,7 @@ func runDefaultsApplier[P ~string, T any](
 	ctx := context.Background()
 	preview, err := client.ApplyApplicationDefaults(ctx, kmsclient.ApplicationDefaultsApplyOptions{
 		Namespace: namespace, Artifact: artifactData, Overwrite: flags.overwrite,
-		UpdateDefinition: flags.updateDefinition,
+		UpdateDefinition: flags.updateDefinition, SchemaVersion: flags.schemaVersion,
 	})
 	if err != nil {
 		writeDefaultsApplierError(stderr, "preview defaults", err)
@@ -149,8 +159,8 @@ func runDefaultsApplier[P ~string, T any](
 
 	applied, err := client.ApplyApplicationDefaults(ctx, kmsclient.ApplicationDefaultsApplyOptions{
 		Namespace: namespace, Artifact: artifactData, Overwrite: flags.overwrite,
-		UpdateDefinition: flags.updateDefinition,
-		Execute:          true, PlanDigest: preview.PlanDigest,
+		UpdateDefinition: flags.updateDefinition, SchemaVersion: flags.schemaVersion,
+		Execute: true, PlanDigest: preview.PlanDigest,
 	})
 	if err != nil {
 		writeDefaultsApplierError(stderr, "apply defaults", err)
@@ -173,6 +183,7 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	set.BoolVar(&result.execute, "execute", false, "apply after a fresh preview")
 	set.StringVar(&result.confirmProduction, "confirm-production", "", "production environment name confirmation")
 	addManagedConnectionFlags(set, &result.managedConnectionFlags)
+	addManagedScopeFlags(set, &result.managedScopeFlags)
 	set.Usage = func() {
 		if stdout == nil {
 			return
@@ -192,6 +203,9 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	if !canonicalDefaultsText(result.profile, false) {
 		return defaultsApplierFlags{}, false, errors.New("--profile must be nonempty and canonical")
 	}
+	if result.schemaVersion != nil && result.updateDefinition {
+		return defaultsApplierFlags{}, false, errors.New("--schema-version cannot be combined with --update-definition; omit --update-definition to apply to an explicit track, or omit --schema-version to update the application default using the artifact digest")
+	}
 	return result, false, nil
 }
 
@@ -200,6 +214,8 @@ func defaultsApplierUsage() string {
 		"Flags:\n" +
 		"  --profile <profile>       Application defaults profile (required)\n" +
 		"  --endpoint <host:port>    KMS gRPC endpoint (env KMS_ENDPOINT; default localhost:8443)\n" +
+		"  --namespace ENV/APP       Override the environment, keeping the same application\n" +
+		"  --schema-version N        Select an explicit schema track; incompatible with --update-definition\n" +
 		"  --overwrite               Permit differing parameter values to be updated\n" +
 		"  --update-definition       Permit the application contract and schema pin to be updated\n" +
 		"  --execute                 Apply after a fresh preview\n" +

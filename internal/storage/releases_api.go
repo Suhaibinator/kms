@@ -70,7 +70,15 @@ type ApplicationReleaseCurrentPin struct {
 
 // ApplicationReleaseCreate is the complete stale-state expectation captured
 // by CreateApplicationRelease's preview.
+type ApplicationReleaseSourceState struct {
+	SchemaVersion      uint64
+	Version            uint64
+	ActivationRevision uint64
+	Digest             string
+}
+
 type ApplicationReleaseCreate struct {
+	Source                     *ApplicationReleaseSourceState
 	Release                    domain.ConfigurationRelease
 	NamespaceID                int64
 	Contract                   []domain.ApplicationContractField

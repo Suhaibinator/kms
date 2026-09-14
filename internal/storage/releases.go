@@ -216,6 +216,18 @@ func verifyApplicationReleaseState(tx *gorm.DB, nsID int64, in ApplicationReleas
 			return applicationReleaseStale()
 		}
 	}
+	if in.Source != nil {
+		source, err := (&SQLStore{db: tx}).GetActiveConfigurationRelease(tx.Statement.Context, domain.ReleaseTrack{Namespace: in.Release.Namespace, Name: in.Release.Name, SchemaVersion: in.Source.SchemaVersion})
+		if errors.Is(err, domain.ErrNotFound) {
+			return applicationReleaseStale()
+		}
+		if err != nil {
+			return err
+		}
+		if source.Release.Version != in.Source.Version || source.ActivationRevision != in.Source.ActivationRevision || source.Release.Digest != in.Source.Digest {
+			return applicationReleaseStale()
+		}
+	}
 	for _, pin := range in.CurrentPins {
 		pinNamespaceID, err := resolveNamespaceID(tx, pin.Ref.NS)
 		if err != nil {

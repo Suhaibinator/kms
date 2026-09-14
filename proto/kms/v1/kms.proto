@@ -1284,6 +1284,8 @@ message CreateApplicationReleaseRequest {
   bool execute = 4;
   string plan_digest = 5;
   optional uint64 schema_version = 6;
+  // Carry exact secret pins from this track's active release.
+  optional uint64 source_schema_version = 7;
 }
 
 // ApplicationReleasePlanEntry is a value-free account of one release pin.
@@ -1313,6 +1315,9 @@ message CreateApplicationReleaseResponse {
   // Set after any successful execute, including an idempotent result that
   // returns an already-equivalent latest inactive release.
   ConfigurationRelease release = 12;
+  optional uint64 source_schema_version = 13;
+  uint64 source_release_version = 14;
+  uint64 source_activation_revision = 15;
 }
 
 // ApplicationMigrationChange addresses one target contract alias when

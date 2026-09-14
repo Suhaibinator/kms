@@ -20,10 +20,13 @@ const (
 type CreateApplicationReleaseOptions struct {
 	Namespace     string
 	SchemaVersion *uint64
-	Artifact      []byte
-	MetadataJSON  string
-	Execute       bool
-	PlanDigest    string
+	// SourceSchemaVersion selects the active release whose exact secret pins
+	// should be carried into the target schema. Parameter keys follow the target.
+	SourceSchemaVersion *uint64
+	Artifact            []byte
+	MetadataJSON        string
+	Execute             bool
+	PlanDigest          string
 }
 
 // ApplicationReleasePlanEntry describes one value-free resource pin selected
@@ -51,18 +54,21 @@ type ApplicationReleaseValidationError struct {
 // release preview or execution. Release is present when KMS returns the created
 // or already-identical immutable manifest; it is never activated by this API.
 type CreateApplicationReleaseResult struct {
-	Profile            string
-	PlanDigest         string
-	Valid              bool
-	Executed           bool
-	Created            bool
-	ReleaseName        string
-	SchemaVersion      uint64
-	BaseReleaseVersion uint64
-	Entries            []ApplicationReleasePlanEntry
-	MissingSecrets     []string
-	Validation         []ApplicationReleaseValidationError
-	Release            *ReleaseManifest
+	Profile                  string
+	PlanDigest               string
+	Valid                    bool
+	Executed                 bool
+	Created                  bool
+	ReleaseName              string
+	SchemaVersion            uint64
+	BaseReleaseVersion       uint64
+	SourceSchemaVersion      *uint64
+	SourceReleaseVersion     uint64
+	SourceActivationRevision uint64
+	Entries                  []ApplicationReleasePlanEntry
+	MissingSecrets           []string
+	Validation               []ApplicationReleaseValidationError
+	Release                  *ReleaseManifest
 }
 
 // CreateApplicationRelease previews or creates an immutable application
@@ -89,18 +95,22 @@ func (c *Client) CreateApplicationRelease(
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.admin.CreateApplicationRelease(cctx, &kmsv1.CreateApplicationReleaseRequest{
-		Namespace:     namespace.proto(),
-		SchemaVersion: options.SchemaVersion,
-		Artifact:      options.Artifact,
-		MetadataJson:  options.MetadataJSON,
-		Execute:       options.Execute,
-		PlanDigest:    options.PlanDigest,
+		Namespace:           namespace.proto(),
+		SchemaVersion:       options.SchemaVersion,
+		SourceSchemaVersion: options.SourceSchemaVersion,
+		Artifact:            options.Artifact,
+		MetadataJson:        options.MetadataJSON,
+		Execute:             options.Execute,
+		PlanDigest:          options.PlanDigest,
 	})
 	if err != nil {
 		return CreateApplicationReleaseResult{}, mapError(err)
 	}
 	if response == nil || response.GetProfile() == "" || response.GetReleaseName() == "" || !validCanonicalSHA256Hex(response.GetPlanDigest()) {
 		return CreateApplicationReleaseResult{}, fmt.Errorf("kmsclient: invalid application release response")
+	}
+	if options.SourceSchemaVersion != nil && (response.SourceSchemaVersion == nil || *response.SourceSchemaVersion != *options.SourceSchemaVersion || response.SourceReleaseVersion == 0 || response.SourceActivationRevision == 0) {
+		return CreateApplicationReleaseResult{}, fmt.Errorf("kmsclient: server did not confirm the requested source schema; upgrade KMS before creating this release")
 	}
 	if response.GetExecuted() != options.Execute || response.GetCreated() && !response.GetExecuted() {
 		return CreateApplicationReleaseResult{}, fmt.Errorf("kmsclient: application release response execution state mismatch")
@@ -122,6 +132,7 @@ func (c *Client) CreateApplicationRelease(
 		Profile: response.GetProfile(), PlanDigest: response.GetPlanDigest(), Valid: response.GetValid(),
 		Executed: response.GetExecuted(), Created: response.GetCreated(), ReleaseName: response.GetReleaseName(),
 		SchemaVersion: response.GetSchemaVersion(), BaseReleaseVersion: response.GetBaseReleaseVersion(),
+		SourceSchemaVersion: response.SourceSchemaVersion, SourceReleaseVersion: response.GetSourceReleaseVersion(), SourceActivationRevision: response.GetSourceActivationRevision(),
 		Entries:        make([]ApplicationReleasePlanEntry, 0, len(response.GetEntries())),
 		MissingSecrets: append([]string(nil), response.GetMissingSecrets()...),
 		Validation:     make([]ApplicationReleaseValidationError, 0, len(response.GetValidation())),

@@ -105,9 +105,9 @@ func (h *adminServer) CreateApplicationRelease(ctx context.Context, req *kmsv1.C
 		return nil, err
 	}
 	result, err := h.s.svc.CreateApplicationRelease(ctx, pr, domain.ApplicationReleaseCreateInput{
-		SchemaVersion: req.SchemaVersion,
-		Namespace:     nsRefFromProto(req.GetNamespace()),
-		Artifact:      req.GetArtifact(), Metadata: req.GetMetadataJson(),
+		SchemaVersion: req.SchemaVersion, SourceSchemaVersion: req.SourceSchemaVersion,
+		Namespace: nsRefFromProto(req.GetNamespace()),
+		Artifact:  req.GetArtifact(), Metadata: req.GetMetadataJson(),
 		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
 	})
 	if err != nil {
@@ -132,6 +132,7 @@ func toProtoApplicationReleaseCreateResult(result domain.ApplicationReleaseCreat
 		Profile: result.Profile, PlanDigest: result.PlanDigest, Valid: result.Valid,
 		Executed: result.Executed, Created: result.Created, ReleaseName: result.ReleaseName,
 		SchemaVersion: result.SchemaVersion, BaseReleaseVersion: result.BaseReleaseVersion,
+		SourceSchemaVersion: result.SourceSchemaVersion, SourceReleaseVersion: result.SourceReleaseVersion, SourceActivationRevision: result.SourceActivationRevision,
 		Entries: entries, MissingSecrets: append([]string(nil), result.MissingSecrets...),
 		Validation: validation,
 	}

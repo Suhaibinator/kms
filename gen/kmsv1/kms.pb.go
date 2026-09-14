@@ -9911,8 +9911,10 @@ type CreateApplicationReleaseRequest struct {
 	Execute       bool                   `protobuf:"varint,4,opt,name=execute,proto3" json:"execute,omitempty"`
 	PlanDigest    string                 `protobuf:"bytes,5,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
 	SchemaVersion *uint64                `protobuf:"varint,6,opt,name=schema_version,json=schemaVersion,proto3,oneof" json:"schema_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Carry exact secret pins from this track's active release.
+	SourceSchemaVersion *uint64 `protobuf:"varint,7,opt,name=source_schema_version,json=sourceSchemaVersion,proto3,oneof" json:"source_schema_version,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CreateApplicationReleaseRequest) Reset() {
@@ -9983,6 +9985,13 @@ func (x *CreateApplicationReleaseRequest) GetPlanDigest() string {
 func (x *CreateApplicationReleaseRequest) GetSchemaVersion() uint64 {
 	if x != nil && x.SchemaVersion != nil {
 		return *x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *CreateApplicationReleaseRequest) GetSourceSchemaVersion() uint64 {
+	if x != nil && x.SourceSchemaVersion != nil {
+		return *x.SourceSchemaVersion
 	}
 	return 0
 }
@@ -10089,9 +10098,12 @@ type CreateApplicationReleaseResponse struct {
 	Validation         []*ReleaseValidationError      `protobuf:"bytes,11,rep,name=validation,proto3" json:"validation,omitempty"`
 	// Set after any successful execute, including an idempotent result that
 	// returns an already-equivalent latest inactive release.
-	Release       *ConfigurationRelease `protobuf:"bytes,12,opt,name=release,proto3" json:"release,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Release                  *ConfigurationRelease `protobuf:"bytes,12,opt,name=release,proto3" json:"release,omitempty"`
+	SourceSchemaVersion      *uint64               `protobuf:"varint,13,opt,name=source_schema_version,json=sourceSchemaVersion,proto3,oneof" json:"source_schema_version,omitempty"`
+	SourceReleaseVersion     uint64                `protobuf:"varint,14,opt,name=source_release_version,json=sourceReleaseVersion,proto3" json:"source_release_version,omitempty"`
+	SourceActivationRevision uint64                `protobuf:"varint,15,opt,name=source_activation_revision,json=sourceActivationRevision,proto3" json:"source_activation_revision,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *CreateApplicationReleaseResponse) Reset() {
@@ -10206,6 +10218,27 @@ func (x *CreateApplicationReleaseResponse) GetRelease() *ConfigurationRelease {
 		return x.Release
 	}
 	return nil
+}
+
+func (x *CreateApplicationReleaseResponse) GetSourceSchemaVersion() uint64 {
+	if x != nil && x.SourceSchemaVersion != nil {
+		return *x.SourceSchemaVersion
+	}
+	return 0
+}
+
+func (x *CreateApplicationReleaseResponse) GetSourceReleaseVersion() uint64 {
+	if x != nil {
+		return x.SourceReleaseVersion
+	}
+	return 0
+}
+
+func (x *CreateApplicationReleaseResponse) GetSourceActivationRevision() uint64 {
+	if x != nil {
+		return x.SourceActivationRevision
+	}
+	return 0
 }
 
 // ApplicationMigrationChange addresses one target contract alias when
@@ -11501,7 +11534,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12)\n" +
 	"\x10current_revision\x18\x04 \x01(\x04R\x0fcurrentRevision\x12!\n" +
-	"\fdetails_json\x18\x05 \x01(\tR\vdetailsJson\"\x90\x02\n" +
+	"\fdetails_json\x18\x05 \x01(\tR\vdetailsJson\"\xe3\x02\n" +
 	"\x1fCreateApplicationReleaseRequest\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x1a\n" +
 	"\bartifact\x18\x02 \x01(\fR\bartifact\x12#\n" +
@@ -11509,8 +11542,10 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\aexecute\x18\x04 \x01(\bR\aexecute\x12\x1f\n" +
 	"\vplan_digest\x18\x05 \x01(\tR\n" +
 	"planDigest\x12*\n" +
-	"\x0eschema_version\x18\x06 \x01(\x04H\x00R\rschemaVersion\x88\x01\x01B\x11\n" +
-	"\x0f_schema_version\"\xc8\x01\n" +
+	"\x0eschema_version\x18\x06 \x01(\x04H\x00R\rschemaVersion\x88\x01\x01\x127\n" +
+	"\x15source_schema_version\x18\a \x01(\x04H\x01R\x13sourceSchemaVersion\x88\x01\x01B\x11\n" +
+	"\x0f_schema_versionB\x18\n" +
+	"\x16_source_schema_version\"\xc8\x01\n" +
 	"\x1bApplicationReleasePlanEntry\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12%\n" +
@@ -11518,7 +11553,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\ffrom_version\x18\x04 \x01(\x04R\vfromVersion\x12\x1d\n" +
 	"\n" +
 	"to_version\x18\x05 \x01(\x04R\ttoVersion\x12\x16\n" +
-	"\x06source\x18\x06 \x01(\tR\x06source\"\x85\x04\n" +
+	"\x06source\x18\x06 \x01(\tR\x06source\"\xcc\x05\n" +
 	" CreateApplicationReleaseResponse\x12\x18\n" +
 	"\aprofile\x18\x01 \x01(\tR\aprofile\x12\x1f\n" +
 	"\vplan_digest\x18\x02 \x01(\tR\n" +
@@ -11535,7 +11570,11 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"validation\x18\v \x03(\v2\x1e.kms.v1.ReleaseValidationErrorR\n" +
 	"validation\x126\n" +
-	"\arelease\x18\f \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\"\xc5\x01\n" +
+	"\arelease\x18\f \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\x127\n" +
+	"\x15source_schema_version\x18\r \x01(\x04H\x00R\x13sourceSchemaVersion\x88\x01\x01\x124\n" +
+	"\x16source_release_version\x18\x0e \x01(\x04R\x14sourceReleaseVersion\x12<\n" +
+	"\x1asource_activation_revision\x18\x0f \x01(\x04R\x18sourceActivationRevisionB\x18\n" +
+	"\x16_source_schema_version\"\xc5\x01\n" +
 	"\x1aApplicationMigrationChange\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x1d\n" +
 	"\n" +
@@ -12122,6 +12161,7 @@ func file_kms_v1_kms_proto_init() {
 	file_kms_v1_kms_proto_msgTypes[104].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[140].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[145].OneofWrappers = []any{}
+	file_kms_v1_kms_proto_msgTypes[147].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[148].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[149].OneofWrappers = []any{}
 	type x struct{}

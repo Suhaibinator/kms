@@ -195,3 +195,23 @@ func TestCreateApplicationReleaseExecuteRequiresValidRelease(t *testing.T) {
 func applicationReleaseRef(key string) *kmsv1.ResourceRef {
 	return &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: "dev", App: "gradethis"}, Key: key}
 }
+
+func TestCreateApplicationReleaseSourceSchemaRequiresServerSupport(t *testing.T) {
+	source := uint64(5)
+	stub := &applicationReleaseAdminStub{response: &kmsv1.CreateApplicationReleaseResponse{Profile: "dev", PlanDigest: strings.Repeat("a", 64), Valid: true, ReleaseName: "runtime", SchemaVersion: 7}}
+	client := newApplicationReleaseTestClient(stub)
+	options := CreateApplicationReleaseOptions{Namespace: "dev/gradethis", Artifact: []byte(`{}`), SourceSchemaVersion: &source}
+	if _, err := client.CreateApplicationRelease(context.Background(), options); err == nil || !strings.Contains(err.Error(), "upgrade KMS") {
+		t.Fatalf("unsupported source error=%v", err)
+	}
+	stub.response.SourceSchemaVersion = &source
+	stub.response.SourceReleaseVersion = 2
+	stub.response.SourceActivationRevision = 10
+	result, err := client.CreateApplicationRelease(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SourceSchemaVersion == nil || *result.SourceSchemaVersion != 5 || result.SourceReleaseVersion != 2 || result.SourceActivationRevision != 10 || stub.calls[0].SourceSchemaVersion == nil || *stub.calls[0].SourceSchemaVersion != 5 {
+		t.Fatalf("source result=%+v request=%+v", result, stub.calls[0])
+	}
+}

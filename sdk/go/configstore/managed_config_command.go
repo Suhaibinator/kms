@@ -29,8 +29,8 @@ type managedConfigClient interface {
 
 type managedConfigClientFactory func(kmsclient.Config) (managedConfigClient, error)
 
-// RunManagedConfigCommand dispatches "schema upload", "defaults apply", or
-// "release create". The importing application's main normally passes
+// RunManagedConfigCommand dispatches schema upload, defaults apply/drift, and
+// release create/validate/activate. The importing application's main normally passes
 // os.Args[1:] and the generated GeneratedSchema and EncodeDefaultsArtifact
 // functions. Every subcommand uses the same flag, KMS_* environment, and
 // built-in-default precedence for connection settings.
@@ -78,6 +78,12 @@ func runManagedConfigCommand[P ~string, T any](
 		})
 	case "schema upload":
 		return runManagedSchemaUpload(args[2:], stdout, stderr, config.Application, config.Schema, newClient)
+	case "defaults drift":
+		return runManagedDefaultsDrift(args[2:], stdout, stderr, config, newClient)
+	case "release validate":
+		return runManagedReleaseLifecycle(args[2:], stdout, stderr, config, newClient, false)
+	case "release activate":
+		return runManagedReleaseLifecycle(args[2:], stdout, stderr, config, newClient, true)
 	case "release create":
 		return runManagedReleaseCreate(args[2:], stdout, stderr, config, newClient)
 	default:
@@ -87,6 +93,8 @@ func runManagedConfigCommand[P ~string, T any](
 }
 
 type managedReleaseFlags struct {
+	managedScopeFlags
+	sourceSchemaVersion *uint64
 	managedConnectionFlags
 	profile  string
 	metadata string
@@ -135,6 +143,14 @@ func runManagedReleaseCreate[P ~string, T any](
 		writeManagedConfigError(stderr, errors.New("resolve namespace: resolver failed"))
 		return 1
 	}
+	namespace, err = resolveManagedNamespace(namespace, flags.namespace)
+	if err != nil {
+		writeManagedConfigError(stderr, err)
+		return 2
+	}
+	if _, err := fmt.Fprintf(stdout, "Namespace: %s\n", namespace); err != nil {
+		return 1
+	}
 	_, application, ok := strings.Cut(namespace, "/")
 	if !ok || application != config.Application || strings.Contains(application, "/") {
 		writeManagedConfigError(stderr, errors.New("resolve namespace: resolver returned a namespace for another application"))
@@ -158,6 +174,7 @@ func runManagedReleaseCreate[P ~string, T any](
 	ctx := context.Background()
 	preview, err := client.CreateApplicationRelease(ctx, kmsclient.CreateApplicationReleaseOptions{
 		Namespace: namespace, Artifact: artifactData, MetadataJSON: flags.metadata,
+		SchemaVersion: flags.schemaVersion, SourceSchemaVersion: flags.sourceSchemaVersion,
 	})
 	if err != nil {
 		writeManagedConfigError(stderr, fmt.Errorf("preview release: %w", err))
@@ -181,6 +198,7 @@ func runManagedReleaseCreate[P ~string, T any](
 
 	created, err := client.CreateApplicationRelease(ctx, kmsclient.CreateApplicationReleaseOptions{
 		Namespace: namespace, Artifact: artifactData, MetadataJSON: flags.metadata,
+		SchemaVersion: flags.schemaVersion, SourceSchemaVersion: flags.sourceSchemaVersion,
 		Execute: true, PlanDigest: preview.PlanDigest,
 	})
 	if err != nil {
@@ -201,6 +219,8 @@ func runManagedReleaseCreate[P ~string, T any](
 func parseManagedReleaseFlags(args []string, stdout, stderr io.Writer) (managedReleaseFlags, bool, error) {
 	var result managedReleaseFlags
 	set := flag.NewFlagSet("managed-config release create", flag.ContinueOnError)
+	addManagedScopeFlags(set, &result.managedScopeFlags)
+	addManagedVersionFlag(set, "from-schema", "carry secret pins and resource keys from this schema track's active release", &result.sourceSchemaVersion)
 	set.SetOutput(stderr)
 	set.StringVar(&result.profile, "profile", "", "application defaults profile")
 	set.StringVar(&result.metadata, "metadata-json", "", "non-sensitive release metadata JSON")
@@ -250,6 +270,11 @@ func writeManagedReleaseResult(writer io.Writer, heading string, result kmsclien
 		heading, result.Profile, result.ReleaseName, result.SchemaVersion, result.BaseReleaseVersion,
 		result.PlanDigest, result.Valid, result.Executed, result.Created); err != nil {
 		return err
+	}
+	if result.SourceSchemaVersion != nil {
+		if _, err := fmt.Fprintf(writer, "Source schema version: %d\nSource release version: %d\nSource activation revision: %d\n", *result.SourceSchemaVersion, result.SourceReleaseVersion, result.SourceActivationRevision); err != nil {
+			return err
+		}
 	}
 	if result.Release != nil {
 		if _, err := fmt.Fprintf(writer, "Release version: %d\nRelease digest: %s\nActivation: inactive\n",
@@ -402,7 +427,10 @@ func managedConfigUsage() string {
 	return "Usage: managed-config <command> [flags]\n\nCommands:\n" +
 		"  schema upload    Upload the generated application schema\n" +
 		"  defaults apply   Preview or apply defaults for a profile\n" +
-		"  release create   Preview or create an immutable release for a profile\n"
+		"  defaults drift   Compare embedded defaults with an active release\n" +
+		"  release create   Preview or create an immutable release for a profile\n" +
+		"  release validate Validate an existing release\n" +
+		"  release activate Preview or activate an existing release\n"
 }
 
 func managedReleaseUsage() string {
@@ -410,6 +438,9 @@ func managedReleaseUsage() string {
 		"Flags:\n" +
 		"  --profile <profile>     Application defaults profile (required)\n" +
 		"  --endpoint <host:port>  KMS gRPC endpoint (env KMS_ENDPOINT; default localhost:8443)\n" +
+		"  --namespace ENV/APP     Override the environment, keeping the same application\n" +
+		"  --schema-version N      Select the target schema (default: generated digest)\n" +
+		"  --from-schema N         Carry exact secret pins from this schema track's active release\n" +
 		"  --metadata-json JSON    Non-sensitive release metadata\n" +
 		"  --execute               Create after a fresh preview; does not activate\n" +
 		"  --insecure              Disable TLS for local development\n" +
