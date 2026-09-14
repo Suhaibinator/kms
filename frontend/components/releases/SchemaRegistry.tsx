@@ -1,10 +1,11 @@
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { JsonHighlight } from "@/components/JsonHighlight";
 import { Modal } from "@/components/Modal";
+import { RefreshControl } from "@/components/RefreshControl";
 import {
   Button,
   Checkbox,
@@ -316,10 +317,7 @@ export function SchemaRegistry({ onRegistered }: { onRegistered?: () => void }) 
           </p>
         </div>
         <div className="row-wrap">
-          <Button variant="outline" loading={loading} onClick={() => void loadSchemas()}>
-            {loading ? null : <RefreshCw size={16} aria-hidden />}
-            Refresh
-          </Button>
+          <RefreshControl loading={loading} onRefresh={() => void loadSchemas()} />
           <Button onClick={() => setRegisterOpen(true)}>
             <Plus size={16} aria-hidden />
             Register schema

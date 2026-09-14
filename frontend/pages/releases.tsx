@@ -1,10 +1,11 @@
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useRouter } from "next/router";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { RefreshControl } from "@/components/RefreshControl";
 import { ReleaseBuilder } from "@/components/releases/ReleaseBuilder";
 import { type ActivationFailure, ReleaseWorkspace } from "@/components/releases/ReleaseWorkspace";
 import { SchemaRegistry } from "@/components/releases/SchemaRegistry";
@@ -744,15 +745,11 @@ export default function ReleasesPage() {
         actions={
           activeTab === "releases" ? (
             <>
-              <Button
-                variant="outline"
+              <RefreshControl
                 disabled={!hasNS || !trackReady || Boolean(busyAction)}
                 loading={releasesLoading}
-                onClick={() => void refresh(true)}
-              >
-                {releasesLoading ? null : <RefreshCw size={16} aria-hidden />}
-                Refresh
-              </Button>
+                onRefresh={() => void refresh(true)}
+              />
               <Button
                 disabled={!hasNS || !trackReady || Boolean(busyAction)}
                 onClick={() => setBuilderOpen(true)}

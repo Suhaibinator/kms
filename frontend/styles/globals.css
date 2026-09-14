@@ -4020,6 +4020,13 @@
     border-right: 0;
     border-radius: var(--radius-md) 0 0 var(--radius-md);
   }
+  /* --input, not --border: the outline Button beside it draws its edge with
+     --input, and two segments of one control cannot outline in two colours.
+     :not(.is-stale) so the warning edge still wins — it is the same
+     specificity as this rule and stands earlier in the file. */
+  .refresh-control > .transport-badge:not(.is-stale) {
+    border-color: var(--input);
+  }
   .refresh-control[data-size="sm"] > .transport-badge {
     min-height: var(--control-h-sm);
     padding: 0 var(--space-2);

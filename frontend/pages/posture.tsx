@@ -1,14 +1,13 @@
-import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
+import { RefreshControl } from "@/components/RefreshControl";
 import { headerLabels, SortHeaderRow, staticController } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
   PageHeader,
   Skeleton,
-  Spinner,
   StatSkeleton,
   TableSkeleton,
 } from "@/components/ui";
@@ -246,12 +245,7 @@ function Posture({ initialWindow }: { initialWindow: WindowValue }) {
       <PageHeader
         title="Security posture"
         subtitle="What is about to expire, how old the key is, and whether admin authentication is in its strong posture. Metadata only — never a value, token, or key."
-        actions={
-          <Button variant="outline" onClick={() => void load(expiryWindow)} disabled={loading}>
-            {loading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
-        }
+        actions={<RefreshControl loading={loading} onRefresh={() => void load(expiryWindow)} />}
       />
 
       {error ? (

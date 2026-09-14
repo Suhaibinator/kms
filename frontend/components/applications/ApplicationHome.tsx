@@ -5,7 +5,6 @@ import {
   FileUp,
   MoreHorizontal,
   Plus,
-  RefreshCw,
   RotateCcw,
   Send,
   SlidersHorizontal,
@@ -18,7 +17,7 @@ import { Icon } from "@/components/icons";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { SearchField } from "@/components/SearchField";
 import { StatusChip } from "@/components/StatusChip";
-import { TransportBadge } from "@/components/TransportBadge";
+import { RefreshControl } from "@/components/RefreshControl";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { AppSelect } from "@/components/ui/app-select";
@@ -365,6 +364,8 @@ export function ApplicationHome({
         documentTitle={application.name}
         subtitle={application.description || "Application configuration across environments."}
         actions={
+          // Layout rule 9: status/refresh, then the secondary actions, then
+          // the one primary, then the overflow.
           <>
             <label className="row-wrap" htmlFor="application-schema-track">
               <span className="muted">Schema</span>
@@ -396,51 +397,51 @@ export function ApplicationHome({
                 ]}
               />
             </label>
-            {freshness ? (
-              <TransportBadge
-                transport="poll"
-                stale={freshness.staleReason !== null}
-                lastUpdatedAt={freshness.lastLoadedAt}
-                title="Checked every 30 seconds while this tab is visible; changes are announced, not applied."
-                staleTitle={
-                  freshness.staleReason === "changed"
-                    ? "A release was activated since this loaded. Refresh to see it."
-                    : "The last refresh failed; what is shown may be behind."
-                }
-              />
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Refresh"
-              title="Refresh"
-              onClick={() => void reload()}
-              disabled={loading}
-            >
-              <RefreshCw size={15} aria-hidden />
-            </Button>
-            <EnvironmentAction
-              label="Ship"
-              icon={<Send size={15} />}
-              variant="default"
-              environments={archived ? [] : focusEnv ? [focusEnv] : environmentNames}
-              onPick={(environment) => actions.openShip(environment)}
+            <RefreshControl
+              loading={loading}
+              onRefresh={() => void reload()}
+              freshness={
+                freshness
+                  ? {
+                      transport: "poll",
+                      stale: freshness.staleReason !== null,
+                      lastUpdatedAt: freshness.lastLoadedAt,
+                      title:
+                        "Checked every 30 seconds while this tab is visible; changes are announced, not applied.",
+                      staleTitle:
+                        freshness.staleReason === "changed"
+                          ? "A release was activated since this loaded. Refresh to see it."
+                          : "The last refresh failed; what is shown may be behind.",
+                    }
+                  : undefined
+              }
             />
             <EnvironmentAction
               label="Roll back"
-              icon={<RotateCcw size={15} />}
+              icon={<RotateCcw size={16} />}
               environments={activeNames}
               onPick={actions.openRollback}
               open={rollbackMenuOpen}
               onOpenChange={setRollbackMenuOpen}
             />
+            <EnvironmentAction
+              label="Ship"
+              icon={<Send size={16} />}
+              variant="default"
+              environments={archived ? [] : focusEnv ? [focusEnv] : environmentNames}
+              onPick={(environment) => actions.openShip(environment)}
+            />
             <ActionMenu
               items={moreItems}
               trigger={
-                <Button type="button" variant="outline" aria-label="More actions">
-                  <MoreHorizontal size={15} aria-hidden />
-                  More
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="More actions"
+                  title="More actions"
+                >
+                  <MoreHorizontal size={16} aria-hidden />
                 </Button>
               }
             />

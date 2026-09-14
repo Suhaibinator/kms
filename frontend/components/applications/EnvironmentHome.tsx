@@ -5,7 +5,6 @@ import {
   GitCompare,
   MoreHorizontal,
   Pencil,
-  RefreshCw,
   RotateCcw,
   Send,
   Trash2,
@@ -16,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
-import { TransportBadge } from "@/components/TransportBadge";
+import { RefreshControl } from "@/components/RefreshControl";
 import { Badge, PageHeader } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -310,34 +309,31 @@ export function EnvironmentHome({
         }
         subtitle={ns.description || `One environment of ${ns.app}.`}
         actions={
+          // Layout rule 9: status/refresh, then the secondary actions, then
+          // the one primary, then the overflow.
           <>
-            {freshness ? (
-              <TransportBadge
-                transport="poll"
-                stale={freshness.staleReason !== null}
-                lastUpdatedAt={freshness.lastLoadedAt}
-                title="Checked every 30 seconds while this tab is visible; changes are announced, not applied."
-                staleTitle={
-                  freshness.staleReason === "changed"
-                    ? "A release was activated since this loaded. Refresh to see it."
-                    : "The last refresh failed; what is shown may be behind."
-                }
-              />
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Refresh"
-              title="Refresh"
-              onClick={() => void reload()}
-              disabled={loading}
-            >
-              <RefreshCw size={15} aria-hidden />
-            </Button>
-            <Button type="button" disabled={archived} onClick={() => actions.openShip(env)}>
-              <Send size={15} aria-hidden />
-              Ship to {env}…
+            <RefreshControl
+              loading={loading}
+              onRefresh={() => void reload()}
+              freshness={
+                freshness
+                  ? {
+                      transport: "poll",
+                      stale: freshness.staleReason !== null,
+                      lastUpdatedAt: freshness.lastLoadedAt,
+                      title:
+                        "Checked every 30 seconds while this tab is visible; changes are announced, not applied.",
+                      staleTitle:
+                        freshness.staleReason === "changed"
+                          ? "A release was activated since this loaded. Refresh to see it."
+                          : "The last refresh failed; what is shown may be behind.",
+                    }
+                  : undefined
+              }
+            />
+            <Button type="button" variant="outline" onClick={() => actions.openConnect(env)}>
+              <Cable size={16} aria-hidden />
+              Connect SDK
             </Button>
             <Button
               type="button"
@@ -345,19 +341,24 @@ export function EnvironmentHome({
               disabled={archived || !canRollback}
               onClick={() => actions.openRollback(env)}
             >
-              <RotateCcw size={15} aria-hidden />
+              <RotateCcw size={16} aria-hidden />
               {active?.is_rolled_back ? `Re-activate v${active.previous_version}` : "Roll back"}
             </Button>
-            <Button type="button" variant="outline" onClick={() => actions.openConnect(env)}>
-              <Cable size={15} aria-hidden />
-              Connect SDK
+            <Button type="button" disabled={archived} onClick={() => actions.openShip(env)}>
+              <Send size={16} aria-hidden />
+              Ship to {env}…
             </Button>
             <ActionMenu
               items={moreItems}
               trigger={
-                <Button type="button" variant="outline" aria-label="More actions">
-                  <MoreHorizontal size={15} aria-hidden />
-                  More
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="More actions"
+                  title="More actions"
+                >
+                  <MoreHorizontal size={16} aria-hidden />
                 </Button>
               }
             />

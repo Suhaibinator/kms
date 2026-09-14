@@ -1,7 +1,6 @@
-import { RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Ident } from "@/components/Ident";
-import { TransportBadge } from "@/components/TransportBadge";
+import { RefreshControl } from "@/components/RefreshControl";
 import { Badge, Button } from "@/components/ui";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
@@ -157,21 +156,16 @@ export function RolloutPanel({
           </span>
         </div>
         <div className="rollout-tools">
-          <TransportBadge
-            transport={live.transport}
-            stale={live.stale}
-            lastUpdatedAt={live.lastUpdatedAt}
-          />
-          <Button
-            type="button"
-            variant="outline"
+          <RefreshControl
             size="sm"
             disabled={!enabled}
-            onClick={() => void live.refresh()}
-          >
-            <RefreshCw size={14} aria-hidden />
-            Refresh
-          </Button>
+            onRefresh={() => void live.refresh()}
+            freshness={{
+              transport: live.transport,
+              stale: live.stale,
+              lastUpdatedAt: live.lastUpdatedAt,
+            }}
+          />
           {onRollback ? (
             <Button
               type="button"
