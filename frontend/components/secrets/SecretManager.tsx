@@ -11,6 +11,7 @@ import { BINDING_ACTION_LABELS, bindingActions } from "@/components/secrets/bind
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   Badge,
   Checkbox,
@@ -480,24 +481,31 @@ export default function SecretManager({
               change height when the data arrives. Hidden from the accessibility
               tree because none of these placeholders can be operated. */}
           <Tabs defaultValue="overview">
-            <div className="secret-workspace-toolbar" aria-hidden>
-              <TabsList variant="line">
-                <TabsTrigger value="overview" disabled>
-                  Overview
-                </TabsTrigger>
-                <TabsTrigger value="versions" disabled>
-                  Versions
-                </TabsTrigger>
-              </TabsList>
-              <div className="row-wrap">
-                <Button variant="outline" size="sm" disabled>
-                  New version
-                </Button>
-                <Button variant="destructive" size="sm" disabled>
-                  Delete
-                </Button>
-              </div>
-            </div>
+            <SectionHeader
+              aria-hidden
+              className="secret-workspace-toolbar"
+              as="none"
+              title={
+                <TabsList variant="line">
+                  <TabsTrigger value="overview" disabled>
+                    Overview
+                  </TabsTrigger>
+                  <TabsTrigger value="versions" disabled>
+                    Versions
+                  </TabsTrigger>
+                </TabsList>
+              }
+              actions={
+                <>
+                  <Button variant="outline" size="sm" disabled>
+                    New version
+                  </Button>
+                  <Button variant="destructive" size="sm" disabled>
+                    Delete
+                  </Button>
+                </>
+              }
+            />
             <TabsContent value="overview" className="secret-workspace-stack">
               {metadataSkeleton}
               {valueSkeleton}
@@ -717,41 +725,46 @@ export default function SecretManager({
         <div className="warn-panel">{NON_ADMIN_NOTICE}</div>
       ) : revealed ? (
         <div className="reveal-box">
-          <div className="between mb-2">
-            <div className="row-wrap">
-              <Badge kind="accent">version {revealed.version}</Badge>
-              <span className="faint text-sm">{revealed.contentType || "value"}</span>
-            </div>
-            <div className="row-wrap">
-              {valueVisible ? (
-                <CopyButton
-                  label="Copy value"
-                  value={() =>
-                    revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
-                  }
-                />
-              ) : null}
-              <Button
-                variant="outline"
-                size="sm"
-                aria-expanded={valueVisible}
-                aria-controls="revealed-secret-value"
-                onClick={() => setValueVisible((visible) => !visible)}
-              >
-                {valueVisible ? "Hide value" : "Show value"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setRevealed(null);
-                  setValueVisible(false);
-                }}
-              >
-                Forget value
-              </Button>
-            </div>
-          </div>
+          <SectionHeader
+            as="none"
+            title={
+              <div className="row-wrap">
+                <Badge kind="accent">version {revealed.version}</Badge>
+                <span className="faint text-sm">{revealed.contentType || "value"}</span>
+              </div>
+            }
+            actions={
+              <>
+                {valueVisible ? (
+                  <CopyButton
+                    label="Copy value"
+                    value={() =>
+                      revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
+                    }
+                  />
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={valueVisible}
+                  aria-controls="revealed-secret-value"
+                  onClick={() => setValueVisible((visible) => !visible)}
+                >
+                  {valueVisible ? "Hide value" : "Show value"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRevealed(null);
+                    setValueVisible(false);
+                  }}
+                >
+                  Forget value
+                </Button>
+              </>
+            }
+          />
           {valueVisible ? (
             revealed.isText ? (
               <div id="revealed-secret-value" className="reveal-value">
@@ -1005,13 +1018,18 @@ export default function SecretManager({
         onClose={() => onClose?.()}
       >
         <Tabs value={section} onValueChange={(value) => setSection(String(value))}>
-          <div className="secret-workspace-toolbar">
-            <TabsList variant="line" aria-label="Secret details">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="versions">Versions</TabsTrigger>
-            </TabsList>
-            <div className="row-wrap">{actions("sm")}</div>
-          </div>
+          <SectionHeader
+            // The sticky/bleed rules for the modal body key off this class.
+            className="secret-workspace-toolbar"
+            as="none"
+            title={
+              <TabsList variant="line" aria-label="Secret details">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="versions">Versions</TabsTrigger>
+              </TabsList>
+            }
+            actions={actions("sm")}
+          />
           <TabsContent value="overview" className="secret-workspace-stack">
             {metadataCard}
             {revealCard}

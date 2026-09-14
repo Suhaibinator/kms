@@ -8,6 +8,7 @@ import { Icon } from "@/components/icons";
 import { SearchField } from "@/components/SearchField";
 import { MobileListToolbar, SortHeaderRow, useSort } from "@/components/SortableTable";
 import { BindingKeyBadge } from "@/components/secrets/SecretBadges";
+import { SectionHeader } from "@/components/SectionHeader";
 import { TableSummary } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { countNoun } from "@/lib/format";
@@ -80,17 +81,20 @@ export function EnvironmentValuesTable({
 
   return (
     <section className="environment-values" aria-label={`Values in ${env}`}>
-      <div className="between mb-2 items-end">
-        <h2 className="section-title">Values</h2>
-        <SearchField
-          className="w-full max-w-[280px]"
-          label="Filter values"
-          placeholder="Filter by alias, key or value"
-          value={filter}
-          onChange={setFilter}
-          onClear={() => setFilter("")}
-        />
-      </div>
+      <SectionHeader
+        title="Values"
+        actions={
+          <SearchField
+            labelHidden
+            className="w-full max-w-[280px]"
+            label="Filter values"
+            placeholder="Filter by alias, key or value"
+            value={filter}
+            onChange={setFilter}
+            onClear={() => setFilter("")}
+          />
+        }
+      />
       {environment.values.length === 0 ? (
         <div className="pipeline-row">
           <span className="faint text-sm">The contract has no aliases.</span>

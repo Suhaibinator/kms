@@ -2,6 +2,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
+import { SectionHeader } from "@/components/SectionHeader";
 import { Button, Field, Input, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -522,16 +523,24 @@ export function ReleaseBuilder({
         </div>
       ) : (
         <Tabs value={mode} onValueChange={switchMode}>
-          <div className="release-workspace-toolbar">
-            <TabsList aria-label="Release definition mode">
-              <TabsTrigger value="guided">Guided</TabsTrigger>
-              <TabsTrigger value="json">JSON</TabsTrigger>
-            </TabsList>
-            <div className="text-sm faint">
-              {entryCount} {entryCount === 1 ? "entry" : "entries"} · selectors are resolved when
-              the release is created
-            </div>
-          </div>
+          <SectionHeader
+            // The class carries this toolbar's sticky/bleed rules inside a
+            // modal body; the SectionHeader root is where they now apply.
+            className="release-workspace-toolbar"
+            as="none"
+            title={
+              <TabsList aria-label="Release definition mode">
+                <TabsTrigger value="guided">Guided</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+              </TabsList>
+            }
+            actions={
+              <div className="text-sm faint">
+                {entryCount} {entryCount === 1 ? "entry" : "entries"} · selectors are resolved when
+                the release is created
+              </div>
+            }
+          />
 
           {modeMessage ? (
             <div className="warn-panel mb-4" role="alert">
@@ -558,24 +567,23 @@ export function ReleaseBuilder({
                 </Field>
               </div>
 
-              <div className="between mb-3 mt-4">
-                <div className="grow basis-80">
-                  <h2 className="section-title">Release entries</h2>
-                  <p className="text-sm faint">
-                    Contract fields are fixed; choose which resource version supplies each alias.
-                  </p>
-                </div>
-                {dashboard?.application.contract.length ? null : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setEntries((current) => [...current, blankEntry(false)])}
-                  >
-                    <Plus size={15} aria-hidden />
-                    Add entry
-                  </Button>
-                )}
-              </div>
+              <SectionHeader
+                className="mb-3 mt-4"
+                title="Release entries"
+                description="Contract fields are fixed; choose which resource version supplies each alias."
+                actions={
+                  dashboard?.application.contract.length ? null : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEntries((current) => [...current, blankEntry(false)])}
+                    >
+                      <Plus size={15} aria-hidden />
+                      Add entry
+                    </Button>
+                  )
+                }
+              />
 
               <div className="release-builder-entries">
                 {entries.map((entry, index) => {

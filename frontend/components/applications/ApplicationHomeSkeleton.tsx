@@ -1,6 +1,7 @@
 import { ContextBar } from "@/components/ContextBar";
 import { Ident } from "@/components/Ident";
 import { InlineField } from "@/components/InlineField";
+import { SectionHeader } from "@/components/SectionHeader";
 import { PageHeader, Skeleton } from "@/components/ui";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { crumbs } from "@/lib/crumbs";
@@ -53,18 +54,27 @@ export function ApplicationHomeSkeleton({ name }: { name: string }) {
           ))}
         </div>
         <div className="definition-alignment">
-          <div className="between">
-            <span className="faint text-sm">Alignment</span>
-            <Skeleton width={72} height={30} />
-          </div>
+          <SectionHeader
+            className="mb-0"
+            as="none"
+            title={<span className="faint text-sm">Alignment</span>}
+            actions={<Skeleton width={72} height={30} />}
+          />
           <Skeleton width="30%" height="1em" />
         </div>
       </section>
       <Tabs value="pipeline" className="application-tabs">
-        <TabsList variant="line" aria-label="Application views" className="mb-2">
-          <TabsTrigger value="pipeline">Environments</TabsTrigger>
-          <TabsTrigger value="matrix">Matrix</TabsTrigger>
-        </TabsList>
+        <SectionHeader
+          as="none"
+          title={
+            <TabsList variant="line" aria-label="Application views">
+              <TabsTrigger value="pipeline">Environments</TabsTrigger>
+              <TabsTrigger value="matrix">Matrix</TabsTrigger>
+            </TabsList>
+          }
+          // The value filter's box, at the height it loads at.
+          actions={<Skeleton width={280} height={38} />}
+        />
       </Tabs>
       <div className="pipeline-scroll" aria-hidden>
         <div className="pipeline" data-columns={2}>

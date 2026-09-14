@@ -8,6 +8,7 @@ import {
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   EmptyState,
   Field,
@@ -695,12 +696,17 @@ function RuleEditor({
 
   return (
     <div>
-      <div className="between mb-2">
-        <div className="field-label">{title}</div>
-        <Button type="button" variant="outline" size="sm" onClick={add}>
-          Add rule
-        </Button>
-      </div>
+      <SectionHeader
+        as="none"
+        // mb-0 on the caption: .field-label carries a block margin for a
+        // stacked field, and this one is a row caption.
+        title={<div className="field-label mb-0">{title}</div>}
+        actions={
+          <Button type="button" variant="outline" size="sm" onClick={add}>
+            Add rule
+          </Button>
+        }
+      />
       <datalist id={`${listId}-apps`}>
         {apps.map((app) => (
           <option key={app} value={app} />

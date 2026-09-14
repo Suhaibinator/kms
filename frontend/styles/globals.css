@@ -701,6 +701,11 @@
   .section-head > * {
     min-width: 0;
   }
+  /* A description makes the text column two lines tall, and centring then
+     floats the toolbar ~12px below the heading its buttons belong to. */
+  .section-head:has(.section-head-description) {
+    align-items: flex-start;
+  }
   /* Same reason as the .between note above: the row wraps on the text's
      *hypothetical* main size, so the text column needs a basis or a long
      description drops the toolbar to a second line at every width. */
@@ -2668,7 +2673,9 @@
     display: block;
     overflow-wrap: anywhere;
   }
-  .section-toolbar,
+  /* `.section-toolbar` stood here too. It was one caller (the schema
+     registry's head) of what is now SectionHeader, and folding it in left
+     nothing to define. */
   .release-workspace-toolbar,
   .schema-viewer-meta {
     display: flex;
@@ -2688,9 +2695,6 @@
      `.secret-workspace-toolbar` — see the workspace toolbar block further down.
      The rule, the bleed and the sticky inset all live there, so nothing is
      restated here. */
-  .section-toolbar h2 {
-    margin-bottom: 0;
-  }
   .schema-filters > .field {
     flex-basis: 360px;
     width: min(360px, 100%);
@@ -3555,8 +3559,8 @@
   /* The clearance below the buttons is the toolbar's padding, not a margin on
      the row: a margin joins the flex line's alignment and staggered the buttons
      9px above the tab list under `align-items: flex-end`. */
-  .secret-workspace-toolbar > .row-wrap,
-  [data-modal-body] .release-workspace-toolbar > .row-wrap {
+  .secret-workspace-toolbar > .section-head-tools,
+  [data-modal-body] .release-workspace-toolbar > .section-head-tools {
     margin-bottom: 0;
   }
 
@@ -3593,7 +3597,7 @@
       padding: var(--space-2) var(--modal-pad) var(--space-3);
     }
 
-    .secret-workspace-toolbar > .row-wrap {
+    .secret-workspace-toolbar > .section-head-tools {
       justify-content: flex-end;
     }
   }

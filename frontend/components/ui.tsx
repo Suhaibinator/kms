@@ -317,6 +317,7 @@ export function StatSkeleton({ label }: { label: string }) {
 
 export function Field({
   label,
+  labelHidden = false,
   hint,
   htmlFor,
   error,
@@ -326,6 +327,13 @@ export function Field({
   "data-path": dataPath,
 }: {
   label: ReactNode;
+  /**
+   * Renders the label `sr-only`: still the control's accessible name, but no
+   * caption block above it. For a control that stands alone on a toolbar row,
+   * where a floating caption is what breaks the row's one centreline. The
+   * label is out of flow, so the field's own gap does not apply either.
+   */
+  labelHidden?: boolean;
   hint?: ReactNode;
   htmlFor?: string;
   /**
@@ -408,7 +416,11 @@ export function Field({
     >
       {/* Muted + 600 matches the app's own .field-label, so forms that mix the
           two label systems render identically. */}
-      <FieldLegend variant="label" id={labelId} className="font-semibold text-muted-foreground">
+      <FieldLegend
+        variant="label"
+        id={labelId}
+        className={cn("font-semibold text-muted-foreground", labelHidden && "sr-only")}
+      >
         {labelContent}
       </FieldLegend>
       {children}
@@ -423,7 +435,7 @@ export function Field({
       <FieldLabel
         htmlFor={resolvedFor}
         id={labelId}
-        className="font-semibold text-muted-foreground"
+        className={cn("font-semibold text-muted-foreground", labelHidden && "sr-only")}
       >
         {labelContent}
       </FieldLabel>

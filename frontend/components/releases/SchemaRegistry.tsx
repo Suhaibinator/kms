@@ -6,6 +6,7 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { JsonHighlight } from "@/components/JsonHighlight";
 import { Modal } from "@/components/Modal";
 import { RefreshControl } from "@/components/RefreshControl";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   Button,
   Checkbox,
@@ -309,21 +310,20 @@ export function SchemaRegistry({ onRegistered }: { onRegistered?: () => void }) 
 
   return (
     <>
-      <div className="section-toolbar">
-        <div>
-          <h2 className="section-title">Schema registry</h2>
-          <p className="text-sm faint">
-            Immutable JSON Schema versions owned by application release streams.
-          </p>
-        </div>
-        <div className="row-wrap">
-          <RefreshControl loading={loading} onRefresh={() => void loadSchemas()} />
-          <Button onClick={() => setRegisterOpen(true)}>
-            <Plus size={16} aria-hidden />
-            Register schema
-          </Button>
-        </div>
-      </div>
+      <SectionHeader
+        className="mb-4"
+        title="Schema registry"
+        description="Immutable JSON Schema versions owned by application release streams."
+        actions={
+          <>
+            <RefreshControl loading={loading} onRefresh={() => void loadSchemas()} />
+            <Button onClick={() => setRegisterOpen(true)}>
+              <Plus size={16} aria-hidden />
+              Register schema
+            </Button>
+          </>
+        }
+      />
 
       <form className="filters schema-filters" onSubmit={applyFilter}>
         <Field label="Application">

@@ -54,10 +54,12 @@
   }
 
   /* ---------- Toolbar ---------- */
+  /* center, not flex-end: the filter box hides its label now, so nothing in
+     this row has a stacked caption left to bottom-align against. */
   .release-diff-toolbar {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-end;
+    align-items: center;
     gap: var(--space-3);
   }
   .release-diff-toolbar > * {

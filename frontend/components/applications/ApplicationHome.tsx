@@ -20,6 +20,7 @@ import SetupPanel from "@/components/onboarding/SetupPanel";
 import { RefreshControl } from "@/components/RefreshControl";
 import { SearchField } from "@/components/SearchField";
 import { StatusChip } from "@/components/StatusChip";
+import { SectionHeader } from "@/components/SectionHeader";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { AppSelect } from "@/components/ui/app-select";
@@ -504,25 +505,29 @@ export function ApplicationHome({
           onValueChange={(value) => replaceQuery({ tab: value === "matrix" ? "matrix" : "" })}
           className="application-tabs"
         >
-          {/* mb-2, not mb-4: the Tabs root is a flex column with gap-2, so the
-              margin stacks on top of it and mb-4 spent 24px against the page's
-              16px rhythm. */}
-          {/* One box beside the tabs, so a filter typed on either tab is still
-              applied after switching to the other. */}
-          <div className="between mb-2 items-end">
-            <TabsList variant="line" aria-label="Application views">
-              <TabsTrigger value="pipeline">Environments</TabsTrigger>
-              <TabsTrigger value="matrix">Matrix</TabsTrigger>
-            </TabsList>
-            <SearchField
-              className="w-full max-w-[280px]"
-              label="Filter values"
-              placeholder="Filter by alias, key or value"
-              value={valueFilter}
-              onChange={setValueFilter}
-              onClear={() => setValueFilter("")}
-            />
-          </div>
+          {/* The tab list is this section's title slot. One filter box beside
+              it, so a filter typed on either tab is still applied after
+              switching to the other. */}
+          <SectionHeader
+            as="none"
+            title={
+              <TabsList variant="line" aria-label="Application views">
+                <TabsTrigger value="pipeline">Environments</TabsTrigger>
+                <TabsTrigger value="matrix">Matrix</TabsTrigger>
+              </TabsList>
+            }
+            actions={
+              <SearchField
+                labelHidden
+                className="w-full max-w-[280px]"
+                label="Filter values"
+                placeholder="Filter by alias, key or value"
+                value={valueFilter}
+                onChange={setValueFilter}
+                onClear={() => setValueFilter("")}
+              />
+            }
+          />
           <TabsContent value="pipeline">
             <EnvironmentPipeline
               application={application}
@@ -534,41 +539,30 @@ export function ApplicationHome({
             />
           </TabsContent>
           <TabsContent value="matrix">
-            {/* items-start: .between centres, which floats the two buttons
-                ~12px below the heading they belong to against the two-line
-                description beside them. */}
-            <div className="between mb-2 items-start">
-              {/* .between wraps on hypothetical main size, which min-width: 0
-                  does not change: the description's 891px max-content left 89px
-                  for a 273px button pair, so the buttons dropped to a second
-                  line at the left edge at every width. A 320px basis wraps only
-                  when the row really cannot hold both. */}
-              <div className="grow basis-80">
-                <h2 className="section-title">Configuration matrix</h2>
-                <div className="faint text-sm">
-                  Parameters show current values; secrets show metadata only. A bulk parameter
-                  update creates an independent version in every selected environment.
-                </div>
-              </div>
-              <div className="row-wrap">
-                <Button
-                  variant="outline"
-                  onClick={() => actions.openSecretSeed({ environment: "", key: "" })}
-                >
-                  <Plus size={15} />
-                  New secret
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    actions.openWriteRow({ key: "", kind: "parameter", environments: {} })
-                  }
-                >
-                  <Plus size={15} />
-                  New parameter
-                </Button>
-              </div>
-            </div>
+            <SectionHeader
+              title="Configuration matrix"
+              description="Parameters show current values; secrets show metadata only. A bulk parameter update creates an independent version in every selected environment."
+              actions={
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => actions.openSecretSeed({ environment: "", key: "" })}
+                  >
+                    <Plus size={16} />
+                    New secret
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      actions.openWriteRow({ key: "", kind: "parameter", environments: {} })
+                    }
+                  >
+                    <Plus size={16} />
+                    New parameter
+                  </Button>
+                </>
+              }
+            />
             <ConfigurationMatrix
               app={application.name}
               schemaVersion={schemaVersion}
