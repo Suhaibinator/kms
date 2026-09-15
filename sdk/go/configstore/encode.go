@@ -24,7 +24,7 @@ func EncodeGroup(src any, fields []FieldCodec) (jsontext.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	document, err := json.Marshal(encoded)
+	document, err := json.Marshal(encoded, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("configstore: encode JSON group document: %w", err)
 	}
