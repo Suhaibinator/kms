@@ -359,11 +359,7 @@ func TestDecodeGroupPreservesNilVersusEmptyCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := CanonicalParameterValue("json", document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(canonical), `{"blob":null,"items":null,"labels":null}`; got != want {
+	if got, want := string(document), `{"blob":null,"items":null,"labels":null}`; got != want {
 		t.Fatalf("EncodeGroup(nil collections) = %s, want %s", got, want)
 	}
 }
