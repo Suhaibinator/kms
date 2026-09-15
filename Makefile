@@ -103,7 +103,7 @@ test-unit:
 test-unit-shard:
 	@packages=''; \
 	case "$(GO_TEST_SHARD)" in \
-		configgen) packages='./internal/configgen' ;; \
+		configgen) packages='./internal/configgen ./internal/configgen/testdata/*generated' ;; \
 		cli-storage) packages='./internal/cli ./internal/storage' ;; \
 		remaining) packages="$$(go list -f '{{if and (ne .ImportPath "github.com/Suhaibinator/kms/internal/integration") (ne .ImportPath "github.com/Suhaibinator/kms/internal/configgen") (ne .ImportPath "github.com/Suhaibinator/kms/internal/cli") (ne .ImportPath "github.com/Suhaibinator/kms/internal/storage")}}{{.ImportPath}}{{end}}' ./...)" ;; \
 		*) echo "ERROR: unknown GO_TEST_SHARD $(GO_TEST_SHARD)" >&2; exit 2 ;; \

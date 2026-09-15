@@ -43,10 +43,10 @@ func TestEncodeParameterGroupsCanonicalRoundTrip(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("group count = %d, want 2", len(groups))
 	}
-	if got, want := string(groups["database"]), `{"endpoint":{"host":"db.internal","labels":{"empty":[],"nil":null},"ports":[],"zones":["west-a","west-b"]},"timeout":"1.5s"}`; got != want {
+	if got, want := canonicalJSON(t, string(groups["database"])), `{"endpoint":{"host":"db.internal","labels":{"empty":[],"nil":null},"ports":[],"zones":["west-a","west-b"]},"timeout":"1.5s"}`; got != want {
 		t.Fatalf("database group = %s, want %s", got, want)
 	}
-	if got, want := string(groups["rate_limits"]), `{"limit":7,"payload":"","ratio":0.25}`; got != want {
+	if got, want := canonicalJSON(t, string(groups["rate_limits"])), `{"limit":7,"payload":"","ratio":0.25}`; got != want {
 		t.Fatalf("rate_limits group = %s, want %s", got, want)
 	}
 	for alias, document := range groups {
@@ -79,10 +79,10 @@ func TestEncodeParameterGroupsPreservesNilCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(groups["database"]), `{"endpoint":{"host":"","labels":{},"ports":[],"zones":["",""]},"timeout":"1s"}`; got != want {
+	if got, want := canonicalJSON(t, string(groups["database"])), `{"endpoint":{"host":"","labels":null,"ports":null,"zones":["",""]},"timeout":"1s"}`; got != want {
 		t.Fatalf("database group = %s, want %s", got, want)
 	}
-	if got, want := string(groups["rate_limits"]), `{"limit":0,"payload":"","ratio":null}`; got != want {
+	if got, want := canonicalJSON(t, string(groups["rate_limits"])), `{"limit":0,"payload":null,"ratio":null}`; got != want {
 		t.Fatalf("rate_limits group = %s, want %s", got, want)
 	}
 }
@@ -130,7 +130,16 @@ func TestEncodeDefaultsArtifactIncludesCompleteContractWithoutSecretValues(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Parameters) != 2 || artifact.Parameters[0].Alias != "database" || artifact.Parameters[0].Value != string(groups["database"]) || artifact.Parameters[1].Alias != "rate_limits" || artifact.Parameters[1].Value != string(groups["rate_limits"]) {
+	if len(artifact.Parameters) != 2 || artifact.Parameters[0].Alias != "database" || canonicalJSON(t, artifact.Parameters[0].Value) != canonicalJSON(t, string(groups["database"])) || artifact.Parameters[1].Alias != "rate_limits" || canonicalJSON(t, artifact.Parameters[1].Value) != canonicalJSON(t, string(groups["rate_limits"])) {
 		t.Fatalf("artifact parameters = %#v", artifact.Parameters)
 	}
+}
+
+func canonicalJSON(t *testing.T, value string) string {
+	t.Helper()
+	canonical, err := configstore.CanonicalParameterValue("json", []byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(canonical)
 }

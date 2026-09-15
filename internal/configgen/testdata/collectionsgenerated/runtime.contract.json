@@ -1,0 +1,80 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/collections",
+    "type": "Config"
+  },
+  "schema_sha256": "27ecd46c24f0dde12b732b94eade15a9528f130e4714a9fd0100d3977b8e706e",
+  "groups": [
+    {
+      "alias": "genai",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "inference_providers",
+        "items",
+        "labels",
+        "payload"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "genai",
+      "json_name": "inference_providers",
+      "go_name": "Providers",
+      "go_path": "Providers",
+      "reload": "hot",
+      "encoding": "nullable-array",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "genai",
+      "json_name": "items",
+      "go_name": "Items",
+      "go_path": "Items",
+      "reload": "hot",
+      "encoding": "nullable-array",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "genai",
+      "json_name": "labels",
+      "go_name": "Labels",
+      "go_path": "Labels",
+      "reload": "hot",
+      "encoding": "nullable-string-map",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "genai",
+      "json_name": "payload",
+      "go_name": "Payload",
+      "go_path": "Payload",
+      "reload": "hot",
+      "encoding": "nullable-base64",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [],
+  "views": [
+    {
+      "name": "worker",
+      "method": "Worker",
+      "fields": [
+        "genai.inference_providers",
+        "genai.items",
+        "genai.labels",
+        "genai.payload"
+      ]
+    }
+  ]
+}

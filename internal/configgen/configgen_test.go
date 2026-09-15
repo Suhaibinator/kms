@@ -514,3 +514,22 @@ func repoRoot(t *testing.T) string {
 	}
 	return root
 }
+
+func TestGeneratedCollectionArtifactsAreCurrent(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/collections", Type: "Config", BindingPackage: "collectionsgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "internal/configgen/testdata/collectionsgenerated")
+	if err := Verify(OutputPaths{
+		Binding:  filepath.Join(dir, "config.gen.go"),
+		Schema:   filepath.Join(dir, "runtime.schema.json"),
+		Contract: filepath.Join(dir, "runtime.contract.json"),
+	}, artifacts); err != nil {
+		t.Fatal(err)
+	}
+}

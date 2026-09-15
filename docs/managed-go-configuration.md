@@ -370,6 +370,11 @@ base64, supported named and composite values are encoded recursively, and
 `nil` remains distinct from a non-nil empty slice, map, or byte slice. Inline
 fragment fields are flattened into their declared application-level groups.
 
+Earlier SDK encoders incorrectly emitted empty values for nil collections.
+After upgrading, re-encode and publish application defaults to replace those
+stored empty values with `null`. Existing stored values are not migrated:
+empty collections remain distinct from nil defaults during drift comparison.
+
 The encoder rejects a nil root, a nil pointer-valued inline fragment, values
 outside a generated portable numeric contract, and JSON values that cannot be
 represented, such as `NaN` or infinity. It never emits managed secrets,
