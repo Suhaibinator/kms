@@ -12,7 +12,8 @@ import (
 // EncodeGroup encodes one complete parameter group from src using the same
 // generated descriptor consumed by DecodeGroup. Src must be a non-nil pointer
 // to a struct. The returned document contains every described field exactly
-// once. Nil slices, maps, and byte slices use JSON v2's empty representations.
+// once. Nil slices, maps, and byte slices encode as JSON null, distinct from
+// non-nil empty collections.
 func EncodeGroup(src any, fields []FieldCodec) (jsontext.Value, error) {
 	value := reflect.ValueOf(src)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() || value.Elem().Kind() != reflect.Struct {
@@ -83,14 +84,7 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 			}
 		}
 		if source.IsNil() {
-			switch codec.Kind {
-			case CodecSlice:
-				return []any{}, nil
-			case CodecMap:
-				return map[string]any{}, nil
-			case CodecBytes:
-				return "", nil
-			}
+			return nil, nil
 		}
 	}
 

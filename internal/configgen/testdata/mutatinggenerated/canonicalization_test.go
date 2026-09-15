@@ -42,9 +42,10 @@ func testMutatingValidator(t *testing.T, rawName, wantName string) {
 	server.SetParameterVersion(namespace, groupPath, `{"name":"`+rawName+`"}`, "json", 1)
 	server.SetSecretVersion(namespace, secretPath, []byte("secret-value"), "text/plain", 1)
 	if _, err := server.SetActiveRelease(kmsclienttest.ReleaseSpec{
-		Namespace: namespace,
-		Name:      releaseName,
-		Version:   1,
+		Namespace:     namespace,
+		Name:          releaseName,
+		Version:       1,
+		SchemaVersion: 1,
 		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "runtime", Kind: "parameter", Path: groupPath, Version: 1, ContentType: "json"},
 			{Alias: "token", Kind: "secret", Path: secretPath, Version: 1},
