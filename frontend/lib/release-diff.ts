@@ -2,7 +2,9 @@
 // diff view (components/releases/diff). Pure functions over the
 // `ReleaseDiffResponse` wire shape; the components render, this decides.
 
+import { countNoun } from "@/lib/format";
 import type {
+  OverviewRollout,
   ReleaseDiffChange,
   ReleaseDiffPin,
   ReleaseDiffReason,
@@ -14,7 +16,11 @@ import type {
 import { formatBytes } from "@/lib/validation";
 import {
   describeChange,
+  describeLeafChange,
+  type FieldCounts,
+  fieldCounts,
   formatValuePath,
+  type StructuralDiff,
   type ValueChange,
   type ValueChangeDescription,
 } from "@/lib/value-diff";
@@ -39,10 +45,80 @@ export interface DiffRowModel {
   prefix: string;
   /** Parameters with at least one present value; null for secrets and value-free rows. */
   description: ValueChangeDescription | null;
+  /** JSON rows with a structural diff: how many fields were added, removed, changed or moved. */
+  fields: FieldCounts | null;
   /** One line: `100 → 20`, `database.pool.max 50 → 5, +1 more`, `v2 → v3`. */
   summary: string;
   /** Lower-cased haystack for the filter: alias, key, reasons, paths, values. */
   searchText: string;
+}
+
+export interface FieldAggregate {
+  counts: FieldCounts;
+  /** Sum of the four counts. */
+  total: number;
+  /** Rows that contributed. */
+  rows: number;
+  /** Some row's listing stopped at its cap, so `total` is a floor. */
+  partial: boolean;
+}
+
+/** Field counts over every row that has them, or null when none does. */
+export function aggregateFields(rows: readonly DiffRowModel[]): FieldAggregate | null {
+  const counts: FieldCounts = { added: 0, removed: 0, changed: 0, moved: 0 };
+  let contributing = 0;
+  let partial = false;
+  for (const row of rows) {
+    if (!row.fields) continue;
+    contributing += 1;
+    counts.added += row.fields.added;
+    counts.removed += row.fields.removed;
+    counts.changed += row.fields.changed;
+    counts.moved += row.fields.moved;
+    if (row.description?.kind === "json" && row.description.structural?.truncated) partial = true;
+  }
+  if (contributing === 0) return null;
+  const total = counts.added + counts.removed + counts.changed + counts.moved;
+  return { counts, total, rows: contributing, partial };
+}
+
+/** `+3 −21 ~1 ↷2`, zero kinds omitted; "" when every count is zero. */
+export function formatFieldCounts(counts: FieldCounts): string {
+  const parts: string[] = [];
+  if (counts.added) parts.push(`+${counts.added}`);
+  if (counts.removed) parts.push(`−${counts.removed}`);
+  if (counts.changed) parts.push(`~${counts.changed}`);
+  if (counts.moved) parts.push(`↷${counts.moved}`);
+  return parts.join(" ");
+}
+
+export type RolloutTone = "zero" | "neutral" | "success" | "danger";
+
+/**
+ * The rollout cell as words. `null` is "we asked and do not know"; a zero
+ * total means no subscriber instance is known for the track, which is not a
+ * failed rollout.
+ */
+export function rolloutSentence(rollout: OverviewRollout | null): string {
+  if (!rollout) return "rollout unknown";
+  const total = rollout.total;
+  if (total === 0) return "not yet applied (no instances subscribed)";
+  if (rollout.applied_current === total && rollout.rejected === 0 && rollout.pending === 0) {
+    return total === 1 ? "applied on the only instance" : `applied on all ${total} instances`;
+  }
+  const parts = [
+    `applied on ${rollout.applied_current} of ${total} ${countNoun(total, "instances")}`,
+  ];
+  if (rollout.pending > 0) parts.push(`${rollout.pending} pending`);
+  if (rollout.rejected > 0) parts.push(`${rollout.rejected} rejected`);
+  return parts.join(", ");
+}
+
+export function rolloutTone(rollout: OverviewRollout | null): RolloutTone {
+  if (!rollout || rollout.total === 0) return "zero";
+  if (rollout.rejected > 0) return "danger";
+  if (rollout.applied_current === rollout.total && rollout.pending === 0) return "success";
+  return "neutral";
 }
 
 export interface BuildRowsOptions {
@@ -133,7 +209,50 @@ function leafText(change: ValueChange): string {
   const path = formatValuePath(change.path);
   if (change.kind === "added") return `${path} + ${elide(change.after ?? "")}`;
   if (change.kind === "removed") return `${path} − ${elide(change.before ?? "")}`;
+  if (change.kind === "moved") {
+    return `${formatValuePath(change.fromPath ?? [])} ↷ ${path} ${elide(change.after ?? "")}`;
+  }
   return `${path} ${elide(change.before ?? "")} → ${elide(change.after ?? "")}`;
+}
+
+const FIELD_GLYPH: Record<ValueChange["kind"], string> = {
+  added: "+",
+  removed: "−",
+  changed: "~",
+  moved: "↷",
+};
+
+/** `(−45, −90 %)` / `(×2)` for a changed scalar leaf, "" otherwise. */
+function leafDelta(change: ValueChange): string {
+  if (change.kind !== "changed") return "";
+  const leaf = describeLeafChange(change.before, change.after);
+  if (leaf.kind === "number" && leaf.delta) {
+    return leaf.percent ? ` (${leaf.delta}, ${leaf.percent})` : ` (${leaf.delta})`;
+  }
+  if (leaf.kind === "duration" && leaf.ratio) return ` (${leaf.ratio})`;
+  return "";
+}
+
+/**
+ * One plain-text line per field change, the path column padded so the values
+ * align: `~ pool.max   50 → 5 (−45, −90 %)`, `+ ssl        true`,
+ * `↷ legacy_endpoint → endpoints.legacy   "https://…"`. Subtrees stay minified.
+ */
+export function fieldLines(structural: StructuralDiff): string[] {
+  const entries = structural.changes.map((change) => {
+    const path = formatValuePath(change.path) || "(root)";
+    const label =
+      change.kind === "moved" ? `${formatValuePath(change.fromPath ?? [])} → ${path}` : path;
+    const value =
+      change.kind === "added" || change.kind === "moved"
+        ? elide(change.after ?? "")
+        : change.kind === "removed"
+          ? elide(change.before ?? "")
+          : `${elide(change.before ?? "")} → ${elide(change.after ?? "")}${leafDelta(change)}`;
+    return { glyph: FIELD_GLYPH[change.kind], label, value };
+  });
+  const width = Math.max(0, ...entries.map((entry) => entry.label.length));
+  return entries.map((entry) => `${entry.glyph} ${entry.label.padEnd(width)}   ${entry.value}`);
 }
 
 /** The inline one-liner for a described parameter change. */
@@ -272,6 +391,7 @@ export function buildRows(diff: ReleaseDiffResponse, opts: BuildRowsOptions = {}
     if (description?.kind === "json" && description.structural) {
       for (const change of description.structural.changes) {
         haystack.push(formatValuePath(change.path));
+        if (change.fromPath) haystack.push(formatValuePath(change.fromPath));
       }
     }
     return {
@@ -287,6 +407,10 @@ export function buildRows(diff: ReleaseDiffResponse, opts: BuildRowsOptions = {}
       flags,
       prefix: aliasPrefix(row.alias),
       description,
+      fields:
+        description?.kind === "json" && description.structural
+          ? fieldCounts(description.structural)
+          : null,
       summary,
       searchText: haystack.join("\n").toLowerCase(),
     };
@@ -373,8 +497,10 @@ export function sideKey(side: ReleaseDiffSide): string {
 }
 
 /**
- * The comparison as columns of plain text for an incident channel or a
- * postmortem. Secrets appear with versions and modes only.
+ * The comparison as plain text for an incident channel or a postmortem: a
+ * header, one padded line per changed alias, and under a JSON parameter one
+ * indented line per field (`fieldLines`, uncapped). Secrets appear with
+ * versions and modes only.
  */
 export function releaseDiffAsText(diff: ReleaseDiffResponse, opts: BuildRowsOptions = {}): string {
   const from = diff.from;
@@ -390,9 +516,20 @@ export function releaseDiffAsText(diff: ReleaseDiffResponse, opts: BuildRowsOpti
   const rows = buildRows(diff, opts).filter((row) => row.change !== "unchanged");
   if (rows.length === 0) return `${header}\nno differences`;
   const aliasWidth = Math.max(12, ...rows.map((row) => row.alias.length));
-  const lines = rows.map((row) => {
+  const lines = rows.flatMap((row) => {
     const label = row.kind === "secret" ? "secret" : row.change;
-    return `${label.padEnd(8)} ${row.alias.padEnd(aliasWidth)} ${row.summary}`;
+    const structural =
+      row.description?.kind === "json" ? (row.description.structural ?? null) : null;
+    if (!structural || !row.fields) {
+      return [`${label.padEnd(8)} ${row.alias.padEnd(aliasWidth)} ${row.summary}`];
+    }
+    const total = structural.changes.length;
+    const versions = `v${row.row.from?.version ?? "—"} → v${row.row.to?.version ?? "—"}`;
+    const head = `${total} ${countNoun(total, "fields")} (${formatFieldCounts(row.fields)}) ${versions}`;
+    return [
+      `${label.padEnd(8)} ${row.alias.padEnd(aliasWidth)} ${head}`,
+      ...fieldLines(structural).map((line) => `  ${line}`),
+    ];
   });
   return [header, ...lines].join("\n");
 }

@@ -202,17 +202,37 @@ export function toSideBySide(lines: DiffLine[]): DiffRow[] {
   return rows;
 }
 
+/** One row of the unified view: the sequence line plus the same/change kind the folder reads. */
+export interface UnifiedRow {
+  kind: "same" | "change";
+  op: DiffOp;
+  text: string;
+  left?: number;
+  right?: number;
+}
+
+/** The unified sequence as foldable rows; removed and added lines stay in order, never zipped. */
+export function toUnified(lines: DiffLine[]): UnifiedRow[] {
+  return lines.map((line) => ({ ...line, kind: line.op === "same" ? "same" : "change" }));
+}
+
 /** A row of the folded view: either a real row or a placeholder for hidden unchanged rows. */
-export type FoldedRow = { kind: "row"; row: DiffRow } | { kind: "fold"; count: number; at: number };
+export type FoldedRow<T = DiffRow> =
+  | { kind: "row"; row: T }
+  | { kind: "fold"; count: number; at: number };
 
 /**
  * Hides long unchanged stretches, keeping `context` rows on either side of a
  * change so the reader sees where the change sits. Runs of at most
  * `2 * context + 1` unchanged rows are never folded — a one-row fold would
- * take more space than the row it hides.
+ * take more space than the row it hides. Works on side-by-side and unified
+ * rows alike; only `kind` is read.
  */
-export function foldUnchanged(rows: DiffRow[], context = 3): FoldedRow[] {
-  const out: FoldedRow[] = [];
+export function foldUnchanged<T extends { kind: "same" | "change" }>(
+  rows: T[],
+  context = 3,
+): FoldedRow<T>[] {
+  const out: FoldedRow<T>[] = [];
   let index = 0;
   while (index < rows.length) {
     if (rows[index].kind === "change") {

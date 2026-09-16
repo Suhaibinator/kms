@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import { parseJsonTree } from "@/components/JsonTree";
 import {
   describeChange,
+  describeLeafChange,
   describeScalarChange,
+  detectMoves,
+  fieldCounts,
   formatValuePath,
   isGoDuration,
+  isSubtreeText,
   nodeText,
   overStructuralCap,
   parseGoDurationMs,
   STRUCTURAL_MAX_BYTES,
   structuralDiff,
+  type ValueChange,
 } from "@/lib/value-diff";
 
 describe("structuralDiff", () => {
@@ -197,5 +202,216 @@ describe("describeChange", () => {
     expect(added.structural).toBeNull();
     expect(added.after).toBe('{"beta":true}');
     expect(describeChange("1", "2", "integer").kind).toBe("number");
+  });
+});
+
+describe("moved detection", () => {
+  it("merges a removed and an added leaf with the same non-trivial text into one moved change at the destination", () => {
+    const diff = structuralDiff(
+      '{"legacy_endpoint":"https://old.internal:8443/api","x":1}',
+      '{"endpoints":{"legacy":"https://old.internal:8443/api"},"x":1}',
+    );
+    expect(diff?.changes).toEqual([
+      {
+        path: ["endpoints", "legacy"],
+        kind: "moved",
+        fromPath: ["legacy_endpoint"],
+        before: '"https://old.internal:8443/api"',
+        after: '"https://old.internal:8443/api"',
+      },
+    ]);
+    expect(diff?.unchangedLeaves).toBe(1);
+    expect(fieldCounts(diff as NonNullable<typeof diff>)).toEqual({
+      added: 0,
+      removed: 0,
+      changed: 0,
+      moved: 1,
+    });
+  });
+
+  it("does not merge when the text is not unique on either side", () => {
+    expect(structuralDiff('{"a":"x1234","b":"x1234"}', '{"c":"x1234"}')?.changes).toEqual([
+      { path: ["a"], kind: "removed", before: '"x1234"' },
+      { path: ["b"], kind: "removed", before: '"x1234"' },
+      { path: ["c"], kind: "added", after: '"x1234"' },
+    ]);
+    expect(structuralDiff('{"a":"x1234"}', '{"b":"x1234","c":"x1234"}')?.changes).toEqual([
+      { path: ["a"], kind: "removed", before: '"x1234"' },
+      { path: ["b"], kind: "added", after: '"x1234"' },
+      { path: ["c"], kind: "added", after: '"x1234"' },
+    ]);
+  });
+
+  it("ignores trivial literals and pairs anything longer", () => {
+    const stays = ["true", "false", "null", "1", "42", '"ab"', "{}", "[]"];
+    for (const text of stays) {
+      const changes = structuralDiff(`{"a":${text}}`, `{"b":${text}}`)?.changes;
+      expect(
+        changes?.map((change) => change.kind),
+        text,
+      ).toEqual(["removed", "added"]);
+    }
+    for (const text of ["100", '"abc"', "1.5", '{"k":1}', "[1,2]"]) {
+      const changes = structuralDiff(`{"a":${text}}`, `{"b":${text}}`)?.changes;
+      expect(
+        changes?.map((change) => change.kind),
+        text,
+      ).toEqual(["moved"]);
+    }
+  });
+
+  it("moves a renamed subtree whole, and a wrapped one field by field", () => {
+    expect(
+      structuralDiff(
+        '{"db":{"host":"db-primary","port":5432}}',
+        '{"database":{"host":"db-primary","port":5432}}',
+      )?.changes,
+    ).toEqual([
+      {
+        path: ["database"],
+        kind: "moved",
+        fromPath: ["db"],
+        before: '{"host":"db-primary","port":5432}',
+        after: '{"host":"db-primary","port":5432}',
+      },
+    ]);
+    // `storage` is new, so it is one added subtree until its leaves are found
+    // under the removed `db`; then it splits into the fields that moved.
+    expect(
+      structuralDiff(
+        '{"db":{"host":"db-primary","port":5432}}',
+        '{"storage":{"db":{"host":"db-primary","port":5432}}}',
+      )?.changes,
+    ).toEqual([
+      {
+        path: ["storage", "db", "host"],
+        kind: "moved",
+        fromPath: ["db", "host"],
+        before: '"db-primary"',
+        after: '"db-primary"',
+      },
+      {
+        path: ["storage", "db", "port"],
+        kind: "moved",
+        fromPath: ["db", "port"],
+        before: "5432",
+        after: "5432",
+      },
+    ]);
+  });
+
+  it("splits an added subtree only down to the branches that hold a move", () => {
+    const diff = structuralDiff(
+      '{"anthropic_base_url":"https://api.anthropic.com/v1","anthropic_model":"claude-opus-5","x":1}',
+      '{"providers":{"anthropic":{"base_url":"https://api.anthropic.com/v1","model":"claude-opus-5","timeout":"30s"},"openai":{"base_url":"https://api.openai.com/v1","model":"gpt-5"}},"x":1}',
+    );
+    expect(diff?.changes).toEqual([
+      {
+        path: ["providers", "anthropic", "base_url"],
+        kind: "moved",
+        fromPath: ["anthropic_base_url"],
+        before: '"https://api.anthropic.com/v1"',
+        after: '"https://api.anthropic.com/v1"',
+      },
+      {
+        path: ["providers", "anthropic", "model"],
+        kind: "moved",
+        fromPath: ["anthropic_model"],
+        before: '"claude-opus-5"',
+        after: '"claude-opus-5"',
+      },
+      { path: ["providers", "anthropic", "timeout"], kind: "added", after: '"30s"' },
+      {
+        path: ["providers", "openai"],
+        kind: "added",
+        after: '{"base_url":"https://api.openai.com/v1","model":"gpt-5"}',
+      },
+    ]);
+  });
+
+  it("finds an element that left an array and reappeared under a key, but never a reorder", () => {
+    expect(
+      structuralDiff('{"hosts":["alpha","beta"],"x":1}', '{"hosts":["alpha"],"backup":"beta"}')
+        ?.changes,
+    ).toEqual([
+      {
+        path: ["backup"],
+        kind: "moved",
+        fromPath: ["hosts", "[1]"],
+        before: '"beta"',
+        after: '"beta"',
+      },
+      { path: ["x"], kind: "removed", before: "1" },
+    ]);
+    expect(
+      structuralDiff('["alpha","beta","gamma"]', '["beta","gamma","alpha"]')?.changes.map(
+        (change) => change.kind,
+      ),
+    ).toEqual(["changed", "changed", "changed"]);
+  });
+
+  it("leaves ambiguous lists in walk order and never touches changed leaves", () => {
+    const changes: ValueChange[] = [
+      { path: ["a"], kind: "removed", before: '"same-value"' },
+      { path: ["m"], kind: "changed", before: '"same-value"', after: '"other"' },
+      { path: ["z"], kind: "removed", before: '"same-value"' },
+      { path: ["n"], kind: "added", after: '"same-value"' },
+    ];
+    expect(detectMoves(changes)).toEqual(changes);
+    expect(isSubtreeText(' {"a":1}')).toBe(true);
+    expect(isSubtreeText("[1]")).toBe(true);
+    expect(isSubtreeText('"[1]"')).toBe(false);
+  });
+});
+
+describe("describeLeafChange", () => {
+  it("types a leaf from its JSON token and reuses the scalar deltas", () => {
+    expect(describeLeafChange("50", "5")).toEqual({
+      kind: "number",
+      before: "50",
+      after: "5",
+      delta: "−45",
+      percent: "−90 %",
+    });
+    expect(describeLeafChange("0.5", "0.75")).toMatchObject({ kind: "number", delta: "+0.25" });
+    expect(describeLeafChange('"30s"', '"5s"')).toEqual({
+      kind: "duration",
+      before: "30s",
+      after: "5s",
+      ratio: "×0.17",
+    });
+    expect(describeLeafChange('"db-primary"', '"db-replica"')).toEqual({
+      kind: "string",
+      before: "db-primary",
+      after: "db-replica",
+      common: { prefix: 3, suffix: 0 },
+      long: false,
+    });
+    expect(describeLeafChange("true", "false")).toEqual({
+      kind: "boolean",
+      before: "true",
+      after: "false",
+    });
+    expect(describeLeafChange(undefined, "true")).toEqual({
+      kind: "boolean",
+      before: undefined,
+      after: "true",
+    });
+  });
+
+  it("reports null, mixed kinds and subtrees without a delta", () => {
+    expect(describeLeafChange("null", "null")).toMatchObject({ kind: "null" });
+    expect(describeLeafChange("1", "null")).toMatchObject({
+      kind: "mixed",
+      before: "1",
+      after: "null",
+    });
+    expect(describeLeafChange('"30"', "30")).toMatchObject({ kind: "mixed" });
+    expect(describeLeafChange('{"a":1}', undefined)).toMatchObject({
+      kind: "subtree",
+      before: '{"a":1}',
+    });
+    expect(describeLeafChange('{"a":1}', "[1]")).toMatchObject({ kind: "subtree" });
+    expect(describeLeafChange("not json", "1")).toMatchObject({ kind: "mixed" });
   });
 });
