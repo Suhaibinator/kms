@@ -9,13 +9,8 @@ import { formatRelative, formatUnixMs } from "@/lib/format";
 import { matchRanges } from "@/lib/fuzzy";
 import { type DiffRowModel, reasonLabel } from "@/lib/release-diff";
 import type { ReleaseDiffPin, ReleaseEntryKind } from "@/lib/types";
-import {
-  hasBody,
-  ValueChangeBody,
-  ValueChangeInline,
-  ValuePre,
-  type ValueViewMode,
-} from "./ValueChange";
+import type { DiffMode } from "./useDiffMode";
+import { hasBody, ValueChangeBody, ValueChangeInline, ValuePre } from "./ValueChange";
 
 const CHANGE_BADGE: Record<DiffRowModel["change"], BadgeKind> = {
   changed: "accent",
@@ -50,8 +45,8 @@ export interface ReleaseDiffRowProps {
   onToggle: () => void;
   beforeLabel: string;
   afterLabel: string;
-  mode: ValueViewMode;
-  onModeChange: (mode: ValueViewMode) => void;
+  /** The page's value view (Fields / Unified / Split). */
+  mode: DiffMode;
   now: number;
   compact?: boolean;
   /** Prod-vs-staging: a parameter's version number is expected to differ, so "pin only" is not a change reason worth a badge. */
@@ -77,7 +72,6 @@ export function ReleaseDiffRow({
   beforeLabel,
   afterLabel,
   mode,
-  onModeChange,
   now,
   compact,
   crossEnvironment,
@@ -145,8 +139,11 @@ export function ReleaseDiffRow({
             />
           </div>
           <div className="release-diff-row-aside">
-            <Badge kind={CHANGE_BADGE[row.change]}>{row.change}</Badge>
-            {model.contentType && row.kind === "parameter" ? (
+            {/* Rows with field chips say what happened in the middle column;
+                a `changed` badge beside `−21 ~3` would repeat it. Whole-
+                parameter add/remove keeps its badge. */}
+            {model.fields ? null : <Badge kind={CHANGE_BADGE[row.change]}>{row.change}</Badge>}
+            {model.contentType && model.contentType !== "json" && row.kind === "parameter" ? (
               <Badge kind="neutral">{model.contentType}</Badge>
             ) : null}
             {extraReasons.map((reason) => (
@@ -241,7 +238,6 @@ export function ReleaseDiffRow({
                 beforeLabel={beforeLabel}
                 afterLabel={afterLabel}
                 mode={mode}
-                onModeChange={onModeChange}
                 compact={compact}
               />
             )}

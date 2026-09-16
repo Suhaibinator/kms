@@ -2208,6 +2208,10 @@
   .json-diff-col-num {
     width: calc(4ch + 2 * var(--space-2));
   }
+  /* Unified layout: one sign glyph plus the cell's inline padding. */
+  .json-diff-col-sign {
+    width: calc(1.5ch + 2 * var(--space-1));
+  }
   .json-diff-num {
     padding: 0 var(--space-2);
     color: var(--syntax-line-no);
@@ -2243,6 +2247,26 @@
   .json-diff-num[data-op="empty"],
   .json-diff-text[data-op="empty"] {
     background: var(--surface-2);
+  }
+  /* Unified layout: the sign cell is the rail, so the text cell drops its
+     inset shadow and the line tints edge to edge across all four cells. */
+  .json-diff-sign {
+    padding: 0 var(--space-1);
+    text-align: center;
+    user-select: none;
+    vertical-align: top;
+    font-weight: 600;
+  }
+  .json-diff-sign[data-op="del"] {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .json-diff-sign[data-op="add"] {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .json-diff-table[data-layout="unified"] .json-diff-text[data-op] {
+    box-shadow: none;
   }
   .json-diff-text .json-line {
     display: inline;

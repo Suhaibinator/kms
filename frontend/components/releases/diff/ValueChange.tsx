@@ -1,133 +1,55 @@
-import { useEffect, useState } from "react";
 import { Ident } from "@/components/Ident";
 import { JsonDiff } from "@/components/JsonDiff";
 import { JsonLine } from "@/components/JsonHighlight";
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { Badge, SecretStateBadge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { formatJson } from "@/lib/json-text";
 import { type DiffRowModel, elide } from "@/lib/release-diff";
 import type { ReleaseDiffPin } from "@/lib/types";
 import { formatBytes } from "@/lib/validation";
-import { formatValuePath, type ScalarChange, type ValueChangeDescription } from "@/lib/value-diff";
-import { StructuralDiff } from "./StructuralDiff";
+import type { FieldCounts, ValueChangeDescription } from "@/lib/value-diff";
+import { FieldDiff } from "./FieldDiff";
+import { Arrow, Missing, ScalarInline, Token } from "./tokens";
+import type { DiffMode } from "./useDiffMode";
 
-export type ValueViewMode = "structural" | "side";
-const MODE_KEY = "kms-release-diff-mode";
+const CHIPS: ReadonlyArray<{
+  kind: keyof FieldCounts;
+  glyph: string;
+  tone: "added" | "removed" | "changed" | "moved";
+}> = [
+  { kind: "added", glyph: "+", tone: "added" },
+  { kind: "removed", glyph: "−", tone: "removed" },
+  { kind: "changed", glyph: "~", tone: "changed" },
+  { kind: "moved", glyph: "↷", tone: "moved" },
+];
 
-/** The structural / side-by-side choice persists per browser; a broken store falls back to structural. */
-export function useValueViewMode(): [ValueViewMode, (mode: ValueViewMode) => void] {
-  const [mode, setMode] = useState<ValueViewMode>("structural");
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(MODE_KEY);
-      if (stored === "side" || stored === "structural") setMode(stored);
-    } catch {
-      // Private mode or blocked storage: keep the default.
-    }
-  }, []);
-  const update = (next: ValueViewMode) => {
-    setMode(next);
-    try {
-      window.localStorage.setItem(MODE_KEY, next);
-    } catch {
-      // Same: the choice just does not persist.
-    }
-  };
-  return [mode, update];
-}
-
-const Arrow = () => (
-  <span className="release-diff-arrow" aria-hidden>
-    →
-  </span>
-);
-const Missing = () => <span className="release-diff-missing">—</span>;
-
-function Token({ text, op, className }: { text: string; op: "del" | "add"; className?: string }) {
+/** `+3 −21 ~1 ↷2` as tinted pills; zero kinds are omitted. */
+function FieldChips({ counts }: { counts: FieldCounts }) {
   return (
-    <span
-      className={`${op === "del" ? "release-diff-old" : "release-diff-new"} ${className ?? ""}`}
-    >
-      {text}
+    <span className="release-diff-chips">
+      {CHIPS.filter((chip) => counts[chip.kind] > 0).map((chip) => (
+        <span
+          key={chip.kind}
+          className="release-diff-chip"
+          data-tone={chip.tone}
+          title={`${counts[chip.kind]} ${counts[chip.kind] === 1 ? "field" : "fields"} ${chip.kind}`}
+        >
+          {chip.glyph}
+          {counts[chip.kind]}
+        </span>
+      ))}
     </span>
-  );
-}
-
-/** A short string with the shared ends dimmed and the differing span marked. */
-function StringToken({
-  text,
-  op,
-  common,
-}: {
-  text: string;
-  op: "del" | "add";
-  common: { prefix: number; suffix: number } | null;
-}) {
-  if (!common || (common.prefix === 0 && common.suffix === 0)) {
-    return <Token text={JSON.stringify(text)} op={op} className="tok-string" />;
-  }
-  const head = text.slice(0, common.prefix);
-  const mid = text.slice(common.prefix, text.length - common.suffix);
-  const tail = text.slice(text.length - common.suffix);
-  return (
-    <span className={`${op === "del" ? "release-diff-old" : "release-diff-new"} tok-string`}>
-      "<span className="release-diff-str-common">{head}</span>
-      <span className="release-diff-str-diff">{mid}</span>
-      <span className="release-diff-str-common">{tail}</span>"
-    </span>
-  );
-}
-
-function ScalarInline({ change }: { change: ScalarChange }) {
-  if (change.kind === "binary") {
-    const l = change.beforeBytes === undefined ? undefined : formatBytes(change.beforeBytes);
-    const r = change.afterBytes === undefined ? undefined : formatBytes(change.afterBytes);
-    return (
-      <>
-        {l ? <Token text={l} op="del" /> : <Missing />}
-        <Arrow />
-        {r ? <Token text={r} op="add" /> : <Missing />}
-      </>
-    );
-  }
-  const tokenClass =
-    change.kind === "boolean" ? "tok-boolean" : change.kind === "number" ? "tok-number" : "";
-  const before = change.before;
-  const after = change.after;
-  const side = (text: string | undefined, op: "del" | "add") => {
-    if (text === undefined) return <Missing />;
-    if (change.kind === "string") {
-      return change.long ? (
-        <Token text={elide(text.replace(/\s+/g, " "), 60)} op={op} className="tok-string" />
-      ) : (
-        <StringToken text={text} op={op} common={change.common} />
-      );
-    }
-    return <Token text={text} op={op} className={tokenClass} />;
-  };
-  const delta =
-    change.kind === "number" && change.delta
-      ? `(${change.delta}${change.percent ? `, ${change.percent}` : ""})`
-      : change.kind === "duration" && change.ratio
-        ? `(${change.ratio})`
-        : null;
-  return (
-    <>
-      {side(before, "del")}
-      <Arrow />
-      {side(after, "add")}
-      {delta ? <span className="release-diff-delta">{delta}</span> : null}
-    </>
   );
 }
 
 function JsonInline({
   description,
+  fields,
 }: {
   description: Extract<ValueChangeDescription, { kind: "json" }>;
+  fields: FieldCounts | null;
 }) {
   if (description.before === undefined || description.after === undefined) {
     const text = description.before ?? description.after ?? "";
@@ -145,11 +67,11 @@ function JsonInline({
     );
   }
   const structural = description.structural;
-  if (!structural) {
+  if (!structural || !fields) {
     return (
       <span className="faint">
         {description.oversize
-          ? "Too large to compare structurally; open side-by-side"
+          ? "Too large to compare structurally; open the line diff"
           : description.invalid
             ? "Stored value is not valid JSON on one side"
             : "Changed"}
@@ -157,26 +79,7 @@ function JsonInline({
     );
   }
   if (structural.changes.length === 0) return <span className="faint">No leaf differences</span>;
-  const shown = structural.changes.slice(0, 2);
-  const rest = structural.changes.length - shown.length;
-  return (
-    <>
-      {shown.map((change, index) => (
-        <span key={formatValuePath(change.path)} className="release-diff-leaf-values">
-          {index > 0 ? <span className="faint">,</span> : null}
-          <span className="tok-key">{formatValuePath(change.path) || "(root)"}</span>
-          {change.before !== undefined ? <Token text={elide(change.before, 40)} op="del" /> : null}
-          {change.before !== undefined && change.after !== undefined ? <Arrow /> : null}
-          {change.after !== undefined ? <Token text={elide(change.after, 40)} op="add" /> : null}
-        </span>
-      ))}
-      {rest > 0 ? (
-        <span className="faint">
-          , +{rest} more{structural.truncated ? "+" : ""}
-        </span>
-      ) : null}
-    </>
-  );
+  return <FieldChips counts={fields} />;
 }
 
 function SecretSide({ pin }: { pin: ReleaseDiffPin | undefined }) {
@@ -224,7 +127,7 @@ export function ValueChangeInline({
   }
   if (description) {
     return description.kind === "json" ? (
-      <JsonInline description={description} />
+      <JsonInline description={description} fields={model.fields} />
     ) : (
       <ScalarInline change={description} />
     );
@@ -314,25 +217,28 @@ export function hasBody(model: DiffRowModel): boolean {
   return false;
 }
 
-/** The expanded body: structural leaves or side-by-side lines for JSON, a line diff for long strings, one value for one-sided rows. */
+/**
+ * The expanded body: the field list or a line diff for JSON (per the page's
+ * value view), a line diff for long strings, one value for one-sided rows.
+ */
 export function ValueChangeBody({
   model,
   beforeLabel,
   afterLabel,
   mode,
-  onModeChange,
   compact,
 }: {
   model: DiffRowModel;
   beforeLabel: string;
   afterLabel: string;
-  mode: ValueViewMode;
-  onModeChange: (mode: ValueViewMode) => void;
+  mode: DiffMode;
   compact?: boolean;
 }) {
   const { description } = model;
   if (!description || description.kind === "binary") return null;
   const maxHeight = compact ? "40vh" : "60vh";
+  // The field list has no line layout; when it is not available, Fields reads as Unified.
+  const layout = mode === "split" ? "split" : "unified";
   if (description.kind === "json") {
     if (description.before === undefined || description.after === undefined) {
       const text = description.before ?? description.after ?? "";
@@ -345,46 +251,28 @@ export function ValueChangeBody({
       );
     }
     const structural = description.structural;
-    const canStructural = structural !== null;
-    const effective: ValueViewMode = canStructural ? mode : "side";
+    if (mode === "fields" && structural) {
+      return <FieldDiff alias={model.alias} structural={structural} />;
+    }
     return (
       <>
-        <div className="release-diff-mode">
-          {canStructural ? (
-            <Tabs
-              value={effective}
-              onValueChange={(value) => onModeChange(value === "side" ? "side" : "structural")}
-            >
-              <TabsList variant="line" aria-label="Value comparison mode">
-                <TabsTrigger value="structural">Structural</TabsTrigger>
-                <TabsTrigger value="side">
-                  {/* The ≤768px tab reset allows wrapping; the label breaks at its
-                      hyphens in a 360px row body without its own nowrap. */}
-                  <span className="whitespace-nowrap">Side-by-side</span>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          ) : (
-            <span className="info-panel">
-              {description.oversize
-                ? "Too large to compare structurally."
-                : "Stored value is not valid JSON on one side."}
-            </span>
-          )}
-        </div>
-        {effective === "structural" && structural ? (
-          <StructuralDiff structural={structural} />
-        ) : (
-          <JsonDiff
-            before={description.before}
-            after={description.after}
-            beforeLabel={beforeLabel}
-            afterLabel={afterLabel}
-            contentType={description.invalid ? undefined : "json"}
-            fold
-            maxHeight={maxHeight}
-          />
-        )}
+        {mode === "fields" ? (
+          <span className="info-panel">
+            {description.oversize
+              ? "Too large to compare structurally."
+              : "Stored value is not valid JSON on one side."}
+          </span>
+        ) : null}
+        <JsonDiff
+          before={description.before}
+          after={description.after}
+          beforeLabel={beforeLabel}
+          afterLabel={afterLabel}
+          contentType={description.invalid ? undefined : "json"}
+          layout={layout}
+          fold
+          maxHeight={maxHeight}
+        />
       </>
     );
   }
@@ -405,6 +293,7 @@ export function ValueChangeBody({
         after={description.after}
         beforeLabel={beforeLabel}
         afterLabel={afterLabel}
+        layout={layout}
         fold
         maxHeight={maxHeight}
       />

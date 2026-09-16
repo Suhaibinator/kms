@@ -25,32 +25,57 @@
     display: none;
   }
 
-  /* ---------- Summary strip ---------- */
-  .release-diff-strip .stat-label {
+  /* ---------- Verdict band (ReleaseDiffVerdict.tsx) ---------- */
+  /* One wrapping line of facts. The `·` between facts is a pseudo-element so
+     each span's text stays exactly the fact (tests and the clipboard read
+     textContent). Facts that say "nothing happened" are faint and light;
+     the rest carry weight and their tone. */
+  .release-diff-verdict {
     display: flex;
-    align-items: center;
-    gap: var(--space-1);
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-2);
+    margin: 0;
+    padding: var(--space-2) 0;
+    border-block: 1px solid var(--border);
+    font-size: var(--text-sm);
+    color: var(--text);
   }
-  .release-diff-stat-dot {
-    flex: 0 0 auto;
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: var(--tone, var(--text-faint));
+  .release-diff-verdict > * {
+    min-width: 0;
   }
-  .release-diff-stat-dot[data-tone="changed"] {
-    --tone: var(--warning);
+  .release-diff-verdict-fact {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
-  .release-diff-stat-dot[data-tone="added"] {
-    --tone: var(--success);
-  }
-  .release-diff-stat-dot[data-tone="removed"] {
-    --tone: var(--danger);
-  }
-  .release-diff-strip .stat-sub {
-    margin-top: var(--space-0-5);
-    font-size: var(--stat-sub);
+  .release-diff-verdict-fact[data-zero] {
+    font-weight: 400;
     color: var(--text-faint);
+  }
+  .release-diff-verdict-fact + .release-diff-verdict-fact::before {
+    content: "·";
+    margin-inline-end: var(--space-2);
+    color: var(--text-faint);
+    font-weight: 400;
+  }
+  .release-diff-verdict-fact[data-tone="added"],
+  .release-diff-verdict-fact[data-tone="success"] {
+    color: var(--success);
+  }
+  .release-diff-verdict-fact[data-tone="removed"],
+  .release-diff-verdict-fact[data-tone="danger"] {
+    color: var(--danger);
+  }
+  .release-diff-verdict-fact[data-tone="changed"] {
+    color: var(--primary);
+  }
+  .release-diff-verdict-fact[data-tone="warning"] {
+    color: var(--warning-fg);
+  }
+  /* Inside a dialog the band sits between the dialog's own rules. */
+  .release-diff-compact .release-diff-verdict {
+    padding-block: var(--space-1);
+    border-block: 0;
   }
 
   /* ---------- Toolbar ---------- */
@@ -71,13 +96,6 @@
     align-items: center;
     gap: var(--space-3);
     min-height: var(--control-h-sm);
-  }
-  /* Expand all / Collapse all travel as one unit when the toolbar wraps. */
-  .release-diff-expand {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    white-space: nowrap;
   }
   .release-diff-toggle-row {
     display: inline-flex;
@@ -259,6 +277,38 @@
   .release-diff-new {
     background: var(--success-soft);
   }
+  /* Field-count chips in the head of a JSON row (`+3 −21 ~1 ↷2`): soft
+     pills in the same tints the field lines use, not the filled Badge. */
+  .release-diff-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .release-diff-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.25rem;
+    padding-inline: var(--space-1);
+    border-radius: 999px;
+    background: var(--chip-bg, var(--surface-2));
+    font-family: var(--mono);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--chip-fg, var(--text-muted));
+  }
+  .release-diff-chip[data-tone="added"] {
+    --chip-bg: var(--success-soft);
+    --chip-fg: var(--success);
+  }
+  .release-diff-chip[data-tone="removed"] {
+    --chip-bg: var(--danger-soft);
+    --chip-fg: var(--danger);
+  }
+  .release-diff-chip[data-tone="changed"] {
+    --chip-bg: var(--accent-soft);
+    --chip-fg: var(--primary);
+  }
   .release-diff-delta {
     font-size: var(--text-xs);
     color: var(--text-muted);
@@ -289,41 +339,119 @@
   .release-diff-mode > * {
     min-width: 0;
   }
-  .release-diff-leaves {
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  /* ---------- Field list (FieldDiff.tsx) ---------- */
+  .release-diff-fields {
+    display: grid;
+    min-width: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-elev);
+    overflow: hidden;
+  }
+  .release-diff-field-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
     font-family: var(--mono);
     font-size: var(--text-sm);
     line-height: 1.55;
   }
-  .release-diff-leaf {
+  /* One field: glyph · path · value(s). A subtree renders one gutter span and
+     one code span per pretty line; with the path pinned to row 1 and every
+     gutter/code span given its column, auto-placement stacks the lines so
+     column 1 reads `+ + +` down the block. The row is tinted by kind and the
+     glyph colour comes from one custom property. */
+  .release-diff-field {
     display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-    gap: var(--space-2);
-    padding: 0 var(--space-3);
+    grid-template-columns: 1.5ch minmax(0, 2fr) minmax(0, 3fr); /* 1.5ch: one glyph wide */
+    column-gap: var(--space-2);
+    padding: 0 var(--space-3) 0 var(--space-2);
     overflow-wrap: anywhere;
   }
-  .release-diff-leaf > * {
+  .release-diff-field > * {
     min-width: 0;
   }
-  .release-diff-leaf + .release-diff-leaf {
+  .release-diff-field + .release-diff-field {
     border-top: 1px solid var(--border);
   }
-  .release-diff-leaf-path {
+  /* Row tints only on lines that show one side (added / removed): a changed
+     line's old and new tokens carry their own tints, and a tint under them
+     muddied both. The inline tokens inside an added/removed line double up
+     on the row's wash; acceptable, since they are the same hue. */
+  .release-diff-field[data-change="added"] {
+    --gutter: var(--success);
+    background: var(--success-soft);
+  }
+  .release-diff-field[data-change="removed"] {
+    --gutter: var(--danger);
+    background: var(--danger-soft);
+  }
+  .release-diff-field[data-change="changed"] {
+    --gutter: var(--primary);
+  }
+  .release-diff-field[data-change="moved"] {
+    --gutter: var(--text-muted);
+  }
+  .release-diff-field-gutter {
+    grid-column: 1;
+    text-align: center;
+    user-select: none;
+    font-weight: 600;
+    color: var(--gutter, var(--text-faint));
+  }
+  .release-diff-field-path {
+    grid-column: 2;
+    grid-row: 1;
     color: var(--syntax-key);
   }
-  .release-diff-leaf-values {
+  .release-diff-field-values {
+    grid-column: 3;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-1) var(--space-2);
     white-space: pre-wrap;
   }
+  .release-diff-field-code {
+    grid-column: 3;
+    white-space: pre-wrap;
+  }
+  /* A kind-mismatch prints the old block then the new one inside a row that
+     has no wash of its own; each line brings its side's tint. */
+  .release-diff-field-code[data-op="del"] {
+    background: var(--danger-soft);
+  }
+  .release-diff-field-code[data-op="add"] {
+    background: var(--success-soft);
+  }
+  .release-diff-field-code .json-line {
+    display: inline;
+    min-height: 0;
+  }
+  /* A moved value is neither old nor new: one neutral tint, shown once. */
+  .release-diff-moved {
+    border-radius: var(--radius-sm);
+    padding-inline: var(--space-0-5);
+    background: var(--surface-2);
+  }
+  .release-diff-fold-button {
+    display: block;
+    width: 100%;
+    padding: var(--space-1) var(--space-3);
+    border: 0;
+    border-top: 1px solid var(--border);
+    background: none;
+    font-family: var(--sans);
+    font-size: var(--text-xs);
+    color: var(--primary);
+    text-align: center;
+    cursor: pointer;
+  }
+  .release-diff-fold-button:hover {
+    background: var(--surface-hover);
+  }
   .release-diff-fold {
+    margin: 0;
     padding: var(--space-1) var(--space-3);
     border-top: 1px solid var(--border);
     background: var(--surface-2);
@@ -354,11 +482,6 @@
   }
   .release-diff-pre[data-op="add"] {
     box-shadow: inset 2px 0 0 var(--success);
-  }
-  .release-diff-sides {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3);
   }
   .release-diff-side-label {
     display: block;
@@ -411,13 +534,18 @@
     .release-diff-row-aside {
       justify-content: flex-start;
     }
-    .release-diff-leaf {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 0;
+    /* Glyph column stays; path above, values below. A subtree's path spans
+       both columns so its first code line keeps its own glyph in column 1. */
+    .release-diff-field {
+      grid-template-columns: 1.5ch minmax(0, 1fr); /* 1.5ch: one glyph wide */
       padding-block: var(--space-1);
     }
-    .release-diff-sides {
-      grid-template-columns: minmax(0, 1fr);
+    .release-diff-field-values,
+    .release-diff-field-code {
+      grid-column: 2;
+    }
+    .release-diff-field[data-subtree] .release-diff-field-path {
+      grid-column: 1 / -1;
     }
     .release-diff-actions {
       margin-left: 0;
