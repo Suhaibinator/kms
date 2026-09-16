@@ -4,7 +4,7 @@
 // parent selector, and pipeline row actions overflowing their column. Each
 // assertion is a measurement, not a screenshot, so it fails on the cause.
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { incidentState, mockConsole } from "./fakes/console-api";
+import { incidentState, mockConsole, withFeaturesJson } from "./fakes/console-api";
 
 const box = async (locator: Locator) => {
   const rect = await locator.boundingBox();
@@ -153,53 +153,23 @@ test("fleet card environment names and release chips are never ellipsised at 128
   }
 });
 
-// The release comparison's rows expand to nested content (a structural leaf
-// list or the side-by-side JSON diff). Each head is a touch target, and a
-// 60-line JSON value must scroll inside its own pane, never widen the row,
-// the page or, at phone width, the document.
+// The release comparison's changed rows open to nested content (a field list
+// or the whole-value JSON diff, unified or split). Each head is a touch
+// target, and a 24-host JSON value must scroll inside its own pane, never
+// widen the row, the page or, at phone width, the document. The field list
+// keeps its gutter to a glyph and stacks path over values on a phone.
 test("release comparison rows keep a 44px head and never scroll sideways with JSON expanded", async ({
   page,
 }) => {
   await desktop(page);
-  const state = incidentState();
-  const prod = state.namespaces.prod;
-  const json = (max: number) =>
-    JSON.stringify(
-      {
-        pool: { max, idle: 10, timeout: "30s" },
-        hosts: Array.from({ length: 24 }, (_, i) => ({
-          name: `db-${i}.internal.example.com`,
-          port: 5432 + i,
-          weight: i % 3,
-        })),
-        features: { read_replicas: max > 10, sharding: false },
-      },
-      null,
-      2,
-    );
-  prod.parameters.features = {
-    key: "features",
-    content_type: "json",
-    versions: [json(50), json(5)],
-  };
-  for (const release of prod.releases) {
-    release.entries.push({
-      alias: "features",
-      kind: "parameter",
-      ref: { namespace: { env: "prod", app: "gradethis" }, key: "features" },
-      version: release.version >= 2 ? 2 : 1,
-      content_type: "json",
-      metadata_json: "{}",
-      parameter_digest: "",
-    });
-  }
-  await mockConsole(page, state);
+  await mockConsole(page, withFeaturesJson(incidentState()));
   await page.goto(
     "/releases/compare?app=gradethis&env=prod&name=runtime&schema_version=1&from=1&to=2",
   );
   const features = page.locator('[data-testid="release-diff-row"][data-alias="features"]');
   await expect(features).toBeVisible();
   const main = page.locator("main");
+  const views = page.getByRole("tablist", { name: "Value view" });
 
   const check = async (label: string) => {
     for (const head of await page.locator(".release-diff-row-head").all()) {
@@ -226,16 +196,39 @@ test("release comparison rows keep a 44px head and never scroll sideways with JS
 
   for (const width of [1280, 400]) {
     await page.setViewportSize({ width, height: 900 });
-    await check(`${width} collapsed`);
+    // Changed rows open by default; only expand when something closed it.
     if (!(await features.getByRole("button", { name: "Collapse features" }).isVisible())) {
       await features.getByRole("button", { name: "Expand features" }).click();
     }
-    await expect(features.getByTestId("release-diff-structural")).toBeVisible();
-    await check(`${width} structural`);
-    await features.getByRole("tab", { name: "Side-by-side" }).click();
-    await expect(features.getByTestId("json-diff")).toBeVisible();
-    await check(`${width} side-by-side`);
-    await features.getByRole("tab", { name: "Structural" }).click();
+    await views.getByRole("tab", { name: "Fields" }).click();
+    const fields = features.getByTestId("release-diff-fields");
+    await expect(fields).toBeVisible();
+    await check(`${width} fields`);
+    const line = fields.locator(".release-diff-field").first();
+    const gutter = await box(line.locator(".release-diff-field-gutter"));
+    const path = await box(line.locator(".release-diff-field-path"));
+    const values = await box(line.locator(".release-diff-field-values"));
+    if (width === 1280) {
+      // The gutter is one glyph wide: the path column starts right after it.
+      expect(gutter.width, `${width}: field gutter width`).toBeLessThanOrEqual(24);
+      expect(path.x, `${width}: path beside gutter`).toBeGreaterThanOrEqual(
+        gutter.x + gutter.width,
+      );
+    } else {
+      // On a phone the values wrap under the path instead of squeezing beside it.
+      expect(values.y, `${width}: values stacked under path`).toBeGreaterThanOrEqual(
+        path.y + path.height - 0.5,
+      );
+    }
+    await views.getByRole("tab", { name: "Unified" }).click();
+    const jsonDiff = features.getByTestId("json-diff");
+    await expect(jsonDiff).toHaveAttribute("data-layout", "unified");
+    await check(`${width} unified`);
+    await views.getByRole("tab", { name: "Split" }).click();
+    await expect(jsonDiff).toHaveAttribute("data-layout", "split");
+    await check(`${width} split`);
+    await views.getByRole("tab", { name: "Fields" }).click();
+    await expect(fields).toBeVisible();
   }
 });
 

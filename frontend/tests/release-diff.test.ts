@@ -22,7 +22,13 @@ import type {
   ReleaseDiffRow,
   ReleaseDiffSide,
 } from "@/lib/types";
-import { describeChange, structuralDiff } from "@/lib/value-diff";
+import { describeChange, fieldCounts, structuralDiff } from "@/lib/value-diff";
+import {
+  FEATURES_AFTER,
+  FEATURES_BEFORE,
+  FEATURES_EXPECTED,
+  FEATURES_FIELD_TOTAL,
+} from "./fixtures/release-diff-json";
 
 const ns = { env: "prod", app: "gradethis" };
 
@@ -482,5 +488,32 @@ describe("rolloutSentence", () => {
       rolloutSentence(rollout({ total: 5, applied_current: 3, pending: 1, rejected: 1 })),
     ).toBe("applied on 3 of 5 instances, 1 pending, 1 rejected");
     expect(rolloutTone(rollout({ total: 5, applied_current: 3, rejected: 1 }))).toBe("danger");
+  });
+});
+
+// The shared JSON fixture (vitest view tests and the Playwright fake) pins its
+// counts here so a change to the fixture surfaces before an e2e run does.
+describe("features fixture", () => {
+  it("diffs to exactly the counts it exports", () => {
+    const diff = structuralDiff(FEATURES_BEFORE, FEATURES_AFTER);
+    if (!diff) throw new Error("fixture is not valid JSON on one side");
+    expect(diff.truncated).toBe(false);
+    expect(fieldCounts(diff)).toEqual(FEATURES_EXPECTED);
+    expect(diff.changes).toHaveLength(FEATURES_FIELD_TOTAL);
+    const moved = diff.changes.filter((change) => change.kind === "moved");
+    expect(moved).toEqual([
+      {
+        kind: "moved",
+        path: ["endpoints", "legacy"],
+        fromPath: ["legacy_endpoint"],
+        before: '"https://old.internal:8443/api"',
+        after: '"https://old.internal:8443/api"',
+      },
+    ]);
+    const added = diff.changes.filter((change) => change.kind === "added");
+    expect(added.map((change) => change.path)).toEqual([["tls"]]);
+    expect(fieldLines(diff)).toContain(
+      '↷ legacy_endpoint → endpoints.legacy   "https://old.internal:8443/api"',
+    );
   });
 });

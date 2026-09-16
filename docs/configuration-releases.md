@@ -483,21 +483,39 @@ renders readiness state and never recomputes it.
   change as "changed meanwhile", and applies production type-to-confirm.
 - **Compare releases** (`/releases/compare`). One page answers "what changed
   between these two releases" from a single server read
-  ([Release diff](http-api.md#release-diff)). A counts strip shows added,
-  removed, changed, and unchanged aliases plus the number of secrets that
-  moved and the rows that need attention. Rows are grouped with *Needs
-  attention* first (a kind or content-type change, a secret that is not
-  enabled, a value the operator may not read), then secrets, then changed,
-  added, removed, and unchanged; each row shows the old and new value side by
-  side with the author of each pinned version. JSON values get a structural
-  leaf-by-leaf diff (`database.pool.max 50 → 5`) rather than a text diff.
-  Secrets are compared by pinned version and metadata only (state, bound,
-  expiry); the response has no field that can carry a secret value. The page
-  is reachable from the environment page's Release section and More menu,
-  the releases list and the release workspace, the Ship modal's success step,
-  the Rollback dialog (which shows the same summary inline), activation and
-  rollback audit rows, and the command palette ("What changed in env/app").
-  The URL is
+  ([Release diff](http-api.md#release-diff)). A verdict line reads as one
+  sentence: how many entries changed, were added or removed; how many JSON
+  fields were touched, with `+` added, `−` removed, `~` changed and `↷` moved
+  counts; whether any secret was repinned; whether the schema track is the
+  same; and the rollout in words (`applied on 2 of 3 instances, 1 rejected`,
+  or `not yet applied (no instances subscribed)` when no instance subscribes
+  to the track). Zero facts are shown faint rather than dropped. Rows are
+  grouped with *Needs attention* first (a kind or content-type change, a
+  secret that is not enabled, a value the operator may not read), then
+  secrets, then changed, added, removed, and unchanged; each row shows the
+  author of each pinned version, and a scalar parameter shows its old and new
+  value inline with the delta (`7 → 12 (+5, +71 %)`). A changed JSON
+  parameter opens by default to a field plan, one line per field: `+` added
+  and `−` removed leaves show the value with the gutter saying which side;
+  `~` changed leaves carry typed deltas (a number's difference and percent, a
+  Go duration's ratio, a string's differing span); `↷` moved marks a value
+  that reappears under another key, including inside a new object
+  (`legacy_endpoint → endpoints.legacy`). Added or removed objects print in
+  full, one gutter glyph per line. Twelve fields are listed, then *Show all N
+  fields*; unchanged fields are counted, never listed, and the head carries
+  the same counts as chips. The toolbar's *Fields* / *Unified* / *Split*
+  tabs choose how every JSON value is read: the field plan, a unified line
+  diff with old and new line numbers and a sign rail, or the two panes side
+  by side. The choice is remembered per browser, not in the URL. Secrets are
+  compared by pinned version and metadata only (state, bound, expiry); the
+  response has no field that can carry a secret value. *Copy as text* pastes
+  the verdict header, one padded line per changed alias, and under a JSON
+  alias the field lines, uncapped, for an incident channel or a postmortem.
+  The page is reachable from the environment page's Release section and More
+  menu, the releases list and the release workspace, the Ship modal's success
+  step, the Rollback dialog (which shows the same summary inline), activation
+  and rollback audit rows, and the command palette ("What changed in
+  env/app"). The URL is
   `/releases/compare?app&env&name&schema_version&from&to[&to_env]`, where
   `from` and `to` are version numbers or the labels `current` / `previous`,
   so a link can be built from an activation alone; the page resolves labels

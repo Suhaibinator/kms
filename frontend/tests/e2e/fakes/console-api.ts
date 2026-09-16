@@ -36,6 +36,7 @@ import type {
   ValidateReleaseResponse,
 } from "../../../lib/types";
 import incidentJson from "../../fixtures/backend/overview-incident.json";
+import { FEATURES_AFTER, FEATURES_BEFORE } from "../../fixtures/release-diff-json";
 
 export interface FakeParameter {
   key: string;
@@ -492,6 +493,34 @@ export function incidentState(): ConsoleState {
     state.revision = Math.max(state.revision, ns.activationRevision);
   }
   state.identities = seedIdentities(state);
+  return state;
+}
+
+/**
+ * Adds a `features` JSON parameter to `env` with two versions (the shared
+ * `release-diff-json` fixture) and pins v1 in release 1 and v2 in every later
+ * release, so `GET /releases/diff` from 1 to 2 reports it as `changed` with
+ * both values present: the row the compare specs open to its field list.
+ */
+export function withFeaturesJson(state: ConsoleState, env = "prod"): ConsoleState {
+  const ns = state.namespaces[env];
+  if (!ns) throw new Error(`withFeaturesJson: no namespace ${env}`);
+  ns.parameters.features = {
+    key: "features",
+    content_type: "json",
+    versions: [FEATURES_BEFORE, FEATURES_AFTER],
+  };
+  for (const release of ns.releases) {
+    release.entries.push({
+      alias: "features",
+      kind: "parameter",
+      ref: { namespace: { ...ns.namespace }, key: "features" },
+      version: release.version >= 2 ? 2 : 1,
+      content_type: "json",
+      metadata_json: "{}",
+      parameter_digest: "",
+    });
+  }
   return state;
 }
 

@@ -464,3 +464,6 @@ Follow-ups (not in this pass):
 - F2: `x-kms-reload: "restart"` schema annotation emitted by `kms-config-gen` from the `reload=restart` tag, consumed by `flags` in `lib/release-diff.ts` (the `flags` slot and the "restart" badge rendering ship now, dormant).
 - F3: CLI `release diff --values` reusing the core function.
 - F4: side-by-side JSON diff with array LCS alignment (today index-aligned in structural mode, line-LCS in side-by-side).
+- F5: ship writes `{release_name, release_version, reason}` into the parameter version's `metadata_json` (today `"{}"`, `internal/core/application_ship.go:215`) and the diff pin exposes it, so each compare row can say why it changed; needs a reason field on the ship modal.
+- F6: embed the rollout block in the diff response (drop the compare page's second overview fetch) and name pending/rejected instances inline in the verdict.
+- F7: `n`/`p`/`x` keyboard navigation between compare rows (cut from the 2026-09-16 presentation pass with F1, F3 and F4 still open).
