@@ -155,7 +155,15 @@ export default function ReleaseComparePage() {
   const onQueryChange = (next: string) => {
     setLocal({ view, q: next });
     if (qWrite.current) clearTimeout(qWrite.current);
-    qWrite.current = setTimeout(() => void replaceQuery({ q: next }), 250);
+    qWrite.current = null;
+    // Typing away and back inside the debounce window already matches the
+    // URL. Do not start a no-op shallow navigation that can race a version
+    // picker or Swap click made immediately afterwards.
+    if (next === urlQ) return;
+    qWrite.current = setTimeout(() => {
+      qWrite.current = null;
+      void replaceQuery({ q: next });
+    }, 250);
   };
   useEffect(
     () => () => {

@@ -5,6 +5,7 @@ import {
   foldUnchanged,
   MAX_TABLE_CELLS,
   toSideBySide,
+  toUnified,
 } from "@/lib/line-diff";
 
 function ops(before: string, after: string): string[] {
@@ -102,5 +103,40 @@ describe("foldUnchanged", () => {
   it("never folds a run too short to save space", () => {
     const rows = toSideBySide(diffLines("a\nb\nc\nd", "a\nb\nc\nD").lines);
     expect(foldUnchanged(rows).every((entry) => entry.kind === "row")).toBe(true);
+  });
+});
+
+describe("toUnified", () => {
+  it("keeps the sequence in order with each side's own line numbers", () => {
+    const rows = toUnified(diffLines("a\nb\nc", "a\nB\nC\nD").lines);
+    expect(rows).toEqual([
+      { kind: "same", op: "same", text: "a", left: 1, right: 1 },
+      { kind: "change", op: "del", text: "b", left: 2 },
+      { kind: "change", op: "del", text: "c", left: 3 },
+      { kind: "change", op: "add", text: "B", right: 2 },
+      { kind: "change", op: "add", text: "C", right: 3 },
+      { kind: "change", op: "add", text: "D", right: 4 },
+    ]);
+  });
+
+  it("folds unified rows like side-by-side ones, without zipping a removed run against an added one", () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `l${index + 1}`);
+    const changed = lines.map((line) => (line === "l10" ? "L10" : line));
+    const result = diffLines(lines.join("\n"), changed.join("\n"));
+    const unified = foldUnchanged(toUnified(result.lines));
+    const split = foldUnchanged(toSideBySide(result.lines));
+    // The changed line is one side-by-side row but two unified rows, so the
+    // second fold starts one row later.
+    expect(unified.filter((entry) => entry.kind === "fold")).toEqual([
+      { kind: "fold", count: 6, at: 0 },
+      { kind: "fold", count: 7, at: 14 },
+    ]);
+    expect(split.filter((entry) => entry.kind === "fold")).toEqual([
+      { kind: "fold", count: 6, at: 0 },
+      { kind: "fold", count: 7, at: 13 },
+    ]);
+    expect(unified.filter((entry) => entry.kind === "row")).toHaveLength(
+      split.filter((entry) => entry.kind === "row").length + 1,
+    );
   });
 });

@@ -1,22 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateFields,
   aliasPrefix,
   buildRows,
   describeInline,
   elide,
+  fieldLines,
   filterRows,
+  formatFieldCounts,
   groupRows,
   releaseDiffAsText,
   resolveDurationFormat,
+  rolloutSentence,
+  rolloutTone,
   sideKey,
 } from "@/lib/release-diff";
 import type {
+  OverviewRollout,
   ReleaseDiffPin,
   ReleaseDiffResponse,
   ReleaseDiffRow,
   ReleaseDiffSide,
 } from "@/lib/types";
-import { describeChange } from "@/lib/value-diff";
+import { describeChange, fieldCounts, structuralDiff } from "@/lib/value-diff";
+import {
+  FEATURES_AFTER,
+  FEATURES_BEFORE,
+  FEATURES_EXPECTED,
+  FEATURES_FIELD_TOTAL,
+} from "./fixtures/release-diff-json";
 
 const ns = { env: "prod", app: "gradethis" };
 
@@ -337,13 +349,16 @@ describe("groupRows and filterRows", () => {
 });
 
 describe("releaseDiffAsText", () => {
-  it("prints the header, then one padded line per changed alias, secrets by version only", () => {
+  it("prints the header, one padded line per changed alias with a field line under each JSON change, secrets by version only", () => {
     const text = releaseDiffAsText(
       response([rateLimits, database, featureFlags, dbPassword, timeout]),
     );
     expect(text.split("\n")).toEqual([
       "runtime@1:7 → runtime@1:9 in prod/gradethis (shipped by alice, 2026-09-12 02:41 UTC, rev 53)",
-      "changed  database      pool.idle 10 → 2, pool.max 50 → 5, +1 more",
+      "changed  database      3 fields (+1 ~2) v1 → v2",
+      "  ~ pool.idle   10 → 2 (−8, −80 %)",
+      "  ~ pool.max    50 → 5 (−45, −90 %)",
+      "  + ssl         true",
       "secret   db_password   v2 → v3 (binding key → binding key)",
       'added    feature_flags {"beta":true}',
       "changed  rate_limits   100 → 20 (−80, −80 %)",
@@ -384,5 +399,121 @@ describe("helpers", () => {
     expect(resolveDurationFormat('{"properties":{"a":{"format":"email"}}}', "a")).toBeUndefined();
     expect(describeInline(describeChange("true", "false", "boolean"))).toBe("true → false");
     expect(describeInline(describeChange("abcd", "abcdef", "binary"))).toBe("4 bytes → 6 bytes");
+  });
+});
+
+describe("fields", () => {
+  it("counts a JSON row's fields, leaves scalars and secrets at null, and aggregates the page", () => {
+    const rows = buildRows(response([rateLimits, database, featureFlags, dbPassword, timeout]));
+    const db = rows.find((row) => row.alias === "database");
+    expect(db?.fields).toEqual({ added: 1, removed: 0, changed: 2, moved: 0 });
+    expect(rows.find((row) => row.alias === "rate_limits")?.fields).toBeNull();
+    expect(rows.find((row) => row.alias === "db_password")?.fields).toBeNull();
+    // One-sided JSON has no structural diff, so no field counts either.
+    expect(rows.find((row) => row.alias === "feature_flags")?.fields).toBeNull();
+    expect(aggregateFields(rows)).toEqual({
+      counts: { added: 1, removed: 0, changed: 2, moved: 0 },
+      total: 3,
+      rows: 1,
+      partial: false,
+    });
+    expect(aggregateFields(buildRows(response([rateLimits, dbPassword])))).toBeNull();
+    expect(formatFieldCounts({ added: 3, removed: 21, changed: 1, moved: 2 })).toBe("+3 −21 ~1 ↷2");
+    expect(formatFieldCounts({ added: 0, removed: 0, changed: 0, moved: 0 })).toBe("");
+  });
+
+  it("indexes a moved field's old path in the search text", () => {
+    const moved: ReleaseDiffRow = {
+      ...database,
+      from: pin("database", 1, { content_type: "json", value: '{"legacy_url":"https://old"}' }),
+      to: pin("database", 2, {
+        content_type: "json",
+        value: '{"endpoints":{"legacy":"https://old"}}',
+      }),
+    };
+    const [row] = buildRows(response([moved]));
+    expect(row.fields).toEqual({ added: 0, removed: 0, changed: 0, moved: 1 });
+    expect(row.searchText).toContain("legacy_url");
+    expect(row.searchText).toContain("endpoints.legacy");
+    expect(row.summary).toBe('legacy_url ↷ endpoints.legacy "https://old"');
+  });
+
+  it("prints field lines with a gutter glyph, a padded path and typed deltas", () => {
+    const structural = structuralDiff(
+      '{"a":{"timeout":"30s","legacy_url":"https://old","drop":1.5},"n":50}',
+      '{"a":{"timeout":"60s"},"endpoints":{"legacy":"https://old"},"n":5,"tls":{"min":"1.3"}}',
+    );
+    if (!structural) throw new Error("expected a structural diff");
+    expect(fieldLines(structural)).toEqual([
+      "− a.drop                            1.5",
+      '~ a.timeout                         "30s" → "60s" (×2)',
+      '↷ a.legacy_url → endpoints.legacy   "https://old"',
+      "~ n                                 50 → 5 (−45, −90 %)",
+      '+ tls                               {"min":"1.3"}',
+    ]);
+  });
+});
+
+describe("rolloutSentence", () => {
+  const rollout = (extra: Partial<OverviewRollout>): OverviewRollout => ({
+    total: 0,
+    connected: 0,
+    applied_current: 0,
+    applied_divergent: 0,
+    rejected: 0,
+    pending: 0,
+    other_release_names: [],
+    rejected_instances: [],
+    truncated: false,
+    ...extra,
+  });
+
+  it("says in words what the counts mean", () => {
+    expect(rolloutSentence(null)).toBe("rollout unknown");
+    expect(rolloutTone(null)).toBe("zero");
+    expect(rolloutSentence(rollout({}))).toBe("not yet applied (no instances subscribed)");
+    expect(rolloutTone(rollout({}))).toBe("zero");
+    expect(rolloutSentence(rollout({ total: 3, applied_current: 3 }))).toBe(
+      "applied on all 3 instances",
+    );
+    expect(rolloutTone(rollout({ total: 3, applied_current: 3 }))).toBe("success");
+    expect(rolloutSentence(rollout({ total: 1, applied_current: 1 }))).toBe(
+      "applied on the only instance",
+    );
+    expect(rolloutSentence(rollout({ total: 5, applied_current: 3, pending: 2 }))).toBe(
+      "applied on 3 of 5 instances, 2 pending",
+    );
+    expect(rolloutTone(rollout({ total: 5, applied_current: 3, pending: 2 }))).toBe("neutral");
+    expect(
+      rolloutSentence(rollout({ total: 5, applied_current: 3, pending: 1, rejected: 1 })),
+    ).toBe("applied on 3 of 5 instances, 1 pending, 1 rejected");
+    expect(rolloutTone(rollout({ total: 5, applied_current: 3, rejected: 1 }))).toBe("danger");
+  });
+});
+
+// The shared JSON fixture (vitest view tests and the Playwright fake) pins its
+// counts here so a change to the fixture surfaces before an e2e run does.
+describe("features fixture", () => {
+  it("diffs to exactly the counts it exports", () => {
+    const diff = structuralDiff(FEATURES_BEFORE, FEATURES_AFTER);
+    if (!diff) throw new Error("fixture is not valid JSON on one side");
+    expect(diff.truncated).toBe(false);
+    expect(fieldCounts(diff)).toEqual(FEATURES_EXPECTED);
+    expect(diff.changes).toHaveLength(FEATURES_FIELD_TOTAL);
+    const moved = diff.changes.filter((change) => change.kind === "moved");
+    expect(moved).toEqual([
+      {
+        kind: "moved",
+        path: ["endpoints", "legacy"],
+        fromPath: ["legacy_endpoint"],
+        before: '"https://old.internal:8443/api"',
+        after: '"https://old.internal:8443/api"',
+      },
+    ]);
+    const added = diff.changes.filter((change) => change.kind === "added");
+    expect(added.map((change) => change.path)).toEqual([["tls"]]);
+    expect(fieldLines(diff)).toContain(
+      '↷ legacy_endpoint → endpoints.legacy   "https://old.internal:8443/api"',
+    );
   });
 });

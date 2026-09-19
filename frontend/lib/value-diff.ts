@@ -8,10 +8,10 @@
 // lists; the side-by-side line diff covers reordering.
 
 import { type JsonTreeNode, parseJsonTree } from "@/components/JsonTree";
-import { HIGHLIGHT_MAX_BYTES } from "@/lib/json-text";
+import { HIGHLIGHT_MAX_BYTES, tokenizeJson } from "@/lib/json-text";
 import { byteLength } from "@/lib/validation";
 
-export type ValueChangeKind = "added" | "removed" | "changed";
+export type ValueChangeKind = "added" | "removed" | "changed" | "moved";
 
 export interface ValueChange {
   /** Object keys unquoted; array indexes as `[i]` segments (see `formatValuePath`). */
@@ -20,6 +20,8 @@ export interface ValueChange {
   /** Raw JSON text of the leaf (strings keep their quotes). */
   before?: string;
   after?: string;
+  /** `moved` only: where the value was; `path` is where it is now. Never set on other kinds. */
+  fromPath?: string[];
 }
 
 export interface StructuralDiff {
@@ -27,6 +29,239 @@ export interface StructuralDiff {
   unchangedLeaves: number;
   /** `maxLeaves` changes were recorded and the walk stopped listing more. */
   truncated: boolean;
+}
+
+export interface FieldCounts {
+  added: number;
+  removed: number;
+  changed: number;
+  moved: number;
+}
+
+/** How many changes of each kind a structural diff lists. */
+export function fieldCounts(diff: StructuralDiff): FieldCounts {
+  const counts: FieldCounts = { added: 0, removed: 0, changed: 0, moved: 0 };
+  for (const change of diff.changes) counts[change.kind] += 1;
+  return counts;
+}
+
+/** Minified object or array text, as `nodeText` produces for a one-sided subtree. */
+export function isSubtreeText(text: string): boolean {
+  return /^\s*[{[]/.test(text);
+}
+
+/**
+ * A value that is too short to identify a move: a literal, an empty
+ * container, a one- or two-digit number or a string of under three
+ * characters. Pairing those would call every `enabled: true` that moved
+ * between keys a move of the same field.
+ */
+function trivialLeafText(text: string): boolean {
+  if (text === "true" || text === "false" || text === "null" || text === "{}" || text === "[]") {
+    return true;
+  }
+  if (text.startsWith('"')) return text.length < 5;
+  if (/^-?\d/.test(text)) return text.length < 3;
+  return false;
+}
+
+interface Leaf {
+  path: string[];
+  text: string;
+}
+
+/** The scalar leaves (and empty containers) under a node, with their paths. */
+function collectLeaves(node: JsonTreeNode, path: string[], out: Leaf[]): void {
+  if (node.kind === "scalar" || node.entries.length === 0) {
+    out.push({ path, text: nodeText(node) });
+    return;
+  }
+  node.entries.forEach((entry, index) => {
+    const segment = node.kind === "object" ? unquoteKey(entry.key ?? "") : `[${index}]`;
+    collectLeaves(entry.node, [...path, segment], out);
+  });
+}
+
+function pathKey(path: readonly string[]): string {
+  return path.join("\u0000");
+}
+
+/**
+ * Pairs a removed leaf with an added leaf of the same raw text into one
+ * `moved` change at the added position (the list reads "what the new
+ * document has"). Only unique texts on both sides pair, so two fields that
+ * shared a value never guess at each other, and trivial literals never pair.
+ *
+ * Whole subtrees pair first on their minified text, so a renamed object is
+ * one move. Then the leaves inside the remaining one-sided subtrees take
+ * part: a key that moved under a new parent (`legacy_url` →
+ * `endpoints.legacy`, where `endpoints` is new) pairs with its twin, and the
+ * subtree that held it is split into its leaves — moved ones and the rest —
+ * down to the branches that contain a move; branches without one stay whole.
+ * An object wrapped in a new parent is therefore a move of each field, not
+ * of the object. Array elements aligned by index are `changed`, never
+ * candidates; use the line view for reorders.
+ */
+export function detectMoves(changes: ValueChange[]): ValueChange[] {
+  const merged = new Set<number>();
+  const moves = new Map<number, ValueChange>();
+
+  // Phase 1: whole changes (scalar or subtree) with identical text.
+  const removedWhole = new Map<string, number[]>();
+  const addedWhole = new Map<string, number[]>();
+  const index = (map: Map<string, number[]>, text: string, at: number) => {
+    if (trivialLeafText(text)) return;
+    const list = map.get(text) ?? [];
+    list.push(at);
+    map.set(text, list);
+  };
+  changes.forEach((change, at) => {
+    if (change.kind === "removed" && change.before !== undefined) {
+      index(removedWhole, change.before, at);
+    }
+    if (change.kind === "added" && change.after !== undefined) index(addedWhole, change.after, at);
+  });
+  for (const [text, twins] of addedWhole) {
+    const sources = removedWhole.get(text);
+    if (twins.length !== 1 || !sources || sources.length !== 1) continue;
+    merged.add(sources[0]);
+    moves.set(twins[0], {
+      path: changes[twins[0]].path,
+      kind: "moved",
+      fromPath: changes[sources[0]].path,
+      before: text,
+      after: text,
+    });
+  }
+
+  // Phase 2: leaves inside the one-sided changes that are still unpaired.
+  interface Located extends Leaf {
+    at: number;
+  }
+  const trees = new Map<number, JsonTreeNode>();
+  const leavesOf = (at: number, text: string): Located[] => {
+    if (!isSubtreeText(text)) return [{ at, path: changes[at].path, text }];
+    const node = parseJsonTree(text);
+    if (!node) return [];
+    trees.set(at, node);
+    const out: Leaf[] = [];
+    collectLeaves(node, changes[at].path, out);
+    return out.map((leaf) => ({ ...leaf, at }));
+  };
+  const removedLeaves = new Map<string, Located[]>();
+  const addedLeaves = new Map<string, Located[]>();
+  const indexLeaves = (map: Map<string, Located[]>, leaves: Located[]) => {
+    for (const leaf of leaves) {
+      if (trivialLeafText(leaf.text)) continue;
+      const list = map.get(leaf.text) ?? [];
+      list.push(leaf);
+      map.set(leaf.text, list);
+    }
+  };
+  changes.forEach((change, at) => {
+    if (merged.has(at) || moves.has(at)) return;
+    if (change.kind === "removed" && change.before !== undefined) {
+      indexLeaves(removedLeaves, leavesOf(at, change.before));
+    }
+    if (change.kind === "added" && change.after !== undefined) {
+      indexLeaves(addedLeaves, leavesOf(at, change.after));
+    }
+  });
+  /** Per change index: the paths of its leaves that paired, and for added ones where each came from. */
+  const pairedAdded = new Map<number, Map<string, string[]>>();
+  const pairedRemoved = new Map<number, Set<string>>();
+  for (const [text, twins] of addedLeaves) {
+    const sources = removedLeaves.get(text);
+    if (twins.length !== 1 || !sources || sources.length !== 1) continue;
+    const [twin] = twins;
+    const [source] = sources;
+    const byPath = pairedAdded.get(twin.at) ?? new Map<string, string[]>();
+    byPath.set(pathKey(twin.path), source.path);
+    pairedAdded.set(twin.at, byPath);
+    const paths = pairedRemoved.get(source.at) ?? new Set<string>();
+    paths.add(pathKey(source.path));
+    pairedRemoved.set(source.at, paths);
+  }
+  if (moves.size === 0 && pairedAdded.size === 0) return changes;
+
+  /** Splits a one-sided subtree down to the branches that hold a paired leaf. */
+  const expand = (
+    node: JsonTreeNode,
+    path: string[],
+    paired: (key: string) => boolean,
+    emit: (leaf: Leaf | null, node: JsonTreeNode, path: string[], isPaired: boolean) => void,
+  ) => {
+    const leaves: Leaf[] = [];
+    collectLeaves(node, path, leaves);
+    if (!leaves.some((leaf) => paired(pathKey(leaf.path)))) {
+      emit(null, node, path, false);
+      return;
+    }
+    if (node.kind === "scalar" || node.entries.length === 0) {
+      emit(leaves[0], node, path, true);
+      return;
+    }
+    node.entries.forEach((entry, i) => {
+      const segment = node.kind === "object" ? unquoteKey(entry.key ?? "") : `[${i}]`;
+      expand(entry.node, [...path, segment], paired, emit);
+    });
+  };
+
+  const out: ValueChange[] = [];
+  changes.forEach((change, at) => {
+    if (merged.has(at)) return;
+    const move = moves.get(at);
+    if (move) {
+      out.push(move);
+      return;
+    }
+    const addedPairs = pairedAdded.get(at);
+    if (addedPairs) {
+      const tree = trees.get(at);
+      if (!tree) {
+        // A scalar leaf whose twin sat inside a removed subtree.
+        const from = addedPairs.get(pathKey(change.path));
+        out.push({
+          path: change.path,
+          kind: "moved",
+          fromPath: from ?? [],
+          before: change.after,
+          after: change.after,
+        });
+        return;
+      }
+      expand(
+        tree,
+        change.path,
+        (key) => addedPairs.has(key),
+        (leaf, node, path, isPaired) => {
+          const from = leaf ? addedPairs.get(pathKey(leaf.path)) : undefined;
+          if (isPaired && leaf && from) {
+            out.push({ path, kind: "moved", fromPath: from, before: leaf.text, after: leaf.text });
+          } else {
+            out.push({ path, kind: "added", after: nodeText(node) });
+          }
+        },
+      );
+      return;
+    }
+    const removedPairs = pairedRemoved.get(at);
+    if (removedPairs) {
+      const tree = trees.get(at);
+      if (!tree) return; // A scalar that reappeared inside an added subtree: shown there as moved.
+      expand(
+        tree,
+        change.path,
+        (key) => removedPairs.has(key),
+        (_leaf, node, path, isPaired) => {
+          if (!isPaired) out.push({ path, kind: "removed", before: nodeText(node) });
+        },
+      );
+      return;
+    }
+    out.push(change);
+  });
+  return out;
 }
 
 /** Either side over the highlighter cap: structural mode is disabled for it. */
@@ -125,6 +360,7 @@ export function structuralDiff(
     }
   };
   walk(left, right, []);
+  result.changes = detectMoves(result.changes);
   return result;
 }
 
@@ -300,6 +536,61 @@ export function describeScalarChange(
     common: before !== undefined && after !== undefined ? commonEnds(before, after) : null,
     long,
   };
+}
+
+export type LeafChange =
+  | ScalarChange
+  | {
+      /** `null` on the present side(s); `mixed` when the two sides are different JSON kinds (`"30"` vs `30`); `subtree` for an object or array. */
+      kind: "null" | "mixed" | "subtree";
+      before?: string;
+      after?: string;
+    };
+
+type LeafKind = "string" | "number" | "boolean" | "null" | "subtree" | "other";
+
+function leafKind(text: string): LeafKind {
+  if (isSubtreeText(text)) return "subtree";
+  const tokens = tokenizeJson(text.trim()).filter((token) => token.kind !== "ws");
+  const kind = tokens.length === 1 ? tokens[0].kind : "other";
+  return kind === "string" || kind === "number" || kind === "boolean" || kind === "null"
+    ? kind
+    : "other";
+}
+
+function unquote(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const value = JSON.parse(text);
+    return typeof value === "string" ? value : text;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * The typed description of one structural leaf, so a field line gets the
+ * same deltas a scalar parameter does: numbers their difference and percent,
+ * Go durations their ratio, strings their differing span. String texts are
+ * unquoted in the result (`StringToken` re-quotes); every other kind keeps
+ * its raw JSON text.
+ */
+export function describeLeafChange(before?: string, after?: string): LeafChange {
+  const kb = before === undefined ? undefined : leafKind(before);
+  const ka = after === undefined ? undefined : leafKind(after);
+  if (kb !== undefined && ka !== undefined && kb !== ka) return { kind: "mixed", before, after };
+  const kind = kb ?? ka;
+  if (kind === "subtree") return { kind: "subtree", before, after };
+  if (kind === "null") return { kind: "null", before, after };
+  if (kind === "boolean") return describeScalarChange(before, after, "boolean");
+  if (kind === "number") {
+    const integer =
+      (before === undefined || INTEGER.test(before)) &&
+      (after === undefined || INTEGER.test(after));
+    return describeScalarChange(before, after, integer ? "integer" : "float");
+  }
+  if (kind === "string") return describeScalarChange(unquote(before), unquote(after), "string");
+  return { kind: "mixed", before, after };
 }
 
 /** `describeScalarChange`, plus the structural JSON case. */

@@ -1,14 +1,20 @@
-// The release comparison view against the Go-generated fixture: the counts an
-// operator reads first, groups with "Needs attention" ahead of everything
-// else, the inline old → new text, filtering, lazily loaded values for
-// unchanged rows, the structural / side-by-side toggle for JSON, secrets
-// rendered by version only, compact mode, the identical state and the
-// plain-text export.
+// The release comparison view against the Go-generated fixture: the verdict
+// band an operator reads first, groups with "Needs attention" ahead of
+// everything else, the inline old → new text, filtering, lazily loaded values
+// for unchanged rows, changed JSON rows open to their field list with the
+// Fields / Unified / Split view chosen once in the toolbar, secrets rendered
+// by version only, compact mode, the identical state and the plain-text
+// export.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReleaseDiffView } from "@/components/releases/diff/ReleaseDiffView";
 import type { ReleaseDiffPin, ReleaseDiffResponse, ReleaseDiffRow } from "@/lib/types";
 import diffJson from "./fixtures/backend/release-diff.json";
+import {
+  FEATURES_AFTER,
+  FEATURES_BEFORE,
+  FEATURES_FIELD_TOTAL,
+} from "./fixtures/release-diff-json";
 
 const mocks = vi.hoisted(() => ({
   releaseDiff: vi.fn(),
@@ -81,6 +87,44 @@ const rowFor = (alias: string) =>
     .getAllByTestId("release-diff-row")
     .find((row) => row.getAttribute("data-alias") === alias) as HTMLElement;
 
+/** A changed JSON row: two pool fields changed, `ssl` added, `host` and `port` unchanged. */
+function databaseRow(): ReleaseDiffRow {
+  return {
+    alias: "database",
+    kind: "parameter",
+    change: "changed",
+    reasons: ["value"],
+    from: pin("database", 1, {
+      content_type: "json",
+      value: '{"pool":{"max":50,"idle":10},"host":"db","port":5432}',
+    }),
+    to: pin("database", 2, {
+      content_type: "json",
+      value: '{"pool":{"max":5,"idle":20},"host":"db","port":5432,"ssl":true}',
+    }),
+  };
+}
+
+/** The shared fixture: 16 field changes (one added subtree, 14 changed, one moved). */
+function featuresRow(): ReleaseDiffRow {
+  return {
+    alias: "features",
+    kind: "parameter",
+    change: "changed",
+    reasons: ["value"],
+    from: pin("features", 1, { content_type: "json", value: FEATURES_BEFORE }),
+    to: pin("features", 2, { content_type: "json", value: FEATURES_AFTER }),
+  };
+}
+
+const fieldLines = (row: HTMLElement) => row.querySelectorAll<HTMLElement>(".release-diff-field");
+const fieldWithPath = (row: HTMLElement, path: string) =>
+  [...fieldLines(row)].find(
+    (line) => line.querySelector(".release-diff-field-path")?.textContent === path,
+  ) as HTMLElement;
+const valueViewTab = (name: "Fields" | "Unified" | "Split") =>
+  within(screen.getByRole("tablist", { name: "Value view" })).getByRole("tab", { name });
+
 describe("ReleaseDiffView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,7 +132,7 @@ describe("ReleaseDiffView", () => {
     mocks.releaseDiff.mockResolvedValue(fixture);
   });
 
-  it("shows the counts strip and only the changed row by default, with the old → new values", async () => {
+  it("shows the verdict band and only the changed row by default, with the old → new values", async () => {
     render(<ReleaseDiffView query={query} />);
     expect(mocks.releaseDiff).toHaveBeenCalledWith(query, expect.anything());
     const row = await screen.findByTestId("release-diff-row");
@@ -100,11 +144,23 @@ describe("ReleaseDiffView", () => {
     // Integers carry their delta.
     expect(row.querySelector(".release-diff-delta")).toHaveTextContent("+5");
 
-    expect(screen.getByTestId("release-diff-count-changed")).toHaveTextContent("1");
-    expect(screen.getByTestId("release-diff-count-added")).toHaveTextContent("0");
-    expect(screen.getByTestId("release-diff-count-removed")).toHaveTextContent("0");
-    expect(screen.getByTestId("release-diff-count-secrets")).toHaveTextContent("0");
-    expect(screen.getByTestId("release-diff-schema")).toHaveTextContent("v1");
+    // The band is one sentence of facts; separators are CSS, so each fact's
+    // text is exact and the zero facts are marked faint.
+    const band = screen.getByTestId("release-diff-strip");
+    expect(band).toHaveClass("release-diff-verdict");
+    expect(band).not.toHaveAttribute("role");
+    expect(screen.getByTestId("release-diff-count-changed")).toHaveTextContent(
+      /^1 parameter changed$/,
+    );
+    expect(screen.getByTestId("release-diff-count-added")).toHaveTextContent(/^0 added$/);
+    expect(screen.getByTestId("release-diff-count-added")).toHaveAttribute("data-zero");
+    expect(screen.getByTestId("release-diff-count-removed")).toHaveTextContent(/^0 removed$/);
+    expect(screen.getByTestId("release-diff-count-secrets")).toHaveTextContent(
+      /^no secrets repinned$/,
+    );
+    expect(screen.getByTestId("release-diff-schema")).toHaveTextContent(/^schema v1 unchanged$/);
+    // No JSON row has a structural diff, so no field total.
+    expect(screen.queryByTestId("release-diff-fields-total")).toBeNull();
     // Two unchanged rows exist but are hidden behind the toggle.
     expect(rows()).toHaveLength(1);
     expect(screen.getByRole("checkbox", { name: /Show unchanged/ })).not.toBeChecked();
@@ -189,7 +245,13 @@ describe("ReleaseDiffView", () => {
     // Added and removed show one side and an em dash for the other.
     expect(rowFor("added_flag").querySelector(".release-diff-missing")).not.toBeNull();
     expect(rowFor("old_key").querySelector(".release-diff-missing")).not.toBeNull();
-    expect(screen.getByTestId("release-diff-count-secrets")).toHaveTextContent("1");
+    expect(screen.getByTestId("release-diff-count-secrets")).toHaveTextContent(
+      /^1 secret repinned$/,
+    );
+    // `counts.changed` includes the secret, so the noun is "entries".
+    expect(screen.getByTestId("release-diff-count-changed")).toHaveTextContent(
+      /^3 entries changed$/,
+    );
   });
 
   it("filters rows by alias text and reports an empty match", async () => {
@@ -246,45 +308,145 @@ describe("ReleaseDiffView", () => {
     expect(mocks.getParameter).toHaveBeenCalledTimes(1);
   });
 
-  it("expands a JSON row to the structural leaf list and switches to side-by-side, remembering the choice", async () => {
-    mocks.releaseDiff.mockResolvedValue(
-      withRows([
-        {
-          alias: "database",
-          kind: "parameter",
-          change: "changed",
-          reasons: ["value"],
-          from: pin("database", 1, {
-            content_type: "json",
-            value: '{"pool":{"max":50,"idle":10},"host":"db"}',
-          }),
-          to: pin("database", 2, {
-            content_type: "json",
-            value: '{"pool":{"max":5,"idle":10},"host":"db"}',
-          }),
-        },
-      ]),
-    );
+  it("opens a changed JSON row to its field list without a click, with count chips in the head", async () => {
+    mocks.releaseDiff.mockResolvedValue(withRows([databaseRow()]));
     render(<ReleaseDiffView query={query} />);
     const row = await screen.findByTestId("release-diff-row");
-    // Collapsed: the inline summary names the leaf that changed.
-    expect(row).toHaveTextContent("pool.max");
-    fireEvent.click(within(row).getByRole("button", { name: "Expand database" }));
-    const structural = await within(row).findByTestId("release-diff-structural");
-    expect(structural).toHaveTextContent("pool.max");
-    expect(structural).toHaveTextContent("50");
-    expect(structural).toHaveTextContent("5");
-    // Unchanged leaves are folded, not listed.
-    expect(structural).not.toHaveTextContent('"db"');
-    expect(structural).toHaveTextContent(/2 unchanged/);
-    expect(within(row).getByRole("tab", { name: "Structural" })).toHaveAttribute(
-      "aria-selected",
-      "true",
+    // Open by default: the chevron offers to collapse, and the field list is there.
+    expect(within(row).getByRole("button", { name: "Collapse database" })).toBeInTheDocument();
+    const fields = within(row).getByTestId("release-diff-fields");
+    expect(fields.querySelector("ol.release-diff-field-list")).not.toBeNull();
+    expect(fieldLines(row)).toHaveLength(3);
+    // A changed number carries its typed delta.
+    const max = fieldWithPath(row, "pool.max");
+    expect(max).toHaveAttribute("data-change", "changed");
+    expect(max.querySelector(".release-diff-field-gutter")).toHaveTextContent("~");
+    expect(max.querySelector(".release-diff-old")).toHaveTextContent("50");
+    expect(max.querySelector(".release-diff-new")).toHaveTextContent("5");
+    expect(max.querySelector(".release-diff-delta")).toHaveTextContent("(−45, −90 %)");
+    // An added leaf: value only, the gutter says which side.
+    const ssl = fieldWithPath(row, "ssl");
+    expect(ssl).toHaveAttribute("data-change", "added");
+    expect(ssl.querySelector(".release-diff-field-gutter")).toHaveTextContent("+");
+    expect(ssl.querySelector(".release-diff-field-values")).toHaveTextContent("true");
+    expect(ssl.querySelector(".release-diff-old")).toBeNull();
+    // Unchanged leaves are counted, not listed.
+    expect(fields).not.toHaveTextContent('"db"');
+    expect(fields).toHaveTextContent("2 unchanged fields not listed");
+    // The head carries the counts as chips instead of a `changed` badge.
+    const head = row.querySelector(".release-diff-row-head") as HTMLElement;
+    expect(head.querySelector('.release-diff-chip[data-tone="changed"]')).toHaveTextContent("~2");
+    expect(head.querySelector('.release-diff-chip[data-tone="added"]')).toHaveTextContent("+1");
+    expect(head.querySelector('.release-diff-chip[data-tone="removed"]')).toBeNull();
+    expect(head.textContent).not.toMatch(/\bchanged\b/);
+    // The band totals the fields across rows.
+    expect(screen.getByTestId("release-diff-fields-total")).toHaveTextContent(
+      /^3 fields \(\+1 ~2\)$/,
     );
-    fireEvent.click(within(row).getByRole("tab", { name: "Side-by-side" }));
-    await waitFor(() => expect(within(row).getByTestId("json-diff")).toBeVisible());
-    expect(within(row).queryByTestId("release-diff-structural")).toBeNull();
-    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("side");
+    // The chevron collapses to head and meta only.
+    fireEvent.click(within(row).getByRole("button", { name: "Collapse database" }));
+    expect(within(row).queryByTestId("release-diff-fields")).toBeNull();
+    expect(within(row).getByRole("button", { name: "Expand database" })).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Expand database" }));
+    expect(within(row).getByTestId("release-diff-fields")).toBeInTheDocument();
+  });
+
+  it("switches the value view from the toolbar and remembers it, migrating the old key", async () => {
+    mocks.releaseDiff.mockResolvedValue(withRows([databaseRow()]));
+    const first = render(<ReleaseDiffView query={query} />);
+    const row = await screen.findByTestId("release-diff-row");
+    expect(valueViewTab("Fields")).toHaveAttribute("aria-selected", "true");
+    // No per-row tabs any more: the choice is made once.
+    expect(within(row).queryByRole("tab")).toBeNull();
+
+    fireEvent.click(valueViewTab("Split"));
+    await waitFor(() =>
+      expect(within(row).getByTestId("json-diff")).toHaveAttribute("data-layout", "split"),
+    );
+    expect(within(row).queryByTestId("release-diff-fields")).toBeNull();
+    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("split");
+
+    fireEvent.click(valueViewTab("Unified"));
+    await waitFor(() =>
+      expect(within(row).getByTestId("json-diff")).toHaveAttribute("data-layout", "unified"),
+    );
+    // The removed line's sign cell is the rail.
+    expect(row.querySelector('.json-diff-sign[data-op="del"]')).not.toBeNull();
+    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("unified");
+
+    fireEvent.click(valueViewTab("Fields"));
+    await waitFor(() => expect(within(row).getByTestId("release-diff-fields")).toBeVisible());
+    expect(within(row).queryByTestId("json-diff")).toBeNull();
+    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("fields");
+    first.unmount();
+
+    // The previous pass stored `side` / `structural`; both migrate and are rewritten.
+    window.localStorage.setItem("kms-release-diff-mode", "side");
+    const second = render(<ReleaseDiffView query={query} />);
+    const rowAgain = await screen.findByTestId("release-diff-row");
+    await waitFor(() => expect(valueViewTab("Split")).toHaveAttribute("aria-selected", "true"));
+    expect(within(rowAgain).getByTestId("json-diff")).toHaveAttribute("data-layout", "split");
+    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("split");
+    second.unmount();
+
+    window.localStorage.setItem("kms-release-diff-mode", "structural");
+    render(<ReleaseDiffView query={query} />);
+    const rowThird = await screen.findByTestId("release-diff-row");
+    await waitFor(() => expect(valueViewTab("Fields")).toHaveAttribute("aria-selected", "true"));
+    expect(within(rowThird).getByTestId("release-diff-fields")).toBeInTheDocument();
+    expect(window.localStorage.getItem("kms-release-diff-mode")).toBe("fields");
+  });
+
+  it("caps the field list at twelve, marks a moved key and prints an added object in full", async () => {
+    mocks.releaseDiff.mockResolvedValue(withRows([featuresRow()]));
+    render(<ReleaseDiffView query={query} />);
+    const row = await screen.findByTestId("release-diff-row");
+    expect(fieldLines(row)).toHaveLength(12);
+    // The move reads as one line, old path → new path, value once in a neutral tint.
+    const moved = row.querySelectorAll('.release-diff-field[data-change="moved"]');
+    expect(moved).toHaveLength(1);
+    const movedLine = moved[0] as HTMLElement;
+    expect(movedLine.querySelector(".release-diff-field-gutter")).toHaveTextContent("↷");
+    expect(movedLine.querySelector(".release-diff-field-path")).toHaveTextContent(
+      "legacy_endpoint → endpoints.legacy",
+    );
+    expect(movedLine.querySelector(".release-diff-moved")).toHaveTextContent(
+      "https://old.internal:8443/api",
+    );
+    expect(movedLine.querySelector(".release-diff-old")).toBeNull();
+    expect(movedLine.querySelector(".release-diff-new")).toBeNull();
+    // Keys sort, so `pool.*` sits past the cap until Show all.
+    expect(fieldWithPath(row, "pool.timeout")).toBeUndefined();
+    // Chips and band agree with the fixture's counts.
+    expect(row.querySelector('.release-diff-chip[data-tone="changed"]')).toHaveTextContent("~14");
+    expect(row.querySelector('.release-diff-chip[data-tone="added"]')).toHaveTextContent("+1");
+    expect(row.querySelector('.release-diff-chip[data-tone="moved"]')).toHaveTextContent("↷1");
+    expect(screen.getByTestId("release-diff-fields-total")).toHaveTextContent(
+      /^16 fields \(\+1 ~14 ↷1\)$/,
+    );
+    // Show all reveals the rest, including the added object printed line by line.
+    fireEvent.click(
+      within(row).getByRole("button", { name: `Show all ${FEATURES_FIELD_TOTAL} fields` }),
+    );
+    expect(fieldLines(row)).toHaveLength(FEATURES_FIELD_TOTAL);
+    const tls = fieldWithPath(row, "tls");
+    expect(tls).toHaveAttribute("data-change", "added");
+    expect(tls).toHaveAttribute("data-subtree", "true");
+    const code = tls.querySelectorAll(".release-diff-field-code");
+    expect(code).toHaveLength(5);
+    expect(code[0]).toHaveAttribute("data-op");
+    expect(tls).toHaveTextContent("/etc/kms/tls.crt");
+    // A Go duration reads with its ratio.
+    const timeout = fieldWithPath(row, "pool.timeout");
+    expect(timeout).toHaveAttribute("data-change", "changed");
+    expect(timeout.querySelector(".release-diff-old")).toHaveTextContent("30s");
+    expect(timeout.querySelector(".release-diff-new")).toHaveTextContent("5s");
+    expect(timeout.querySelector(".release-diff-delta")).toHaveTextContent("×0.17");
+    expect(within(row).queryByRole("button", { name: /Show all/ })).toBeNull();
+    // The unchanged leaves stay counted, never listed.
+    expect(within(row).getByTestId("release-diff-fields")).toHaveTextContent(
+      /\d+ unchanged fields not listed/,
+    );
   });
 
   it("renders compact without the page-level actions and the identical state without a toolbar", async () => {

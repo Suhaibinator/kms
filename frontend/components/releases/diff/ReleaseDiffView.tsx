@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import { links } from "@/lib/links";
 import {
+  aggregateFields,
   buildRows,
   type DiffKindFilter,
   type DiffRowModel,
@@ -34,9 +35,9 @@ import type {
 import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/utils";
 import { ReleaseDiffRow } from "./ReleaseDiffRow";
-import { ReleaseDiffStrip } from "./ReleaseDiffStrip";
+import { ReleaseDiffVerdict } from "./ReleaseDiffVerdict";
+import { type DiffMode, useDiffMode } from "./useDiffMode";
 import { useReleaseDiff } from "./useReleaseDiff";
-import { useValueViewMode } from "./ValueChange";
 
 /** The server's error message as a sentence, so prose can follow it. */
 function sentence(text: string): string {
@@ -84,18 +85,13 @@ function withValues(
   };
 }
 
+/** Layout rule 8: the loaded structure — one verdict line, then rows. */
 function Skeletons() {
   return (
     <div className="release-diff" aria-busy="true" data-testid="release-diff">
-      <div className="stat-strip release-diff-strip">
-        {["Changed", "Added", "Removed", "Secrets repinned", "Schema", "Rollout"].map((label) => (
-          <div key={label} className="stat">
-            <div className="stat-label">{label}</div>
-            <div className="stat-value flex items-center" style={{ height: "1.25em" }}>
-              <Skeleton width="40%" height={22} />
-            </div>
-          </div>
-        ))}
+      {/* A div, not the band's <p>: the Skeleton is a div and cannot nest in one. */}
+      <div className="release-diff-verdict">
+        <Skeleton width="60%" height={16} />
       </div>
       <div className="release-diff-skeleton-rows">
         {[0, 1, 2, 3, 4].map((index) => (
@@ -132,7 +128,7 @@ export function ReleaseDiffView({
   const { diff, loading, stale, error, reload } = useReleaseDiff(sameVersion ? null : query);
   const now = useNow();
   const ids = useId();
-  const [mode, setMode] = useValueViewMode();
+  const [mode, setMode] = useDiffMode();
   const [internalView, setInternalView] = useState<DiffView>("changed");
   const [internalQ, setInternalQ] = useState("");
   const view = controlledView ?? internalView;
@@ -147,7 +143,10 @@ export function ReleaseDiffView({
   };
   const [kind, setKind] = useState<DiffKindFilter>("all");
   const [groupMode, setGroupMode] = useState<GroupMode>("kind");
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // Only explicit choices are stored: a row the reader has not touched is
+  // open when it changed and closed when it did not, so a new comparison
+  // arrives open and "Show unchanged" adds closed rows.
+  const [toggles, setToggles] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const [values, setValues] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [loadingValues, setLoadingValues] = useState<ReadonlySet<string>>(() => new Set());
   const loadedFor = useRef<ReleaseDiffResponse | null>(null);
@@ -163,15 +162,26 @@ export function ReleaseDiffView({
   const models = useMemo(() => (patched ? buildRows(patched, { now }) : []), [patched, now]);
   const filtered = useMemo(() => filterRows(models, q, kind, view), [models, q, kind, view]);
   const groups = useMemo(() => groupRows(filtered, groupMode), [filtered, groupMode]);
+  const fields = useMemo(() => aggregateFields(models), [models]);
 
-  const toggle = useCallback((alias: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(alias)) next.delete(alias);
-      else next.add(alias);
+  const isOpen = useCallback(
+    (model: DiffRowModel) => toggles.get(model.alias) ?? model.change !== "unchanged",
+    [toggles],
+  );
+  const toggle = useCallback(
+    (model: DiffRowModel) => {
+      const open = isOpen(model);
+      setToggles((current) => new Map(current).set(model.alias, !open));
+    },
+    [isOpen],
+  );
+  const setAll = (open: boolean) => {
+    setToggles((current) => {
+      const next = new Map(current);
+      for (const model of filtered) next.set(model.alias, open);
       return next;
     });
-  }, []);
+  };
 
   const loadValues = useCallback(
     async (model: DiffRowModel) => {
@@ -203,7 +213,7 @@ export function ReleaseDiffView({
           for (const [key, value] of loaded) next.set(key, value);
           return next;
         });
-        setExpanded((current) => new Set(current).add(model.alias));
+        setToggles((current) => new Map(current).set(model.alias, true));
       } catch {
         // The row keeps its "Load value" button; a toast would be noise on a
         // page whose other rows are fine.
@@ -241,6 +251,8 @@ export function ReleaseDiffView({
   const rolledBack =
     patched.to.current && !patched.cross_environment && patched.to.version < patched.from.version;
   const unchangedCount = patched.counts.unchanged;
+  const openCount = filtered.filter(isOpen).length;
+  const mostlyOpen = openCount * 2 > filtered.length;
 
   return (
     <div
@@ -279,12 +291,9 @@ export function ReleaseDiffView({
             removed.
           </div>
         ) : null}
-        {!patched.values_included ? (
-          <div className="info-panel">Entries only; values were not requested.</div>
-        ) : null}
       </div>
 
-      <ReleaseDiffStrip diff={patched} rollout={compact ? undefined : rollout} />
+      <ReleaseDiffVerdict diff={patched} fields={fields} rollout={compact ? undefined : rollout} />
 
       {patched.identical ? (
         <div className="info-panel" role="status" data-testid="release-diff-identical">
@@ -319,6 +328,13 @@ export function ReleaseDiffView({
                 <TabsTrigger value="secret">Secrets</TabsTrigger>
               </TabsList>
             </Tabs>
+            <Tabs value={mode} onValueChange={(value) => setMode(value as DiffMode)}>
+              <TabsList variant="line" aria-label="Value view">
+                <TabsTrigger value="fields">Fields</TabsTrigger>
+                <TabsTrigger value="unified">Unified</TabsTrigger>
+                <TabsTrigger value="split">Split</TabsTrigger>
+              </TabsList>
+            </Tabs>
             <div className="release-diff-toggles">
               <span className="release-diff-toggle-row">
                 <Checkbox
@@ -339,18 +355,9 @@ export function ReleaseDiffView({
                 />
                 <label htmlFor={`${ids}-prefix`}>Group by prefix</label>
               </span>
-              <span className="release-diff-expand">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => setExpanded(new Set(filtered.map((model) => model.alias)))}
-                >
-                  Expand all
-                </Button>
-                <Button variant="ghost" size="xs" onClick={() => setExpanded(new Set())}>
-                  Collapse all
-                </Button>
-              </span>
+              <Button variant="ghost" size="xs" onClick={() => setAll(!mostlyOpen)}>
+                {mostlyOpen ? "Collapse all" : "Expand all"}
+              </Button>
             </div>
             <div className="release-diff-actions">
               {!compact ? (
@@ -417,12 +424,11 @@ export function ReleaseDiffView({
                         model={model}
                         valuesIncluded={patched.values_included}
                         q={q}
-                        expanded={expanded.has(model.alias)}
-                        onToggle={() => toggle(model.alias)}
+                        expanded={isOpen(model)}
+                        onToggle={() => toggle(model)}
                         beforeLabel={beforeLabel}
                         afterLabel={afterLabel}
                         mode={mode}
-                        onModeChange={setMode}
                         now={now}
                         compact={compact}
                         crossEnvironment={patched.cross_environment}

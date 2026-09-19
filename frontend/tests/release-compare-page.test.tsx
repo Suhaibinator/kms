@@ -196,11 +196,15 @@ describe("release compare page", () => {
       expect.objectContaining({ signal: expect.anything() }),
       1,
     );
-    // The fixture's prod rollout: 3 instances, 1 rejected. The cell exists
-    // (showing "—") before the overview resolves, so wait for the content.
+    // The fixture's prod rollout: 3 instances, 2 applied, 1 rejected. The fact
+    // exists (reading "rollout unknown") before the overview resolves, so wait
+    // for the sentence.
     await waitFor(() =>
-      expect(screen.getByTestId("release-diff-rollout")).toHaveTextContent("1 rejected"),
+      expect(screen.getByTestId("release-diff-rollout")).toHaveTextContent(
+        /^applied on 2 of 3 instances, 1 rejected$/,
+      ),
     );
+    expect(screen.getByTestId("release-diff-rollout")).toHaveAttribute("data-tone", "danger");
     // Rolling back is offered from the header because `to` is current.
     expect(screen.getByRole("button", { name: "Roll back to v1" })).toBeVisible();
   });
@@ -297,6 +301,22 @@ describe("release compare page", () => {
         undefined,
         { shallow: true, scroll: false },
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending filter write when the input returns to the URL value", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ReleaseComparePage />);
+      await screen.findByTestId("release-diff-row");
+      const filter = screen.getByRole("searchbox");
+      fireEvent.change(filter, { target: { value: "rate" } });
+      fireEvent.change(filter, { target: { value: "" } });
+      vi.advanceTimersByTime(300);
+
+      expect(mocks.replace).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
