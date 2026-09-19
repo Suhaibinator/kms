@@ -306,6 +306,22 @@ describe("release compare page", () => {
     }
   });
 
+  it("cancels a pending filter write when the input returns to the URL value", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ReleaseComparePage />);
+      await screen.findByTestId("release-diff-row");
+      const filter = screen.getByRole("searchbox");
+      fireEvent.change(filter, { target: { value: "rate" } });
+      fireEvent.change(filter, { target: { value: "" } });
+      vi.advanceTimersByTime(300);
+
+      expect(mocks.replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("compares across environments with a banner and no version steps", async () => {
     mocks.query = { ...baseQuery, from: "2", to: "1", to_env: "dev" };
     mocks.releaseDiff.mockResolvedValue({
