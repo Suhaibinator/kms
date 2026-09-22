@@ -5,7 +5,7 @@ import warnings
 
 from kms_paramstore._gen import kms_pb2 as kms_dot_v1_dot_kms__pb2
 
-GRPC_GENERATED_VERSION = '1.83.1'
+GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
