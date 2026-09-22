@@ -86,6 +86,7 @@ export interface ManagedReleaseClient {
 }
 
 export interface ManagedConfigStatus {
+  readonly source: "kms" | "local";
   readonly state: ReleaseLoaderStatus["state"];
   readonly ready: boolean;
   readonly observed: ReleaseIdentity;
@@ -106,6 +107,44 @@ export interface ManagedConfigStats {
   readonly appliedActivationRevision: bigint;
 }
 
+/** Common lifecycle for managed and local configuration. */
+export interface ConfigManager {
+  waitUntilReady(): Promise<void>;
+  stop(reason?: unknown): void;
+  wait(): Promise<void>;
+  status(): ManagedConfigStatus;
+  stats(): ManagedConfigStats;
+}
+
+/** Lifecycle of one validated local generation; owns no background work. */
+export class LocalConfigManager implements ConfigManager {
+  async waitUntilReady(): Promise<void> {}
+  stop(_reason?: unknown): void {}
+  async wait(): Promise<void> {}
+  status(): ManagedConfigStatus {
+    return Object.freeze({
+      source: "local",
+      state: "applied",
+      ready: true,
+      observed: new ReleaseIdentity(),
+      applied: new ReleaseIdentity(),
+      defaultDivergent: false,
+      reconnects: 0n,
+    });
+  }
+  stats(): ManagedConfigStats {
+    return Object.freeze({
+      candidates: 1n,
+      applied: 1n,
+      rejected: Object.freeze({}),
+      reconnects: 0n,
+      defaultDivergent: false,
+      appliedReleaseVersion: 0n,
+      appliedActivationRevision: 0n,
+    });
+  }
+}
+
 interface PolicyOptions extends Callbacks {
   readonly name: string;
 }
@@ -119,7 +158,7 @@ interface Completion {
  * startManagedConfig so exact manifest validation runs before any resource
  * fetch and startup does not return before generated state is publishable.
  */
-export class ManagedConfigManager {
+export class ManagedConfigManager implements ConfigManager {
   readonly #loader: ReleaseLoader;
   readonly #options: PolicyOptions;
   readonly #prepare: PrepareManagedCandidate;
@@ -211,6 +250,7 @@ export class ManagedConfigManager {
       });
     }
     return Object.freeze({
+      source: "kms",
       state: loaderStatus.state,
       ready: this.#ready,
       observed,

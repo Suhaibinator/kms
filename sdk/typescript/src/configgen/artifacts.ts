@@ -322,6 +322,7 @@ function renderBinding(
     "cloneConfig",
     "encodeDefaultsArtifact as encodeDefaultsArtifactWire",
     "immutableSnapshot",
+    "LocalConfigManager",
     "ReleaseIdentity",
     "startManagedConfig",
     "verifyDefaults",
@@ -501,6 +502,13 @@ function renderBinding(
     `export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys" | "schemaVersion" | "schemaSHA256">;`,
   );
   line();
+  line("/** Validate supplied configuration and publish one generation without KMS. */");
+  line(
+    `export async function createLocalStore(config: ${root}, validate: ValidateConfig): Promise<{ store: Store; manager: LocalConfigManager }> {`,
+  );
+  line("  return Store.createLocal(config, validate);");
+  line("}");
+  line();
   line("export class Store {");
   line(`  readonly #defaults: ConfigSnapshot<${root}>;`);
   line("  readonly #bindingKeys: Readonly<Record<string, string>>;");
@@ -528,6 +536,41 @@ function renderBinding(
   line("    this.#bindingKeys = Object.freeze(bindingKeys);");
   line("    this.#defaults = immutableSnapshot(copiedDefaults);");
   line("    this.#validate = validate;");
+  line("  }");
+  line();
+  line("  /** @internal Use createLocalStore. */");
+  line(
+    `  static async createLocal(config: ${root}, validate: ValidateConfig): Promise<{ store: Store; manager: LocalConfigManager }> {`,
+  );
+  line("    try {");
+  line("      const candidate = writableClone(config);");
+  for (const secret of descriptor.secrets) {
+    line(`      assertSecret(candidate[${quote(secret.property)}], ${quote(secret.alias)});`);
+    line(
+      `      setProperty(candidate, ${quote(secret.property)}, stripSecretBindingKey(candidate[${quote(secret.property)}]));`,
+    );
+  }
+  line("      encodeParameterGroups(candidate);");
+  line("      await validate(candidate);");
+  for (const secret of descriptor.secrets) {
+    line(`      assertSecret(candidate[${quote(secret.property)}], ${quote(secret.alias)});`);
+    line(
+      `      setProperty(candidate, ${quote(secret.property)}, stripSecretBindingKey(candidate[${quote(secret.property)}]));`,
+    );
+  }
+  line("      encodeParameterGroups(candidate);");
+  line("      const validated = writableClone(candidate);");
+  line("      const defaults = writableClone(validated);");
+  for (const secret of descriptor.secrets) {
+    line(`      setProperty(defaults, ${quote(secret.property)}, new Secret());`);
+  }
+  line("      const store = new Store(defaults, validate);");
+  line("      store.#active = immutableSnapshot(validated);");
+  line("      store.#started = true;");
+  line("      return { store, manager: new LocalConfigManager() };");
+  line("    } catch (cause) {");
+  line('      throw new CandidateError("config_validation_failed", cause);');
+  line("    }");
   line("  }");
   line();
   line("  async start(");

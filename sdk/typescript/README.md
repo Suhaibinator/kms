@@ -398,6 +398,59 @@ await manager.wait();
 await client.close();
 ```
 
+### Run with local configuration
+
+Regenerate bindings after upgrading the SDK to get `createLocalStore`.
+Using the `RuntimeConfig` and descriptor above, the application can supply
+parameters and secrets directly without creating a client:
+
+```ts
+import { Secret } from "@suhaibinator/kms";
+import type { ConfigManager } from "@suhaibinator/kms/configstore";
+import type { RuntimeConfig } from "./config.js";
+import { createLocalStore } from "./config.generated.js";
+
+const defaults: RuntimeConfig = {
+  requestTimeoutMs: 3000,
+  databasePassword: new Secret(),
+};
+const { store, manager } = await createLocalStore(
+  {
+    ...defaults,
+    requestTimeoutMs: 1000,
+    databasePassword: new Secret(process.env.DATABASE_PASSWORD ?? ""),
+  },
+  async (candidate) => {
+    if (candidate.requestTimeoutMs <= 0 || candidate.databasePassword.isEmpty) {
+      throw new Error("positive timeout and database password required");
+    }
+  },
+);
+const lifecycle: ConfigManager = manager; // also accepts ManagedConfigManager
+await lifecycle.waitUntilReady();
+console.info(store.current().worker().requestTimeoutMs, lifecycle.status().source);
+lifecycle.stop();
+await lifecycle.wait();
+```
+
+Local construction validates field codecs and awaits the application validator,
+clones inputs and validated output, and strips secret binding keys. Empty
+secrets are allowed if your validator permits them. Validation failures are
+redacting `CandidateError`s. No callbacks, release identity, credentials, or
+network connection are required.
+
+The local manager reports `source: "local"`, `state: "applied"`, and
+`ready: true`. Release identities/versions are zero, candidates/applied are
+`1n`, and reconnects, rejections, and divergence are zero. Readiness and wait
+resolve immediately; repeated stop/wait calls leave snapshots readable.
+Managed managers report `source: "kms"` and implement the same `ConfigManager`
+interface. A local store cannot subsequently be started against KMS.
+
+Select local or managed construction explicitly in your application. Local
+configuration stays fixed until process restart; env loading and overrides
+belong to the application. There is no automatic fallback on KMS failure and
+no schema, contract, or server migration.
+
 `consoleCallbacks(logger, { component })` from `@suhaibinator/kms/configstore`
 is a ready-made `Callbacks` implementation (mirroring Go's `SlogCallbacks`)
 that renders mismatches, applied generations, per-group startup snapshots,

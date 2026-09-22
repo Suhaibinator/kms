@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Awaitable, Callable, Generic, Mapping, TypeVar
+from typing import Any, Awaitable, Callable, Generic, Mapping, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -37,6 +37,10 @@ from .types import (
 T = TypeVar("T", bound=BaseModel)
 
 __all__ = [
+    "ConfigManager",
+    "AsyncConfigManager",
+    "LocalConfigManager",
+    "AsyncLocalConfigManager",
     "Callbacks",
     "ConfigBinding",
     "ConfigView",
@@ -95,7 +99,52 @@ class ConfigBinding(Generic[T]):
         self._snapshot_type = snapshot_type
         self._active: ConfigSnapshot[T] | None = None
         self._started = False
+        self._local = False
         self._lock = threading.Lock()
+
+    @classmethod
+    def _from_local(
+        cls, model: type[T], config: Mapping[str, Any] | T,
+        *, snapshot_type: type[ConfigSnapshot[T]] = ConfigSnapshot,
+    ) -> "ConfigBinding[T]":
+        """Build a local binding without passing secrets through managed defaults."""
+        try:
+            spec = ConfigSpec.from_model(model)
+            raw = (
+                {name: getattr(config, name) for name in model.model_fields}
+                if isinstance(config, model) else dict(config)
+            )
+            # Pass defaults as explicit input so Pydantic validates them even
+            # when the source model does not enable validate_default.
+            for name, info in model.model_fields.items():
+                if name not in raw and not info.is_required():
+                    raw[name] = info.get_default(call_default_factory=True)
+            raw = copy.deepcopy(raw)
+            for field in spec.secrets:
+                if field.property in raw:
+                    if not isinstance(raw[field.property], Secret):
+                        raise TypeError("local secret must be a Secret")
+                    raw[field.property] = _clone_secret(raw[field.property])
+            # Convert model instances back to validation inputs, including nested
+            # models: Pydantic otherwise trusts instances by default.
+            payload = _local_validation_input(_model_input(model, raw))
+            candidate = model.model_validate(payload, strict=True)
+            _require_finite(candidate, tuple(field.property for field in spec.parameters))
+            for field in spec.secrets:
+                if not isinstance(getattr(candidate, field.property), Secret):
+                    raise TypeError("validated local secret must remain a Secret")
+            binding = cls.__new__(cls)
+            binding.spec, binding.model = spec, model
+            binding._binding_keys = MappingProxyType({})
+            binding._snapshot_type = snapshot_type
+            binding._started = True
+            binding._local = True
+            binding._lock = threading.Lock()
+            binding._active = snapshot_type(candidate, ReleaseIdentity())
+            binding._source_defaults = binding._normalize_defaults(binding._active.config())
+            return binding
+        except Exception as error:
+            raise CandidateError("config_validation_failed", error) from None
 
     @property
     def current(self) -> ConfigSnapshot[T]:
@@ -137,6 +186,8 @@ class ConfigBinding(Generic[T]):
         return MappingProxyType(groups)
 
     def prepare(self, snapshot: object) -> "_PreparedCandidate[T]":
+        if self._local:
+            raise RuntimeError("configstore: local configuration cannot be replaced")
         identity = ReleaseIdentity.from_candidate(snapshot)
         try:
             parameters = getattr(snapshot, "parameters")
@@ -343,6 +394,58 @@ class _PreparedCandidate(Generic[T]):
     def release_divergence(self) -> tuple[bool, int]:
         """Bounded source-default drift carried by release acknowledgements."""
         return bool(self.default_differences), len(self.default_differences)
+
+
+class ConfigManager(Protocol):
+    """Shared synchronous lifecycle for managed and local configuration."""
+
+    def wait_until_ready(self, timeout: float | None = None) -> None: ...
+    def stop(self) -> None: ...
+    def wait(self, timeout: float | None = None) -> None: ...
+    def status(self) -> ManagedConfigStatus: ...
+    def stats(self) -> ManagedConfigStats: ...
+
+
+class AsyncConfigManager(Protocol):
+    """Shared asynchronous lifecycle for managed and local configuration."""
+
+    async def wait_until_ready_async(self) -> None: ...
+    async def stop_async(self) -> None: ...
+    async def wait_async(self) -> None: ...
+    def status(self) -> ManagedConfigStatus: ...
+    def stats(self) -> ManagedConfigStats: ...
+
+
+class LocalConfigManager:
+    """Lifecycle of one validated local generation; owns no background work."""
+
+    def wait_until_ready(self, timeout: float | None = None) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> None:
+        pass
+
+    def status(self) -> ManagedConfigStatus:
+        return ManagedConfigStatus(source="local", state="applied", ready=True)
+
+    def stats(self) -> ManagedConfigStats:
+        return ManagedConfigStats(candidates=1, applied=1, rejected=MappingProxyType({}))
+
+
+class AsyncLocalConfigManager(LocalConfigManager):
+    """Async lifecycle matching AsyncManagedConfigManager."""
+
+    async def wait_until_ready_async(self) -> None:
+        pass
+
+    async def stop_async(self) -> None:
+        pass
+
+    async def wait_async(self) -> None:
+        pass
 
 
 class ManagedConfigManager(Generic[T]):
@@ -656,6 +759,21 @@ def _model_input(model: type[BaseModel], values: Mapping[str, Any]) -> dict[str,
         )
         result[input_name] = value
     return result
+
+
+def _local_validation_input(value: Any) -> Any:
+    if isinstance(value, Secret):
+        return _clone_secret(value)
+    if isinstance(value, BaseModel):
+        values = {name: getattr(value, name) for name in type(value).model_fields}
+        return _local_validation_input(_model_input(type(value), values))
+    if isinstance(value, Mapping):
+        return {key: _local_validation_input(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_local_validation_input(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_local_validation_input(child) for child in value)
+    return value
 
 
 def _same(left: Any, right: Any) -> bool:

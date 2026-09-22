@@ -7,6 +7,10 @@ no external KMS, credentials, ports, or network access.
 go run ./examples/managed-config
 ```
 
+For a fully local store with no KMS server or watcher, use the generated
+`configkms.NewLocal(cfg)` constructor. The [local configuration example](../../docs/managed-go-configuration.md#run-with-local-configuration)
+loads source defaults, overrides a parameter, and supplies a secret from an env variable.
+
 It demonstrates:
 
 - a source-owned, tagged `Config` with defaults and validation;

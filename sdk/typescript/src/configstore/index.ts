@@ -55,6 +55,8 @@ export {
 export {
   type Callbacks,
   ManagedConfigManager,
+  LocalConfigManager,
+  type ConfigManager,
   type ManagedConfigOptions,
   type ManagedConfigStats,
   type ManagedConfigStatus,

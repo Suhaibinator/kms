@@ -9,6 +9,7 @@ import {
   cloneConfig,
   encodeDefaultsArtifact as encodeDefaultsArtifactWire,
   immutableSnapshot,
+  LocalConfigManager,
   ReleaseIdentity,
   startManagedConfig,
   verifyDefaults,
@@ -183,6 +184,11 @@ export class Snapshot {
 export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
 export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys" | "schemaVersion" | "schemaSHA256">;
 
+/** Validate supplied configuration and publish one generation without KMS. */
+export async function createLocalStore(config: RootConfig, validate: ValidateConfig): Promise<{ store: Store; manager: LocalConfigManager }> {
+  return Store.createLocal(config, validate);
+}
+
 export class Store {
   readonly #defaults: ConfigSnapshot<RootConfig>;
   readonly #bindingKeys: Readonly<Record<string, string>>;
@@ -202,6 +208,29 @@ export class Store {
     this.#bindingKeys = Object.freeze(bindingKeys);
     this.#defaults = immutableSnapshot(copiedDefaults);
     this.#validate = validate;
+  }
+
+  /** @internal Use createLocalStore. */
+  static async createLocal(config: RootConfig, validate: ValidateConfig): Promise<{ store: Store; manager: LocalConfigManager }> {
+    try {
+      const candidate = writableClone(config);
+      assertSecret(candidate["password"], "database_password");
+      setProperty(candidate, "password", stripSecretBindingKey(candidate["password"]));
+      encodeParameterGroups(candidate);
+      await validate(candidate);
+      assertSecret(candidate["password"], "database_password");
+      setProperty(candidate, "password", stripSecretBindingKey(candidate["password"]));
+      encodeParameterGroups(candidate);
+      const validated = writableClone(candidate);
+      const defaults = writableClone(validated);
+      setProperty(defaults, "password", new Secret());
+      const store = new Store(defaults, validate);
+      store.#active = immutableSnapshot(validated);
+      store.#started = true;
+      return { store, manager: new LocalConfigManager() };
+    } catch (cause) {
+      throw new CandidateError("config_validation_failed", cause);
+    }
   }
 
   async start(

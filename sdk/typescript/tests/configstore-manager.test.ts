@@ -355,7 +355,7 @@ describe("ManagedConfigManager", () => {
 
     expect(calls).toBe(1);
     expect(active).toEqual({ hot: 1, restart: "a" });
-    expect(manager.status()).toMatchObject({ ready: true, state: "applied" });
+    expect(manager.status()).toMatchObject({ source: "kms", ready: true, state: "applied" });
 
     transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}'), 2n);
     await waitFor(() => manager.status().applied.version === 2n);

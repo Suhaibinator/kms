@@ -282,6 +282,58 @@ digest without storing sensitive or environment-specific data. The generated
 Go binding embeds the same alias/kind/content-type contract for prefetch
 validation.
 
+## Run with local configuration
+
+After upgrading the SDK, regenerate your bindings to obtain `NewLocal`.
+Pass a complete configuration with resolved secrets to publish one validated,
+immutable generation without constructing a KMS client:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "os"
+
+    appconfig "github.com/Suhaibinator/kms/examples/managed-config/config"
+    "github.com/Suhaibinator/kms/examples/managed-config/configkms"
+    "github.com/Suhaibinator/kms/sdk/go/kmsclient"
+)
+
+func main() {
+    cfg := appconfig.Defaults()
+    cfg.RequestLimit = 25
+    cfg.APIKey = kmsclient.NewSecret([]byte(os.Getenv("APP_API_KEY")))
+    store, err := configkms.NewLocal(cfg)
+    if err != nil {
+        log.Fatal(err) // classified error; configuration values stay redacted
+    }
+    snapshot := store.Current()
+    fmt.Println(snapshot.RequestHandler().RequestLimit(), store.Status().Source)
+    if err := store.Wait(); err != nil { // returns immediately for local stores
+        log.Fatal(err)
+    }
+}
+```
+
+`NewLocal` clones before and after application validation and removes secret
+binding keys. Optional empty secrets are allowed when `Validate` permits them.
+The existing typed snapshots and views remain unchanged. Configuration stays
+fixed until process restart; changing the input or an environment variable
+does not update the store.
+
+Local status reports `Source: "local"`, `Ready: true`, and `State: "applied"`.
+Release identities and versions are zero, candidate/applied counters are one,
+and reconnects, rejections, and divergence are zero. Managed stores report
+`Source: "kms"`. Local stores own no client or watcher to close; `Wait` always
+succeeds immediately and does not invalidate snapshots.
+
+Applications explicitly choose local construction or managed `Start`, for
+example using their own `CONFIG_SOURCE` setting. KMS does not read that setting,
+load env secrets, or fall back to local configuration on connection failure.
+No schema, contract, or server migration is needed.
+
 ## Supply application defaults
 
 The importing application supplies a complete literal for all managed

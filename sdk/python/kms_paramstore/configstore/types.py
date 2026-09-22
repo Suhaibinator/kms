@@ -173,6 +173,7 @@ class ManagedConfigStatus:
     last_rejection_category: str = ""
     last_failure_unix_ms: int = 0
     reconnects: int = 0
+    source: str = "kms"
 
 
 @dataclass(frozen=True)
