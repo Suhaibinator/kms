@@ -19,6 +19,9 @@ func Defaults() *Config {
 	return &Config{Name: "  canonical name  "}
 }
 
+// ValidationObserver lets tests retain a validator-owned reference.
+var ValidationObserver func(*Config)
+
 func (c *Config) Validate() error {
 	if c.Token.IsZero() {
 		return errors.New("token is required")
@@ -33,5 +36,8 @@ func (c *Config) Validate() error {
 		plaintext[0] = 'S'
 	}
 	c.Name = strings.TrimSpace(c.Name)
+	if ValidationObserver != nil {
+		ValidationObserver(c)
+	}
 	return nil
 }

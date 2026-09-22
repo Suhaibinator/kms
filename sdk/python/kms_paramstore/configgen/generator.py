@@ -319,6 +319,7 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
         "from kms_paramstore import Secret",
         "from kms_paramstore.configstore import (",
         "    AsyncManagedConfigManager, Callbacks, ConfigBinding, ConfigSnapshot,",
+        "    LocalConfigManager, AsyncLocalConfigManager,",
         "    ConfigView, ContractEntry, Duration, ManagedConfigManager, VerifyResult,",
         "    encode_defaults_artifact as _encode_defaults_artifact,",
         "    export_defaults as _export_defaults,",
@@ -393,6 +394,16 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
         "",
         "    async def verify_defaults_async(self, client: object, *, namespace: str, release: str = '', profile: str = '', **options: Any) -> VerifyResult:",
         "        return await _verify_defaults_async(client, namespace=namespace, release=release, profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, groups=self.encode_defaults_groups(), **options)",
+    ])
+    lines.extend([
+        "", "", "def create_local_store(config: Mapping[str, Any] | _RootConfig) -> tuple[GeneratedConfigStore, LocalConfigManager]:",
+        '    """Validate and publish one immutable local generation, without KMS."""',
+        "    store = GeneratedConfigStore._from_local(_RootConfig, config, snapshot_type=Snapshot)",
+        "    return cast(GeneratedConfigStore, store), LocalConfigManager()",
+        "", "", "async def create_local_store_async(config: Mapping[str, Any] | _RootConfig) -> tuple[GeneratedConfigStore, AsyncLocalConfigManager]:",
+        '    """Create local configuration with an asynchronous lifecycle handle."""',
+        "    store, _ = create_local_store(config)",
+        "    return store, AsyncLocalConfigManager()",
     ])
     return "\n".join(lines) + "\n"
 

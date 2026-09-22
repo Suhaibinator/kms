@@ -66,6 +66,7 @@ def _selector(schema: int, digest: bool):
 
 def _assert_queued_status(manager, schema: int) -> None:
     status = manager.status()
+    assert status.source == "kms"
     assert status.observed == ReleaseIdentity(
         namespace="prod/app", name="runtime", version=3,
         activation_revision=30, schema_version=schema,

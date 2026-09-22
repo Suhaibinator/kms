@@ -684,6 +684,8 @@ func (r ReleaseIdentity) MarshalJSONTo(out *jsontext.Encoder) error {
 // Status is a redacted point-in-time manager status. It contains no aliases,
 // field paths, values, or secret metadata.
 type Status struct {
+	// Source identifies whether configuration came from KMS or local input.
+	Source                string
 	State                 string
 	Ready                 bool
 	Observed              ReleaseIdentity

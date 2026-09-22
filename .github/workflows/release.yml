@@ -166,6 +166,8 @@ jobs:
         env:
           PACKAGE_FILE: ${{ steps.npm-pack.outputs.package_file }}
         run: |
+          typescript_version=$(node -p 'require(process.argv[1]).version' "$GITHUB_WORKSPACE/sdk/typescript/node_modules/typescript/package.json")
+          node_types_version=$(node -p 'require(process.argv[1]).version' "$GITHUB_WORKSPACE/sdk/typescript/node_modules/@types/node/package.json")
           consumer="$RUNNER_TEMP/typescript-release-consumer"
           mkdir -p "$consumer"
           cd "$consumer"
@@ -173,7 +175,7 @@ jobs:
           npm pkg set type=module
           npm install --ignore-scripts \
             "$GITHUB_WORKSPACE/dist/release/$PACKAGE_FILE" \
-            typescript@5.2.2 @types/node@20
+            "typescript@$typescript_version" "@types/node@$node_types_version"
           cat >index.ts <<'EOF'
           import type { KmsClient, ReleaseSnapshot } from "@suhaibinator/kms";
           export type PublicReleaseTypes = readonly [KmsClient, ReleaseSnapshot];

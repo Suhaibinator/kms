@@ -15,6 +15,7 @@ import (
 
 // Manager owns managed release policy and the background lower-level loader.
 type Manager struct {
+	local   bool
 	loader  *kmsclient.ReleaseLoader
 	options Options
 	prepare PrepareFunc
@@ -71,6 +72,10 @@ func (m *Manager) MarshalJSON() ([]byte, error) {
 func (m *Manager) MarshalJSONTo(out *jsontext.Encoder) error {
 	return json.MarshalEncode(out, m.safeProjection())
 }
+
+// NewLocalManager returns the lifecycle of one already validated local generation.
+// It owns no loader or background work. Generated bindings call it after publication.
+func NewLocalManager() *Manager { return &Manager{local: true} }
 
 // Start validates its generated contract, starts ReleaseLoader in the
 // background, and waits until the initial generation has been atomically
@@ -385,6 +390,9 @@ func (m *Manager) Status() Status {
 	if m == nil {
 		return Status{}
 	}
+	if m.local {
+		return Status{Source: "local", State: "applied", Ready: true}
+	}
 	loaderStatus := m.loader.Status()
 	m.mu.RLock()
 	observed := m.observed
@@ -403,6 +411,7 @@ func (m *Manager) Status() Status {
 		}
 	}
 	status := Status{
+		Source:                "kms",
 		State:                 loaderStatus.State,
 		Ready:                 m.ready,
 		Observed:              observed,
@@ -420,6 +429,9 @@ func (m *Manager) Status() Status {
 func (m *Manager) Stats() Stats {
 	if m == nil {
 		return Stats{Rejected: make(map[RejectionCategory]uint64)}
+	}
+	if m.local {
+		return Stats{Candidates: 1, Applied: 1, Rejected: make(map[RejectionCategory]uint64)}
 	}
 	loaderStats := m.loader.Stats()
 	m.mu.RLock()
@@ -444,6 +456,9 @@ func (m *Manager) Stats() Stats {
 func (m *Manager) Wait() error {
 	if m == nil {
 		return errors.New("configstore: nil Manager")
+	}
+	if m.local {
+		return nil
 	}
 	<-m.done
 	m.mu.RLock()

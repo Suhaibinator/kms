@@ -135,6 +135,7 @@ func (r *bindingRenderer) renderBody() {
 	r.renderDefaultsArtifactEncoder()
 	r.renderVerify()
 	r.renderStart()
+	r.renderLocal()
 	r.renderPrepare()
 	r.renderGroupCodecs()
 	r.renderSnapshots()
@@ -312,6 +313,30 @@ func (r *bindingRenderer) renderStart() {
 	r.line("func (s *Store) Status() configstore.Status { return s.manager.Status() }")
 	r.line("func (s *Store) Stats() configstore.Stats { return s.manager.Stats() }")
 	r.line("func (s *Store) Wait() error { return s.manager.Wait() }")
+	r.line("")
+}
+
+func (r *bindingRenderer) renderLocal() {
+	r.line("// NewLocal validates and publishes supplied configuration without connecting to KMS.")
+	r.line("// The immutable generation stays fixed for the lifetime of the store.")
+	r.line("func NewLocal(config *%s) (*Store, error) {", r.rootTypeString)
+	r.line("if config == nil { return nil, configstore.Reject(configstore.RejectConfigValidationFailed, errors.New(\"local configuration is required\")) }")
+	r.line("if err := validateInlinePointers(config); err != nil { return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err) }")
+	r.line("candidate := cloneRoot(config)")
+	for _, field := range r.model.Secrets {
+		r.line("%s.BindKey = kmsclient.BindingKey{}", r.fieldSelector("candidate", field))
+	}
+	r.line("if err := candidate.Validate(); err != nil { return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err) }")
+	r.line("if err := validateInlinePointers(candidate); err != nil { return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err) }")
+	r.line("candidate = cloneRoot(candidate)")
+	for _, field := range r.model.Secrets {
+		r.line("%s.BindKey = kmsclient.BindingKey{}", r.fieldSelector("candidate", field))
+	}
+	r.line("store := &Store{}")
+	r.line("store.active.Store(&immutableGeneration{config: candidate})")
+	r.line("store.manager = configstore.NewLocalManager()")
+	r.line("return store, nil")
+	r.line("}")
 	r.line("")
 }
 

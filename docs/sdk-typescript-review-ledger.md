@@ -171,7 +171,7 @@ cancellation, stale recovery, and bundle exclusion.
 | An async-rejecting shutdown error observer escaped as an unhandled rejection, and an initializer abort listener could re-enter close before the shared attempt existed. | Observe sync, Promise, and hostile-thenable observer failures without delaying cleanup (`0c1708f`); publish one close attempt before abort/uninstall side effects (`dce510e`). | `sdk/typescript/tests/next-server.test.ts` |
 | Browser policy could remain stale across navigation/focus or after `policy_changed`. | Added navigation refresh (`f98ff02`), structured stale recovery (`223721f`), and recovery observations (`b8361bf`). | `sdk/typescript/tests/next-client.test.tsx` |
 | Unit mocks did not prove server-only imports, instrumentation, or a real App Router build. | Added real Next boundaries (`5593138`), isolated fixtures (`2c37976`), and instrumentation lifecycle (`bd89250`). | `npm run test:next`, `tests/fixtures/next-boundary` |
-| Peer claims and browser behavior were not tested from isolated installed packages. | Added exact Next/React and Chromium gates (`f5672db`) and hardened them to packed, non-symlinked installs plus the minimum compiler (`2634141`). | `.github/workflows/ci.yml`, `npm run test:browser`, `scripts/test-next-peer.mjs`, `scripts/test-typescript-min.mjs` |
+| Peer claims and browser behavior were not tested from isolated installed packages. | Added exact Next/React and Chromium gates (`f5672db`) and hardened them to packed, non-symlinked installs plus the minimum compiler (`2634141`). | `.github/workflows/ci.yml`, `npm run test:browser`, `scripts/test-next-peer.mjs`, `scripts/test-declarations.mjs` |
 
 The root entry point remains Node-only. The sole browser entry point is
 `@suhaibinator/kms/next/client`; it receives public HTTP policy and cannot
@@ -210,7 +210,7 @@ hermetic CI.
 | Examples and package entry points could drift from emitted declarations. | Published API/examples (`6672dfe`), added declaration consumers (`88a17f3`), packaging gates (`d173cc8`), and the built API lock (`0b82435`). | `npm run test:types`, `npm run build`, `npm run test:package` |
 | Published links and notices were incomplete or repository-relative. | Corrected links (`77f7fd2`, `2af8a32`), included notices (`23ce596`), and clarified security reporting (`44b13d9`). | package `README.md`, `LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `package.json` |
 | Generated checking reused committed output and could miss non-hermetic drift. | Generation now runs in isolation and byte-compares every generated file (`04c64e3`). | `npm run check:generated` |
-| Runtime, compiler, peer, and browser claims lacked a complete matrix. | Added Node qualification (`73b3efe`), TypeScript/Next/React/Chromium gates (`f5672db`), and package-isolated compatibility (`2634141`). | `.github/workflows/ci.yml`, `npm run test:typescript-min`, `scripts/test-next-peer.mjs`, `npm run test:browser` |
+| Runtime, compiler, peer, and browser claims lacked a complete matrix. | Added Node qualification (`73b3efe`), TypeScript/Next/React/Chromium gates (`f5672db`), and package-isolated compatibility (`2634141`). | `.github/workflows/ci.yml`, `npm run test:declarations`, `scripts/test-next-peer.mjs`, `npm run test:browser` |
 | Protocol qualification needed positive TLS, auth, mutations, watches, releases, exact integers, secret writes, and deadlines. | Added coverage in `7b5eeab`, `bf159cd`, `2655897`, `d70bbc0`, and `81efbf9`. | `tests/tls-integration.test.ts`, `tests/grpc-integration.test.ts` |
 | Concurrency confidence needed more than ordinary unit tests. | Added stress scenarios (`9697d3e`) and strengthened callback/lifecycle bounds (`903df95`). | `sdk/typescript/tests/stress.test.ts` |
 
@@ -220,7 +220,7 @@ The release gates are:
 cd sdk/typescript
 npm ci
 npm run check
-npm run test:typescript-min
+npm run test:declarations
 npm run test:browser
 ```
 
@@ -239,7 +239,7 @@ These are accepted support boundaries, not unresolved hidden findings:
   contract over loopback TLS/mTLS but do not claim qualification against a
   separately deployed production KMS server.
 - **Explicit compatibility matrix.** Supported Node majors are 22, 24, and 26;
-  declarations are checked with TypeScript 5.2.2 and the pinned compiler;
+  declarations are checked with the pinned TypeScript 7 compiler;
   Next.js 16 and React 19 are the supported adapter peers.
 - **Browser matrix.** Chromium is qualified. Other modern browsers with native
   `bigint`, `fetch`, `AbortController`, and focus/navigation events are expected

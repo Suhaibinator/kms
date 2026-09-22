@@ -266,7 +266,8 @@ for lifecycle, cancellation, token-provider, and status details.
 ## Generated managed configuration
 
 The optional Pydantic v2 layer generates a typed store, Draft 2020-12 schema,
-and release contract; it also provides atomic snapshots, hot/restart policy,
+and release contract; generated `create_local_store` / `create_local_store_async`
+allow validated supplied configuration with no KMS connection. It also provides atomic snapshots, hot/restart policy,
 defaults export, and value-free defaults verification. See
 [`MANAGED_CONFIG.md`](MANAGED_CONFIG.md). Its generator rejects schemas larger
 than 256 KiB; the KMS server and Go generator permit up to 1 MiB.

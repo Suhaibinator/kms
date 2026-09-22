@@ -85,7 +85,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:types": "node ./node_modules/typescript/bin/tsc -p tests/types/tsconfig.json --noEmit",
-    "test:typescript-min": "node ./scripts/test-typescript-min.mjs",
+    "test:declarations": "node ./scripts/test-declarations.mjs",
     "test:next": "node ./scripts/test-next-boundaries.mjs",
     "test:browser": "node ./scripts/test-next-browser.mjs",
     "test:package": "node ./node_modules/typescript/bin/tsc -p tests/package/tsconfig.json --noEmit && npm pack --dry-run --ignore-scripts",

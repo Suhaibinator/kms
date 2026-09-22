@@ -23,7 +23,7 @@ class AppConfig(BaseModel):
     port: Annotated[int, Parameter("runtime", reload="restart")] = 8080
     debug: Annotated[bool, Parameter("runtime")] = False
     password: Annotated[Secret, SecretField("db_password")] = Secret(
-        bind_key=os.environ["DB_PASSWORD_KMS_BINDING_KEY"]
+        bind_key=os.getenv("DB_PASSWORD_KMS_BINDING_KEY", "")
     )
 
 binding = ConfigBinding(AppConfig, {})
@@ -93,3 +93,57 @@ present so management tooling can pair it with an explicit schema version 0.
 Generated stores always embed and export their nonempty generated schema digest.
 The generated store exposes these as `defaults_artifact`, `export_defaults`,
 `verify_defaults`, and `verify_defaults_async`.
+
+## Run with local configuration
+
+Regenerate bindings after upgrading to get the local factories. With the
+`AppConfig` above, missing parameter values use the model's source defaults;
+applications supply overrides and resolved secrets themselves:
+
+```python
+import os
+from app.config_generated import create_local_store
+from kms_paramstore import Secret
+from kms_paramstore.configstore import ConfigManager
+
+values = {"debug": False}  # port uses the model default unless overridden
+values.update(port=9000, password=Secret(os.environ["DB_PASSWORD"].encode()))
+store, local_manager = create_local_store(values)
+manager: ConfigManager = local_manager  # also accepts ManagedConfigManager
+manager.wait_until_ready()
+print(store.current.port, manager.status().source)
+manager.stop()
+manager.wait()
+```
+
+An existing `AppConfig` instance can also be supplied; it is strictly
+revalidated, including nested model instances. Local factories clone before
+validation and again before publication, strip binding keys, and use the same
+generated snapshots/views. Model validation decides whether an empty secret
+is acceptable. Failures raise a redacting `CandidateError`.
+
+For asyncio applications, use the equivalent lifecycle:
+
+```python
+from app.config_generated import create_local_store_async
+from kms_paramstore.configstore import AsyncConfigManager
+
+async def run_local(values):
+    store, local_manager = await create_local_store_async(values)
+    manager: AsyncConfigManager = local_manager
+    await manager.wait_until_ready_async()
+    print(store.current.port)
+    await manager.stop_async()
+    await manager.wait_async()
+```
+
+Local managers own no clients, threads, tasks, or watchers. They report
+`source="local"`, `state="applied"`, and `ready=True`; managed managers report
+`source="kms"`. Local identities/versions remain zero, candidates/applied are
+one, and reconnects, rejections, and divergence are zero. Readiness and wait
+complete immediately; repeated stop/wait calls are harmless and snapshots
+remain readable. Starting KMS management on a local store is rejected.
+
+The application explicitly chooses local or managed configuration. Local
+values stay fixed until process restart, with no automatic fallback, env
+loading, or hot reload. No schema, contract, or server migration is needed.

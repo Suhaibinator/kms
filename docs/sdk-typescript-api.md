@@ -28,11 +28,9 @@ snapshot. The existing repository frontend remains a static export and is not a
 host for this adapter; consumers need a serverful Next.js deployment.
 
 The package is ESM-only. Node 22 is the oldest supported runtime; CI runs the
-complete release gate on the current Node 26 release. The declaration syntax
-requires TypeScript 5.2 or newer (`const` type parameters and
-`Symbol.asyncDispose`);
-the release gate compiles built-package consumers with both TypeScript 5.2.2
-and the pinned current compiler. Next.js and React are
+complete release gate on the current Node 26 release. TypeScript 7 is the supported
+compiler major; older compilers are not supported. The release gate compiles
+packed-package consumers with the pinned TypeScript 7 compiler. Next.js and React are
 optional peers and are needed only for their respective adapter entry points.
 The peer ranges cover Next.js 16 and React 19; an isolated exact-tuple build
 qualifies Next.js 16 with React 19.
@@ -333,7 +331,8 @@ The complete compile-checked integration is in the
 | `Callbacks`, `ManagedConfigOptions`, `ManagedReleaseClient`, `ManagedPreparedCandidate`, `PrepareManagedCandidate` | Types | Application observers (`onDefaultMismatch` required, `onApplied` and `onCandidateRejected` optional; all synchronous, failures isolated), structural client, generated preparation (including `changed` and `groups`), contract, and release-loader options. |
 | `consoleCallbacks(logger, options?)`, `ConsoleLogger`, `ConsoleCallbacksOptions` | Function/types | Ready-made `Callbacks` rendering fixed structured log records (`kms config diverges from source defaults`, `kms config applied`, `kms config group`, `kms config reloaded`, `kms config field changed`, `kms config candidate rejected`) with an optional `component` attribute and `startupSnapshot`/`reloadChanges`/`reloadSnapshot` toggles (every applied generation is dumped in full by default). |
 | `startManagedConfig(client, options, prepare, signal?)`, `ManagedConfigManager` | Function and class | Validate before fetch, block until initial atomic publication, then expose `stop`, `wait`, `status`, and `stats`. |
-| `ManagedConfigStatus`, `ManagedConfigStats` | Types | Fresh redacted identity/health and bounded counter snapshots. |
+| `ConfigManager`, `LocalConfigManager` | Interface and class | Shared readiness/stop/wait/status/stats lifecycle; local handles own no background work. Obtain one from generated `createLocalStore(config, validate)`, which returns `{ store, manager }`. |
+| `ManagedConfigStatus`, `ManagedConfigStats` | Types | Fresh redacted identity/health (including `source: "kms" \| "local"`) and bounded counter snapshots. |
 | `ReleaseIdentityInit`, `ReleaseIdentity` | Type and immutable class | Value-free copied release identity; use `ReleaseIdentity.from`, `isZero`, and safe serialization. |
 | `ConfigSnapshot<T>`, `immutableSnapshot(config, release?)` | Class/function | Private immutable generation with defensive `config()` and typed `get(key)` reads. |
 | `canonicalParameterValue(contentType, value)`, `parameterHash(contentType, value)` | Functions | Canonical bytes and lowercase-hex SHA-256 shared with the Go SDK and the server: strict single-document JSON with UTF-8-byte-sorted keys, verbatim number literals, minimal string escaping, duplicate-key and invalid-UTF-8 rejection; other content types byte-for-byte. |

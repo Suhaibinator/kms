@@ -109,7 +109,7 @@ func TestStartAppliesStartupMismatchAndAcknowledgesDivergence(t *testing.T) {
 		t.Fatalf("Start() = (%v, %v), want manager despite startup divergence", manager, err)
 	}
 	status := manager.Status()
-	if !status.Ready || !status.DefaultDivergent || status.Applied.Version() != 1 {
+	if status.Source != "kms" || !status.Ready || !status.DefaultDivergent || status.Applied.Version() != 1 {
 		t.Fatalf("Status() = %+v", status)
 	}
 	if reported.Load() != 1 || aborted.Load() != 0 || published.Load() != 1 {

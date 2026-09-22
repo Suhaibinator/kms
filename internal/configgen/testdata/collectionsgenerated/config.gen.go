@@ -145,6 +145,29 @@ func (s *Store) Status() configstore.Status { return s.manager.Status() }
 func (s *Store) Stats() configstore.Stats   { return s.manager.Stats() }
 func (s *Store) Wait() error                { return s.manager.Wait() }
 
+// NewLocal validates and publishes supplied configuration without connecting to KMS.
+// The immutable generation stays fixed for the lifetime of the store.
+func NewLocal(config *rootconfig.Config) (*Store, error) {
+	if config == nil {
+		return nil, configstore.Reject(configstore.RejectConfigValidationFailed, errors.New("local configuration is required"))
+	}
+	if err := validateInlinePointers(config); err != nil {
+		return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err)
+	}
+	candidate := cloneRoot(config)
+	if err := candidate.Validate(); err != nil {
+		return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err)
+	}
+	if err := validateInlinePointers(candidate); err != nil {
+		return nil, configstore.Reject(configstore.RejectConfigValidationFailed, err)
+	}
+	candidate = cloneRoot(candidate)
+	store := &Store{}
+	store.active.Store(&immutableGeneration{config: candidate})
+	store.manager = configstore.NewLocalManager()
+	return store, nil
+}
+
 func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (configstore.PreparedCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return configstore.PreparedCandidate{}, err
