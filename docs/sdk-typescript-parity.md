@@ -35,7 +35,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore`, `configgen` | Declaration build, built consumer, serverful Next build, browser-bundle inspection, and invalid client-import rejection | `sdk/typescript/tests/types`, `sdk/typescript/tests/package`, `npm run test:next`, `npm run test:package` | complete |
 | Current Node runtime | package release gate | Typecheck, lint, tests, consumer types, framework boundary builds, and package checks on Node 26 | `.github/workflows/ci.yml` | complete |
-| TypeScript compiler compatibility | published declarations | Built-package consumption on TypeScript 5.2.2 and the pinned current compiler | `npm run test:typescript-min`, `npm run test:types`, `npm run test:package` | complete |
+| TypeScript compiler compatibility | published declarations | Built-package consumption on the pinned TypeScript 7 compiler | `npm run test:declarations`, `npm run test:types`, `npm run test:package` | complete |
 | Protocol-faithful server interoperability | core transport, watches, releases | Actual gRPC loopback with TLS/mTLS, auth metadata, unary methods, exact `bigint` values, bidi resume, releases, and applied acknowledgement | `sdk/typescript/tests/grpc-integration.test.ts`, `tls-integration.test.ts` | complete |
 
 Intentional differences are documented in

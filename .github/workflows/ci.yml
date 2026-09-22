@@ -307,7 +307,7 @@ jobs:
         run: go test ./internal/integration -race -count=1 -timeout=10m -run 'TestExternalSDKSessionConformance|TestReleaseSessionReplayConsistencyOverRealKMS'
 
   typescript-sdk-compatibility:
-    name: TypeScript SDK (compiler minimum & Chromium)
+    name: TypeScript SDK (TS7 declarations & Chromium)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -322,10 +322,10 @@ jobs:
           cache-dependency-path: sdk/typescript/package-lock.json
       - name: Install dependencies from lockfile
         run: npm ci
-      - name: Build declarations for minimum-compiler consumption
+      - name: Build declarations for packed-package consumption
         run: npm run build
-      - name: TypeScript 5.2 declaration consumer
-        run: npm run test:typescript-min
+      - name: TypeScript 7 declaration consumer
+        run: npm run test:declarations
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Next client real-browser behavior

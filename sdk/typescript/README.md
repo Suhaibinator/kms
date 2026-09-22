@@ -7,10 +7,9 @@ atomic release loading, public-policy publishing primitives, and an optional
 serverful Next.js adapter.
 
 The SDK requires Node.js 22 or newer and is ESM-only. CI qualifies the complete
-release gate on Node.js 22, 24, and 26. Its declarations use
-TypeScript features available in TypeScript 5.2 and newer; the repository
-release gate compiles built-package consumers with both TypeScript 5.2.2 and
-the pinned current compiler. The KMS transport is server-only: never import the package root from browser code. The only
+release gate on Node.js 22, 24, and 26. TypeScript 7 is the supported compiler
+major; older compilers are not supported. The release gate compiles packed-package
+consumers with the pinned TypeScript 7 compiler. The KMS transport is server-only: never import the package root from browser code. The only
 browser entry point is `@suhaibinator/kms/next/client`, which consumes an
 explicitly allowlisted public HTTP projection and never connects to KMS.
 

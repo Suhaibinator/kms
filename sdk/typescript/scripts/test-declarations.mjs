@@ -1,11 +1,20 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sdkDirectory = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-const temporaryDirectory = await mkdtemp(join(tmpdir(), "kms-typescript-minimum-"));
+const { version: compilerVersion } = JSON.parse(
+  await readFile(join(sdkDirectory, "node_modules/typescript/package.json"), "utf8"),
+);
+if (!compilerVersion.startsWith("7.")) {
+  throw new Error("The declaration consumer requires the pinned TypeScript 7 compiler");
+}
+const { version: nodeTypesVersion } = JSON.parse(
+  await readFile(join(sdkDirectory, "node_modules/@types/node/package.json"), "utf8"),
+);
+const temporaryDirectory = await mkdtemp(join(tmpdir(), "kms-typescript-declarations-"));
 
 try {
   const packed = await command(
@@ -13,7 +22,7 @@ try {
     ["pack", "--ignore-scripts", "--pack-destination", temporaryDirectory],
     sdkDirectory,
   );
-  if (packed.code !== 0) fail("SDK package failed to pack for TypeScript 5.2", packed.output);
+  if (packed.code !== 0) fail("SDK package failed to pack for TypeScript 7", packed.output);
   const archives = (await readdir(temporaryDirectory)).filter((entry) => entry.endsWith(".tgz"));
   const archive = archives[0];
   if (archives.length !== 1 || archive === undefined) {
@@ -31,9 +40,9 @@ try {
           react: "19.2.8",
         },
         devDependencies: {
-          "@types/node": "20.14.12",
+          "@types/node": nodeTypesVersion,
           "@types/react": "19.2.18",
-          typescript: "5.2.2",
+          typescript: compilerVersion,
         },
       },
       null,
@@ -84,7 +93,7 @@ void descriptor;
 
   const install = await command("npm", ["install", "--no-audit", "--no-fund"]);
   if (install.code !== 0)
-    fail("TypeScript 5.2 consumer dependencies failed to install", install.output);
+    fail("TypeScript 7 consumer dependencies failed to install", install.output);
   const compile = await command(process.execPath, [
     resolve(temporaryDirectory, "node_modules/typescript/bin/tsc"),
     "-p",
@@ -92,7 +101,7 @@ void descriptor;
     "--pretty",
     "false",
   ]);
-  if (compile.code !== 0) fail("TypeScript 5.2 rejected the packed declarations", compile.output);
+  if (compile.code !== 0) fail("TypeScript 7 rejected the packed declarations", compile.output);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

@@ -163,8 +163,8 @@ chunks for server transport, TLS, generated-protocol, and credential markers.
 Generated managed-configuration fixtures must match the descriptor and
 exercise the emitted `Store`; applications should run their
 `kms-config-gen-ts ... --check` command in CI for the same stale-artifact gate.
-The compatibility jobs compile the built package with the exact TypeScript
-5.2.2 minimum, build an isolated Next.js 16/React 19 peer tuple,
+The compatibility jobs compile the packed package with the pinned TypeScript
+7 compiler, build an isolated Next.js 16/React 19 peer tuple,
 and launch Chromium against the serverful fixture. The browser gate verifies
 initial hydration, HTTP refresh, exact `bigint` revisions, and `policy_changed`
 recovery without a reload.
@@ -268,8 +268,8 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
   release.
 - `TypeScript SDK (Node 26)` — the complete package gate on the current Node.js
   release.
-- `TypeScript SDK (compiler minimum & Chromium)` — minimum TypeScript
-  declaration consumption and the real-browser Next.js fixture.
+- `TypeScript SDK (TS7 declarations & Chromium)` — TypeScript 7
+  packed declaration consumption and the real-browser Next.js fixture.
 - `TypeScript SDK (Next ... / React ...)` — isolated builds across the
   supported Next.js and React peer tuples.
 - `Frontend (quality, tests & build)` — locked install, generated types,

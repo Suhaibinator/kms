@@ -8,6 +8,9 @@ a minor release may contain documented breaking changes.
 
 ### Changed
 
+- **Breaking:** support TypeScript 7 only. Packed declaration checks use the
+  pinned TypeScript 7 compiler; remove the TypeScript 5.2 compatibility gate.
+
 - **Breaking:** require Next.js 16 and React 19 for the optional adapter peers.
   Drop Next.js 14 and 15 and React 18 compatibility jobs.
 
