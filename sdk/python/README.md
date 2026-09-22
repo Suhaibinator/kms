@@ -35,7 +35,7 @@ python -m pip install \
   https://github.com/Suhaibinator/kms/releases/download/v0.3.0/kms_paramstore-0.3.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.83.1`, `protobuf>=7.35.1,<8`, and
+Runtime dependencies are `grpcio>=1.84.0`, `protobuf>=7.35.1,<8`, and
 `pydantic>=2.13,<3`. The gRPC stubs are vendored under
 `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 
