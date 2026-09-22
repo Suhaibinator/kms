@@ -203,7 +203,7 @@ export class ManagedConfigManager implements ConfigManager {
     );
   }
 
-  /** @internal Wait for the first atomic publication or the loader's startup failure. */
+  /** Wait for the first atomic publication or the loader's startup failure. */
   async waitUntilReady(): Promise<void> {
     const completion = this.#completion;
     if (!completion) throw new Error("configstore: manager is not started");

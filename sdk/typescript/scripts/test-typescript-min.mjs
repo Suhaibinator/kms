@@ -43,10 +43,16 @@ try {
   await writeFile(
     resolve(temporaryDirectory, "consumer.ts"),
     `import { createClient, formatRevision, type WatchStatus } from "@suhaibinator/kms";
-import { codecs, type ValueCodec } from "@suhaibinator/kms/configstore";
+import { codecs, LocalConfigManager, type ConfigManager, type ManagedConfigManager, type ValueCodec } from "@suhaibinator/kms/configstore";
 import { generate, type ConfigDescriptor } from "@suhaibinator/kms/configgen";
 import { createNextKms } from "@suhaibinator/kms/next/server";
 import { usePublicConfig } from "@suhaibinator/kms/next/client";
+
+declare const managed: ManagedConfigManager;
+const lifecycles: ConfigManager[] = [managed, new LocalConfigManager()];
+for (const lifecycle of lifecycles) {
+  void lifecycle.waitUntilReady();
+}
 
 declare const status: WatchStatus;
 const revision: string = formatRevision(status.currentRevision);
