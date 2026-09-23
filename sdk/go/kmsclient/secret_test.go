@@ -11,6 +11,86 @@ import (
 
 const leak = "super-secret-plaintext"
 
+func TestSecretEqual(t *testing.T) {
+	newSnapshot := func() Secret {
+		return Secret{
+			BindKey: NewBindingKey("declaration-binding-key"),
+			value:   []byte("secret"), path: "/prod/app/password",
+			version: 17, contentType: "text/plain",
+		}
+	}
+	base := newSnapshot()
+	changed := func(change func(*Secret)) Secret {
+		s := newSnapshot()
+		change(&s)
+		return s
+	}
+	for _, tt := range []struct {
+		name string
+		a, b Secret
+		want bool
+	}{
+		{"independent equal values", base, newSnapshot(), true},
+		{"copy", base, base, true},
+		{"changed plaintext", base, changed(func(s *Secret) { s.value[0] = 'S' }), false},
+		{"different lengths", base, changed(func(s *Secret) { s.value = append(s.value, 'x') }), false},
+		{"different capacity", base, changed(func(s *Secret) {
+			value := make([]byte, len(s.value), len(s.value)+10)
+			copy(value, s.value)
+			s.value = value
+		}), true},
+		{"path only", base, changed(func(s *Secret) { s.path = "/dev/app/password" }), false},
+		{"version only", base, changed(func(s *Secret) { s.version++ }), false},
+		{"content type only", base, changed(func(s *Secret) { s.contentType = "application/octet-stream" }), false},
+		{"binding key only", base, changed(func(s *Secret) { s.BindKey = NewBindingKey("different-binding-key") }), false},
+		{"binding key removed", base, changed(func(s *Secret) { s.BindKey = BindingKey{} }), false},
+		{"zero values", Secret{}, Secret{}, true},
+		{"nil buffers", NewSecret(nil), NewSecret(nil), true},
+		{"empty buffers", NewSecret([]byte{}), NewSecret(make([]byte, 0, 10)), true},
+		{"nil versus empty", NewSecret(nil), NewSecret([]byte{}), false},
+		{"zero versus nil", Secret{}, NewSecret(nil), true},
+		{"zero versus empty", Secret{}, NewSecret([]byte{}), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.Equal(tt.b); got != tt.want {
+				t.Errorf("Equal = %t, want %t", got, tt.want)
+			}
+			if got := tt.b.Equal(tt.a); got != tt.want {
+				t.Errorf("reverse Equal = %t, want %t", got, tt.want)
+			}
+			if !tt.a.Equal(tt.a) || !tt.b.Equal(tt.b) {
+				t.Error("Equal must be reflexive")
+			}
+		})
+	}
+}
+
+func TestSecretClonePreservesEquality(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"empty with capacity", make([]byte, 0, 10)},
+		{"non-empty", []byte("secret")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			original := Secret{
+				BindKey: NewBindingKey("declaration-binding-key"), value: tt.value,
+				path: "/prod/app/password", version: 17, contentType: "text/plain",
+			}
+			clone := original.Clone()
+			if !original.Equal(clone) || !clone.Equal(original) {
+				t.Error("clone must equal its source")
+			}
+			if (clone.Value() == nil) != (original.Value() == nil) {
+				t.Error("clone must preserve buffer nilness")
+			}
+		})
+	}
+}
+
 // assertRedacted fails if s contains the plaintext or does not contain the
 // redaction marker.
 func assertRedacted(t *testing.T, label, s string) {

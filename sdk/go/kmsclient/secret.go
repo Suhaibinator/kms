@@ -1,6 +1,7 @@
 package kmsclient
 
 import (
+	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -47,11 +48,25 @@ func (s Secret) Version() uint64 { return s.version }
 // ContentType returns the declared content type of the secret, if known.
 func (s Secret) ContentType() string { return s.contentType }
 
+// Equal reports whether plaintext, path, version, content type, and binding key
+// contents are equal. Nil and non-nil empty plaintext buffers are distinct;
+// buffer capacity and allocation identity do not affect equality. Zero values
+// compare equal. Equal does not guarantee constant-time comparison.
+func (s Secret) Equal(other Secret) bool {
+	return s.path == other.path &&
+		s.version == other.version &&
+		s.contentType == other.contentType &&
+		s.BindKey.Equal(other.BindKey) &&
+		(s.value == nil) == (other.value == nil) &&
+		bytes.Equal(s.value, other.value)
+}
+
 // Clone returns an independent copy of the Secret. The plaintext buffer is
 // deep-copied while declaration credentials and immutable metadata are
-// preserved. Generated stores strip BindKey before retaining resolved values.
+// preserved. Nil and non-nil empty buffers remain distinct, so the clone is
+// Equal to its source. Generated stores strip BindKey before retaining resolved values.
 func (s Secret) Clone() Secret {
-	s.value = append([]byte(nil), s.value...)
+	s.value = bytes.Clone(s.value)
 	return s
 }
 
