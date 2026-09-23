@@ -35,6 +35,16 @@ func NewBindingKey(value string) BindingKey {
 // IsSet reports whether the credential contains a non-empty key.
 func (k BindingKey) IsSet() bool { return k.value != nil && *k.value != "" }
 
+// Equal reports whether the keys have identical contents, regardless of allocation
+// identity. The zero value equals NewBindingKey(""). Contents are not normalized.
+// Equal does not guarantee constant-time comparison.
+func (k BindingKey) Equal(other BindingKey) bool {
+	if !k.IsSet() || !other.IsSet() {
+		return !k.IsSet() && !other.IsSet()
+	}
+	return *k.value == *other.value
+}
+
 // plaintext is used only at the RPC boundary inside kmsclient.
 func (k BindingKey) plaintext() string {
 	if k.value == nil {

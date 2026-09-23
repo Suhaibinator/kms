@@ -19,6 +19,39 @@ import (
 
 const bindingCanary = "binding-key-canary-DO-NOT-DISCLOSE-123456789"
 
+func TestBindingKeyEqual(t *testing.T) {
+	key := kmsclient.NewBindingKey(bindingCanary)
+	copyOfKey := key
+	for _, tt := range []struct {
+		name string
+		a, b kmsclient.BindingKey
+		want bool
+	}{
+		{"independent equal keys", key, kmsclient.NewBindingKey(bindingCanary), true},
+		{"copy", key, copyOfKey, true},
+		{"changed contents", kmsclient.NewBindingKey("abc"), kmsclient.NewBindingKey("abd"), false},
+		{"different lengths", key, kmsclient.NewBindingKey(bindingCanary + "x"), false},
+		{"zero values", kmsclient.BindingKey{}, kmsclient.BindingKey{}, true},
+		{"empty constructor", kmsclient.BindingKey{}, kmsclient.NewBindingKey(""), true},
+		{"unset versus set", kmsclient.BindingKey{}, key, false},
+		{"equal whitespace", kmsclient.NewBindingKey(" "), kmsclient.NewBindingKey(" "), true},
+		{"whitespace is significant", kmsclient.NewBindingKey(" abc"), kmsclient.NewBindingKey("abc"), false},
+		{"whitespace is set", kmsclient.BindingKey{}, kmsclient.NewBindingKey(" "), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.Equal(tt.b); got != tt.want {
+				t.Errorf("Equal = %t, want %t", got, tt.want)
+			}
+			if got := tt.b.Equal(tt.a); got != tt.want {
+				t.Errorf("reverse Equal = %t, want %t", got, tt.want)
+			}
+			if !tt.a.Equal(tt.a) || !tt.b.Equal(tt.b) {
+				t.Error("Equal must be reflexive")
+			}
+		})
+	}
+}
+
 func TestBindingKeyZeroAndCopies(t *testing.T) {
 	var zero kmsclient.BindingKey
 	if zero.IsSet() || kmsclient.NewBindingKey("").IsSet() {

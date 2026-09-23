@@ -95,6 +95,27 @@ json.Marshal(cfg)                    // {"DBPassword":"[REDACTED]", ...}
 Plaintext is only reachable through explicit accessors: `Secret.Value()`,
 `Secret.StringValue()`, `SecretValue.Value()`.
 
+## Value equality
+
+Use `Equal` to compare secret snapshots or binding keys without reflection or
+plaintext accessors:
+
+```go
+sameSnapshot := previous.Equal(current) // previous and current are Secret values
+sameKey := kmsclient.NewBindingKey("example").Equal(kmsclient.NewBindingKey("example")) // true
+```
+
+`Secret.Equal` compares plaintext bytes, path, version, content type, and binding
+key contents. Nil and non-nil empty plaintext buffers compare unequal; buffer
+capacity and allocation identity do not matter. `Secret.Clone` preserves this
+distinction and returns an equal, independent copy.
+
+`BindingKey.Equal` compares exact contents, including independently constructed
+keys; its zero value equals `NewBindingKey("")`. The `==` operator still compares
+the private pointer's identity. Formatting and serialization remain redacted and
+cannot be used for value comparison. Neither `Equal` method guarantees constant-time
+comparison.
+
 ## Declarative config (drop-in pattern)
 
 Declare store-backed fields and resolve the whole struct in one call. Resolution
