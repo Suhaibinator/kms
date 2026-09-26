@@ -806,9 +806,12 @@ To measure drift against historical defaults, run the historical application
 checkout; selecting an older schema does not reconstruct its code defaults.
 `--release NAME` overrides the application's release name for drift.
 
-Defaults apply writes parameters only. `--overwrite` replaces whole differing
-groups; it does not merge missing nested fields. It never changes secret values
-or existing release pins. Create a new release after changing parameters.
+Defaults apply writes parameters only. JSON groups can add fields, including
+nested fields, without `--overwrite` when every existing field stays present
+and unchanged. Changes or removals of existing values still require
+`--overwrite`, which replaces the whole differing group. Defaults apply never
+changes secret values or existing release pins. Create a new release after
+changing parameters.
 
 Release creation requires current parameters to match the embedded defaults and
 creates an inactive immutable release. Without `--from-schema`, existing secret
