@@ -43,6 +43,146 @@ func defaultsEntry(t *testing.T, result domain.DefaultsApplyResult, alias string
 	return domain.DefaultsApplyEntry{}
 }
 
+func TestApplicationDefaultsJSONChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, desired, status string
+	}{
+		{"top-level addition", `{"host":"db.internal"}`, `{"host":"db.internal","port":5432}`, domain.DefaultsStatusUpdate},
+		{"nested addition", `{"pool":{"max":10}}`, `{"pool":{"max":10,"idle":2}}`, domain.DefaultsStatusUpdate},
+		{"empty object", `{}`, `{"pool":{"max":10}}`, domain.DefaultsStatusUpdate},
+		{"null addition", `{"host":"db.internal"}`, `{"host":"db.internal","optional":null}`, domain.DefaultsStatusUpdate},
+		{"preserve array", `{"hosts":["a","b"]}`, `{"hosts":["a","b"],"port":5432}`, domain.DefaultsStatusUpdate},
+		{"formatting and key order", `{"pool":{"max":10,"idle":2},"host":"db"}`, "{\n\"host\":\"db\",\"pool\":{\"idle\":2,\"max\":10}}", domain.DefaultsStatusUnchanged},
+		{"escaped string", `{"host":"db"}`, `{"host":"\u0064b"}`, domain.DefaultsStatusUnchanged},
+		{"large number addition", `{"id":9007199254740993}`, `{"id":9007199254740993,"port":5432}`, domain.DefaultsStatusUpdate},
+		{"changed leaf with addition", `{"pool":{"max":10}}`, `{"pool":{"max":20,"idle":2}}`, domain.DefaultsStatusBlocked},
+		{"removed field", `{"host":"db","port":5432}`, `{"host":"db","timeout":30}`, domain.DefaultsStatusBlocked},
+		{"removed nested field", `{"pool":{"max":10,"idle":2}}`, `{"pool":{"max":10}}`, domain.DefaultsStatusBlocked},
+		{"changed type", `{"pool":10}`, `{"pool":{"max":10}}`, domain.DefaultsStatusBlocked},
+		{"null replacement", `{"pool":null}`, `{"pool":{"max":10}}`, domain.DefaultsStatusBlocked},
+		{"array append", `{"hosts":["a"]}`, `{"hosts":["a","b"]}`, domain.DefaultsStatusBlocked},
+		{"addition within array", `{"pools":[{"max":10}]}`, `{"pools":[{"max":10,"idle":2}]}`, domain.DefaultsStatusBlocked},
+		{"large number change", `{"id":9007199254740992}`, `{"id":9007199254740993}`, domain.DefaultsStatusBlocked},
+		{"number spelling remains conservative", `{"max":10}`, `{"max":1e1}`, domain.DefaultsStatusBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, store := newConsoleTestService(t)
+			admin := adminPrincipal()
+			seedConsoleApp(t, svc, admin)
+			ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+			ref := domain.Ref{NS: ns, Key: "database"}
+			if _, _, err := svc.PutParameter(ctx, admin, ref, tc.current, "json", "{}"); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.GetParameter(ctx, ref, 0, domain.LabelCurrent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := domain.DefaultsApplyInput{Namespace: ns, Artifact: consoleDefaultsArtifact(t, tc.desired, "5")}
+			preview, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := defaultsEntry(t, preview, "database"); got.Status != tc.status {
+				t.Fatalf("preview = %+v, want %s", got, tc.status)
+			}
+			in.Execute, in.PlanDigest = true, preview.PlanDigest
+			_, err = svc.ApplyApplicationDefaults(ctx, admin, in)
+			wantValue, wantVersion := tc.desired, before.Version+1
+			if tc.status == domain.DefaultsStatusBlocked {
+				if !errors.Is(err, domain.ErrFailedPrecondition) {
+					t.Fatalf("blocked execute = %v", err)
+				}
+				wantValue, wantVersion = before.Value, before.Version
+			} else if err != nil {
+				t.Fatal(err)
+			} else if tc.status == domain.DefaultsStatusUnchanged {
+				wantValue, wantVersion = before.Value, before.Version
+			}
+			after, err := store.GetParameter(ctx, ref, 0, domain.LabelCurrent)
+			if err != nil || after.Value != wantValue || after.Version != wantVersion {
+				t.Fatalf("persisted parameter = %+v, err=%v; want value %s version %d", after, err, wantValue, wantVersion)
+			}
+			// The existing explicit overwrite path must still replace conflicting
+			// objects, while successful additions must become idempotent.
+			in.Execute, in.PlanDigest, in.Overwrite = false, "", tc.status == domain.DefaultsStatusBlocked
+			retry, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == domain.DefaultsStatusBlocked {
+				if defaultsEntry(t, retry, "database").Status != domain.DefaultsStatusUpdate {
+					t.Fatal("overwrite did not allow replacement")
+				}
+				in.Execute, in.PlanDigest = true, retry.PlanDigest
+				if _, err := svc.ApplyApplicationDefaults(ctx, admin, in); err != nil {
+					t.Fatal(err)
+				}
+				after, err = store.GetParameter(ctx, ref, 0, domain.LabelCurrent)
+				if err != nil || after.Value != tc.desired || after.Version != before.Version+1 {
+					t.Fatalf("overwrite parameter = %+v, err=%v", after, err)
+				}
+			} else if defaultsEntry(t, retry, "database").Status != domain.DefaultsStatusUnchanged {
+				t.Fatal("retry was not unchanged")
+			}
+		})
+	}
+}
+
+func TestApplicationDefaultsAdditiveJSONRejectsStalePlan(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newConsoleTestService(t)
+	admin := adminPrincipal()
+	seedConsoleApp(t, svc, admin)
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	ref := domain.Ref{NS: ns, Key: "database"}
+	in := domain.DefaultsApplyInput{Namespace: ns, Artifact: consoleDefaultsArtifact(t, `{"host":"db.internal","port":5432}`, "5")}
+	preview, err := svc.ApplyApplicationDefaults(ctx, admin, in)
+	if err != nil || defaultsEntry(t, preview, "database").Status != domain.DefaultsStatusUpdate {
+		t.Fatalf("preview = %+v, err=%v", preview, err)
+	}
+	const concurrent = `{"host":"operator.internal"}`
+	if _, _, err := svc.PutParameter(ctx, admin, ref, concurrent, "json", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	in.Execute, in.PlanDigest = true, preview.PlanDigest
+	if _, err := svc.ApplyApplicationDefaults(ctx, admin, in); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale execute = %v", err)
+	}
+	after, err := store.GetParameter(ctx, ref, 0, domain.LabelCurrent)
+	if err != nil || after.Value != concurrent || after.Version != 2 {
+		t.Fatalf("concurrent value lost: %+v, err=%v", after, err)
+	}
+}
+
+func TestApplicationDefaultsJSONContentTypeChangeRequiresOverwrite(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newConsoleTestService(t)
+	admin := adminPrincipal()
+	seedConsoleApp(t, svc, admin)
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	if _, _, err := svc.PutParameter(ctx, admin, domain.Ref{NS: ns, Key: "database"}, `{"host":"db.internal"}`, "string", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	for _, desired := range []string{`{"host":"db.internal"}`, `{"host":"db.internal","port":5432}`} {
+		preview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: consoleDefaultsArtifact(t, desired, "5")})
+		if err != nil || defaultsEntry(t, preview, "database").Status != domain.DefaultsStatusBlocked {
+			t.Fatalf("content type change was not blocked: %+v, err=%v", preview, err)
+		}
+	}
+}
+
+func TestClassifyJSONDefaultsRejectsInvalidJSON(t *testing.T) {
+	for _, invalid := range []string{`{"x":`, `{"x":1,"x":2}`, `{} {}`} {
+		for _, pair := range [][2]string{{invalid, `{}`}, {`{}`, invalid}} {
+			if unchanged, additive := classifyJSONDefaults(pair[0], pair[1]); unchanged || additive {
+				t.Fatalf("accepted invalid JSON: %q", pair)
+			}
+		}
+	}
+}
+
 type countingDefaultsHub struct{ wakes int }
 
 func (h *countingDefaultsHub) Wake()                            { h.wakes++ }

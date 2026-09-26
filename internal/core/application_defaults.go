@@ -317,9 +317,14 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 			expectation.ExpectedDigest = sha256Hex([]byte(current.Value))
 			expectation.ExpectedContentType = current.ContentType
 			currentDigest, currentType = expectation.ExpectedDigest, current.ContentType
-			if current.Value == parameter.Value && current.ContentType == parameter.ContentType {
+			unchanged := current.Value == parameter.Value && current.ContentType == parameter.ContentType
+			additive := false
+			if !unchanged && current.ContentType == "json" && parameter.ContentType == "json" {
+				unchanged, additive = classifyJSONDefaults(current.Value, parameter.Value)
+			}
+			if unchanged {
 				entry.Status = domain.DefaultsStatusUnchanged
-			} else if in.Overwrite {
+			} else if additive || in.Overwrite {
 				entry.Status = domain.DefaultsStatusUpdate
 				expectation.Write = true
 			} else {
@@ -374,6 +379,40 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	}
 	result.PlanDigest = sha256Hex(digestJSON)
 	return defaultsPlan{result: result, transaction: transaction, blocked: blocked}, nil
+}
+
+// classifyJSONDefaults allows object additions only when every existing field
+// survives unchanged. Arrays are atomic, and numbers retain their exact JSON
+// representation rather than being rounded through float64. Invalid JSON falls
+// back to the existing explicit-overwrite policy.
+func classifyJSONDefaults(current, desired string) (unchanged, additive bool) {
+	before, err := decodeStrictJSON(current)
+	if err != nil {
+		return false, false
+	}
+	after, err := decodeStrictJSON(desired)
+	if err != nil {
+		return false, false
+	}
+	if reflect.DeepEqual(before, after) {
+		return true, false
+	}
+	return false, jsonDefaultsPreserveExisting(before, after)
+}
+
+func jsonDefaultsPreserveExisting(before, after any) bool {
+	beforeObject, beforeOK := before.(map[string]any)
+	afterObject, afterOK := after.(map[string]any)
+	if !beforeOK || !afterOK {
+		return reflect.DeepEqual(before, after)
+	}
+	for key, value := range beforeObject {
+		next, exists := afterObject[key]
+		if !exists || !jsonDefaultsPreserveExisting(value, next) {
+			return false
+		}
+	}
+	return true
 }
 
 func applicationContractFromArtifact(artifact []configstore.ContractEntry) []domain.ApplicationContractField {

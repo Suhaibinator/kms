@@ -100,8 +100,10 @@ go run ./cmd/apply-kms-defaults \
 ```
 
 Execute the fresh preview plan with `--execute`. Existing identical values are
-reported as `unchanged` and create no versions or revisions. Differing values
-remain blocked until the operator also passes `--overwrite`. If preview reports
+reported as `unchanged` and create no versions or revisions. JSON objects can
+add fields, including nested fields, without `--overwrite` as long as every
+existing field remains present and unchanged. Other differing values remain
+blocked until the operator also passes `--overwrite`. If preview reports
 that the application definition differs, execution additionally requires
 `--update-definition`:
 
@@ -207,8 +209,15 @@ parameter-store defaults apply dev/payments \
 ```
 
 Each parameter is reported as `create`, `unchanged`, `update`, or `blocked`.
-Existing identical values are skipped. A differing value is blocked unless
-the operator explicitly supplies `--overwrite`.
+Existing identical values are skipped. For `json` parameters, whitespace,
+object key order, and equivalent string escapes do not create a change.
+Adding object fields (including nested fields) is reported as `update` and
+can execute without `--overwrite` when every existing field is preserved.
+Changing or removing an existing field, changing its type, or editing an array
+still requires `--overwrite`. Arrays are compared as complete values, and JSON
+number spellings are compared exactly to avoid rounding large numbers.
+If stored values differ from the defaults, adding a new field does not bypass
+those conflicts; existing operator values cannot be replaced implicitly.
 
 If the artifact contract or schema digest differs from the existing
 application definition, preview reports the definition change but never writes
