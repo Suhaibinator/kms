@@ -643,13 +643,16 @@ func TestPurgeQuiescesPrimedInProcessPoolAndRestoresPolicy(t *testing.T) {
 	if err := readerConn.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Completion includes the purge transaction and WAL truncation, not just
+	// draining the reader. Slow Windows CI disks can take more than two seconds
+	// for this I/O; this bound detects a stall rather than enforcing performance.
 	select {
 	case got := <-done:
 		if got.err != nil || !slices.Equal(got.result.AffectedVersions, []uint64{1}) {
 			t.Fatalf("purge after reader drain: result=%+v err=%v", got.result, got.err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("purge did not finish after in-process reader drained")
+	case <-time.After(30 * time.Second):
+		t.Fatalf("purge did not finish after in-process reader drained: pool stats=%+v", sqlDB.Stats())
 	}
 
 	if got := sqlDB.Stats().MaxOpenConnections; got != sqlStoreMaxOpenConns {
