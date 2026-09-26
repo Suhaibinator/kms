@@ -137,3 +137,111 @@ describe("bulk parameter draft safety", () => {
     expect(within(dialog).getByText("Choose at least one target environment.")).toBeVisible();
   });
 });
+
+describe("deliberate environment writes", () => {
+  const environments = ["dev", "staging", "prod"];
+  const row: ApplicationConfigurationRow = {
+    key: "banner",
+    kind: "parameter",
+    environments: {
+      dev: { present: true, value: "development", content_type: "string", version: 1 },
+      staging: { present: true, value: "staging only", content_type: "string", version: 4 },
+      prod: { present: true, value: "production only", content_type: "string", version: 9 },
+    },
+  };
+  const props = {
+    app: "app",
+    environments,
+    row,
+    retryEnvironments: null,
+    saving: false,
+    onClose: vi.fn(),
+  };
+
+  it("starts from the explicitly selected environment and labels its source", () => {
+    render(<BulkParameterModal {...props} initialEnvironments={["staging"]} onSave={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "Value" })).toHaveValue("staging only");
+    expect(screen.getByText(/Starting value:/)).toHaveTextContent("staging");
+    expect(screen.getByRole("checkbox", { name: "prod" })).not.toBeChecked();
+  });
+
+  it("excludes production by default and requires an up-to-date per-target review", () => {
+    const onSave = vi.fn();
+    render(<BulkParameterModal {...props} onSave={onSave} />);
+    const prod = screen.getByRole("checkbox", { name: "prod" });
+    expect(prod).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Review 2 environments" }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Changes for staging" })).toHaveTextContent(
+      "staging only",
+    );
+    fireEvent.click(prod);
+    expect(
+      screen.queryByRole("region", { name: "Review environment changes" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review 3 environments" }));
+    expect(screen.getByRole("region", { name: "Changes for prod" })).toHaveTextContent(
+      "production only",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 3 environments" }));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ environments, value: "development" }),
+    );
+  });
+
+  it("requires a fresh review when a new parameter key changes", () => {
+    const onSave = vi.fn();
+    render(
+      <BulkParameterModal
+        {...props}
+        row={{ key: "", kind: "parameter", environments: {} }}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Key" }), {
+      target: { value: "first-key" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value: "value" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review 2 environments" }));
+    expect(screen.getByRole("button", { name: "Apply to 2 environments" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Key" }), {
+      target: { value: "different-key" },
+    });
+    expect(
+      screen.queryByRole("button", { name: "Apply to 2 environments" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review 2 environments" }));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps outcomes and the draft while retrying only failed environments", () => {
+    const onSave = vi.fn();
+    const view = render(<BulkParameterModal {...props} onSave={onSave} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value: "edited draft" },
+    });
+    view.rerender(
+      <BulkParameterModal
+        {...props}
+        onSave={onSave}
+        retryEnvironments={["staging"]}
+        results={[
+          { environment: "dev", version: 2, revision: 10 },
+          { environment: "staging", version: 0, revision: 0, error: "Permission denied" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("region", { name: "Update results" })).toHaveTextContent("Saved v2");
+    expect(screen.getByRole("region", { name: "Update results" })).toHaveTextContent(
+      "Permission denied",
+    );
+    expect(screen.getByRole("textbox", { name: "Value" })).toHaveValue("edited draft");
+    expect(screen.getByRole("checkbox", { name: "dev" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed environments" }));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ environments: ["staging"], value: "edited draft" }),
+    );
+  });
+});

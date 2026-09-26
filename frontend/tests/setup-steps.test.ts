@@ -32,7 +32,7 @@ describe("deriveSetupSteps", () => {
       "applied",
     ]);
     expect(steps[0]).toMatchObject({ informational: true, state: "done" });
-    expect(steps[0]?.detail).toContain("admin identity rotate");
+    expect(steps[0]?.detail).toContain("parameter-store rotate-admin --name <admin-name>");
   });
 
   it("makes 'create application' current on an empty store and everything else todo", () => {

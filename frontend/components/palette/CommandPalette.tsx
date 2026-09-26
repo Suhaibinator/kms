@@ -10,12 +10,14 @@ import {
   useState,
 } from "react";
 import type { CommandPaletteProps } from "@/components/applications/contracts";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { useAuth } from "@/context/AuthContext";
 import { api, getToken, isAbortError } from "@/lib/api";
 import { useNamespaces } from "@/lib/hooks";
-import { useLastNamespace } from "@/lib/namespace-memory";
+import { links } from "@/lib/links";
+import { useNavigationNamespace } from "@/lib/navigation-namespace";
 import {
   buildPaletteIndex,
   fallthroughActions,
@@ -42,7 +44,7 @@ export function resetPaletteCache(): void {
   cachedApplications = null;
 }
 
-function useApplications(enabled: boolean, identityName: string | undefined): Application[] {
+function useApplications(enabled: boolean, identityName: string | undefined) {
   const token = getToken();
   const sessionKey = enabled ? `${token ?? ""}\u0000${identityName ?? ""}` : "";
   const [snapshot, setSnapshot] = useState<{ sessionKey: string; applications: Application[] }>(
@@ -51,8 +53,15 @@ function useApplications(enabled: boolean, identityName: string | undefined): Ap
         ? cachedApplications
         : { sessionKey, applications: [] },
   );
+  const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const retry = () => setAttempt((value) => value + 1);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt explicitly retries a failed index.
   useEffect(() => {
     if (!enabled) return;
+    setLoading(true);
+    setError(false);
     const controller = new AbortController();
     let current = true;
 
@@ -64,7 +73,8 @@ function useApplications(enabled: boolean, identityName: string | undefined): Ap
         const res = await api.listApplications(200, pageToken, { signal: controller.signal });
         applications.push(...(res.applications ?? []));
         pageToken = res.next_page_token || undefined;
-        if (pageToken && seenTokens.has(pageToken)) break;
+        if (pageToken && seenTokens.has(pageToken))
+          throw new Error("Application search pagination did not advance.");
         if (pageToken) seenTokens.add(pageToken);
       } while (pageToken);
 
@@ -74,33 +84,46 @@ function useApplications(enabled: boolean, identityName: string | undefined): Ap
       setSnapshot(next);
     }
 
-    void refresh().catch((err: unknown) => {
-      if (isAbortError(err)) return;
-      // The palette still works for pages and environments; nothing to surface.
-    });
+    void refresh()
+      .catch((err: unknown) => {
+        if (isAbortError(err)) return;
+        if (current) setError(true);
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
     return () => {
       current = false;
       controller.abort();
     };
-  }, [enabled, sessionKey, token]);
-  return enabled && snapshot.sessionKey === sessionKey ? snapshot.applications : [];
+  }, [enabled, sessionKey, token, attempt]);
+  return {
+    applications: enabled && snapshot.sessionKey === sessionKey ? snapshot.applications : [],
+    loading: enabled && loading,
+    error: enabled && error,
+    retry,
+  };
 }
 
 function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcuts?: () => void }) {
   const router = useRouter();
   const { identity } = useAuth();
   const isAdmin = identity?.kind === "admin";
-  const applications = useApplications(isAdmin, identity?.name);
-  const { namespaces } = useNamespaces();
+  const { applications, loading, error, retry } = useApplications(isAdmin, identity?.name);
+  const {
+    namespaces,
+    loading: namespacesLoading,
+    error: namespacesError,
+    reload,
+  } = useNamespaces();
   const index = useMemo(
     () => buildPaletteIndex({ applications, namespaces, isAdmin }),
     [applications, namespaces, isAdmin],
   );
 
-  // The namespace the operator last worked in (or the one a client identity
-  // is bound to) scopes the "Search parameters/secrets for …" fall-throughs.
-  const remembered = useLastNamespace();
-  const scope = identity?.kind === "client" ? (identity.namespace ?? null) : remembered;
+  // Validated current workspace first, remembered workspace second; clients
+  // always search inside their identity binding.
+  const scope = useNavigationNamespace();
 
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -137,9 +160,17 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
         onShortcuts?.();
         return;
       }
-      void router.push(item.href);
+      const scopedHref =
+        scope && item.id === "page:/parameters"
+          ? links.parameters(scope)
+          : scope && item.id === "page:/secrets"
+            ? links.secrets(scope)
+            : scope && item.id === "page:/releases"
+              ? links.releases(scope)
+              : item.href;
+      void router.push(scopedHref);
     },
-    [onClose, onShortcuts, router],
+    [onClose, onShortcuts, router, scope],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -202,7 +233,30 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <Kbd className="palette-esc">esc</Kbd>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+      <div className="px-4 py-2 text-xs text-muted-foreground" role="status">
+        {scope
+          ? `Key search in ${scope.app} / ${scope.env}`
+          : "Choose an environment to search parameter and secret keys."}
+        {loading || namespacesLoading ? <span className="block">Loading search index…</span> : null}
+        {error || namespacesError ? (
+          <span className="block">
+            Some search results are unavailable.{" "}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                retry();
+                reload();
+              }}
+            >
+              Retry search
+            </Button>
+          </span>
+        ) : null}
       </div>
       <div
         ref={listRef}
@@ -212,7 +266,7 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
         className="palette-list"
         onMouseDown={(event) => event.preventDefault()}
       >
-        {total === 0 ? (
+        {total === 0 && !loading && !namespacesLoading && !error && !namespacesError ? (
           <div className="palette-empty">
             No matches for <span className="mono">{query.trim()}</span>.
           </div>

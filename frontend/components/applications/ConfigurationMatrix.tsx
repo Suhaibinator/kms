@@ -229,7 +229,7 @@ export function ConfigurationMatrix({
                     {row.kind === "parameter" ? (
                       <Button variant="outline" size="sm" onClick={() => onEdit(row)}>
                         <SlidersHorizontal size={14} />
-                        Edit
+                        Edit across environments
                       </Button>
                     ) : null}
                   </td>

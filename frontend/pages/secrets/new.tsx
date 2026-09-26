@@ -16,6 +16,7 @@ import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { validateBindingKey, validateKey, validateMetadataJson } from "@/lib/validation";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -49,6 +50,18 @@ export default function NewSecretPage() {
   const [bindingKey, setBindingKey] = useState("");
 
   const [saving, setSaving] = useState(false);
+  const releaseDraft = useUnsavedWork(
+    Boolean(
+      value ||
+        bindingKey ||
+        expires ||
+        bindVersion ||
+        alreadyBase64 ||
+        metadataJson !== "{}" ||
+        contentType !== "text/plain" ||
+        (queryReady && key !== (queryValues.key ?? "")),
+    ),
+  );
   const { formRef, requestFocus } = useFocusFirstInvalid();
 
   // A field reports its problem only once the operator has left it, so a
@@ -141,6 +154,7 @@ export default function NewSecretPage() {
       });
       // Clear plaintext inputs from the DOM immediately.
       setValue("");
+      releaseDraft();
       const ref = { env: ns.env, app: ns.app, key: k };
       toast.success(`Secret created (version ${res.version})`, `${ns.env}/${ns.app}/${k}`);
       await router.push(links.secretDetail(ref));

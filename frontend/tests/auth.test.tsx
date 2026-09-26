@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AppProps } from "next/app";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
 import App from "@/pages/_app";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const mocks = vi.hoisted(() => ({
   whoami: vi.fn(),
@@ -93,6 +95,14 @@ function renderProvider() {
 /** Renders the real _app tree, which is where the login redirect lives. */
 function renderApp() {
   return render(<App {...({ Component: Probe, pageProps: {} } as unknown as AppProps)} />);
+}
+
+function DraftProbe() {
+  const [draft, setDraft] = useState("");
+  useUnsavedWork(Boolean(draft));
+  return (
+    <input aria-label="Draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
+  );
 }
 
 /** The Retry handler AuthContext attached to its could-not-verify toast. */
@@ -377,7 +387,51 @@ describe("AuthProvider session restore", () => {
     expect(latest?.ready).toBe(true);
     expect(latest?.authenticated).toBe(true);
     expect(latest?.identity?.name).toBe("b");
+    expect(latest?.verifying).toBe(false);
   });
+
+  it("clears restore busy state when a superseding login cannot verify scope", async () => {
+    mocks.token = "token-a";
+    mocks.whoami.mockReturnValueOnce(new Promise(() => {}));
+    renderProvider();
+    await waitFor(() => expect(latest?.verifying).toBe(true));
+    mocks.login.mockResolvedValue({ identity: { name: "b", kind: "admin" } });
+    mocks.whoami.mockRejectedValueOnce(new ApiError("unavailable", "offline", 0));
+    await act(async () => {
+      await expect(latest?.login("token-b")).rejects.toMatchObject({
+        name: "SessionVerificationError",
+      });
+    });
+    expect(latest?.verificationPending).toBe(true);
+    expect(latest?.verifying).toBe(false);
+    expect(latest?.ready).toBe(false);
+  });
+
+  it.each([false, true])(
+    "refuses a changed namespace when recovering a draft (retry=%s)",
+    async (retry) => {
+      const expected: Identity = {
+        name: "client",
+        kind: "client",
+        namespace: { env: "prod", app: "billing" },
+      };
+      renderProvider();
+      await waitFor(() => expect(latest?.ready).toBe(true));
+      mocks.login.mockResolvedValue({ identity: { name: "client", kind: "client" } });
+      if (retry) mocks.whoami.mockRejectedValueOnce(new ApiError("unavailable", "offline", 0));
+      mocks.whoami.mockResolvedValue({ ...expected, namespace: { env: "dev", app: "billing" } });
+      await act(async () => {
+        await expect(latest?.login("new-token", expected)).rejects.toBeInstanceOf(Error);
+      });
+      if (retry) {
+        await act(async () => latest?.retryVerification());
+        await waitFor(() => expect(latest?.ready).toBe(true));
+      }
+      expect(latest?.authenticated).toBe(false);
+      expect(mocks.token).toBeNull();
+      expect(latest?.identity).toEqual(expected);
+    },
+  );
 
   it("can replace or end a login whose scope verification is pending", async () => {
     mocks.login.mockResolvedValueOnce({ identity: { name: "a", kind: "client" } });
@@ -491,5 +545,49 @@ describe("Protected redirects", () => {
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
     expect(mocks.replace).toHaveBeenCalledTimes(1);
     expect(lastNamespace()).toBeNull();
+  });
+
+  it("offers persistent recovery after an uncached session check fails", async () => {
+    mocks.token = "stored-token";
+    mocks.cachedIdentity = null;
+    mocks.whoami.mockRejectedValueOnce(new ApiError("unavailable", "offline", 0));
+    renderApp();
+    await screen.findByRole("heading", { name: "Could not verify your access" });
+    expect(screen.queryByText("Checking session…")).not.toBeInTheDocument();
+    mocks.whoami.mockResolvedValueOnce({ name: "admin", kind: "admin" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry access check" }));
+    await screen.findByTestId("identity");
+    expect(screen.getByTestId("identity")).toHaveTextContent("admin");
+  });
+
+  it("keeps a draft mounted through session expiry and resumes only with the same identity", async () => {
+    mocks.token = "stored-token";
+    mocks.whoami.mockResolvedValue({ name: "admin", kind: "admin" });
+    render(<App {...({ Component: DraftProbe, pageProps: {} } as unknown as AppProps)} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft" }), {
+      target: { value: "unsaved configuration" },
+    });
+    act(() => {
+      mocks.token = null;
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    });
+    await screen.findByRole("dialog", { name: "Sign in to resume your draft" });
+    expect(mocks.replace).not.toHaveBeenCalled();
+    mocks.login.mockResolvedValueOnce({ identity: { name: "other", kind: "admin" } });
+    fireEvent.change(screen.getByLabelText("Token for admin"), {
+      target: { value: "other-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resume editing" }));
+    await screen.findByText(/Sign in as admin to resume this draft/);
+    expect(mocks.token).toBeNull();
+
+    mocks.login.mockResolvedValueOnce({ identity: { name: "admin", kind: "admin" } });
+    fireEvent.change(screen.getByLabelText("Token for admin"), {
+      target: { value: "renewed-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resume editing" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue("unsaved configuration");
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 });

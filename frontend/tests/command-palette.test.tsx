@@ -270,7 +270,7 @@ describe("CommandPalette", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("activates the first visibly grouped result rather than the pre-group ranking", async () => {
+  it("keeps an exact page match ahead of a similarly named application", async () => {
     const secretsService = { ...applications[0], name: "secrets-service" } as Application;
     mocks.listApplications.mockResolvedValue({
       applications: [secretsService],
@@ -281,12 +281,12 @@ describe("CommandPalette", () => {
     fireEvent.change(input, { target: { value: "secrets" } });
 
     await waitFor(() =>
-      expect(screen.getAllByRole("option")[0]).toHaveTextContent("secrets-service"),
+      expect(screen.getAllByRole("option")[0]).toHaveTextContent("SecretsGo to page"),
     );
     const options = screen.getAllByRole("option");
     expect(options[0]).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(mocks.push).toHaveBeenCalledWith(links.application("secrets-service"));
+    expect(mocks.push).toHaveBeenCalledWith("/secrets");
   });
 
   it("moves the highlight with the arrow keys and wraps, and follows the mouse", async () => {
@@ -330,6 +330,41 @@ describe("CommandPalette", () => {
     expect(options[1]?.querySelector(".palette-item-enter")).not.toHaveClass(
       "palette-item-enter-idle",
     );
+  });
+
+  it("shows indexing progress instead of a premature no-results message", async () => {
+    mocks.listApplications.mockReturnValue(new Promise(() => {}));
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "zzzz-nothing" } });
+    expect(screen.getByText("Loading search index…")).toBeVisible();
+    expect(screen.queryByText(/No matches for/)).toBeNull();
+  });
+
+  it("keeps a page shortcut inside the displayed search scope", async () => {
+    rememberNamespace({ env: "prod", app: "gradethis" });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "secrets" } });
+    expect(screen.getByText("Key search in gradethis / prod")).toBeVisible();
+    fireEvent.click(await screen.findByRole("option", { name: "Secrets Go to page" }));
+    expect(mocks.push).toHaveBeenCalledWith("/secrets?env=prod&app=gradethis");
+  });
+
+  it("can dismiss search with a visible touch control", async () => {
+    const onOpenChange = vi.fn();
+    render(<CommandPalette open onOpenChange={onOpenChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("distinguishes a failed index from no results and retries", async () => {
+    mocks.listApplications.mockRejectedValueOnce(new Error("offline"));
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "zzzz-nothing" } });
+    const retry = await screen.findByRole("button", { name: "Retry search" });
+    expect(screen.queryByText(/No matches for/)).toBeNull();
+    fireEvent.click(retry);
+    expect(await screen.findByText(/No matches for/)).toBeVisible();
+    expect(mocks.listApplications).toHaveBeenCalledTimes(2);
   });
 
   it("closes on Escape and shows an empty state for no matches", async () => {

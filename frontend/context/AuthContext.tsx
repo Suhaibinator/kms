@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { rememberNamespace } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
+import { confirmDiscardWork, discardUnsavedWork, hasUnsavedWork } from "@/lib/unsaved-work";
 
 interface AuthState {
   identity: Identity | null;
@@ -37,8 +38,9 @@ interface AuthState {
   signedOut: boolean;
   /** Login succeeded, but the identity scope has not yet been verified. */
   verificationPending: boolean;
+  verifying: boolean;
   retryVerification: () => void;
-  login: (token: string) => Promise<Identity>;
+  login: (token: string, expectedIdentity?: Identity) => Promise<Identity>;
   logout: () => void;
 }
 
@@ -48,6 +50,15 @@ interface Session {
 }
 
 const AuthContext = createContext<AuthState | null>(null);
+
+function sameIdentityScope(a: Identity, b: Identity): boolean {
+  return (
+    a.name === b.name &&
+    a.kind === b.kind &&
+    (a.namespace?.env ?? "") === (b.namespace?.env ?? "") &&
+    (a.namespace?.app ?? "") === (b.namespace?.app ?? "")
+  );
+}
 
 export class SessionVerificationError extends Error {
   constructor() {
@@ -67,6 +78,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const generation = useRef(0);
   const pendingLoginVerification = useRef(false);
   const [verificationPending, setVerificationPending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const identityRef = useRef<Identity | null>(null);
+  identityRef.current = identity;
+  const recoveryIdentity = useRef<Identity | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is never read inside the effect; it exists purely so that bumping it re-runs the session check, which is what the toast's Retry action does.
   useEffect(() => {
@@ -82,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      setVerifying(true);
       try {
         const current = await api.whoami({ signal: controller.signal });
         if (cancelled || generation.current !== requestGeneration || getToken() !== token) return;
@@ -91,11 +107,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           namespace: current.namespace,
           auth_method: current.auth_method,
         };
+        if (
+          recoveryIdentity.current &&
+          !sameIdentityScope(verifiedIdentity, recoveryIdentity.current)
+        ) {
+          clearToken();
+          setIdentity(recoveryIdentity.current);
+          setSession({ authenticated: false, signedOut: false });
+          pendingLoginVerification.current = false;
+          setVerificationPending(false);
+          toast.error(
+            new Error("Access scope changed. Discard the draft and sign in again."),
+            "Could not resume draft",
+          );
+          return;
+        }
         storeIdentity(verifiedIdentity);
         setIdentity(verifiedIdentity);
         setSession({ authenticated: true, signedOut: false });
         pendingLoginVerification.current = false;
         setVerificationPending(false);
+        recoveryIdentity.current = null;
       } catch (err) {
         if (
           cancelled ||
@@ -110,7 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // more, so drop it along with the cached identity.
           clearToken();
           rememberNamespace(null);
-          setIdentity(null);
+          setIdentity(recoveryIdentity.current);
           setSession({ authenticated: false, signedOut: false });
           pendingLoginVerification.current = false;
           setVerificationPending(false);
@@ -124,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           pendingLoginVerification.current = true;
           setVerificationPending(true);
-          setIdentity(null);
+          setIdentity(recoveryIdentity.current);
         }
         setSession({ authenticated: true, signedOut: false });
         toast.error(err, "Could not verify your session", {
@@ -134,6 +166,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } finally {
         if (!cancelled && generation.current === requestGeneration) {
           setReady(!pendingLoginVerification.current);
+          setVerifying(false);
         }
       }
     }
@@ -146,8 +179,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       generation.current += 1;
       pendingLoginVerification.current = false;
       setVerificationPending(false);
+      setVerifying(false);
       rememberNamespace(null);
-      setIdentity(null);
+      // Keep only the already verified display identity while an in-memory
+      // draft is being recovered. Credentials have already been cleared.
+      recoveryIdentity.current = hasUnsavedWork() ? identityRef.current : null;
+      setIdentity(recoveryIdentity.current);
       setSession({ authenticated: false, signedOut: false });
       setReady(true);
     };
@@ -160,8 +197,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [toast, attempt]);
 
   const login = useCallback(
-    async (token: string): Promise<Identity> => {
+    async (token: string, expectedIdentity?: Identity): Promise<Identity> => {
       const loginGeneration = ++generation.current;
+      // The form owns this request's busy state. A superseded restore cannot
+      // clear its own flag in finally once this generation takes over.
+      setVerifying(false);
       // Validate before persisting: login sends the token in the body, not the header.
       let res: Awaited<ReturnType<typeof api.login>>;
       try {
@@ -177,6 +217,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (generation.current !== loginGeneration)
         throw new DOMException("Superseded", "AbortError");
+      if (
+        expectedIdentity &&
+        (res.identity.name !== expectedIdentity.name || res.identity.kind !== expectedIdentity.kind)
+      ) {
+        throw new Error(
+          `Sign in as ${expectedIdentity.name} to resume this draft, or discard it to change identities.`,
+        );
+      }
+      recoveryIdentity.current = expectedIdentity ?? null;
       // Namespace memory belongs to the previous identity until the new session
       // establishes its own scope.
       rememberNamespace(null);
@@ -204,7 +253,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         pendingLoginVerification.current = true;
         setVerificationPending(true);
-        setIdentity(id);
+        setIdentity(expectedIdentity ?? id);
         setSession({ authenticated: true, signedOut: false });
         setReady(false);
         toast.error(err, "Could not load access scope", {
@@ -215,7 +264,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       pendingLoginVerification.current = false;
       setVerificationPending(false);
+      if (expectedIdentity && !sameIdentityScope(id, expectedIdentity)) {
+        clearToken();
+        setIdentity(expectedIdentity);
+        setSession({ authenticated: false, signedOut: false });
+        setReady(true);
+        throw new Error(
+          "This identity's access scope changed. Discard the draft and sign in again.",
+        );
+      }
       storeIdentity(id);
+      recoveryIdentity.current = null;
       setIdentity(id);
       setSession({ authenticated: true, signedOut: false });
       setReady(true);
@@ -225,9 +284,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    if (!confirmDiscardWork()) return;
+    discardUnsavedWork();
+    recoveryIdentity.current = null;
     generation.current += 1;
     pendingLoginVerification.current = false;
     setVerificationPending(false);
+    setVerifying(false);
     clearToken();
     rememberNamespace(null);
     setIdentity(null);
@@ -242,11 +305,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authenticated: session.authenticated,
       signedOut: session.signedOut,
       verificationPending,
+      verifying,
       retryVerification: () => setAttempt((n) => n + 1),
       login,
       logout,
     }),
-    [identity, ready, session, verificationPending, login, logout],
+    [identity, ready, session, verificationPending, verifying, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

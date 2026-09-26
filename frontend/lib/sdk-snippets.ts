@@ -12,6 +12,8 @@ export interface SnippetInput {
   schemaVersion: number;
   /** The first contract alias; the snippet reads it. Empty when the contract is empty. */
   alias: string;
+  /** Select the matching accessor; secrets remain bytes and must never be logged. */
+  aliasKind?: "parameter" | "secret";
   /** false when health reports `tls_enabled: false`; the snippet then opts into cleartext. */
   tls: boolean;
   /** Defaults to mTLS over TLS, or token on a development cleartext listener. */
@@ -78,7 +80,7 @@ if err != nil {
 err = loader.Run(ctx, func(ctx context.Context, candidate kmsclient.ReleaseSnapshot) (
     kmsclient.PreparedRelease, error,
 ) {
-    ${name}, ok := candidate.Parameter(${goString(alias)})
+    ${name}, ok := candidate.${input.aliasKind === "secret" ? "Secret" : "Parameter"}(${goString(alias)})
     if !ok {
         return nil, errors.New(${goString(`${alias} alias is missing`)})
     }
@@ -119,7 +121,7 @@ const loader = await client.createReleaseLoader({
 });
 
 await loader.run((snapshot) => {
-  const ${name} = snapshot.parameter(${tsString(alias)})?.value();
+  const ${name} = snapshot.${input.aliasKind === "secret" ? "secret" : "parameter"}(${tsString(alias)})?.${input.aliasKind === "secret" ? "bytes" : "value"}();
   if (${name} === undefined) throw new ClassifiedReleaseError("config_validation_failed");
   // Parse and validate here; keep commit synchronous and infallible.
   return { commit() {}, abort() {} };

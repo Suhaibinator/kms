@@ -29,6 +29,7 @@ import { projectedSubscribers } from "./fixtures/subscriber-projection";
 const mocks = vi.hoisted(() => ({
   ship: vi.fn(),
   getParameter: vi.fn(),
+  getActiveRelease: vi.fn(),
   activateRelease: vi.fn(),
   releaseSubscribers: vi.fn(),
   subscriberStream: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       ship: mocks.ship,
       getParameter: mocks.getParameter,
+      getActiveRelease: mocks.getActiveRelease,
       activateRelease: mocks.activateRelease,
       releaseSubscribers: mocks.releaseSubscribers,
       subscriberStream: mocks.subscriberStream,
@@ -264,6 +266,7 @@ describe("ship editor rows", () => {
         labels: {},
       },
     });
+    mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "No active release", 404));
     mocks.ship.mockImplementation(shipLike());
     mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([], 119));
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
@@ -377,6 +380,7 @@ describe("ShipModal", () => {
         labels: {},
       },
     });
+    mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "No active release", 404));
     mocks.ship.mockImplementation(shipLike());
     mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([], 119));
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
@@ -455,6 +459,7 @@ describe("ShipModal", () => {
       changes: [{ alias: "rate_limits", value: EDIT_A, content_type: rateLimitsType }],
       expected_active_version: base,
       request_id: expect.any(String),
+      metadata_json: JSON.stringify({ ship_operation_id: realShips()[0].request_id }),
     });
 
     expect(await within(dialog()).findByTestId("ship-rollout")).toBeVisible();
@@ -626,7 +631,10 @@ describe("ShipModal", () => {
       ),
     );
     expect(await within(dialog()).findByTestId("ship-rollout")).toBeVisible();
-    expect(within(dialog()).getByTestId("rollout-progress")).toHaveTextContent(/rev\s*120/);
+    expect(within(dialog()).getByTestId("rollout-progress")).toHaveTextContent(/rev\s*119/);
+    expect(within(dialog()).getByText(/Waiting for the shipped activation/)).toHaveTextContent(
+      "revision 120",
+    );
   });
 
   it("shows the conflict panel and re-previews against the new base reusing the written version", async () => {
@@ -673,10 +681,10 @@ describe("ShipModal", () => {
     fireEvent.click(shipButton());
     const panel = await within(dialog()).findByTestId("ship-conflict");
     expect(within(panel).queryByRole("button", { name: "Discard" })).toBeNull();
-    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Close without re-previewing" }));
     // The written version is named so the user knows it survives the close.
     const confirm = await screen.findByRole("dialog", {
-      name: "Close without re-previewing?",
+      name: "Close without activating?",
       hidden: true,
     });
     expect(confirm).toHaveTextContent(`rate_limits v${conflictWritten}`);
@@ -684,21 +692,21 @@ describe("ShipModal", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "Close without re-previewing?", hidden: true }),
+        screen.queryByRole("dialog", { name: "Close without activating?", hidden: true }),
       ).toBeNull(),
     );
     expect(props.onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Close without re-previewing" }));
     const again = await screen.findByRole("dialog", {
-      name: "Close without re-previewing?",
+      name: "Close without activating?",
       hidden: true,
     });
-    fireEvent.click(within(again).getByRole("button", { name: "Close", hidden: true }));
+    fireEvent.click(within(again).getByRole("button", { name: "Discard", hidden: true }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("closes a conflict directly when nothing was written", async () => {
+  it("protects unsaved edits when a conflict wrote nothing", async () => {
     const preflight: ShipResult = { ...conflict, parameters: [], release: undefined };
     mocks.ship.mockImplementation(async (request: ShipRequest) =>
       request.dry_run ? preview : preflight,
@@ -710,12 +718,51 @@ describe("ShipModal", () => {
     fireEvent.click(shipButton());
     const panel = await within(dialog()).findByTestId("ship-conflict");
     expect(panel).toHaveTextContent("nothing was written");
-    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
-    expect(
-      screen.queryByRole("dialog", { name: "Close without re-previewing?", hidden: true }),
-    ).toBeNull();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Close without re-previewing" }));
+    const confirmation = await screen.findByRole("dialog", {
+      name: "Discard changes?",
+      hidden: true,
+    });
+    expect(confirmation).toHaveTextContent("not been saved");
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Discard", hidden: true }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["header", "escape"] as const)(
+    "guards %s dismissal after a preflight conflict",
+    async (route) => {
+      mocks.ship.mockImplementation(async (request: ShipRequest) => {
+        if (request.dry_run) return preview;
+        throw new ApiError("aborted", "Another release became active", 409);
+      });
+      const { props } = renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() => expect(shipButton()).toBeEnabled());
+      fireEvent.click(shipButton());
+      await within(dialog()).findByTestId("ship-conflict");
+      if (route === "header")
+        fireEvent.click(dialog().querySelector('[data-slot="dialog-close"]') as HTMLElement);
+      else fireEvent.keyDown(dialog(), { key: "Escape" });
+      const confirmation = await screen.findByRole("dialog", {
+        name: "Discard changes?",
+        hidden: true,
+      });
+      expect(props.onClose).not.toHaveBeenCalled();
+      fireEvent.click(
+        within(confirmation).getByRole("button", { name: "Keep editing", hidden: true }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull(),
+      );
+      fireEvent.click(within(dialog()).getByRole("button", { name: "Re-preview" }));
+      await settlePreview();
+      expect(
+        await within(dialog()).findByRole("textbox", { name: "rate_limits value" }),
+      ).toHaveValue(EDIT_A);
+    },
+  );
 
   describe("disabled Ship explains itself", () => {
     const note = () => within(dialog()).queryByTestId("ship-blocked-reason");
@@ -1095,7 +1142,7 @@ describe("ShipModal", () => {
     );
   });
 
-  it("pins the previewed secret even if current rotates before shipping and a transport retry", async () => {
+  it("retains the previewed secret pin and never replays a Ship after a lost response", async () => {
     let currentSecret = 2;
     let attempts = 0;
     mocks.ship.mockImplementation(async (request: ShipRequest) => {
@@ -1138,8 +1185,85 @@ describe("ShipModal", () => {
     currentSecret = 3;
     fireEvent.click(shipButton());
     await within(dialog()).findByText("Temporary connection failure");
+    expect(within(dialog()).getByTestId("ship-uncertain")).toBeVisible();
+    expect(within(dialog()).queryByTestId("ship-submit")).toBeNull();
+    const request = realShips()[0];
+    expect(within(dialog()).getByTestId("ship-uncertain")).toHaveTextContent(
+      request.request_id ?? "missing-attempt-id",
+    );
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Check active state" }));
+    await within(dialog()).findByText(/No active release was found/);
+    expect(realShips()).toHaveLength(1);
+    expect(realShips()[0]).toBe(request);
+  });
+
+  it("recovers a lost Ship response only when the active release carries this attempt's identity", async () => {
+    mocks.ship.mockImplementation(async (request: ShipRequest) => {
+      if (request.dry_run) return preview;
+      throw new ApiError("unavailable", "Response lost", 0);
+    });
+    const { props } = renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
     fireEvent.click(shipButton());
-    await waitFor(() => expect(realShips()).toHaveLength(2));
+    await within(dialog()).findByTestId("ship-uncertain");
+    const request = realShips()[0];
+    mocks.getActiveRelease.mockResolvedValue({
+      release: {
+        ...activated.release,
+        schema_version: app.schema_version,
+        metadata_json: request.metadata_json,
+      },
+      activation_revision: 119,
+      previous_version: base,
+    });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Check active state" }));
+    await within(dialog()).findByTestId("ship-rollout");
+    expect(realShips()).toHaveLength(1);
+    expect(props.onShipped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "activated",
+        release: expect.objectContaining({ version: next }),
+      }),
+      "dev",
+    );
+  });
+
+  it("keeps an unmatched or failed active-state check uncertain and guards its recovery context", async () => {
+    mocks.ship.mockImplementation(async (request: ShipRequest) => {
+      if (request.dry_run) return preview;
+      throw new ApiError("internal", "Response unavailable", 502);
+    });
+    const { props } = renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.click(shipButton());
+    await within(dialog()).findByTestId("ship-uncertain");
+    mocks.getActiveRelease
+      .mockResolvedValueOnce({
+        release: {
+          ...activated.release,
+          metadata_json: JSON.stringify({ ship_operation_id: "another-attempt" }),
+        },
+        activation_revision: 120,
+        previous_version: base,
+      })
+      .mockRejectedValueOnce(new ApiError("unavailable", "Still offline", 0));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Check active state" }));
+    await within(dialog()).findByText(/It is not tagged with this attempt/);
+    expect(props.onShipped).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Check active state" }));
+    await within(dialog()).findByText(/Could not check active state: Still offline/);
+    expect(realShips()).toHaveLength(1);
+    fireEvent.click(within(dialog()).getByRole("button", { name: /^Close$/ }));
+    const confirmation = await screen.findByRole("dialog", {
+      name: "Close with Ship outcome unknown?",
+      hidden: true,
+    });
+    expect(confirmation).toHaveTextContent(realShips()[0].request_id ?? "missing-attempt-id");
+    expect(props.onClose).not.toHaveBeenCalled();
   });
 
   it("freezes implicit current selectors for the first release without replacing new writes", () => {
@@ -1544,6 +1668,55 @@ describe("ShipModal", () => {
     // Nothing parses yet (the JSON row is empty), so no dry run is scheduled.
     await settlePreview();
     expect(dryRuns()).toHaveLength(0);
+  });
+
+  it("labels adoption with the current snapshot and marks the shipped activation superseded", async () => {
+    mocks.releaseSubscribers.mockResolvedValue(
+      projectedSubscribers(
+        [{ ...appliedInstance, last_applied_version: next + 1, activation_revision: 120 }],
+        120,
+      ),
+    );
+    mocks.getActiveRelease.mockResolvedValue({
+      release: { version: next + 1 },
+      activation_revision: 120,
+    });
+    renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.click(shipButton());
+    const panel = await within(dialog()).findByTestId("ship-rollout");
+    expect(await within(panel).findByTestId("rollout-superseded")).toHaveTextContent(
+      "revision 119",
+    );
+    await waitFor(() =>
+      expect(within(panel).getByTestId("rollout-progress")).toHaveTextContent(`v${next + 1}`),
+    );
+    expect(within(panel).getByTestId("rollout-progress")).toHaveTextContent(/rev\s*120/);
+    expect(within(panel).getByTestId("rollout-progress")).toHaveTextContent("1/1 applied");
+    expect(within(panel).getByTestId("rollout-instance")).toHaveTextContent(`v${next + 1}`);
+    expect(within(dialog()).getByTestId("ship-rollback")).toBeDisabled();
+    expect(within(panel).getByTestId("rollout-rollback")).toBeDisabled();
+  });
+
+  it("does not decorate a snapshot with a release version from a later activation", async () => {
+    mocks.releaseSubscribers.mockResolvedValue(projectedSubscribers([appliedInstance], 119));
+    mocks.getActiveRelease.mockResolvedValue({
+      release: { version: next + 1 },
+      activation_revision: 120,
+    });
+    renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.click(shipButton());
+    const panel = await within(dialog()).findByTestId("ship-rollout");
+    await waitFor(() =>
+      expect(within(panel).getByTestId("rollout-progress")).toHaveTextContent("unavailable"),
+    );
+    expect(within(panel).getByTestId("rollout-progress")).toHaveTextContent(/rev\s*119/);
+    expect(within(panel).getByTestId("rollout-progress")).not.toHaveTextContent(`v${next + 1}`);
   });
 
   it("shows the rollout with rejected instances first and offers an inline rollback", async () => {

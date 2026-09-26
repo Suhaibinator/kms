@@ -9,14 +9,24 @@ const mocks = vi.hoisted(() => ({
   identity: null as Identity | null,
   logout: vi.fn(),
   pathname: "/",
+  query: {} as Record<string, string>,
 }));
 
 vi.mock("next/router", () => ({
   useRouter: () => ({
     pathname: mocks.pathname,
-    query: {},
+    query: mocks.query,
     isReady: true,
     events: { on: vi.fn(), off: vi.fn() },
+  }),
+}));
+vi.mock("@/lib/hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/hooks")>()),
+  useNamespaces: () => ({
+    namespaces: [{ app: "new-app", env: "dev" }],
+    loading: false,
+    error: null,
+    reload: vi.fn(),
   }),
 }));
 vi.mock("@/context/AuthContext", () => ({
@@ -55,6 +65,7 @@ describe("AppShell", () => {
   beforeEach(() => {
     mocks.identity = admin;
     mocks.pathname = "/";
+    mocks.query = {};
     resetNamespaceMemory();
     setPlatform("MacIntel");
   });
@@ -154,6 +165,49 @@ describe("AppShell", () => {
 
     act(() => rememberNamespace(null));
     expect(href("Parameters")).toBe("/parameters");
+  });
+
+  it("uses the validated current environment instead of previous resource scope", () => {
+    rememberNamespace({ app: "old-app", env: "prod" });
+    mocks.pathname = "/applications/environment";
+    mocks.query = { app: "new-app", env: "dev" };
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+    expect(within(desktopNav()).getByRole("link", { name: "Secrets" })).toHaveAttribute(
+      "href",
+      "/secrets?env=dev&app=new-app",
+    );
+  });
+
+  it("keeps client binding even when the route requests another environment", () => {
+    mocks.identity = client;
+    mocks.query = { app: "new-app", env: "dev" };
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+    expect(within(desktopNav()).getByRole("link", { name: "Secrets" })).toHaveAttribute(
+      "href",
+      "/secrets?env=prod&app=gradethis",
+    );
+  });
+
+  it("does not send an invalid explicit environment to the previous workspace", () => {
+    rememberNamespace({ app: "old-app", env: "prod" });
+    mocks.query = { app: "deleted", env: "dev" };
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+    expect(within(desktopNav()).getByRole("link", { name: "Secrets" })).toHaveAttribute(
+      "href",
+      "/secrets",
+    );
   });
 
   it("marks the namespaced link as current on its page", () => {

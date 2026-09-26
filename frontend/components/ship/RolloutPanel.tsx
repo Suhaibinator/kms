@@ -14,7 +14,7 @@ export interface RolloutPanelProps {
   namespace: NamespaceRef;
   releaseName: string;
   schemaVersion: number;
-  /** The activation instances are expected to reach; counts are relative to it. */
+  /** The shipped activation; used to identify a superseding live snapshot. */
   activationRevision: number;
   /** Follow the revision currently reported by the release feed. */
   followCurrentActivation?: boolean;
@@ -27,6 +27,8 @@ export interface RolloutPanelProps {
   rollbackDisabled?: boolean;
   /** Bump to force a refresh (after a rollback, say) without waiting for the next poll. */
   refreshToken?: number;
+  /** Disable actions tied to a shipped activation once a newer one appears. */
+  onSupersededChange?: (superseded: boolean) => void;
 }
 
 function stateTone(
@@ -47,8 +49,9 @@ function stateLabel(instance: SubscriberInstance): string {
 }
 
 /**
- * Live rollout for one release name: progress toward `activationRevision`,
- * rejected instances first with their category and remediation, and the
+ * Live rollout for one release name: current snapshot counts and rows,
+ * explicitly distinguished from the shipped activation when it was superseded.
+ * Rejected instances come first with their category and remediation, plus the
  * transport badge. Data comes from useReleaseSubscribers (stream, else poll).
  */
 export function RolloutPanel({
@@ -62,6 +65,7 @@ export function RolloutPanel({
   onRollback,
   rollbackDisabled,
   refreshToken,
+  onSupersededChange,
 }: RolloutPanelProps) {
   const [pinDialog, setPinDialog] = useState<{ session: string; unpin: boolean } | null>(null);
   const live = useReleaseSubscribers(namespace, releaseName, { enabled, schemaVersion });
@@ -76,12 +80,21 @@ export function RolloutPanel({
   useEffect(() => {
     if (refreshToken) void refresh();
   }, [refreshToken, refresh]);
-  // Keep the supplied target until the feed has yielded a snapshot, so a
-  // newly opened tab does not briefly render every row as revision zero.
-  const rolloutRevision =
-    followCurrentActivation && live.lastUpdatedAt !== null
-      ? live.currentRevision
-      : activationRevision;
+  // Counts and classifications describe the feed's current activation. Never
+  // attach them to the immutable activation that opened the Ship dialog.
+  const rolloutRevision = live.lastUpdatedAt !== null ? live.currentRevision : activationRevision;
+  const superseded =
+    !followCurrentActivation &&
+    live.lastUpdatedAt !== null &&
+    activationRevision > 0 &&
+    live.currentRevision > activationRevision;
+  const awaitingSnapshot =
+    !followCurrentActivation &&
+    live.lastUpdatedAt !== null &&
+    live.currentRevision < activationRevision;
+  useEffect(() => {
+    onSupersededChange?.(superseded);
+  }, [superseded, onSupersededChange]);
   const activeScope = JSON.stringify([
     namespace.env,
     namespace.app,
@@ -101,7 +114,12 @@ export function RolloutPanel({
       })
       .then((result) => {
         if (!controller.signal.aborted)
-          setActiveRelease({ scope: activeScope, version: result.release.version });
+          setActiveRelease({
+            scope: activeScope,
+            // A second activation may race this separate read. Only decorate
+            // the snapshot with a version when the activation is identical.
+            version: result.activation_revision === rolloutRevision ? result.release.version : 0,
+          });
       })
       .catch(() => {
         if (!controller.signal.aborted) setActiveRelease({ scope: activeScope, version: 0 });
@@ -122,6 +140,18 @@ export function RolloutPanel({
 
   return (
     <section className="rollout-panel" data-testid="ship-rollout" aria-label="Rollout">
+      {superseded ? (
+        <p className="info-panel" role="status" data-testid="rollout-superseded">
+          The activation you shipped (revision {activationRevision}) has been superseded. Counts and
+          instances below describe the current track activation, revision {rolloutRevision}.
+        </p>
+      ) : null}
+      {awaitingSnapshot ? (
+        <p className="info-panel" role="status">
+          Waiting for the shipped activation (revision {activationRevision}) in live status. Counts
+          and instances below describe the last reported activation, revision {rolloutRevision}.
+        </p>
+      ) : null}
       <div className="rollout-head">
         <div className="rollout-progress" data-testid="rollout-progress">
           {!counts?.complete || live.stale ? (
@@ -171,7 +201,7 @@ export function RolloutPanel({
               type="button"
               variant="destructive"
               size="sm"
-              disabled={rollbackDisabled}
+              disabled={rollbackDisabled || superseded}
               onClick={onRollback}
               data-testid="rollout-rollback"
             >

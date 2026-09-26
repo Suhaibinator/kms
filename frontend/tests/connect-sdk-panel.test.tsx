@@ -132,7 +132,7 @@ describe("ConnectSdkPanel", () => {
     );
     expect(
       screen.getByRole("link", { name: "Create identity for prod/gradethis" }),
-    ).toHaveAttribute("href", "/identities?env=prod&app=gradethis&new=1");
+    ).toHaveAttribute("href", "/identities?env=prod&app=gradethis&new=1&authMethod=mtls");
     const runbook = screen.getByRole("link", { name: /mTLS onboarding runbook/ });
     expect(runbook).toHaveAttribute("href", MTLS_RUNBOOK_URL);
     expect(runbook.getAttribute("href")).toContain(
@@ -331,5 +331,74 @@ describe("ConnectSdkPanel", () => {
     expect(screen.getByText(/Identity not bound to this namespace/)).toBeVisible();
     expect(screen.getByText(/Auth method the namespace does not allow/)).toBeVisible();
     expect(screen.getByText(/Loader name differs from the release name/)).toBeVisible();
+  });
+});
+
+describe("typed SDK onboarding", () => {
+  it.each(["secret", "parameter"] as const)("reads a %s through its matching accessor", (kind) => {
+    const input = {
+      endpoint: "localhost:8443",
+      env: "dev",
+      app: "billing",
+      releaseName: "runtime",
+      schemaVersion: 2,
+      alias: "database",
+      aliasKind: kind,
+      tls: true,
+    };
+    expect(goSnippet(input)).toContain(
+      `candidate.${kind === "secret" ? "Secret" : "Parameter"}("database")`,
+    );
+    expect(tsSnippet(input)).toContain(
+      `snapshot.${kind}("database")?.${kind === "secret" ? "bytes" : "value"}()`,
+    );
+  });
+
+  it("uses a secret-first mixed contract and preserves the chosen authentication and return track", async () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={3}
+        aliases={["password", "runtime"]}
+        contract={[
+          { alias: "password", kind: "secret" },
+          { alias: "runtime", kind: "parameter", content_type: "json" },
+        ]}
+        health={health}
+        returnTo="/applications/environment?app=gradethis&env=prod&schema_version=3&connect=1"
+      />,
+    );
+    expect(snippet()).toContain('candidate.Secret("password")');
+    await chooseSelectOption(screen.getByRole("combobox", { name: "Authentication" }), "Token");
+    const href =
+      screen
+        .getByRole("link", { name: "Create identity for prod/gradethis" })
+        .getAttribute("href") ?? "";
+    const target = new URL(href, "https://console.invalid");
+    expect(target.searchParams.get("authMethod")).toBe("token");
+    expect(target.searchParams.get("returnTo")).toBe(
+      "/applications/environment?app=gradethis&env=prod&schema_version=3&connect=1&authMethod=token",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "TypeScript" }));
+    expect(snippet()).toContain('snapshot.secret("password")?.bytes()');
+  });
+
+  it("restores a token choice and refuses an external return destination", () => {
+    render(
+      <ConnectSdkPanel
+        namespace={ns}
+        releaseName="runtime"
+        schemaVersion={0}
+        aliases={aliases}
+        health={health}
+        initialAuthMethod="token"
+        returnTo="//outside.example"
+      />,
+    );
+    expect(snippet()).toContain('Token:    os.Getenv("KMS_TOKEN")');
+    expect(
+      screen.getByRole("link", { name: "Create identity for prod/gradethis" }),
+    ).toHaveAttribute("href", "/identities?env=prod&app=gradethis&new=1&authMethod=token");
   });
 });

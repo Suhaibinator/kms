@@ -1180,3 +1180,93 @@ describe("IdentitiesPage query prefill", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
+
+describe("SDK identity handoff", () => {
+  it("waits for namespace methods before opening a prefilled wizard", async () => {
+    mocks.query = { new: "1", env: "prod", app: "billing", authMethod: "token" };
+    mocks.namespacesLoading = true;
+    const view = render(<IdentitiesPage />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    mocks.namespaces = [namespace(["token"])];
+    mocks.namespacesLoading = false;
+    view.rerender(<IdentitiesPage />);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Connect application — choose application",
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+      target: { value: "billing-api" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+    expect(screen.getByRole("checkbox", { name: /Bearer token/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /mTLS client certificate/ })).not.toBeChecked();
+  });
+
+  it.each([
+    { requested: "token", accepted: ["mtls", "token"], expected: "token" },
+    { requested: "mtls", accepted: ["token"], expected: "token" },
+    { requested: "token", accepted: ["mtls"], expected: "mtls" },
+  ] as const)(
+    "prefills $requested with accepted methods $accepted",
+    async ({ requested, accepted, expected }) => {
+      mocks.query = { new: "1", env: "prod", app: "billing", authMethod: requested };
+      mocks.namespaces = [namespace([...accepted])];
+      render(<IdentitiesPage />);
+      const dialog = await screen.findByRole("dialog", {
+        name: "Connect application — choose application",
+      });
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+        target: { value: "billing-api" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+      const auth = screen.getByRole("dialog", { name: "Connect application — authentication" });
+      expect(within(auth).getByRole("checkbox", { name: /Bearer token/ })).toHaveAttribute(
+        "aria-checked",
+        String(expected === "token"),
+      );
+      expect(
+        within(auth).getByRole("checkbox", { name: /mTLS client certificate/ }),
+      ).toHaveAttribute("aria-checked", String(expected === "mtls"));
+      expect(
+        within(auth).getByRole("button", { name: "Create application credentials" }),
+      ).toBeEnabled();
+    },
+  );
+
+  it.each([
+    "/applications/environment?app=billing&env=prod&schema_version=2&connect=1&authMethod=token",
+    "//outside.example",
+  ])("offers a safe continuation only after credentials are saved (%s)", async (returnTo) => {
+    mocks.query = { new: "1", env: "prod", app: "billing", authMethod: "token", returnTo };
+    mocks.namespaces = [namespace(["token"])];
+    vi.spyOn(api, "createIdentity").mockResolvedValue({
+      identity: {
+        name: "billing-api",
+        kind: "client",
+        namespace: { env: "prod", app: "billing" },
+        has_token: true,
+        certs: [],
+      },
+      token: "kms_once",
+    });
+    render(<IdentitiesPage />);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Connect application — choose application",
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+      target: { value: "billing-api" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create application credentials" }));
+    const save = await screen.findByRole("dialog", { name: "Save these credentials now" });
+    expect(screen.queryByRole("link", { name: /Continue connecting/ })).not.toBeInTheDocument();
+    acknowledgeAndContinue(save);
+    if (returnTo.startsWith("//")) {
+      expect(screen.queryByRole("link", { name: /Continue connecting/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+    } else {
+      expect(
+        screen.getByRole("link", { name: "Continue connecting prod/billing" }),
+      ).toHaveAttribute("href", returnTo);
+    }
+  });
+});

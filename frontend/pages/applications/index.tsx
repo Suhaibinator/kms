@@ -1,8 +1,6 @@
-import { parseSchemaVersion } from "@/lib/schema";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SchemaUpgradeSource } from "@/components/applications/SchemaUpgradeSource";
 import { ApplicationHome } from "@/components/applications/ApplicationHome";
 import { ApplicationHomeSkeleton } from "@/components/applications/ApplicationHomeSkeleton";
 import {
@@ -11,6 +9,7 @@ import {
 } from "@/components/applications/ApplicationList";
 import CreateApplicationWizard from "@/components/applications/CreateApplicationWizard";
 import type { SetupAction } from "@/components/applications/contracts";
+import { SchemaUpgradeSource } from "@/components/applications/SchemaUpgradeSource";
 import { LIST_HEADERS } from "@/components/applications/shared";
 import { useApplicationOverview } from "@/components/applications/useApplicationOverview";
 import { Icon } from "@/components/icons";
@@ -20,6 +19,7 @@ import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { useCursorPagination, useLatestRequest, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
+import { parseSchemaVersion } from "@/lib/schema";
 import type { Application } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 
@@ -37,6 +37,7 @@ export default function ApplicationsPage() {
   const request = useLatestRequest();
   const replaceQuery = useQueryReplace("/applications");
   const { values: query, ready } = useQueryParams([
+    "q",
     "app",
     "env",
     "ship",
@@ -47,8 +48,14 @@ export default function ApplicationsPage() {
     "schema_version",
   ]);
   const name = query.app ?? "";
+  const [searchQuery, setSearchQuery] = useState(query.q ?? "");
+  useEffect(() => {
+    setSearchQuery(query.q ?? "");
+  }, [query.q]);
+  const searching = Boolean(searchQuery.trim());
   const [applications, setApplications] = useState<Application[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [listFailed, setListFailed] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [archiveFilter, setArchiveFilter] = useState<ApplicationArchiveFilter>("exclude");
   const paging = useCursorPagination(`applications:${archiveFilter}`);
@@ -93,25 +100,45 @@ export default function ApplicationsPage() {
     async (pageToken: string) => {
       const run = request.begin();
       setListLoading(true);
+      setListFailed(false);
       try {
         const response = await api.listApplications(
           LIST_PAGE_SIZE,
-          pageToken || undefined,
+          searching ? undefined : pageToken || undefined,
           {
             signal: run.signal,
           },
           archiveFilter,
         );
+        const results = [...(response.applications ?? [])];
+        let nextToken = response.next_page_token;
+        const seen = new Set<string>();
+        while (searching && nextToken) {
+          if (seen.has(nextToken))
+            throw new Error("Application search pagination did not advance.");
+          seen.add(nextToken);
+          const next = await api.listApplications(
+            200,
+            nextToken,
+            { signal: run.signal },
+            archiveFilter,
+          );
+          results.push(...(next.applications ?? []));
+          nextToken = next.next_page_token;
+        }
         if (!run.current) return;
-        setApplications(response.applications ?? []);
+        setApplications(results);
         paging.setNextToken(response.next_page_token ?? "");
       } catch (error) {
-        if (run.current && !isAbortError(error)) toast.error(error, "Failed to load applications");
+        if (run.current && !isAbortError(error)) {
+          setListFailed(true);
+          toast.error(error, "Failed to load applications");
+        }
       } finally {
         if (run.current) setListLoading(false);
       }
     },
-    [request, toast, paging.setNextToken, archiveFilter],
+    [request, toast, paging.setNextToken, archiveFilter, searching],
   );
 
   useEffect(() => {
@@ -152,17 +179,33 @@ export default function ApplicationsPage() {
   if (!name) {
     return (
       <>
-        <ApplicationList
-          applications={applications}
-          loading={listLoading}
-          onCreate={() => onSetupAction({ kind: "create-app" })}
-          paging={paging}
-          archiveFilter={archiveFilter}
-          onArchiveFilterChange={(filter) => {
-            setArchiveFilter(filter);
-            paging.reset();
-          }}
-        />
+        {listFailed ? (
+          <EmptyState
+            title="Could not load applications"
+            actions={
+              <Button onClick={() => void loadApplications(paging.pageToken)}>Retry search</Button>
+            }
+          >
+            Your search could not be completed. Try again.
+          </EmptyState>
+        ) : (
+          <ApplicationList
+            applications={applications}
+            loading={listLoading}
+            onCreate={() => onSetupAction({ kind: "create-app" })}
+            paging={searching ? undefined : paging}
+            query={searchQuery}
+            onQueryChange={(q) => {
+              setSearchQuery(q);
+              void replaceQuery({ q });
+            }}
+            archiveFilter={archiveFilter}
+            onArchiveFilterChange={(filter) => {
+              setArchiveFilter(filter);
+              paging.reset();
+            }}
+          />
+        )}
         <CreateApplicationWizard
           open={wizardOpen}
           onClose={closeWizard}

@@ -7,7 +7,7 @@ import { releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
-import { api, isAbortError, isConflict } from "@/lib/api";
+import { ApiError, api, isAbortError, isConflict } from "@/lib/api";
 import { countNoun } from "@/lib/format";
 import { useFocusOnAppear } from "@/lib/forms";
 import type { ShipStepId } from "@/lib/glossary";
@@ -20,6 +20,7 @@ import type {
   ShipChange,
   ShipPreview as ShipPreviewData,
   ShipResult,
+  ShipRequest,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { validateParameterValue } from "@/lib/validation";
@@ -63,6 +64,15 @@ interface Activation {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function outcomeMayBeUnknown(error: unknown): boolean {
+  return (
+    !(error instanceof ApiError) ||
+    error.status === 0 ||
+    error.status === 408 ||
+    error.status >= 500
+  );
 }
 
 function newRequestId(): string {
@@ -128,7 +138,11 @@ export default function ShipModal({
   const [result, setResult] = useState<ShipResult | null>(null);
   const [conflict, setConflict] = useState<ShipConflict | null>(null);
   const [activation, setActivation] = useState<Activation | null>(null);
+  const [superseded, setSuperseded] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [attempt, setAttempt] = useState<ShipRequest | null>(null);
+  const [checkingAttempt, setCheckingAttempt] = useState(false);
+  const [attemptObservation, setAttemptObservation] = useState<string | null>(null);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rolledBack, setRolledBack] = useState<RollbackResponse | null>(null);
   const previewRequest = useLatestRequest();
@@ -216,9 +230,13 @@ export default function ShipModal({
     }
     setPhase("compose");
     setActivation(null);
+    setSuperseded(false);
     setRolledBack(null);
     setRollbackOpen(false);
     setRetrying(false);
+    setAttempt(null);
+    setCheckingAttempt(false);
+    setAttemptObservation(null);
     setMode(readStoredMode() ?? (everActivated(environments) ? "express" : "guided"));
     resetFor(defaultEnvironment(environments, initialEnvironment));
   }, [open]);
@@ -413,11 +431,10 @@ export default function ShipModal({
                         ? `Type ${environment} to ship to production.`
                         : null;
 
-  // Unsaved edits only matter while composing; once shipped (or in conflict)
-  // the values were sent and closing loses nothing.
-  const dirty =
-    phase === "compose" &&
-    (rows.some(
+  // A refused preflight leaves local drafts unsaved. A partial write leaves
+  // saved versions inactive. Both need the same guard on every close route.
+  const hasLocalEdits =
+    rows.some(
       (row) =>
         row.loaded &&
         row.reuseVersion === undefined &&
@@ -425,8 +442,35 @@ export default function ShipModal({
           validateParameterValue(row.value, row.content_type) === null) ||
           row.value !== (prefilled.current.get(row.alias) ?? "")),
     ) ||
-      optInsChanged(optIns, baselineOptIns.current) ||
-      confirmText !== "");
+    optInsChanged(optIns, baselineOptIns.current) ||
+    confirmText !== "";
+
+  const pendingOutcome =
+    phase === "conflict" || phase === "release_created_not_activated" || phase === "rejected";
+  const savedVersions = pendingOutcome ? (result?.parameters ?? []) : [];
+  const savedRelease = pendingOutcome ? result?.release : undefined;
+  const dirty =
+    phase === "uncertain" ||
+    ((phase === "compose" || pendingOutcome) && hasLocalEdits) ||
+    savedVersions.length > 0 ||
+    savedRelease !== undefined;
+  const discardTitle =
+    phase === "uncertain"
+      ? "Close with Ship outcome unknown?"
+      : savedVersions.length > 0 || savedRelease
+        ? "Close without activating?"
+        : undefined;
+  const discardMessage =
+    phase === "uncertain"
+      ? `This Ship attempt may have saved or activated a release. Closing loses the local draft and recovery context. Check release history before shipping again. Attempt: ${attempt?.request_id ?? "unknown"}.`
+      : savedVersions.length > 0 || savedRelease
+        ? `${[
+            ...savedVersions.map((entry) => `${entry.alias} v${entry.version}`),
+            ...(savedRelease ? [`release ${savedRelease.name}@${savedRelease.version}`] : []),
+          ].join(
+            ", ",
+          )} remain saved, but this attempt has not activated them. Closing also discards any remaining local edits.`
+        : undefined;
 
   const parameterAliases = useMemo(
     () => new Set(application.contract.filter((f) => f.kind === "parameter").map((f) => f.alias)),
@@ -473,21 +517,31 @@ export default function ShipModal({
     setPhase("shipping");
     setShipError(null);
     const expected = preview.base_version;
+    const operationId = newRequestId();
+    const request: ShipRequest = {
+      application: application.name,
+      environment,
+      schema_version: application.schema_version,
+      changes: previewChanges,
+      expected_active_version: expected,
+      request_id: operationId,
+      // Correlation evidence, not an idempotency key. Never replay this write
+      // automatically: a lost response can hide a successful activation.
+      metadata_json: JSON.stringify({ ship_operation_id: operationId }),
+    };
+    setAttempt(request);
+    setAttemptObservation(null);
     let response: ShipResult;
     try {
-      response = await api.ship({
-        application: application.name,
-        environment,
-        schema_version: application.schema_version,
-        changes: previewChanges,
-        expected_active_version: expected,
-        request_id: newRequestId(),
-      });
+      response = await api.ship(request);
     } catch (error) {
       if (isConflict(error)) {
         // Preflight refused before writing anything.
         setConflict({ message: errorMessage(error) });
         setPhase("conflict");
+      } else if (outcomeMayBeUnknown(error)) {
+        setShipError(errorMessage(error));
+        setPhase("uncertain");
       } else {
         setShipError(errorMessage(error));
         setPhase("compose");
@@ -529,6 +583,59 @@ export default function ShipModal({
     }
   }
 
+  async function checkAttempt() {
+    if (!attempt || !preview || checkingAttempt) return;
+    const generation = loadGeneration.current;
+    setCheckingAttempt(true);
+    setAttemptObservation(null);
+    try {
+      const current = await api.getActiveRelease(
+        namespace,
+        preview.release_name,
+        preview.schema_version,
+      );
+      if (generation !== loadGeneration.current) return;
+      let operationId: unknown;
+      try {
+        operationId = JSON.parse(current.release.metadata_json).ship_operation_id;
+      } catch {
+        // Missing or malformed metadata cannot establish which write won.
+      }
+      if (operationId === attempt.request_id && current.activation_revision > 0) {
+        const confirmed: ShipResult = {
+          status: "activated",
+          preview,
+          parameters: [],
+          release: current.release,
+          activation: {
+            activation_revision: current.activation_revision,
+            previous_version: current.previous_version,
+            changed: true,
+          },
+        };
+        setResult(confirmed);
+        enterRollout(confirmed, {
+          version: current.release.version,
+          revision: current.activation_revision,
+          previousVersion: current.previous_version,
+        });
+      } else {
+        setAttemptObservation(
+          `Currently active: ${preview.release_name}@${current.release.version}, revision ${current.activation_revision}. It is not tagged with this attempt. This does not prove the attempt failed: it may have saved inactive versions or been superseded. Inspect release history before shipping again.`,
+        );
+      }
+    } catch (error) {
+      if (generation !== loadGeneration.current) return;
+      setAttemptObservation(
+        error instanceof ApiError && error.status === 404
+          ? "No active release was found. The attempt may still have saved inactive versions; inspect release history before shipping again."
+          : `Could not check active state: ${errorMessage(error)}. The Ship outcome remains unknown.`,
+      );
+    } finally {
+      if (generation === loadGeneration.current) setCheckingAttempt(false);
+    }
+  }
+
   /** Back to compose with the rows as they are; the preview re-runs on its own. */
   function backToCompose() {
     setPreview(null);
@@ -565,6 +672,7 @@ export default function ShipModal({
         setPhase("conflict");
       } else {
         setShipError(errorMessage(error));
+        if (outcomeMayBeUnknown(error)) setPhase("uncertain");
       }
     }
   }
@@ -577,7 +685,10 @@ export default function ShipModal({
   const step: ShipStepId =
     phase === "rollout"
       ? "rollout"
-      : phase === "shipping" || phase === "conflict" || phase === "release_created_not_activated"
+      : phase === "shipping" ||
+          phase === "uncertain" ||
+          phase === "conflict" ||
+          phase === "release_created_not_activated"
         ? "ship"
         : preview
           ? "preview"
@@ -631,6 +742,8 @@ export default function ShipModal({
         dismissible={phase !== "shipping"}
         initialFocus={initialFocus}
         dirty={dirty}
+        discardTitle={discardTitle}
+        discardMessage={discardMessage}
         footer={(close) =>
           phase === "rollout" ? (
             <>
@@ -638,7 +751,7 @@ export default function ShipModal({
                 <Button
                   type="button"
                   variant="destructive"
-                  disabled={rollbackOpen}
+                  disabled={rollbackOpen || superseded}
                   onClick={() => setRollbackOpen(true)}
                   data-testid="ship-rollback"
                 >
@@ -676,7 +789,7 @@ export default function ShipModal({
             </>
           ) : (
             <Button type="button" variant="outline" onClick={close}>
-              Close
+              {phase === "conflict" ? "Close without re-previewing" : "Close"}
             </Button>
           )
         }
@@ -694,7 +807,7 @@ export default function ShipModal({
           </div>
           {mode === "guided" ? <ShipSteps current={step} /> : null}
 
-          {shipError ? (
+          {shipError && phase !== "uncertain" ? (
             <div className="danger-panel" role="alert">
               {shipError}
             </div>
@@ -778,6 +891,46 @@ export default function ShipModal({
                 </Field>
               ) : null}
             </div>
+          ) : null}
+
+          {phase === "uncertain" && attempt ? (
+            <section className="danger-panel" role="alert" data-testid="ship-uncertain">
+              <strong>Ship outcome unknown</strong>
+              <p>
+                The response was lost. This attempt may have saved values or activated a release.
+                Your draft is retained here; do not ship it again until you verify the outcome.
+              </p>
+              <p className="text-sm">{shipError}</p>
+              <p className="text-sm">
+                Attempt: <span className="mono">{attempt.request_id}</span>
+              </p>
+              <p className="text-sm">
+                Changes:{" "}
+                {attempt.changes.map((change) => change.alias).join(", ") || "first activation"}.
+              </p>
+              <Button
+                type="button"
+                loading={checkingAttempt}
+                disabled={checkingAttempt}
+                onClick={() => void checkAttempt()}
+              >
+                Check active state
+              </Button>
+              <Link
+                className="text-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                href={links.releases({
+                  app: application.name,
+                  env: environment,
+                  name: application.release_name,
+                  schemaVersion: preview?.schema_version ?? application.schema_version,
+                })}
+              >
+                Inspect release history (new tab)
+              </Link>
+              {attemptObservation ? <p role="status">{attemptObservation}</p> : null}
+            </section>
           ) : null}
 
           {phase === "rejected" ? (
@@ -879,7 +1032,6 @@ export default function ShipModal({
               conflict={conflict}
               disabled={false}
               onRepreview={backToCompose}
-              onDiscard={() => onClose(environment)}
             />
           ) : null}
 
@@ -963,6 +1115,7 @@ export default function ShipModal({
                 }
                 rollbackDisabled={rollbackOpen}
                 refreshToken={rolledBack?.activation_revision}
+                onSupersededChange={setSuperseded}
               />
               {env?.rollout.total === 0 && env.rollout.connected === 0 ? (
                 <p className="faint text-sm">
