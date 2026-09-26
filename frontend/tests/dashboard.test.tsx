@@ -440,7 +440,10 @@ describe("DashboardPage", () => {
 
     // A failed per-app overview degrades that card only.
     const reports = grid.querySelector("[data-app='reports']") as HTMLElement;
-    expect(within(reports).getByText("no release")).toBeVisible();
+    expect(within(reports).queryByText("no release")).toBeNull();
+    expect(within(reports).queryByText("never activated")).toBeNull();
+    expect(within(reports).getByText("Release details unavailable")).toBeVisible();
+    expect(within(reports).getByRole("button", { name: "Retry details" })).toBeVisible();
     expect(within(reports).getByText("—")).toBeVisible();
 
     // The status chips narrow the grid; a second click on the active one clears it.
@@ -581,7 +584,9 @@ describe("DashboardPage", () => {
     // Release and rejected counts are still unknown, shown as dashes — not "no release".
     expect(within(gradethis).queryByText("no release")).toBeNull();
     expect(within(gradethis).getAllByText("—").length).toBeGreaterThan(0);
-    expect(screen.getByRole("status")).toHaveTextContent("Loaded");
+    expect(within(gradethis).getByText("Loading release details…")).toBeVisible();
+    expect(within(gradethis).queryByText("never activated")).toBeNull();
+    expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled();
 
     pending.resolve(ready);
     await waitFor(() => {
@@ -589,6 +594,85 @@ describe("DashboardPage", () => {
         expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
       }
     });
+  });
+
+  it("waits for verified namespace counts before choosing the first-run checklist", async () => {
+    const counts = deferred<{
+      namespaces: { env: string; app: string }[];
+      next_page_token: string;
+    }>();
+    mocks.listNamespaces.mockReturnValue(counts.promise);
+    render(<DashboardPage />);
+    expect(await screen.findByText("Checking existing environments…")).toBeVisible();
+    expect(screen.queryByText("Set up your first application")).toBeNull();
+    counts.resolve({ namespaces: [{ env: "prod", app: "existing" }], next_page_token: "" });
+    expect(await screen.findByText("Adopt your existing environments")).toBeVisible();
+  });
+
+  it("offers recovery instead of an empty-store checklist when namespace counts fail", async () => {
+    mocks.listNamespaces.mockRejectedValueOnce(new Error("offline"));
+    render(<DashboardPage />);
+    expect(await screen.findByText("Could not check existing environments")).toBeVisible();
+    expect(screen.queryByText("Set up your first application")).toBeNull();
+    mocks.listNamespaces.mockResolvedValue({ namespaces: [], next_page_token: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Set up your first application")).toBeVisible();
+  });
+
+  it("publishes fleet and fast summaries without waiting for audit, then each application's details independently", async () => {
+    const audit = deferred<{ events: AuditEvent[]; next_page_token: string }>();
+    const slow = deferred<ApplicationOverview>();
+    mocks.listAudit.mockReturnValue(audit.promise);
+    mocks.fleetOverview.mockResolvedValue(fleet);
+    mocks.applicationOverview.mockImplementation((name: string) =>
+      name === "reports" ? slow.promise : Promise.resolve(ready),
+    );
+    render(<DashboardPage />);
+    expect(await screen.findByText("healthy")).toBeVisible();
+    await waitFor(() => expect(document.querySelectorAll(".fleet-card")).toHaveLength(3));
+    const fast = document.querySelector("[data-app='gradethis']") as HTMLElement;
+    const reports = document.querySelector("[data-app='reports']") as HTMLElement;
+    await waitFor(() =>
+      expect(within(fast).getAllByText(readyReleases[0] as string).length).toBeGreaterThan(0),
+    );
+    expect(within(reports).getByText("Loading release details…")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled();
+    audit.resolve({ events: [], next_page_token: "" });
+    expect(await screen.findByText("No recent events")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled();
+    slow.resolve(ready);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  });
+
+  it("retries failed details on one card without refreshing other sections", async () => {
+    mocks.fleetOverview.mockResolvedValue({ applications: [fleet.applications[0]] });
+    mocks.applicationOverview.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(ready);
+    render(<DashboardPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry details" }));
+    await waitFor(() => expect(screen.queryByText("Release details unavailable")).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(2);
+    expect(mocks.fleetOverview).toHaveBeenCalledTimes(1);
+    expect(mocks.listAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads skipped details on demand without claiming an empty release history", async () => {
+    const many = Array.from({ length: 26 }, (_, i) => ({
+      ...fleet.applications[0],
+      application: { ...fleet.applications[0]?.application, name: `app${i}` },
+    }));
+    mocks.fleetOverview.mockResolvedValue({ applications: many });
+    render(<DashboardPage />);
+    const loadButton = await screen.findByRole("button", { name: "Load details" });
+    const skipped = document.querySelector("[data-app='app25']") as HTMLElement;
+    expect(within(skipped).getByText("Release details not loaded")).toBeVisible();
+    expect(within(skipped).queryByText("never activated")).toBeNull();
+    expect(within(skipped).queryByText("no release")).toBeNull();
+    fireEvent.click(loadButton);
+    await waitFor(() =>
+      expect(within(skipped).queryByText("Release details not loaded")).toBeNull(),
+    );
+    expect(mocks.applicationOverview).toHaveBeenCalledTimes(26);
   });
 
   it("caps per-application overview calls at 25", async () => {
@@ -606,7 +690,7 @@ describe("DashboardPage", () => {
     const grid = await screen.findByRole("region", { name: "Applications" });
     await waitFor(() => expect(grid.querySelectorAll(".fleet-card")).toHaveLength(30));
     expect(mocks.applicationOverview).toHaveBeenCalledTimes(25);
-    expect(screen.getByText(/Release detail is shown for the first 25/)).toBeVisible();
+    expect(screen.getByText(/Release detail loads automatically for the first 25/)).toBeVisible();
   });
 
   it("uses the complete active fleet for the application count beyond the list page", async () => {

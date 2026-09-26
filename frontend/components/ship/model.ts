@@ -19,6 +19,7 @@ import { validateParameterValue, validateValueSize } from "@/lib/validation";
 export type ShipPhase =
   | "compose"
   | "shipping"
+  | "uncertain"
   | "rejected"
   | "release_created_not_activated"
   | "conflict"

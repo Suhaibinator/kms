@@ -93,8 +93,9 @@ export default function LoginPage() {
         </div>
 
         <p className="muted text-sm mb-4">
-          Paste an admin or client identity token to sign in. Tokens are stored only for this
-          browser session.
+          Paste an admin or client identity token to sign in. Administrators also need a client
+          certificate when the server requires one; see setup help below. Tokens are stored only for
+          this browser session.
         </p>
 
         <form onSubmit={onSubmit}>

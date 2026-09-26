@@ -1,8 +1,8 @@
 import { ChevronRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
-import { Icon } from "@/components/icons";
 import { InlineField } from "@/components/InlineField";
+import { Icon } from "@/components/icons";
 import { Badge, EmptyState, Input, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,8 @@ export function ApplicationList({
   paging,
   archiveFilter = "exclude",
   onArchiveFilterChange,
+  query: controlledQuery,
+  onQueryChange,
 }: {
   applications: Application[];
   loading: boolean;
@@ -49,15 +51,18 @@ export function ApplicationList({
   paging?: ApplicationListPaging;
   archiveFilter?: ApplicationArchiveFilter;
   onArchiveFilterChange?: (filter: ApplicationArchiveFilter) => void;
+  query?: string;
+  onQueryChange?: (query: string) => void;
 }) {
-  const [query, setQuery] = useState("");
+  const [localQuery, setLocalQuery] = useState("");
+  const query = controlledQuery ?? localQuery;
+  const setQuery = onQueryChange ?? setLocalQuery;
   const filterId = useId();
   const filtered = useMemo(
     () => applications.filter((app) => matchesApplication(app, query)),
     [applications, query],
   );
   if (!loading) lastRowCount = Math.max(3, applications.length);
-  const firstPage = !paging || (paging.page === 1 && !paging.hasNext);
 
   return (
     <>
@@ -85,7 +90,7 @@ export function ApplicationList({
             id={filterId}
             type="search"
             className="application-list-filter min-w-[200px]"
-            placeholder={firstPage ? "Filter by name or description" : "Filter this page"}
+            placeholder="Search all applications"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             disabled={loading && applications.length === 0}
@@ -136,7 +141,7 @@ export function ApplicationList({
             </Button>
           }
         >
-          Nothing on this page matches <span className="mono">{query.trim()}</span>.
+          No application matches <span className="mono">{query.trim()}</span>.
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">

@@ -67,6 +67,7 @@ export default function CloneEnvironmentModal({
   const [copyValues, setCopyValues] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [result, setResult] = useState<CloneEnvironmentResponse | null>(null);
   // What the form opened with, so `dirty` tracks the user's own edits only.
   const [opened, setOpened] = useState({ source: "", target: "", description: "", token: false });
@@ -93,6 +94,7 @@ export default function CloneEnvironmentModal({
     setConfirming(false);
     setBusy(false);
     setResult(null);
+    setRequestError(null);
     completed.current = false;
     reset();
   }, [open, seed, environments, reset]);
@@ -127,6 +129,7 @@ export default function CloneEnvironmentModal({
   async function run() {
     setConfirming(false);
     setBusy(true);
+    setRequestError(null);
     try {
       const response = await api.cloneEnvironment({
         application: application.name,
@@ -137,12 +140,24 @@ export default function CloneEnvironmentModal({
         auth_methods: token ? ["mtls", "token"] : ["mtls"],
         description,
       });
-      setResult(response);
+      setResult((previous) => ({
+        ...response,
+        namespace_created: previous?.namespace_created ?? response.namespace_created,
+        items: response.items.map((item) =>
+          item.action === "exists"
+            ? (previous?.items.find(
+                (old) =>
+                  old.alias === item.alias && old.kind === item.kind && old.action === "copied",
+              ) ?? item)
+            : item,
+        ),
+      }));
       toast.success(
         response.namespace_created ? "Environment created" : "Environment attached",
         `${target.trim()}/${application.name}: ${response.items.filter((item) => item.action === "copied").length} value(s) copied.`,
       );
     } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Could not copy the environment.");
       toast.error(error, "Failed to clone environment");
     } finally {
       setBusy(false);
@@ -159,6 +174,9 @@ export default function CloneEnvironmentModal({
     }
   }
 
+  const unresolved =
+    result?.items.filter((item) => !["copied", "exists"].includes(item.action)) ?? [];
+  const failedCopies = result?.items.some((item) => item.action === "error") ?? false;
   const hasSecrets = contractSecrets(application).length > 0;
   const sourceOptions = environments.map((environment) => ({
     value: environment.namespace.env,
@@ -178,9 +196,16 @@ export default function CloneEnvironmentModal({
         wide
         footer={(close) =>
           result ? (
-            <Button type="button" onClick={close}>
-              Done
-            </Button>
+            <>
+              {failedCopies ? (
+                <Button type="button" variant="outline" loading={busy} onClick={() => void run()}>
+                  Retry failed copies
+                </Button>
+              ) : null}
+              <Button type="button" onClick={close} disabled={busy}>
+                Done
+              </Button>
+            </>
           ) : (
             <>
               {blocking && !busy ? (
@@ -200,13 +225,16 @@ export default function CloneEnvironmentModal({
       >
         {result ? (
           <>
-            {result.needs_value.length > 0 ? (
-              <div className="warn-panel mb-4 text-sm">
-                Secret values are never copied.{" "}
-                {result.needs_value.map((alias) => `\`${alias}\``).join(", ")}{" "}
-                {result.needs_value.length === 1 ? "needs" : "need"} a value in{" "}
-                <span className="mono">{result.namespace.env}</span> before a release can be
-                shipped.
+            {requestError ? (
+              <div className="danger-panel mb-4" role="alert">
+                {requestError}
+              </div>
+            ) : null}
+            {unresolved.length > 0 ? (
+              <div className="warn-panel mb-4 text-sm" role="status">
+                {result.items.length - unresolved.length} ready; {unresolved.length} need attention
+                before a release can be shipped. Secret values are never copied. Add missing values
+                or retry failed copies below.
               </div>
             ) : (
               <div className="info-panel mb-4 text-sm">Every contract alias has a value.</div>
@@ -243,7 +271,7 @@ export default function CloneEnvironmentModal({
                         ) : null}
                       </td>
                       <td data-label="Actions">
-                        {item.action === "needs_value" &&
+                        {(item.action === "needs_value" || item.action === "missing_in_source") &&
                         (item.kind === "secret" ? onAddSecret : onAddParameter) ? (
                           <AddResourceButton
                             kind={item.kind}
@@ -271,6 +299,11 @@ export default function CloneEnvironmentModal({
               submit();
             }}
           >
+            {requestError ? (
+              <div className="danger-panel mb-4" role="alert">
+                {requestError}
+              </div>
+            ) : null}
             <div className="info-panel mb-4 text-sm">
               {copyValues
                 ? "Parameter values are copied as new versions in the target; existing target keys are kept."

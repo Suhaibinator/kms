@@ -69,6 +69,16 @@ describe("LoginPage", () => {
     expect(screen.getByLabelText("Identity token")).toHaveFocus();
   });
 
+  it("offers browser certificate setup help before sign-in", async () => {
+    render(<LoginPage />);
+    await screen.findByText("No client certificate received");
+    expect(screen.getByText(/Administrator access normally requires both/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Set up administrator access" })).toHaveAttribute(
+      "href",
+      "https://github.com/Suhaibinator/kms/blob/main/docs/operations.md#admin-credentials-and-browser-setup",
+    );
+  });
+
   it("reports an empty token inline rather than as a toast", () => {
     render(<LoginPage />);
     // No error before the first attempt: an untouched form is not a failure.

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Ident, ReleaseIdent } from "@/components/Ident";
+import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/StatusChip";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
@@ -11,18 +12,33 @@ export interface ApplicationCardProps {
   overview?: ApplicationOverview | null;
   /** A ticking clock (lib/useNow.ts) so "activated 2m ago" stays honest. */
   now?: number;
+  loading?: boolean;
+  onLoadDetail?: () => void;
 }
 
 /** One fleet card: app chip, status, a status dot per environment, the active
  *  release per environment, rejected instances, and the last activation. */
-export default function ApplicationCard({ fleet, overview, now }: ApplicationCardProps) {
+export default function ApplicationCard({
+  fleet,
+  overview,
+  now,
+  loading = false,
+  onLoadDetail,
+}: ApplicationCardProps) {
+  const unknownLabel = loading
+    ? "Loading release details…"
+    : overview === null
+      ? "Release details unavailable"
+      : "Release details not loaded";
   const name = fleet.application.name;
   const envOverviews = new Map(
     (overview?.environments ?? []).map((env) => [env.namespace.env, env] as const),
   );
-  const rejected = overview
-    ? overview.environments.reduce((sum, env) => sum + env.rollout.rejected, 0)
-    : null;
+  const complete = !!overview && fleet.environments.every((env) => envOverviews.has(env.env));
+  const rejected =
+    overview && complete
+      ? overview.environments.reduce((sum, env) => sum + env.rollout.rejected, 0)
+      : null;
   // The environment with the newest activation; its pair is the card's
   // "what changed" when it has a previous release to compare against.
   const latestEnv = overview
@@ -89,7 +105,7 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
                     // The schema version is a card's least useful 70px: it sits
                     // in the title here and in full on the environment page.
                     <ReleaseIdent name={active.name} version={active.version} tooltip={false} />
-                  ) : overview === undefined ? (
+                  ) : !detail ? (
                     <span className="faint">—</span>
                   ) : (
                     <span className="faint">no release</span>
@@ -101,12 +117,22 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
         </ul>
       )}
 
+      {!overview ? (
+        <div className="fleet-card-desc" role={overview === null ? "alert" : undefined}>
+          <span>{unknownLabel}</span>{" "}
+          {!loading && onLoadDetail ? (
+            <Button variant="ghost" size="sm" onClick={onLoadDetail}>
+              {overview === null ? "Retry details" : "Load details"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <footer className="fleet-card-foot">
         <span
           className={`fleet-card-rejected ${rejected ? "fleet-card-rejected-some" : ""}`}
           title="Instances that rejected the active release"
         >
-          {rejected === null ? "—" : `${rejected} rejected`}
+          {rejected === null ? "Rejections unknown" : `${rejected} rejected`}
         </span>
         {compareHref && latestEnv ? (
           <Link
@@ -123,7 +149,9 @@ export default function ApplicationCard({ fleet, overview, now }: ApplicationCar
           >
             {lastActivation
               ? `activated ${formatRelative(lastActivation, now)}`
-              : "never activated"}
+              : complete
+                ? "never activated"
+                : "Activation unknown"}
           </span>
         )}
       </footer>

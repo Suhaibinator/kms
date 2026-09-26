@@ -2,10 +2,15 @@ import type { AppProps } from "next/app";
 import localFont from "next/font/local";
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import AppShell from "@/components/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Loading } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { SessionRecovery } from "@/components/SessionRecovery";
+import { UnsavedWorkGuard } from "@/components/UnsavedWorkGuard";
+import { useHasUnsavedWork } from "@/lib/unsaved-work";
+import type { Identity } from "@/lib/types";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { currentPath, loginHref } from "@/lib/returnTo";
@@ -39,20 +44,34 @@ const inter = localFont({
 const PUBLIC_ROUTES = new Set<string>(["/login", "/404"]);
 
 function Protected({ children }: { children: ReactNode }) {
-  const { ready, authenticated, signedOut } = useAuth();
+  const {
+    ready,
+    authenticated,
+    signedOut,
+    identity,
+    verificationPending,
+    verifying,
+    retryVerification,
+    logout,
+  } = useAuth();
   const router = useRouter();
+  const draft = useHasUnsavedWork();
+  const previousIdentity = useRef<Identity | null>(null);
+  if (ready && authenticated && identity) previousIdentity.current = identity;
+  const recovering =
+    !signedOut && Boolean(previousIdentity.current) && draft && (!ready || !authenticated);
 
   // The only place in the app that sends an unauthenticated visitor to /login.
   // AuthContext reports session state; it does not navigate. A sign-out skips
   // the returnTo round-trip — the user chose to leave.
   useEffect(() => {
-    if (!ready || authenticated) return;
+    if (!ready || authenticated || recovering) return;
     void router.replace(signedOut ? "/login" : loginHref(currentPath()));
-  }, [ready, authenticated, signedOut, router]);
+  }, [ready, authenticated, signedOut, router, recovering]);
 
   // `authenticated` and `ready` both start false, so the prerendered HTML is
   // still this branch — byte-identical to what the export produced before.
-  if (!ready || !authenticated) {
+  if ((!ready || !authenticated) && !recovering) {
     return (
       <div className="auth-wrap">
         {/* Titles the pre-auth moment (and therefore the prerendered HTML,
@@ -62,11 +81,36 @@ function Protected({ children }: { children: ReactNode }) {
         <Head>
           <title>KMS Console</title>
         </Head>
-        <Loading label="Checking session…" />
+        {verificationPending && !verifying ? (
+          <div className="auth-card" role="alert">
+            <h1 className="auth-title">Could not verify your access</h1>
+            <p className="muted mb-4">
+              The access check failed. Retry when the server is available, or sign out to use
+              different credentials.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={retryVerification}>Retry access check</Button>
+              <Button variant="outline" onClick={logout}>
+                Sign out
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Loading label="Checking session…" />
+        )}
       </div>
     );
   }
-  return <AppShell>{children}</AppShell>;
+  return (
+    <AppShell>
+      <div style={{ display: "contents" }} inert={recovering || undefined}>
+        {children}
+      </div>
+      {recovering && previousIdentity.current ? (
+        <SessionRecovery identity={previousIdentity.current} />
+      ) : null}
+    </AppShell>
+  );
 }
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -90,6 +134,7 @@ export default function App({ Component, pageProps }: AppProps) {
       <ThemeProvider>
         <ToastProvider>
           <AuthProvider>
+            <UnsavedWorkGuard />
             {/* Tied to the route so navigating away from a crashed page clears
               the error instead of stranding the visitor on the fallback card. */}
             <ErrorBoundary resetKey={router.asPath}>

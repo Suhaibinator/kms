@@ -2,7 +2,7 @@ import { Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { CreateApplicationWizardProps } from "@/components/applications/contracts";
 import { JsonEditor } from "@/components/JsonEditor";
-import { Modal } from "@/components/Modal";
+import { Modal, type ModalHandle } from "@/components/Modal";
 import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,7 @@ export default function CreateApplicationWizard({
   onCreated,
 }: CreateApplicationWizardProps) {
   const toast = useToast();
+  const modal = useRef<ModalHandle>(null);
   const formId = useId();
   const [step, setStep] = useState(1);
 
@@ -275,7 +276,10 @@ export default function CreateApplicationWizard({
             return rows[index]?.env.trim() !== "" && state !== "created" && state !== "attached";
           });
       const allDone = await createNamespaces(app, pending);
-      if (allDone) onCreated(app);
+      if (allDone) {
+        modal.current?.markSaved();
+        onCreated(app);
+      }
     } catch (error) {
       toast.error(error, "Failed to create application");
     } finally {
@@ -299,6 +303,7 @@ export default function CreateApplicationWizard({
 
   return (
     <Modal
+      ref={modal}
       mobileFullScreen
       open={open}
       title={created ? `${created.name} created` : "New application"}

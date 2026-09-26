@@ -47,6 +47,19 @@ export function ClientCertificatePanel() {
           Refresh
         </Button>
       </div>
+      <p className="muted mb-2">
+        Administrator access normally requires both an identity token and a browser client
+        certificate.{" "}
+        <a
+          className="underline"
+          href="https://github.com/Suhaibinator/kms/blob/main/docs/operations.md#admin-credentials-and-browser-setup"
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Set up administrator access
+        </a>{" "}
+        (certificate import and token setup).
+      </p>
       <div role="status" className="muted">
         {state.kind === "loading"
           ? "Checking client certificate…"

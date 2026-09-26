@@ -22,6 +22,7 @@ import type { FixAction } from "@/lib/readiness";
 import type {
   ApplicationConfigurationRow,
   ApplicationOverview,
+  ApplicationWriteResult,
   ConfigurationSchema,
   Finding,
   HealthResponse,
@@ -171,6 +172,7 @@ export function useApplicationActions({
   const [secretSaving, setSecretSaving] = useState(false);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
+  const [writeResults, setWriteResults] = useState<ApplicationWriteResult[]>([]);
   const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
   const writing = writeRow !== null;
   useEffect(() => {
@@ -178,6 +180,19 @@ export function useApplicationActions({
     return () => onWritingChange?.(false);
   }, [writing, onWritingChange]);
   const [writeSaving, setWriteSaving] = useState(false);
+
+  const connectRequested = queryValue(router.query.connect) === "1";
+  const requestedConnectEnv = queryValue(router.query.env);
+  const requestedAuthMethod = queryValue(router.query.authMethod);
+  useEffect(() => {
+    if (connectRequested && requestedConnectEnv && environmentNames.includes(requestedConnectEnv)) {
+      setConnectEnv(requestedConnectEnv);
+    }
+  }, [connectRequested, requestedConnectEnv, environmentNames]);
+  function closeConnect() {
+    setConnectEnv(null);
+    if (connectRequested) replaceQuery({ connect: "", authMethod: "" });
+  }
 
   // Health only matters to the Connect SDK panel (endpoint + TLS warning).
   useEffect(() => {
@@ -231,6 +246,7 @@ export function useApplicationActions({
   /** Write one parameter by its physical key (a matrix cell). */
   function openAddValueForKey(environment: string, key: string) {
     setRetryEnvironments(null);
+    setWriteResults([]);
     setWriteTargets([environment]);
     setWriteRow({ key, kind: "parameter", environments: {} });
   }
@@ -242,6 +258,7 @@ export function useApplicationActions({
 
   function openWriteRow(row: ApplicationConfigurationRow, targets?: string[]) {
     setRetryEnvironments(null);
+    setWriteResults([]);
     setWriteTargets(targets ?? null);
     setWriteRow(row);
   }
@@ -250,8 +267,9 @@ export function useApplicationActions({
     setWriteRow(null);
     // A partial failure still wrote the environments that succeeded; the
     // overview is refreshed once the user is done retrying, not underneath them.
-    if (retryEnvironments) {
+    if (writeResults.length > 0) {
       setRetryEnvironments(null);
+      setWriteResults([]);
       void reload();
     }
   }
@@ -480,7 +498,7 @@ export function useApplicationActions({
         mobileFullScreen
         open={connectEnv !== null}
         title="Connect SDK"
-        onClose={() => setConnectEnv(null)}
+        onClose={closeConnect}
         wide
       >
         {connectEnv ? (
@@ -489,6 +507,21 @@ export function useApplicationActions({
             releaseName={application.release_name}
             schemaVersion={schemaVersion}
             aliases={aliases}
+            contract={application.contract}
+            initialAuthMethod={
+              requestedAuthMethod === "token" || requestedAuthMethod === "mtls"
+                ? requestedAuthMethod
+                : undefined
+            }
+            returnTo={`${
+              pathname === "/applications/environment"
+                ? links.environment(application.name, connectEnv, { schemaVersion })
+                : links.application(application.name, {
+                    env: connectEnv,
+                    schemaVersion,
+                    tab: tab === "matrix" ? "matrix" : undefined,
+                  })
+            }&connect=1`}
             health={health}
             allowedAuthMethods={
               environments.find((item) => item.namespace.env === connectEnv)?.namespace
@@ -647,21 +680,35 @@ export function useApplicationActions({
         row={writeRow}
         initialEnvironments={writeTargets}
         retryEnvironments={retryEnvironments}
+        results={writeResults}
         saving={writeSaving}
         onClose={closeWrite}
         onSave={async (request) => {
           setWriteSaving(true);
           try {
-            const response = await api.putApplicationParameter(request);
+            const successful = new Set(
+              writeResults.filter((result) => !result.error).map((result) => result.environment),
+            );
+            const response = await api.putApplicationParameter({
+              ...request,
+              environments: request.environments.filter(
+                (environment) => !successful.has(environment),
+              ),
+            });
+            setWriteResults((current) => [
+              ...current.filter(
+                (result) =>
+                  !response.results.some((next) => next.environment === result.environment),
+              ),
+              ...response.results,
+            ]);
             const failures = response.results.filter((result) => result.error);
             if (failures.length === 0) {
               toast.success(
                 "Values updated",
                 `Created independent versions in ${response.results.length} ${response.results.length === 1 ? "environment" : "environments"}.`,
               );
-              setWriteRow(null);
-              setRetryEnvironments(null);
-              await reload();
+              setRetryEnvironments([]);
               return;
             }
             toast.error(
@@ -673,6 +720,17 @@ export function useApplicationActions({
             // Keep the modal and its edits; narrow the targets to what failed.
             setRetryEnvironments(failures.map((result) => result.environment));
           } catch (error) {
+            const message = error instanceof Error ? error.message : "Could not update values.";
+            setWriteResults((current) => [
+              ...current.filter((result) => !request.environments.includes(result.environment)),
+              ...request.environments.map((environment) => ({
+                environment,
+                version: 0,
+                revision: 0,
+                error: message,
+              })),
+            ]);
+            setRetryEnvironments(request.environments);
             toast.error(error, "Failed to update values");
           } finally {
             setWriteSaving(false);

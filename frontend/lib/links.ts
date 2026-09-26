@@ -3,6 +3,7 @@ import {
   auditReleaseSchemaVersion,
   auditReleaseVersion,
 } from "./audit-release";
+import { safeReturnTo } from "./returnTo";
 
 // The console's internal URLs, built in one place so every page links to the
 // same shape. Param order and encoding are load-bearing: tests assert the
@@ -106,12 +107,22 @@ export const links = {
   namespaces: (): string => "/namespaces",
   // `env`/`app` prefill the binding; `new` opens the create form directly;
   // `name` points at one identity (subscriber rows link here).
-  identities: (opts?: { env?: string; app?: string; new?: boolean; name?: string }): string => {
+  identities: (opts?: {
+    env?: string;
+    app?: string;
+    new?: boolean;
+    name?: string;
+    authMethod?: "mtls" | "token";
+    returnTo?: string;
+  }): string => {
     const params: string[] = [];
     if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
     if (opts?.new) params.push("new=1");
     if (opts?.name) params.push(`name=${encodeURIComponent(opts.name)}`);
+    if (opts?.authMethod) params.push(`authMethod=${encodeURIComponent(opts.authMethod)}`);
+    const returnTo = safeReturnTo(opts?.returnTo);
+    if (returnTo) params.push(`returnTo=${encodeURIComponent(returnTo)}`);
     return params.length > 0 ? `/identities?${params.join("&")}` : "/identities";
   },
   subscribers: (): string => "/subscribers",

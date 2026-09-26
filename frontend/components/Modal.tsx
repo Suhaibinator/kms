@@ -1,5 +1,14 @@
 import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Field } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,8 +21,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
+
+export interface ModalHandle {
+  /** A confirmed save may navigate before React commits the dialog's close. */
+  markSaved: () => void;
+}
 
 export function Modal({
+  ref,
   open,
   title,
   description,
@@ -26,8 +42,12 @@ export function Modal({
   mobileFullScreen = false,
   dismissible = true,
   dirty = false,
+  discardTitle = "Discard changes?",
+  discardMessage = "Your edits in this dialog have not been saved.",
+  trackUnsavedWork = true,
   initialFocus,
 }: {
+  ref?: Ref<ModalHandle>;
   open: boolean;
   title: ReactNode;
   /** One sentence under the title; also the dialog's accessible description. */
@@ -58,9 +78,17 @@ export function Modal({
    * header close button, the footer's `close`) first asks "Discard changes?".
    */
   dirty?: boolean;
+  discardTitle?: ReactNode;
+  discardMessage?: ReactNode;
+  /** Recovery UI does not itself own a draft or pending application write. */
+  trackUnsavedWork?: boolean;
   /** Element focused when the dialog opens; defaults to Base UI's own choice. */
   initialFocus?: DialogPrimitive.Popup.Props["initialFocus"];
 }) {
+  // Busy dialogs often suppress their discard prompt while saving. They still
+  // own pending work: an auth failure or browser Back must not unmount them.
+  const releaseDraft = useUnsavedWork(trackUnsavedWork && open && (dirty || !dismissible));
+  useImperativeHandle(ref, () => ({ markSaved: releaseDraft }), [releaseDraft]);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const [popupElement, setPopupElement] = useState<HTMLDivElement | null>(null);
@@ -102,8 +130,11 @@ export function Modal({
 
   const requestClose = useCallback(() => {
     if (dirty) setConfirmingDiscard(true);
-    else onClose();
-  }, [dirty, onClose]);
+    else {
+      releaseDraft();
+      onClose();
+    }
+  }, [dirty, onClose, releaseDraft]);
 
   return (
     <Dialog
@@ -200,13 +231,14 @@ export function Modal({
         {dirty || confirmingDiscard ? (
           <ConfirmDialog
             open={confirmingDiscard}
-            title="Discard changes?"
-            message="Your edits in this dialog have not been saved."
+            title={discardTitle}
+            message={discardMessage}
             danger
             confirmLabel="Discard"
             cancelLabel="Keep editing"
             onConfirm={() => {
               setConfirmingDiscard(false);
+              releaseDraft();
               onClose();
             }}
             onCancel={() => setConfirmingDiscard(false)}

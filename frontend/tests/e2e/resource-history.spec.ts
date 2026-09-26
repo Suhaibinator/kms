@@ -11,7 +11,7 @@ async function navigate(page: Page, path: string) {
   }, path);
 }
 
-test("history jumps close parameter drafts before the selected key changes", async ({ page }) => {
+test("history jumps protect parameter drafts until discard is confirmed", async ({ page }) => {
   const state = incidentState();
   state.namespaces.prod.parameters.alpha = {
     key: "alpha",
@@ -34,6 +34,11 @@ test("history jumps close parameter drafts before the selected key changes", asy
   await dialog.getByLabel("Value", { exact: true }).fill("draft for beta");
 
   // Equivalent to selecting alpha directly from the browser's history menu.
+  page.once("dialog", (confirmation) => confirmation.dismiss());
+  await page.evaluate(() => history.go(-2));
+  await expect(page).toHaveURL(/key=beta/);
+  await expect(dialog.getByLabel("Value", { exact: true })).toHaveValue("draft for beta");
+  page.once("dialog", (confirmation) => confirmation.accept());
   await page.evaluate(() => history.go(-2));
   await expect(page).toHaveURL(/key=alpha/);
   await expect(dialog).toBeHidden();

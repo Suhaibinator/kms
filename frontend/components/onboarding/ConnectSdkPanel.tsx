@@ -8,6 +8,7 @@ import { Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { links } from "@/lib/links";
+import { safeReturnTo } from "@/lib/returnTo";
 import {
   ENDPOINT_PLACEHOLDER,
   goSnippet,
@@ -79,6 +80,9 @@ export default function ConnectSdkPanel({
   releaseName,
   schemaVersion,
   aliases,
+  contract,
+  returnTo,
+  initialAuthMethod,
   health,
 }: ConnectSdkPanelProps) {
   const serverEndpoint = health?.grpc_addr?.trim() ?? "";
@@ -97,10 +101,15 @@ export default function ConnectSdkPanel({
     serverEndpoint && !isWildcardEndpoint(serverEndpoint) ? serverEndpoint : "";
   const endpoint = typed.trim() || reportedEndpoint;
   const tls = health?.tls_enabled !== false;
-  const [preferredMethod, setPreferredMethod] = useState<AuthMethod>("mtls");
+  const [preferredMethod, setPreferredMethod] = useState<AuthMethod>(initialAuthMethod ?? "mtls");
   const configuredMethods: readonly AuthMethod[] = allowedAuthMethods ?? ["mtls", "token"];
   const methods = configuredMethods.filter((method) => method === "token" || tls);
   const authMethod = methods.includes(preferredMethod) ? preferredMethod : methods[0];
+  const firstEntry = contract?.[0];
+  const firstAlias = firstEntry?.alias ?? aliases[0] ?? "";
+  const safeDestination = safeReturnTo(returnTo);
+  const destination = safeDestination ? new URL(safeDestination, "https://console.invalid") : null;
+  if (destination && authMethod) destination.searchParams.set("authMethod", authMethod);
   const input: SnippetInput = useMemo(
     () => ({
       endpoint,
@@ -108,11 +117,22 @@ export default function ConnectSdkPanel({
       app: namespace.app,
       releaseName,
       schemaVersion,
-      alias: aliases[0] ?? "",
+      alias: firstAlias,
+      aliasKind: firstEntry?.kind,
       tls,
       authMethod,
     }),
-    [endpoint, namespace.env, namespace.app, releaseName, schemaVersion, aliases, tls, authMethod],
+    [
+      endpoint,
+      namespace.env,
+      namespace.app,
+      releaseName,
+      schemaVersion,
+      firstAlias,
+      firstEntry?.kind,
+      tls,
+      authMethod,
+    ],
   );
   const go = useMemo(() => goSnippet(input), [input]);
   const ts = useMemo(() => tsSnippet(input), [input]);
@@ -126,10 +146,10 @@ export default function ConnectSdkPanel({
         <p className="connect-sub">
           A client bound to <Ident kind="ns" value={`${namespace.env}/${namespace.app}`} /> that
           loads release <Ident kind="release" value={releaseName} />
-          {aliases[0] ? (
+          {firstAlias ? (
             <>
               {" "}
-              and reads <Ident kind="alias" value={aliases[0]} />
+              and reads <Ident kind="alias" value={firstAlias} />
             </>
           ) : null}
           .
@@ -227,7 +247,15 @@ export default function ConnectSdkPanel({
 
       <div className="connect-links">
         <Link
-          href={links.identities({ env: namespace.env, app: namespace.app, new: true })}
+          href={links.identities({
+            env: namespace.env,
+            app: namespace.app,
+            new: true,
+            authMethod,
+            returnTo: destination
+              ? `${destination.pathname}${destination.search}${destination.hash}`
+              : undefined,
+          })}
           className="connect-link"
         >
           Create identity for {namespace.env}/{namespace.app}

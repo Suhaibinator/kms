@@ -1,5 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { Children } from "react";
 import { Badge, StatSkeleton } from "@/components/ui";
 import type { HealthResponse } from "@/lib/types";
 
@@ -11,6 +12,10 @@ export interface Count {
 
 export interface ServiceStripProps {
   loading: boolean;
+  healthLoading?: boolean;
+  countsLoading?: boolean;
+  subscribersLoading?: boolean;
+  subscribersFailed?: boolean;
   health: HealthResponse | null;
   /** true when /health itself could not be reached — a console-side failure,
    *  never reported as the service being unhealthy. */
@@ -52,6 +57,10 @@ const LABELS = [
 export default function ServiceStrip({
   loading,
   health,
+  healthLoading = false,
+  countsLoading = false,
+  subscribersLoading = false,
+  subscribersFailed = false,
   healthFailed,
   countsFailed = false,
   currentRevision,
@@ -73,7 +82,7 @@ export default function ServiceStrip({
     );
   }
   const h = health;
-  return (
+  const content = (
     <div className={className}>
       <div className="stat">
         <div className="stat-label">Service</div>
@@ -103,7 +112,9 @@ export default function ServiceStrip({
 
       <div className="stat">
         <div className="stat-label">Current revision</div>
-        <div className="stat-value">{h?.current_revision ?? currentRevision}</div>
+        <div className="stat-value">
+          {h?.current_revision ?? (subscribersFailed ? "—" : currentRevision)}
+        </div>
         <div className="stat-sub">latest applied configuration</div>
       </div>
 
@@ -148,15 +159,32 @@ export default function ServiceStrip({
 
       <div className="stat">
         <div className="stat-label">Subscribers</div>
-        <div className="stat-value">{subscriberCount}</div>
+        <div className="stat-value">{subscribersFailed ? "—" : subscriberCount}</div>
         <div className="stat-sub">
-          {staleCount > 0 ? (
+          {subscribersFailed ? (
+            <span className="text-danger">unavailable</span>
+          ) : staleCount > 0 ? (
             <span className="text-warning">{staleCount} behind latest revision</span>
           ) : (
             <span className="text-success">all up to date</span>
           )}
         </div>
       </div>
+    </div>
+  );
+  const pending = [
+    healthLoading,
+    (healthLoading || healthFailed) && subscribersLoading,
+    countsLoading,
+    countsLoading,
+    countsLoading,
+    subscribersLoading,
+  ];
+  return (
+    <div className={className}>
+      {Children.toArray(content.props.children).map((child, index) =>
+        pending[index] ? <StatSkeleton key={LABELS[index]} label={LABELS[index] ?? ""} /> : child,
+      )}
     </div>
   );
 }

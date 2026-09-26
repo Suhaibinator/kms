@@ -312,7 +312,7 @@ export function fallthroughActions(query: string, ns: NamespaceRef | null): Pale
   ];
 }
 
-/** Groups a result list for rendering, preserving the ranked order inside each group. */
+/** Put the best match’s group first, retaining relevance within each group. */
 export function groupResults(
   results: readonly PaletteItem[],
 ): Array<{ group: PaletteGroup; items: PaletteItem[] }> {
@@ -322,7 +322,7 @@ export function groupResults(
     if (list) list.push(item);
     else groups.set(item.group, [item]);
   }
-  return PALETTE_GROUPS.filter((group) => groups.has(group)).map((group) => ({
+  return [...groups.keys()].map((group) => ({
     group,
     items: groups.get(group) ?? [],
   }));

@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { Ident, ReleaseIdent } from "@/components/Ident";
-import { ConfirmDialog } from "@/components/Modal";
 import { Button } from "@/components/ui";
 import type { ShipResult } from "@/lib/types";
 
@@ -22,7 +20,6 @@ export interface ConflictPanelProps {
   conflict: ShipConflict;
   disabled: boolean;
   onRepreview: () => void;
-  onDiscard: () => void;
 }
 
 /**
@@ -39,19 +36,10 @@ export function ConflictPanel({
   conflict,
   disabled,
   onRepreview,
-  onDiscard,
 }: ConflictPanelProps) {
   const written = conflict.result?.parameters ?? [];
   const release = conflict.result?.release;
   const current = conflict.currentVersion;
-  const [confirmingClose, setConfirmingClose] = useState(false);
-
-  // Closing after the server already wrote versions deserves a second look:
-  // the values are safe, but nothing pins them until a re-preview ships.
-  function requestDiscard() {
-    if (written.length > 0) setConfirmingClose(true);
-    else onDiscard();
-  }
 
   return (
     <section className="conflict-panel danger-panel" role="alert" data-testid="ship-conflict">
@@ -111,42 +99,10 @@ export function ConflictPanel({
         {written.length > 0 ? " and reuses the saved versions, so nothing is written twice" : ""}.
       </p>
       <div className="conflict-actions">
-        <Button type="button" variant="outline" disabled={disabled} onClick={requestDiscard}>
-          Close without re-previewing
-        </Button>
         <Button type="button" disabled={disabled} onClick={onRepreview}>
           {current !== undefined ? `Re-preview against @${current}` : "Re-preview"}
         </Button>
       </div>
-      {written.length > 0 ? (
-        <ConfirmDialog
-          open={confirmingClose}
-          title="Close without re-previewing?"
-          danger
-          message={
-            <>
-              {written.map((entry, index) => (
-                <span key={entry.alias}>
-                  {index > 0 ? ", " : ""}
-                  <span className="mono">
-                    {entry.alias} v{entry.version}
-                  </span>
-                </span>
-              ))}{" "}
-              {written.length === 1 ? "stays" : "stay"} saved as parameter{" "}
-              {written.length === 1 ? "version" : "versions"}, but no release pins{" "}
-              {written.length === 1 ? "it" : "them"}; you can re-preview later from Ship.
-            </>
-          }
-          confirmLabel="Close"
-          cancelLabel="Keep editing"
-          onConfirm={() => {
-            setConfirmingClose(false);
-            onDiscard();
-          }}
-          onCancel={() => setConfirmingClose(false)}
-        />
-      ) : null}
     </section>
   );
 }

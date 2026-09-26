@@ -252,3 +252,18 @@ it("releaseCompare emits the ten params in a fixed order and accepts track label
     }),
   ).toBe("/releases/compare?app=a&env=e&name=n&schema_version=3&from=1&to=2");
 });
+
+it("encodes identity handoff context and rejects unsafe return paths", () => {
+  const returnTo = "/applications?app=billing&env=prod&connect=1";
+  const href = links.identities({
+    env: "prod",
+    app: "billing",
+    new: true,
+    authMethod: "token",
+    returnTo,
+  });
+  const parsed = new URL(href, "https://console.invalid");
+  expect(parsed.searchParams.get("authMethod")).toBe("token");
+  expect(parsed.searchParams.get("returnTo")).toBe(returnTo);
+  expect(links.identities({ returnTo: "//outside.example" })).toBe("/identities");
+});

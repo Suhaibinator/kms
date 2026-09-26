@@ -1,7 +1,7 @@
 import { ArrowRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CreateApplicationWizard from "@/components/applications/CreateApplicationWizard";
 import { Icon } from "@/components/icons";
 import FirstRunChecklist from "@/components/onboarding/FirstRunChecklist";
@@ -15,7 +15,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { displayAuditResource, formatRelative, formatUnixMs } from "@/lib/format";
-import { useLatestRequest } from "@/lib/hooks";
+import { useLatestRequest, type LoadRun } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { STATUS_LABEL } from "@/lib/readiness";
 import type {
@@ -72,6 +72,7 @@ interface Fleet {
   applications: FleetApplication[];
   fleetFailed: boolean;
   overviews: Record<string, ApplicationOverview | null>;
+  detailLoading: Record<string, boolean>;
 }
 
 const EMPTY: Dashboard = {
@@ -91,6 +92,7 @@ const NO_FLEET: Fleet = {
   applications: [],
   fleetFailed: false,
   overviews: {},
+  detailLoading: {},
 };
 
 const FLEET_STATUS_ORDER: AppStatus[] = ["blocked", "attention", "setup", "ready"];
@@ -355,116 +357,124 @@ export default function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<AppStatus | "all">("all");
   const { begin } = useLatestRequest();
 
+  const [pendingSections, setPendingSections] = useState<DashboardSection[]>([
+    "health",
+    "counts",
+    "subscribers",
+    "audit",
+  ]);
+  const activeRun = useRef<LoadRun | null>(null);
+
+  const loadDetail = useCallback(async (name: string, run: LoadRun) => {
+    if (!run.current) return;
+    setFleet((current) => ({
+      ...current,
+      detailLoading: { ...current.detailLoading, [name]: true },
+    }));
+    try {
+      const overview = await api.applicationOverview(name, undefined, { signal: run.signal });
+      if (!run.current) return;
+      setFleet((current) => ({
+        ...current,
+        overviews: { ...current.overviews, [name]: overview },
+      }));
+    } catch (error) {
+      if (!run.current || isAbortError(error)) return;
+      setFleet((current) => ({ ...current, overviews: { ...current.overviews, [name]: null } }));
+    } finally {
+      if (run.current)
+        setFleet((current) => ({
+          ...current,
+          detailLoading: { ...current.detailLoading, [name]: false },
+        }));
+    }
+  }, []);
+
   const load = useCallback(async () => {
     const run = begin();
+    activeRun.current = run;
     setLoading(true);
-    setFleetLoading(true);
-    // Parameter/secret totals are cross-namespace overviews, which the
-    // namespace-scoped list APIs can't answer directly — they come from the
-    // per-namespace counts on ListNamespaces.
-    const [health, ns, subs, audit] = await Promise.allSettled([
-      api.health({ signal: run.signal }),
-      api.listNamespaces(200, undefined, { signal: run.signal }),
-      api.subscribers({ signal: run.signal }),
-      api.listAudit({ page_size: 8 }, { signal: run.signal }),
-    ]);
-    if (!run.current) return;
-
-    const next: Dashboard = { ...EMPTY, failed: [] };
-    if (health.status === "fulfilled") next.health = health.value;
-    else {
-      next.healthFailed = true;
-      next.failed.push("health");
-    }
-    if (ns.status === "fulfilled") {
-      const list = ns.value.namespaces ?? [];
-      const more = !!ns.value.next_page_token;
-      next.namespaces = { value: list.length, more };
-      next.parameters = { value: list.reduce((sum, n) => sum + (n.parameter_count ?? 0), 0), more };
-      next.secrets = { value: list.reduce((sum, n) => sum + (n.secret_count ?? 0), 0), more };
-    } else {
-      next.failed.push("counts");
-    }
-    if (subs.status === "fulfilled") {
-      next.subscribers = subs.value.subscribers ?? [];
-      next.currentRevision = subs.value.current_revision ?? 0;
-    } else {
-      next.failed.push("subscribers");
-    }
-    if (audit.status === "fulfilled") next.audit = audit.value.events ?? [];
-    else next.failed.push("audit");
-
-    // One toast that names what is missing; the affected cards say so too.
-    const firstError = [health, ns, subs, audit].find((r) => r.status === "rejected") as
-      | PromiseRejectedResult
-      | undefined;
-    if (firstError && !isAbortError(firstError.reason)) {
-      toast.error(firstError.reason, `Could not load ${describeSections(next.failed)}`);
-    }
-
-    setData(next);
-    setLoading(false);
-    setLastLoadedAt(Date.now());
-
-    if (!isAdmin) {
-      setFleet(NO_FLEET);
-      setFleetLoading(false);
-      return;
-    }
-
-    // The fleet: the application list decides first-run vs grid, the fleet
-    // overview carries per-environment status, and the first few per-app
-    // overviews add active releases and rollout counts to the cards.
-    const [apps, overview] = await Promise.allSettled([
-      api.listApplications(200, undefined, { signal: run.signal }),
-      api.fleetOverview({ signal: run.signal }),
-    ]);
-    if (!run.current) return;
-
-    const nextFleet: Fleet = { ...NO_FLEET, overviews: {} };
-    if (overview.status === "fulfilled") {
-      nextFleet.applications = overview.value.applications ?? [];
-      // The fleet endpoint walks every active application, whereas the list
-      // request is a bounded fallback. Keep the header count on the same
-      // active fleet represented by the grid, even beyond the list's 200-row
-      // first page.
-      nextFleet.applicationCount = nextFleet.applications.length;
-    } else {
-      nextFleet.fleetFailed = true;
-      // Preserve a useful count if the complete fleet request failed. Both
-      // endpoints exclude archived applications by default.
-      if (apps.status === "fulfilled") {
-        nextFleet.applicationCount = (apps.value.applications ?? []).length;
+    setFleetLoading(isAdmin);
+    setPendingSections(["health", "counts", "subscribers", "audit"]);
+    setData(EMPTY);
+    const errors: { section: DashboardSection; error: unknown }[] = [];
+    async function section<T>(
+      name: DashboardSection,
+      request: Promise<T>,
+      apply: (value: T) => Partial<Dashboard>,
+    ) {
+      try {
+        const value = await request;
+        if (run.current) setData((current) => ({ ...current, ...apply(value) }));
+      } catch (error) {
+        if (!run.current || isAbortError(error)) return;
+        errors.push({ section: name, error });
+        setData((current) => ({
+          ...current,
+          ...(name === "health" ? { healthFailed: true } : {}),
+          failed: [...current.failed, name],
+        }));
+      } finally {
+        if (run.current) setPendingSections((current) => current.filter((item) => item !== name));
       }
     }
-    const fleetError = [apps, overview].find((r) => r.status === "rejected") as
-      | PromiseRejectedResult
-      | undefined;
-    if (fleetError && !isAbortError(fleetError.reason)) {
-      toast.error(fleetError.reason, "Failed to load applications");
-    }
-
-    // The fleet overview alone carries everything a card's header, status and
-    // environment dots need, so the grid paints now; the per-app overviews
-    // fill in releases and rejected counts as they land.
-    setFleet(nextFleet);
-    setFleetLoading(false);
-
-    if (nextFleet.applications.length === 0) return;
-    const names = nextFleet.applications
-      .slice(0, FLEET_DETAIL_CAP)
-      .map((app) => app.application.name);
-    const details = await Promise.allSettled(
-      names.map((name) => api.applicationOverview(name, undefined, { signal: run.signal })),
-    );
-    if (!run.current) return;
-    const overviews: Fleet["overviews"] = {};
-    names.forEach((name, index) => {
-      const result = details[index];
-      overviews[name] = result?.status === "fulfilled" ? result.value : null;
+    const summary = Promise.all([
+      section("health", api.health({ signal: run.signal }), (health) => ({ health })),
+      section("counts", api.listNamespaces(200, undefined, { signal: run.signal }), (response) => {
+        const list = response.namespaces ?? [];
+        const more = !!response.next_page_token;
+        return {
+          namespaces: { value: list.length, more },
+          parameters: { value: list.reduce((sum, ns) => sum + (ns.parameter_count ?? 0), 0), more },
+          secrets: { value: list.reduce((sum, ns) => sum + (ns.secret_count ?? 0), 0), more },
+        };
+      }),
+      section("subscribers", api.subscribers({ signal: run.signal }), (response) => ({
+        subscribers: response.subscribers ?? [],
+        currentRevision: response.current_revision ?? 0,
+      })),
+      section("audit", api.listAudit({ page_size: 8 }, { signal: run.signal }), (response) => ({
+        audit: response.events ?? [],
+      })),
+    ]).then(() => {
+      if (!run.current || errors.length === 0) return;
+      const order: DashboardSection[] = ["health", "counts", "subscribers", "audit"];
+      toast.error(
+        errors[0]?.error,
+        `Could not load ${describeSections(order.filter((name) => errors.some((item) => item.section === name)))}`,
+      );
     });
-    setFleet((current) => ({ ...current, overviews }));
-  }, [begin, toast, isAdmin]);
+    const loadFleet = async () => {
+      if (!isAdmin) {
+        setFleet(NO_FLEET);
+        return;
+      }
+      try {
+        const overview = await api.fleetOverview({ signal: run.signal });
+        if (!run.current) return;
+        const applications = overview.applications ?? [];
+        const names = applications.slice(0, FLEET_DETAIL_CAP).map((app) => app.application.name);
+        setFleet({
+          applications,
+          applicationCount: applications.length,
+          fleetFailed: false,
+          overviews: {},
+          detailLoading: Object.fromEntries(names.map((name) => [name, true])),
+        });
+        setFleetLoading(false);
+        await Promise.all(names.map((name) => loadDetail(name, run)));
+      } catch (error) {
+        if (!run.current || isAbortError(error)) return;
+        setFleet({ ...NO_FLEET, fleetFailed: true });
+        setFleetLoading(false);
+        toast.error(error, "Failed to load applications");
+      }
+    };
+    await Promise.all([summary, loadFleet()]);
+    if (!run.current) return;
+    setLoading(false);
+    setLastLoadedAt(Date.now());
+  }, [begin, toast, isAdmin, loadDetail]);
 
   useEffect(() => {
     void load();
@@ -487,21 +497,32 @@ export default function DashboardPage() {
 
   const refresh = (
     <RefreshControl
-      loading={loading}
+      loading={loading || Object.values(fleet.detailLoading).some(Boolean)}
       onRefresh={() => void load()}
-      freshness={{
-        transport: "manual",
-        stale: data.failed.length > 0 || fleet.fleetFailed,
-        lastUpdatedAt: lastLoadedAt,
-        staleTitle: "Part of the last refresh failed; the cards say which.",
-      }}
+      freshness={
+        lastLoadedAt === null
+          ? undefined
+          : {
+              transport: "manual",
+              stale:
+                data.failed.length > 0 ||
+                fleet.fleetFailed ||
+                Object.values(fleet.overviews).some((overview) => overview === null),
+              lastUpdatedAt: lastLoadedAt,
+              staleTitle: "Part of the last refresh failed; the cards say which.",
+            }
+      }
     />
   );
 
   const strip = (layout: "grid" | "strip") => (
     <ServiceStrip
       layout={layout}
-      loading={loading}
+      loading={false}
+      healthLoading={pendingSections.includes("health")}
+      countsLoading={pendingSections.includes("counts")}
+      subscribersLoading={pendingSections.includes("subscribers")}
+      subscribersFailed={data.failed.includes("subscribers")}
       health={data.health}
       healthFailed={data.healthFailed}
       countsFailed={data.failed.includes("counts")}
@@ -520,18 +541,18 @@ export default function DashboardPage() {
         <PageHeader
           title="Overview"
           subtitle="Service status and configuration at a glance."
-          actions={<>{refresh}</>}
+          actions={refresh}
         />
         {strip("grid")}
         <RecentActivity
-          loading={loading}
+          loading={pendingSections.includes("audit")}
           failed={data.failed.includes("audit")}
           audit={data.audit}
           now={now}
           onRetry={() => void load()}
         />
         <LiveSubscribers
-          loading={loading}
+          loading={pendingSections.includes("subscribers")}
           failed={data.failed.includes("subscribers")}
           subscribers={data.subscribers}
           currentRevision={data.currentRevision}
@@ -552,7 +573,7 @@ export default function DashboardPage() {
         title="Overview"
         subtitle={
           firstRun
-            ? "Nothing is configured yet. Work through the steps below."
+            ? "Create your first application or adopt existing environments."
             : "Every application, every environment, and whether clients have caught up."
         }
         actions={
@@ -573,6 +594,22 @@ export default function DashboardPage() {
       <section className="fleet-section" aria-label="Applications">
         {fleetLoading ? (
           <FleetSkeleton />
+        ) : firstRun && pendingSections.includes("counts") ? (
+          <div className="card" role="status">
+            Checking existing environments…
+          </div>
+        ) : firstRun && data.failed.includes("counts") ? (
+          <EmptyState
+            title="Could not check existing environments"
+            actions={
+              <Button variant="outline" onClick={() => void load()}>
+                Try again
+              </Button>
+            }
+          >
+            Environment counts are unavailable. Retry to see whether to adopt existing environments
+            or start a new application.
+          </EmptyState>
         ) : firstRun ? (
           <FirstRunChecklist
             namespaceCount={namespaceCount}
@@ -629,10 +666,19 @@ export default function DashboardPage() {
                 Manage <ArrowRight size={14} aria-hidden />
               </Link>
             </div>
-            <FleetGrid applications={visibleApplications} overviews={fleet.overviews} now={now} />
+            <FleetGrid
+              applications={visibleApplications}
+              overviews={fleet.overviews}
+              detailLoading={fleet.detailLoading}
+              onLoadDetail={(name) => {
+                if (activeRun.current) void loadDetail(name, activeRun.current);
+              }}
+              now={now}
+            />
             {(fleet.applicationCount ?? 0) > FLEET_DETAIL_CAP ? (
               <p className="fleet-note faint text-sm">
-                Release detail is shown for the first {FLEET_DETAIL_CAP} applications.
+                Release detail loads automatically for the first {FLEET_DETAIL_CAP} applications.
+                Load other cards individually.
               </p>
             ) : null}
           </>
@@ -640,7 +686,7 @@ export default function DashboardPage() {
       </section>
 
       <RecentActivity
-        loading={loading}
+        loading={pendingSections.includes("audit")}
         failed={data.failed.includes("audit")}
         audit={data.audit}
         now={now}

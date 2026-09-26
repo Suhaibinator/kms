@@ -194,6 +194,101 @@ describe("CloneEnvironmentModal", () => {
     expect(onCreated).toHaveBeenCalledWith(cloneResult);
   });
 
+  it("reports source gaps honestly and offers recovery by physical key", async () => {
+    mocks.cloneEnvironment.mockResolvedValue({
+      ...cloneResult,
+      items: [
+        {
+          alias: "database",
+          key: "database-config",
+          kind: "parameter",
+          action: "missing_in_source",
+        },
+      ],
+      needs_value: [],
+    });
+    const onAddParameter = vi.fn();
+    render(
+      <CloneEnvironmentModal
+        application={ready.application}
+        environments={environments}
+        seed={{ source: "dev", target: "staging", description: "", methods: ["mtls"] }}
+        open
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        onAddParameter={onAddParameter}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    expect(await screen.findByText(/1 need attention/)).toBeVisible();
+    expect(screen.queryByText("Every contract alias has a value.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add value" }));
+    expect(onAddParameter).toHaveBeenCalledWith("prod-eu", "database-config");
+  });
+
+  it("retries failed copies without losing successful outcomes", async () => {
+    mocks.cloneEnvironment
+      .mockResolvedValueOnce({
+        ...cloneResult,
+        items: [
+          {
+            alias: "database",
+            key: "database",
+            kind: "parameter",
+            action: "copied",
+            target_version: 1,
+            source_version: 3,
+          },
+          {
+            alias: "limits",
+            key: "limits",
+            kind: "parameter",
+            action: "error",
+            error: "Temporary failure",
+          },
+        ],
+        needs_value: [],
+      })
+      .mockResolvedValueOnce({
+        ...cloneResult,
+        namespace_created: false,
+        items: [
+          {
+            alias: "database",
+            key: "database",
+            kind: "parameter",
+            action: "exists",
+            target_version: 1,
+          },
+          {
+            alias: "limits",
+            key: "limits",
+            kind: "parameter",
+            action: "copied",
+            target_version: 1,
+            source_version: 2,
+          },
+        ],
+        needs_value: [],
+      });
+    render(
+      <CloneEnvironmentModal
+        application={ready.application}
+        environments={environments}
+        seed={{ source: "dev", target: "staging", description: "", methods: ["mtls"] }}
+        open
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    expect(await screen.findByText("Temporary failure")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed copies" }));
+    expect(await screen.findByText("Every contract alias has a value.")).toBeVisible();
+    expect(screen.getByText("v3 → v1")).toBeVisible();
+    expect(mocks.cloneEnvironment).toHaveBeenCalledTimes(2);
+  });
+
   it("recovers an uncopied parameter by its physical key and completes once", async () => {
     mocks.cloneEnvironment.mockResolvedValue({
       ...cloneResult,

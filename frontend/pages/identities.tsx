@@ -14,13 +14,13 @@ import { NamespaceIdent } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { SectionHeader } from "@/components/SectionHeader";
 import {
   headerLabels,
   MobileListToolbar,
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
-import { SectionHeader } from "@/components/SectionHeader";
 import {
   Badge,
   Checkbox,
@@ -54,6 +54,7 @@ import {
   unavailableMethodReason,
   validCertCount,
 } from "@/lib/identity-methods";
+import { safeReturnTo } from "@/lib/returnTo";
 import type { SortColumn } from "@/lib/sort";
 import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
 import { useNow } from "@/lib/useNow";
@@ -257,7 +258,14 @@ export default function IdentitiesPage() {
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<unknown>(null);
-  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app", "name"]);
+  const { values: prefill, ready: prefillReady } = useQueryParams([
+    "new",
+    "env",
+    "app",
+    "name",
+    "authMethod",
+    "returnTo",
+  ]);
   const scope = useMemo(
     () =>
       prefillReady && prefill.env && prefill.app ? { env: prefill.env, app: prefill.app } : null,
@@ -285,6 +293,7 @@ export default function IdentitiesPage() {
 
   // One-time credential display (from create or issue-cert).
   const [credentials, setCredentials] = useState<Credentials | null>(null);
+  const [credentialReturnTo, setCredentialReturnTo] = useState<string | null>(null);
 
   // Manage-certs modal. The identity is snapshotted when the modal opens so a
   // reload that drops it from the current page (or fails) cannot close the
@@ -438,13 +447,21 @@ export default function IdentitiesPage() {
 
   const issueDaysProblem = certDaysError(issueDays);
 
-  function openCreate(prefill?: NamespaceSelection) {
+  function openCreate(prefill?: NamespaceSelection, preferredMethod?: AuthMethod) {
     setName("");
     setServerNameError(null);
     setIdentityMode("application");
     setBindNs(prefill ?? NO_NS);
     setOpenedBind(prefill ?? NO_NS);
-    setMethods(["mtls"]);
+    const namespace = namespaces.find((ns) => ns.env === prefill?.env && ns.app === prefill?.app);
+    const accepted = namespace?.allowed_auth_methods ?? ["mtls", "token"];
+    const method =
+      preferredMethod && accepted.includes(preferredMethod)
+        ? preferredMethod
+        : accepted.includes("mtls")
+          ? "mtls"
+          : accepted[0];
+    setMethods(method ? [method] : []);
     setCertDays(String(DEFAULT_CERT_DAYS));
     wizardErrors.reset();
     setCreateStep(1);
@@ -454,12 +471,18 @@ export default function IdentitiesPage() {
   // `?new=1&env=&app=` (the Connect SDK panel's "Create identity" link) opens
   // the create flow once with the namespace prefilled.
   const prefillConsumed = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: openCreate is a plain function of state setters; run once per prefill.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openCreate reads the listed namespaces and resets form state; consume each prefill once.
   useEffect(() => {
-    if (!prefillReady || prefillConsumed.current || prefill.new !== "1") return;
+    if (!prefillReady || namespacesLoading || prefillConsumed.current || prefill.new !== "1")
+      return;
     prefillConsumed.current = true;
-    openCreate({ env: prefill.env ?? "", app: prefill.app ?? "" });
-  }, [prefillReady, prefill]);
+    openCreate(
+      { env: prefill.env ?? "", app: prefill.app ?? "" },
+      prefill.authMethod === "mtls" || prefill.authMethod === "token"
+        ? prefill.authMethod
+        : undefined,
+    );
+  }, [prefillReady, prefill, namespacesLoading, namespaces]);
 
   // `?name=` (a subscriber row's identity link) marks that row and scrolls it
   // into view once the page holding it has loaded. The highlight stays while
@@ -540,6 +563,21 @@ export default function IdentitiesPage() {
         cert_ttl_seconds: ttlSeconds,
       });
       setCreateOpen(false);
+      const destination =
+        namespace &&
+        namespace.env === prefill.env &&
+        namespace.app === prefill.app &&
+        prefill.new === "1"
+          ? safeReturnTo(prefill.returnTo)
+          : null;
+      if (destination) {
+        const target = new URL(destination, "https://console.invalid");
+        const preferred = prefill.authMethod === "token" ? "token" : "mtls";
+        target.searchParams.set("authMethod", methods.includes(preferred) ? preferred : methods[0]);
+        setCredentialReturnTo(`${target.pathname}${target.search}${target.hash}`);
+      } else {
+        setCredentialReturnTo(null);
+      }
       setCredentials({
         name: res.identity.name,
         kind: res.identity.kind,
@@ -704,6 +742,7 @@ export default function IdentitiesPage() {
 
   async function closeCredentials() {
     setCredentials(null);
+    setCredentialReturnTo(null);
     paging.reset();
     await load("");
   }
@@ -1285,6 +1324,7 @@ export default function IdentitiesPage() {
       <CredentialsModal
         key={credentials ? `${credentials.name}:${credentials.cert?.serial ?? "token"}` : "empty"}
         credentials={credentials}
+        returnTo={credentialReturnTo}
         onClose={() => void closeCredentials()}
       />
 
@@ -1661,9 +1701,11 @@ try {
 
 function CredentialsModal({
   credentials,
+  returnTo,
   onClose,
 }: {
   credentials: Credentials | null;
+  returnTo: string | null;
   onClose: () => void;
 }) {
   const [stage, setStage] = useState<3 | 4>(3);
@@ -1717,7 +1759,13 @@ function CredentialsModal({
             <Button variant="outline" onClick={() => setStage(3)}>
               Back to credentials
             </Button>
-            <Button onClick={onClose}>Done</Button>
+            {returnTo && credentials?.namespace ? (
+              <ButtonLink href={returnTo}>
+                Continue connecting {displayNamespace(credentials.namespace)}
+              </ButtonLink>
+            ) : (
+              <Button onClick={onClose}>Done</Button>
+            )}
           </>
         )
       }

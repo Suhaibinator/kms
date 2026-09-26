@@ -102,7 +102,7 @@ export function deriveSetupSteps({
     id: "token",
     title: "Keep the admin token safe",
     detail:
-      "The one-time admin token printed at first start cannot be shown again. If it is lost, mint a new one with `admin identity rotate` on the server.",
+      "The one-time admin token printed at first start cannot be shown again. If it is lost, recover on the KMS host with `parameter-store rotate-admin --name <admin-name>`. This offline command does not require the lost token.",
     informational: true,
     done: true,
   });

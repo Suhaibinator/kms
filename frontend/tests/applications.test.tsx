@@ -170,38 +170,64 @@ describe("ApplicationsPage", () => {
     );
   });
 
-  it("filters the list by name or description and pages through it", async () => {
+  it("restores an application search from a shared URL", async () => {
+    const orders = clone(ready.application);
+    orders.name = "orders";
+    mocks.query = { q: "orders" };
+    mocks.listApplications.mockResolvedValue({
+      applications: [ready.application, orders],
+      next_page_token: "",
+    });
+    render(<ApplicationsPage />);
+    expect(await screen.findByRole("link", { name: "Manage orders" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: `Manage ${ready.application.name}` })).toBeNull();
+    expect(screen.getByRole("searchbox", { name: "Filter applications" })).toHaveValue("orders");
+  });
+
+  it("shows a retryable error when searching another page fails", async () => {
+    mocks.query = { q: "orders" };
+    mocks.listApplications
+      .mockResolvedValueOnce({ applications: [ready.application], next_page_token: "page-2" })
+      .mockRejectedValueOnce(new Error("offline"));
+    render(<ApplicationsPage />);
+    expect(await screen.findByText("Could not load applications")).toBeVisible();
+    expect(screen.queryByText("No matching applications")).toBeNull();
+    mocks.listApplications.mockResolvedValue({ applications: [], next_page_token: "" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry search" }));
+    await waitFor(() => expect(screen.queryByText("Could not load applications")).toBeNull());
+  });
+
+  it("searches applications beyond the current page and preserves the URL query", async () => {
     const orders = clone(ready.application);
     orders.name = "orders";
     orders.description = "Order intake";
-    mocks.listApplications.mockResolvedValue({
-      applications: [ready.application, orders],
-      next_page_token: "page-2",
-    });
-    render(<ApplicationsPage />);
-    await screen.findByText("orders");
-    expect(screen.getByText("2 applications")).toBeVisible();
-    const filter = screen.getByRole("searchbox", { name: "Filter applications" });
-    fireEvent.change(filter, { target: { value: "INTAKE" } });
-    expect(screen.getByRole("link", { name: "Manage orders" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: `Manage ${ready.application.name}` })).toBeNull();
-    expect(screen.getByText("1 of 2 shown")).toBeVisible();
-    fireEvent.change(filter, { target: { value: "zzz" } });
-    expect(screen.getByText("No matching applications")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
-    expect(screen.getByRole("link", { name: "Manage orders" })).toBeVisible();
-
-    mocks.listApplications.mockResolvedValue({ applications: [orders], next_page_token: "" });
-    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-    await waitFor(() =>
-      expect(mocks.listApplications).toHaveBeenLastCalledWith(
-        50,
-        "page-2",
-        expect.anything(),
-        "exclude",
-      ),
+    mocks.listApplications.mockImplementation(async (_size, token) =>
+      token
+        ? { applications: [orders], next_page_token: "" }
+        : { applications: [ready.application], next_page_token: "page-2" },
     );
-    expect(await screen.findByText("Page 2")).toBeVisible();
+    render(<ApplicationsPage />);
+    await screen.findByRole("link", { name: `Manage ${ready.application.name}` });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter applications" }), {
+      target: { value: "INTAKE" },
+    });
+    expect(await screen.findByRole("link", { name: "Manage orders" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: `Manage ${ready.application.name}` })).toBeNull();
+    expect(mocks.listApplications).toHaveBeenCalledWith(
+      200,
+      "page-2",
+      expect.anything(),
+      "exclude",
+    );
+    expect(mocks.replace).toHaveBeenCalledWith(
+      { pathname: "/applications", query: { q: "INTAKE" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter applications" }), {
+      target: { value: "zzz" },
+    });
+    expect(screen.getByText("No matching applications")).toBeVisible();
   });
 
   it("can explicitly list archived applications", async () => {

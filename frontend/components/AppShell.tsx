@@ -11,7 +11,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/AuthContext";
 import { displayNamespace } from "@/lib/format";
 import { links } from "@/lib/links";
-import { type NamespaceRef, useLastNamespace } from "@/lib/namespace-memory";
+import type { NamespaceRef } from "@/lib/namespace-memory";
+import { useNavigationNamespace } from "@/lib/navigation-namespace";
 import { isApplePlatform, isShortcutSheetKey } from "@/lib/shortcuts";
 import type { Identity } from "@/lib/types";
 import { Icon } from "./icons";
@@ -233,9 +234,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const shortcutLabel = useShortcutLabel();
-  const rememberedNamespace = useLastNamespace();
-  const namespace =
-    identity?.kind === "client" ? (identity.namespace ?? null) : rememberedNamespace;
+  const namespace = useNavigationNamespace();
   const visibleNav = useMemo(
     () =>
       NAV.map((group) => ({

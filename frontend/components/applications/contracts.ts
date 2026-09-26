@@ -4,6 +4,7 @@
 
 import type {
   Application,
+  ApplicationContractField,
   ApplicationOverview,
   AuthMethod,
   CloneEnvironmentResponse,
@@ -86,6 +87,11 @@ export interface ConnectSdkPanelProps {
   schemaVersion: number;
   /** Contract aliases; the snippet reads the first one. */
   aliases: string[];
+  /** Typed entries take precedence over aliases when generating SDK accessors. */
+  contract?: readonly ApplicationContractField[];
+  /** Contextual destination for continuing after credential creation. */
+  returnTo?: string;
+  initialAuthMethod?: AuthMethod;
   /** null while health has not loaded; `tls_enabled: false` shows a warning. */
   health: HealthResponse | null;
 }
