@@ -648,7 +648,8 @@ func wrapText(s string, width int, indent string) string {
 	for i, wd := range words {
 		if i > 0 {
 			if line+1+len(wd) > width {
-				b.WriteString("\n" + indent)
+				b.WriteString("\n")
+				b.WriteString(indent)
 				line = 0
 			} else {
 				b.WriteByte(' ')
