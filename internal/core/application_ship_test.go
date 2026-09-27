@@ -368,3 +368,20 @@ func TestShipApplicationChangeFirstReleaseWithMissingAlias(t *testing.T) {
 		t.Fatalf("validation = %+v", result.Preview.Validation)
 	}
 }
+
+func TestShipReleaseMetadataPreservesMembers(t *testing.T) {
+	got, err := shipReleaseMetadata(`{"build":9007199254740993,"note":"x","source":"cli"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"build":9007199254740993`, `"note":"x"`, `"source":"console.ship"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metadata %s missing %s", got, want)
+		}
+	}
+	for _, bad := range []string{"null", "[]", `{"a":1,"a":2}`} {
+		if _, err := shipReleaseMetadata(bad); err == nil {
+			t.Fatalf("metadata %s accepted", bad)
+		}
+	}
+}

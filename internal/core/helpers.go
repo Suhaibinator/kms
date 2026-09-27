@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"slices"
@@ -43,7 +44,7 @@ func validateMetadataJSON(s string) (string, error) {
 	if s == "" {
 		return "{}", nil
 	}
-	var m map[string]any
+	var m map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
 		return "", domain.Errorf(domain.ErrInvalidArgument, "metadata must be a JSON object")
 	}
