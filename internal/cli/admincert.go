@@ -448,7 +448,7 @@ func (c *CLI) cmdAdminCertList(args []string) int {
 				IssuedAt:    jsonTimeOf(cert.CreatedAt),
 			})
 		}
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	rows := make([][]string, 0, len(certs))
 	for _, cert := range certs {

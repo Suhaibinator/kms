@@ -217,7 +217,7 @@ func (c *CLI) readReleaseDefinition(path string) (releaseDefinition, error) {
 	if err := decoder.Decode(&definition); err != nil {
 		return releaseDefinition{}, err
 	}
-	var extra any
+	var extra yaml.Node
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
 			return releaseDefinition{}, errors.New("multiple YAML/JSON documents are not allowed")
@@ -570,7 +570,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	if c.jsonOutput() {
 		// The loop above followed every page, so the result set is complete and
 		// there is no token to hand back.
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	c.printTable([]string{"NAME", "SCHEMA", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
 	return 0
@@ -1277,7 +1277,7 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	}
 	if c.jsonOutput() {
 		// Every page has been followed, so there is no token to hand back.
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	c.printTable([]string{"SCHEMA", "VERSION", "DIGEST", "CREATED"}, rows)
 	return 0

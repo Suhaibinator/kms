@@ -105,11 +105,11 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 	}
 	clean := result.Passed() && result.Unverified == 0
 	if *output == "json" {
-		entries := make([]map[string]string, 0, len(result.Entries))
+		entries := make([]defaultsDriftEntryJSON, 0, len(result.Entries))
 		for _, e := range result.Entries {
-			entries = append(entries, map[string]string{"alias": e.Alias, "content_type": e.ContentType, "verdict": e.Verdict})
+			entries = append(entries, defaultsDriftEntryJSON{Alias: e.Alias, ContentType: e.ContentType, Verdict: e.Verdict})
 		}
-		data, err := json.Marshal(map[string]any{"namespace": ns, "release": result.ReleaseName, "version": result.ReleaseVersion, "schema_version": result.SchemaVersion, "activation_revision": result.ActivationRevision, "schema_matches": result.SchemaMatches, "clean": clean, "unverified": result.Unverified, "entries": entries}, json.Deterministic(true))
+		data, err := json.Marshal(defaultsDriftJSON{ActivationRevision: result.ActivationRevision, Clean: clean, Entries: entries, Namespace: ns, Release: result.ReleaseName, SchemaMatches: result.SchemaMatches, SchemaVersion: result.SchemaVersion, Unverified: result.Unverified, Version: result.ReleaseVersion}, json.Deterministic(true))
 		if err != nil {
 			writeManagedConfigError(stderr, err)
 			return 1
@@ -124,4 +124,24 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 		return 1
 	}
 	return 0
+}
+
+// defaultsDriftJSON is the -output json result. Fields are in alphabetical
+// order to match the key order of the previous map encoding.
+type defaultsDriftJSON struct {
+	ActivationRevision uint64                   `json:"activation_revision"`
+	Clean              bool                     `json:"clean"`
+	Entries            []defaultsDriftEntryJSON `json:"entries"`
+	Namespace          string                   `json:"namespace"`
+	Release            string                   `json:"release"`
+	SchemaMatches      bool                     `json:"schema_matches"`
+	SchemaVersion      uint64                   `json:"schema_version"`
+	Unverified         int                      `json:"unverified"`
+	Version            uint64                   `json:"version"`
+}
+
+type defaultsDriftEntryJSON struct {
+	Alias       string `json:"alias"`
+	ContentType string `json:"content_type"`
+	Verdict     string `json:"verdict"`
 }

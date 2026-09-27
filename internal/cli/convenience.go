@@ -630,7 +630,7 @@ func (c *CLI) cmdList(args []string) int {
 		// The command drains every page itself, so the envelope's
 		// next_page_token is always empty (and therefore omitted): the items
 		// array is the complete result.
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {

@@ -195,7 +195,7 @@ func (s *SQLStore) SetReleasePin(ctx context.Context, ref domain.ReleaseSessionR
 			return e
 		}
 		audit.ResourceNamespaceID = m.NamespaceID
-		metadata, _ := json.Marshal(map[string]any{"session_id": m.SessionID, "instance_id": m.InstanceID, "client_name": m.ClientName, "identity": m.Identity, "schema_version": strconv.FormatUint(m.SchemaVersion, 10), "target_revision": strconv.FormatUint(rev, 10)})
+		metadata, _ := json.Marshal(map[string]string{"session_id": m.SessionID, "instance_id": m.InstanceID, "client_name": m.ClientName, "identity": m.Identity, "schema_version": strconv.FormatUint(m.SchemaVersion, 10), "target_revision": strconv.FormatUint(rev, 10)})
 		audit.Metadata = string(metadata)
 		if e := appendAudit(tx, audit); e != nil {
 			return e

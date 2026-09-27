@@ -314,7 +314,7 @@ func (c *CLI) cmdAuditList(args []string) int {
 	}
 	if c.jsonOutput() {
 		records := auditRecordsFromProto(resp.GetEvents())
-		return c.printList(records, resp.GetNextPageToken())
+		return printList(c, records, resp.GetNextPageToken())
 	}
 	c.printTable(auditTableHeaders, auditTableRows(resp.GetEvents()))
 	if next := resp.GetNextPageToken(); next != "" {

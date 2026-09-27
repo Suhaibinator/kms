@@ -128,7 +128,7 @@ func TestFilteredCursorRejectsEveryEnvelopeMutation(t *testing.T) {
 func TestFilteredCursorIsBoundToExactCallerScope(t *testing.T) {
 	svc := New(newFakeStore(), zap.NewNop(), "test")
 	alice := Principal{Identity: domain.Identity{ID: 7, Name: "alice"}, Method: domain.AuthMethodToken}
-	token, err := svc.sealFilteredCursor("audit", filteredCursorScope(alice, map[string]string{"env": "prod"}), "raw-storage-cursor")
+	token, err := svc.sealFilteredCursor("audit", filteredCursorScope(alice, &domain.AuditFilter{Env: "prod"}), "raw-storage-cursor")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,14 +143,14 @@ func TestFilteredCursorIsBoundToExactCallerScope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			scope := filteredCursorScope(tt.principal, map[string]string{"env": "prod"})
+			scope := filteredCursorScope(tt.principal, &domain.AuditFilter{Env: "prod"})
 			if _, err := svc.openFilteredCursor(token, "audit", scope); !errors.Is(err, domain.ErrInvalidArgument) {
 				t.Fatalf("cross-scope cursor error = %v, want ErrInvalidArgument", err)
 			}
 		})
 	}
 
-	otherFilter := filteredCursorScope(alice, map[string]string{"env": "stage"})
+	otherFilter := filteredCursorScope(alice, &domain.AuditFilter{Env: "stage"})
 	if _, err := svc.openFilteredCursor(token, "audit", otherFilter); !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("cross-filter cursor error = %v, want ErrInvalidArgument", err)
 	}

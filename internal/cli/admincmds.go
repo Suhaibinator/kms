@@ -277,7 +277,7 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 		}
 	}
 	if c.jsonOutput() {
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	c.printTable([]string{"NAMESPACE", "AUTH", "PARAMS", "SECRETS", "DESCRIPTION"}, rows)
 	return 0
@@ -713,7 +713,7 @@ func (c *CLI) cmdIdentityList(args []string) int {
 		}
 	}
 	if c.jsonOutput() {
-		return c.printList(items, "")
+		return printList(c, items, "")
 	}
 	c.printTable([]string{"NAME", "KIND", "NAMESPACE", "TOKEN", "CERTS", "DISABLED"}, rows)
 	return 0
