@@ -87,9 +87,8 @@ type listPage[T any] struct {
 	NextPageToken string `json:"next_page_token,omitempty"`
 }
 
-// printList writes a list result in the shared envelope. It is a function
-// rather than a CLI method because methods cannot take type parameters.
-func printList[T any](c *CLI, items []T, nextPageToken string) int {
+// printList writes a list result in the shared envelope.
+func (c *CLI) printList[T any](items []T, nextPageToken string) int {
 	return c.printJSON(listPage[T]{Items: items, NextPageToken: nextPageToken})
 }
 

@@ -185,7 +185,7 @@ func (c *CLI) cmdPolicyList(args []string) int {
 		}
 	}
 	if c.jsonOutput() {
-		return printList(c, items, "")
+		return c.printList(items, "")
 	}
 	c.printTable([]string{"NAME", "SUBJECT", "ALLOW", "DENY"}, rows)
 	return 0

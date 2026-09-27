@@ -204,7 +204,7 @@ func TestPrintList(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := newTestCLI()
-			if code := printList(&c.CLI, tc.items, tc.token); code != exitOK {
+			if code := c.printList(tc.items, tc.token); code != exitOK {
 				t.Fatalf("printList exit = %d", code)
 			}
 			if got := c.stdout(); got != tc.want {
