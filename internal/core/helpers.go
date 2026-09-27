@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"slices"
@@ -43,7 +44,7 @@ func validateMetadataJSON(s string) (string, error) {
 	if s == "" {
 		return "{}", nil
 	}
-	var m map[string]rawJSON
+	var m map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
 		return "", domain.Errorf(domain.ErrInvalidArgument, "metadata must be a JSON object")
 	}
@@ -184,20 +185,4 @@ func unpackNonceCiphertext(b []byte) (nonce, ct []byte, err error) {
 		return nil, nil, fmt.Errorf("ca key material is truncated: %w", domain.ErrDecryptFailed)
 	}
 	return b[1 : 1+n], b[1+n:], nil
-}
-
-// rawJSON holds one JSON value's original bytes through a decode/encode round
-// trip, so numbers keep their exact text instead of passing through float64.
-type rawJSON []byte
-
-func (r *rawJSON) UnmarshalJSON(b []byte) error {
-	*r = append((*r)[:0], b...)
-	return nil
-}
-
-func (r rawJSON) MarshalJSON() ([]byte, error) {
-	if len(r) == 0 {
-		return []byte("null"), nil
-	}
-	return r, nil
 }

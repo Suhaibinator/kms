@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"encoding/json/v2"
+	"encoding/json/jsontext"
 	"regexp"
 	"strconv"
 )
@@ -126,12 +126,12 @@ func NumberParam[N ~int | ~uint64](n N) FindingParam {
 	return FindingParam{value: strconv.FormatUint(uint64(n), 10), number: true}
 }
 
-// MarshalJSON encodes the param as a JSON string or number.
-func (p FindingParam) MarshalJSON() ([]byte, error) {
+// MarshalJSONTo encodes the param as a JSON string or number.
+func (p FindingParam) MarshalJSONTo(enc *jsontext.Encoder) error {
 	if p.number {
-		return []byte(p.value), nil
+		return enc.WriteValue(jsontext.Value(p.value))
 	}
-	return json.Marshal(p.value)
+	return enc.WriteToken(jsontext.String(p.value))
 }
 
 // productionEnvironmentRE matches `prod`, `prod-*` and `production` but not
