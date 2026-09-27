@@ -409,7 +409,7 @@ func buildShipPlan(app domain.Application, ns domain.NamespaceRef, changes []dom
 			plan.selectors = append(plan.selectors, domain.ReleaseEntrySelector{Alias: field.Alias, Kind: activeEntry.Kind, Ref: activeEntry.Ref, Version: activeEntry.Version})
 			if activeEntry.Ref.NS == ns {
 				if cell, present := cellFor(rows, ns.Env, activeEntry.Kind, activeEntry.Ref.Key); present && cell.Version != activeEntry.Version {
-					plan.warnings = append(plan.warnings, finding(domain.FindingUnreleasedChanges, domain.FindingWarning, domain.FindingScope{Env: ns.Env, Alias: field.Alias}, map[string]any{"alias": field.Alias, "current": cell.Version, "pinned": activeEntry.Version}))
+					plan.warnings = append(plan.warnings, finding(domain.FindingUnreleasedChanges, domain.FindingWarning, domain.FindingScope{Env: ns.Env, Alias: field.Alias}, domain.FindingParams{"alias": domain.TextParam(field.Alias), "current": domain.NumberParam(cell.Version), "pinned": domain.NumberParam(activeEntry.Version)}))
 				}
 			}
 		case resolved:

@@ -189,7 +189,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	if e := previewEntry(t, preview, "rate_limits"); e.Change != domain.ShipEntryIncluded || e.FromVersion != 2 || e.ToVersion != 2 {
 		t.Fatalf("unreleased alias must keep the active pin: %+v", e)
 	}
-	if len(preview.Preview.Warnings) != 1 || preview.Preview.Warnings[0].Code != domain.FindingUnreleasedChanges || preview.Preview.Warnings[0].Params["current"] != uint64(3) || preview.Preview.Warnings[0].Params["pinned"] != uint64(2) {
+	if len(preview.Preview.Warnings) != 1 || preview.Preview.Warnings[0].Code != domain.FindingUnreleasedChanges || preview.Preview.Warnings[0].Params["current"] != domain.NumberParam(uint64(3)) || preview.Preview.Warnings[0].Params["pinned"] != domain.NumberParam(uint64(2)) {
 		t.Fatalf("warnings = %+v", preview.Preview.Warnings)
 	}
 	// Opt in by pinning the newer version explicitly, guarded by CAS.
