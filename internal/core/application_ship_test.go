@@ -370,11 +370,11 @@ func TestShipApplicationChangeFirstReleaseWithMissingAlias(t *testing.T) {
 }
 
 func TestShipReleaseMetadataPreservesMembers(t *testing.T) {
-	got, err := shipReleaseMetadata(`{"build":9007199254740993,"note":"x","source":"cli"}`)
+	got, err := shipReleaseMetadata(`{"build":9007199254740993,"nested":{"a":[1,2]},"none":null,"note":"x","source":"cli"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"build":9007199254740993`, `"note":"x"`, `"source":"console.ship"`} {
+	for _, want := range []string{`"build":9007199254740993`, `"nested":{"a":[1,2]}`, `"none":null`, `"note":"x"`, `"source":"console.ship"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metadata %s missing %s", got, want)
 		}

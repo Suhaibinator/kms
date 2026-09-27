@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"maps"
@@ -273,7 +272,7 @@ func shipReleaseMetadata(raw string) (string, error) {
 	}
 	// Members stay as raw JSON so numbers keep their exact text (decoding into
 	// any would round integers above 2^53 through float64).
-	var obj map[string]jsontext.Value
+	var obj map[string]rawJSON
 	if err := json.Unmarshal([]byte(metadata), &obj); err != nil || obj == nil {
 		return "", domain.Errorf(domain.ErrInvalidArgument, "metadata must be a JSON object")
 	}
