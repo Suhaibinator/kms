@@ -107,7 +107,7 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 	if *output == "json" {
 		entries := make([]defaultsDriftEntryJSON, 0, len(result.Entries))
 		for _, e := range result.Entries {
-			entries = append(entries, defaultsDriftEntryJSON{Alias: e.Alias, ContentType: e.ContentType, Verdict: e.Verdict})
+			entries = append(entries, defaultsDriftEntryJSON(e))
 		}
 		data, err := json.Marshal(defaultsDriftJSON{ActivationRevision: result.ActivationRevision, Clean: clean, Entries: entries, Namespace: ns, Release: result.ReleaseName, SchemaMatches: result.SchemaMatches, SchemaVersion: result.SchemaVersion, Unverified: result.Unverified, Version: result.ReleaseVersion}, json.Deterministic(true))
 		if err != nil {
