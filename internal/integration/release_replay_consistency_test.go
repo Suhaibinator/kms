@@ -2,7 +2,7 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"testing"
@@ -63,7 +63,7 @@ func TestReleaseSessionReplayConsistencyOverRealKMS(t *testing.T) {
 				Status string `json:"status"`
 			} `json:"environments"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(resp.Body, &body); err != nil {
 			t.Fatal(err)
 		}
 		if resp.StatusCode != http.StatusOK {

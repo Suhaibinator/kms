@@ -3,7 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 	"net"
 	"net/http"
@@ -170,7 +170,7 @@ func TestExternalSDKSessionConformance(t *testing.T) {
 						Status string `json:"status"`
 					} `json:"environments"`
 				}
-				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				if err := json.UnmarshalRead(resp.Body, &body); err != nil {
 					t.Fatal(err)
 				}
 				return resp.StatusCode == http.StatusOK && len(body.Environments) == 1 && body.Environments[0].Status == "ready"
