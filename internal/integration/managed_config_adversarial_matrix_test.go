@@ -985,6 +985,9 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 					}
 					return
 				}
+				// Keep concurrent snapshot checks running without saturating the
+				// CPUs needed by SQLite, TLS, and the loader under race/coverage.
+				time.Sleep(time.Millisecond)
 			}
 		})
 	}
@@ -1000,7 +1003,22 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 		expectedCurrent = release.GetVersion()
 	}
 	latest := candidates[len(candidates)-1]
-	waitForManagedState(t, func() bool { return running.store.Current().Release().Version() == latest.GetVersion() }, "latest rapid activation")
+	// This stress case needs more headroom than the ordinary five-second wait
+	// when race detection and atomic coverage instrument the concurrent readers.
+	convergenceTimeout := time.NewTimer(30 * time.Second)
+	defer convergenceTimeout.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for running.store.Current().Release().Version() != latest.GetVersion() {
+		select {
+		case failure := <-readerFailures:
+			t.Fatal(failure)
+		case <-convergenceTimeout.C:
+			t.Fatalf("timed out waiting for latest rapid activation: current=%d want=%d status=%+v stats=%+v",
+				running.store.Current().Release().Version(), latest.GetVersion(), running.store.Status(), running.store.Stats())
+		case <-poll.C:
+		}
+	}
 	if got := running.store.Current().Release().Version(); got != latest.GetVersion() {
 		t.Fatalf("stale preparation overwrote latest release: got %d want %d", got, latest.GetVersion())
 	}
