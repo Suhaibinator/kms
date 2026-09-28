@@ -797,7 +797,7 @@ func (s *Service) ListAuditEvents(ctx context.Context, pr Principal, f domain.Au
 
 	limit := filteredPageLimit(page.Limit)
 	visible := make([]domain.AuditEvent, 0, limit+1)
-	scope := filteredCursorScope(pr, f)
+	scope := filteredCursorScope(pr, &f)
 	cursor, err := s.openFilteredCursor(page.Token, "audit", scope)
 	if err != nil {
 		return nil, "", err

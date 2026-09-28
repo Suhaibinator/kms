@@ -189,7 +189,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	if e := previewEntry(t, preview, "rate_limits"); e.Change != domain.ShipEntryIncluded || e.FromVersion != 2 || e.ToVersion != 2 {
 		t.Fatalf("unreleased alias must keep the active pin: %+v", e)
 	}
-	if len(preview.Preview.Warnings) != 1 || preview.Preview.Warnings[0].Code != domain.FindingUnreleasedChanges || preview.Preview.Warnings[0].Params["current"] != uint64(3) || preview.Preview.Warnings[0].Params["pinned"] != uint64(2) {
+	if len(preview.Preview.Warnings) != 1 || preview.Preview.Warnings[0].Code != domain.FindingUnreleasedChanges || preview.Preview.Warnings[0].Params["current"] != domain.NumberParam(uint64(3)) || preview.Preview.Warnings[0].Params["pinned"] != domain.NumberParam(uint64(2)) {
 		t.Fatalf("warnings = %+v", preview.Preview.Warnings)
 	}
 	// Opt in by pinning the newer version explicitly, guarded by CAS.
@@ -366,5 +366,22 @@ func TestShipApplicationChangeFirstReleaseWithMissingAlias(t *testing.T) {
 	}
 	if codes["database"] != domain.ReleaseValidationNotFound || codes["db_password"] != domain.ReleaseValidationNotFound || len(codes) != 2 {
 		t.Fatalf("validation = %+v", result.Preview.Validation)
+	}
+}
+
+func TestShipReleaseMetadataPreservesMembers(t *testing.T) {
+	got, err := shipReleaseMetadata(`{"build":9007199254740993,"nested":{"a":[1,2]},"none":null,"note":"x","source":"cli"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"build":9007199254740993`, `"nested":{"a":[1,2]}`, `"none":null`, `"note":"x"`, `"source":"console.ship"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metadata %s missing %s", got, want)
+		}
+	}
+	for _, bad := range []string{"null", "[]", `{"a":1,"a":2}`} {
+		if _, err := shipReleaseMetadata(bad); err == nil {
+			t.Fatalf("metadata %s accepted", bad)
+		}
 	}
 }

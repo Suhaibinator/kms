@@ -1025,14 +1025,14 @@ func compileSchema(raw string) (*jsonschema.Schema, error) {
 	if err != nil {
 		return nil, err
 	}
+	c := jsonschema.NewCompiler()
+	c.DefaultDraft(jsonschema.Draft2020)
 	if obj, ok := doc.(map[string]any); ok {
 		if dialect, ok := obj["$schema"].(string); ok && strings.TrimSuffix(dialect, "#") != "https://json-schema.org/draft/2020-12/schema" {
 			return nil, fmt.Errorf("unsupported JSON Schema dialect")
 		}
+		configureKMSFormats(c, obj)
 	}
-	c := jsonschema.NewCompiler()
-	c.DefaultDraft(jsonschema.Draft2020)
-	configureKMSFormats(c, doc)
 	const u = "https://kms.local/configuration-schema.json"
 	if err := c.AddResource(u, doc); err != nil {
 		return nil, err

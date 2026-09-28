@@ -29,6 +29,9 @@ var (
 //
 // If any field fails to resolve, Resolve returns the first error (after all
 // in-flight fetches settle); already-initialized fields are left initialized.
+// TODO(breaking): take cfg as a generic *T (Go 1.27 generic method) instead
+// of any. Callers passing a concrete pointer keep compiling; callers holding
+// the config as any would not.
 func (c *Client) Resolve(ctx context.Context, cfg any) error {
 	rv := reflect.ValueOf(cfg)
 	if rv.Kind() != reflect.Pointer {

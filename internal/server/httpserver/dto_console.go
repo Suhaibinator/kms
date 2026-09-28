@@ -14,10 +14,10 @@ type findingScopeDTO struct {
 }
 
 type findingDTO struct {
-	Code     string          `json:"code"`
-	Severity string          `json:"severity"`
-	Scope    findingScopeDTO `json:"scope"`
-	Params   map[string]any  `json:"params"`
+	Code     string               `json:"code"`
+	Severity string               `json:"severity"`
+	Scope    findingScopeDTO      `json:"scope"`
+	Params   domain.FindingParams `json:"params"`
 }
 
 func toFindingDTOs(in []domain.Finding) []findingDTO {
@@ -25,7 +25,7 @@ func toFindingDTOs(in []domain.Finding) []findingDTO {
 	for _, f := range in {
 		params := f.Params
 		if params == nil {
-			params = map[string]any{}
+			params = domain.FindingParams{}
 		}
 		out = append(out, findingDTO{Code: f.Code, Severity: f.Severity, Scope: findingScopeDTO{Env: f.Scope.Env, Alias: f.Scope.Alias, Instance: f.Scope.Instance}, Params: params})
 	}

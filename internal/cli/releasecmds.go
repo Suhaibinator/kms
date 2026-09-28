@@ -217,7 +217,7 @@ func (c *CLI) readReleaseDefinition(path string) (releaseDefinition, error) {
 	if err := decoder.Decode(&definition); err != nil {
 		return releaseDefinition{}, err
 	}
-	var extra any
+	var extra yaml.Node
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
 			return releaseDefinition{}, errors.New("multiple YAML/JSON documents are not allowed")

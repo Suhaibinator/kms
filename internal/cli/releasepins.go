@@ -71,8 +71,20 @@ func (c *CLI) cmdReleasePin(args []string, unpin bool) int {
 		return c.failErr("release "+name, err)
 	}
 	if c.jsonOutput() {
-		return c.printJSON(map[string]any{"schema_version": schema.value, "activation_revision": out.ActivationRevision, "session_id": *session, "target_version": out.GetRelease().GetVersion(), "target_revision": out.TargetRevision, "pin_revision": out.PinRevision, "pinned": out.Pinned})
+		return c.printJSON(releasePinJSON{ActivationRevision: out.GetActivationRevision(), PinRevision: out.GetPinRevision(), Pinned: out.GetPinned(), SchemaVersion: schema.value, SessionID: *session, TargetRevision: out.GetTargetRevision(), TargetVersion: out.GetRelease().GetVersion()})
 	}
 	c.info("Assigned schema %d release %d to process %s; application acknowledgement is pending", schema.value, out.GetRelease().GetVersion(), *session)
 	return 0
+}
+
+// releasePinJSON is the --json result of release pin/unpin. Fields are in
+// alphabetical order to match the key order of the previous map encoding.
+type releasePinJSON struct {
+	ActivationRevision uint64 `json:"activation_revision"`
+	PinRevision        uint64 `json:"pin_revision"`
+	Pinned             bool   `json:"pinned"`
+	SchemaVersion      uint64 `json:"schema_version"`
+	SessionID          string `json:"session_id"`
+	TargetRevision     uint64 `json:"target_revision"`
+	TargetVersion      uint64 `json:"target_version"`
 }

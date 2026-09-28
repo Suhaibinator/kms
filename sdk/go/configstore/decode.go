@@ -102,6 +102,8 @@ func decodeDiagnostic(path string, cause error) error {
 //
 // Errors contain only generated canonical paths and fixed diagnostics; raw
 // JSON values and unknown property names are never included.
+// TODO(breaking): take dst as a generic *T instead of any. Generated bindings
+// already pass *T, but callers holding the value as any would stop compiling.
 func DecodeGroup(document string, dst any, fields []FieldCodec) error {
 	root, err := parseJSONDocument(document)
 	if err != nil {

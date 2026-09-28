@@ -1,6 +1,10 @@
 package domain
 
-import "regexp"
+import (
+	"encoding/json/v2"
+	"regexp"
+	"strconv"
+)
 
 // Readiness state machine vocabulary. The backend computes
 // every state and finding; the frontend only renders them. Finding params
@@ -93,13 +97,41 @@ type FindingScope struct {
 	Instance string
 }
 
-// Finding is one computed readiness observation. Params values are strings or
-// numbers only.
+// Finding is one computed readiness observation.
 type Finding struct {
 	Code     string
 	Severity string
 	Scope    FindingScope
-	Params   map[string]any
+	Params   FindingParams
+}
+
+// FindingParams are the named values a finding's message is rendered from.
+type FindingParams map[string]FindingParam
+
+// FindingParam is a string or a number. It is comparable so tests and
+// callers can check params with ==.
+type FindingParam struct {
+	value  string // the text, or the decimal digits of a number
+	number bool
+}
+
+// TextParam returns a string finding param.
+func TextParam[S ~string](s S) FindingParam { return FindingParam{value: string(s)} }
+
+// NumberParam returns a numeric finding param.
+func NumberParam[N ~int | ~uint64](n N) FindingParam {
+	if n < 0 {
+		return FindingParam{value: strconv.FormatInt(int64(n), 10), number: true}
+	}
+	return FindingParam{value: strconv.FormatUint(uint64(n), 10), number: true}
+}
+
+// MarshalJSON encodes the param as a JSON string or number.
+func (p FindingParam) MarshalJSON() ([]byte, error) {
+	if p.number {
+		return []byte(p.value), nil
+	}
+	return json.Marshal(p.value)
 }
 
 // productionEnvironmentRE matches `prod`, `prod-*` and `production` but not

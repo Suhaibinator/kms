@@ -173,6 +173,8 @@ const (
 // FieldChange is one non-secret field that differs between the previously
 // applied generation and a newly applied one. Secret rotations are reported
 // path-only with nil Previous and Current.
+// TODO(breaking): type Previous/Current (e.g. as raw JSON) instead of any.
+// Changes the exported fields, generated reportValue helpers and callbacks.
 type FieldChange struct {
 	Path     string `json:"path"`
 	Previous any    `json:"previous"`
@@ -264,6 +266,8 @@ func (r *appliedReport) MarshalJSONTo(out *jsontext.Encoder) error {
 }
 
 // FieldDifference contains one canonical, non-secret default comparison.
+// TODO(breaking): type Expected/Actual (e.g. as raw JSON) instead of any.
+// Changes the exported fields and what callers receive.
 type FieldDifference struct {
 	Path     string `json:"path"`
 	Expected any    `json:"expected"`

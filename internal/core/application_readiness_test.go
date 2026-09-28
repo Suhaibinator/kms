@@ -98,7 +98,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("drift env = %+v findings=%v", out, findingCodes(out.Findings))
 		}
 		f, ok := hasFinding(out.Findings, domain.FindingUnreleasedChanges)
-		if !ok || f.Scope.Alias != "rate_limits" || f.Params["current"] != uint64(3) || f.Params["pinned"] != uint64(2) {
+		if !ok || f.Scope.Alias != "rate_limits" || f.Params["current"] != domain.NumberParam(uint64(3)) || f.Params["pinned"] != domain.NumberParam(uint64(2)) {
 			t.Fatalf("unreleased_changes = %+v", f)
 		}
 		if _, ok := hasFinding(out.Findings, domain.FindingRolledBack); !ok {
@@ -127,7 +127,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("divergence must not degrade the rollout: %s", out.RolloutState)
 		}
 		f, ok := hasFinding(out.Findings, domain.FindingInstanceDivergent)
-		if !ok || f.Scope.Instance != "drifted" || f.Severity != domain.FindingWarning || f.Params["divergent_fields"] != 4 {
+		if !ok || f.Scope.Instance != "drifted" || f.Severity != domain.FindingWarning || f.Params["divergent_fields"] != domain.NumberParam(4) {
 			t.Fatalf("instance_divergent = %+v", f)
 		}
 		if _, ok := hasFinding(out.Findings, domain.FindingInstanceRejected); ok {
@@ -166,7 +166,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("other release names = %v", r.OtherReleaseNames)
 		}
 		f, ok := hasFinding(out.Findings, domain.FindingInstanceRejected)
-		if !ok || f.Scope.Instance != "rejecting" || f.Params["category"] != domain.ReleaseRejectConfigValidationFailed {
+		if !ok || f.Scope.Instance != "rejecting" || f.Params["category"] != domain.TextParam(domain.ReleaseRejectConfigValidationFailed) {
 			t.Fatalf("instance_rejected = %+v", f)
 		}
 		for _, code := range []string{domain.FindingInstancePending, domain.FindingSubscriberOtherRelease} {
@@ -260,7 +260,7 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		for _, f := range out.Findings {
 			if f.Code == domain.FindingResourceMissing {
 				missing++
-				if f.Params["kind"] == "" || f.Scope.Alias == "" {
+				if f.Params["kind"] == domain.TextParam("") || f.Scope.Alias == "" {
 					t.Fatalf("resource_missing params = %+v", f)
 				}
 			}
@@ -338,23 +338,23 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 			t.Fatalf("status = %s findings=%v", out.Status, findingCodes(out.Findings))
 		}
 		f, ok := hasFinding(out.Findings, domain.FindingSecretUnreadable)
-		if !ok || f.Params["state"] != domain.StateDisabled {
+		if !ok || f.Params["state"] != domain.TextParam(domain.StateDisabled) {
 			t.Fatalf("secret_unreadable = %+v", f)
 		}
 		f, ok = hasFinding(out.Findings, domain.FindingContentTypeMismatch)
-		if !ok || f.Params["found"] != "string" || f.Params["content_type"] != "integer" {
+		if !ok || f.Params["found"] != domain.TextParam("string") || f.Params["content_type"] != domain.TextParam("integer") {
 			t.Fatalf("content_type_mismatch = %+v", f)
 		}
 		in = base("dev")
 		in.Secrets = map[string]secretCurrentState{"db_password": {State: domain.StateEnabled, Expired: true}}
 		out = computeEnvironmentReadiness(in)
-		if f, ok := hasFinding(out.Findings, domain.FindingSecretUnreadable); !ok || f.Params["state"] != "expired" {
+		if f, ok := hasFinding(out.Findings, domain.FindingSecretUnreadable); !ok || f.Params["state"] != domain.TextParam("expired") {
 			t.Fatalf("expired secret = %+v", f)
 		}
 		in = base("dev")
 		in.Rows[1] = domain.ApplicationConfigurationRow{Key: "db_password", Kind: domain.ResourceParameter, Cells: map[string]domain.ApplicationConfigurationCell{"dev": {Present: true, ContentType: "string", Version: 1}}}
 		out = computeEnvironmentReadiness(in)
-		if f, ok := hasFinding(out.Findings, domain.FindingKindMismatch); !ok || f.Params["found"] != domain.ResourceParameter {
+		if f, ok := hasFinding(out.Findings, domain.FindingKindMismatch); !ok || f.Params["found"] != domain.TextParam(domain.ResourceParameter) {
 			t.Fatalf("kind_mismatch = %+v findings=%v", f, findingCodes(out.Findings))
 		}
 	})
@@ -419,7 +419,7 @@ func TestComputeApplicationFindingsAndStatus(t *testing.T) {
 		t.Fatalf("missing insecure_listener: %v", findingCodes(findings))
 	}
 	status, findings = computeApplicationFindings(applicationReadinessInput{App: app, SchemaMissing: true, Environments: []domain.EnvironmentOverview{env(domain.EnvStatusReady)}})
-	if f, ok := hasFinding(findings, domain.FindingSchemaMissing); status != domain.AppStatusBlocked || !ok || f.Params["application"] != app.Name || f.Params["release_name"] != app.ReleaseName {
+	if f, ok := hasFinding(findings, domain.FindingSchemaMissing); status != domain.AppStatusBlocked || !ok || f.Params["application"] != domain.TextParam(app.Name) || f.Params["release_name"] != domain.TextParam(app.ReleaseName) {
 		t.Fatalf("schema missing = %s %+v", status, findings)
 	}
 	unpinned := app

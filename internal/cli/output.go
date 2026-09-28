@@ -82,15 +82,14 @@ func (c *CLI) printJSON(v any) int {
 
 // listPage is the JSON envelope shared by every list command. Commands that
 // page through the whole result set leave next_page_token empty.
-type listPage struct {
-	Items         any    `json:"items"`
+type listPage[T any] struct {
+	Items         []T    `json:"items"`
 	NextPageToken string `json:"next_page_token,omitempty"`
 }
 
-// printList writes a list result in the shared envelope. items must be a
-// non-nil slice so an empty result renders as [] rather than null.
-func (c *CLI) printList(items any, nextPageToken string) int {
-	return c.printJSON(listPage{Items: items, NextPageToken: nextPageToken})
+// printList writes a list result in the shared envelope.
+func (c *CLI) printList[T any](items []T, nextPageToken string) int {
+	return c.printJSON(listPage[T]{Items: items, NextPageToken: nextPageToken})
 }
 
 func writeJSON(w io.Writer, v any) error {

@@ -14,6 +14,8 @@ import (
 // to a struct. The returned document contains every described field exactly
 // once. Nil slices, maps, and byte slices encode as JSON null, distinct from
 // non-nil empty collections.
+// TODO(breaking): take src as a generic *T instead of any. Generated bindings
+// already pass *T, but callers holding the value as any would stop compiling.
 func EncodeGroup(src any, fields []FieldCodec) (jsontext.Value, error) {
 	value := reflect.ValueOf(src)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() || value.Elem().Kind() != reflect.Struct {

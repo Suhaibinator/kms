@@ -51,9 +51,9 @@ type environmentReadinessInput struct {
 	Now           time.Time
 }
 
-func finding(code, severity string, scope domain.FindingScope, params map[string]any) domain.Finding {
+func finding(code, severity string, scope domain.FindingScope, params domain.FindingParams) domain.Finding {
 	if params == nil {
-		params = map[string]any{}
+		params = domain.FindingParams{}
 	}
 	return domain.Finding{Code: code, Severity: severity, Scope: scope, Params: params}
 }
@@ -112,7 +112,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		ref, resolved := in.Refs[field.Alias]
 		if !resolved {
 			incomplete = true
-			add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind}))
+			add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "kind": domain.TextParam(field.Kind)}))
 			out.Values = append(out.Values, value)
 			continue
 		}
@@ -122,7 +122,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			// foreign refs as absent rather than accepting a pin as evidence that
 			// the resource exists.
 			incomplete = true
-			add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind}))
+			add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "kind": domain.TextParam(field.Kind)}))
 			out.Values = append(out.Values, value)
 			continue
 		}
@@ -134,9 +134,9 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 				otherKind = domain.ReleaseEntryParameter
 			}
 			if _, found := rowFor(otherKind, ref.Key); found {
-				add(finding(domain.FindingKindMismatch, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind, "found": otherKind}))
+				add(finding(domain.FindingKindMismatch, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "kind": domain.TextParam(field.Kind), "found": domain.TextParam(otherKind)}))
 			} else {
-				add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "kind": field.Kind}))
+				add(finding(domain.FindingResourceMissing, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "kind": domain.TextParam(field.Kind)}))
 			}
 			out.Values = append(out.Values, value)
 			continue
@@ -149,16 +149,16 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 		case domain.ReleaseEntryParameter:
 			if cell.ContentType != field.ContentType {
 				incomplete = true
-				add(finding(domain.FindingContentTypeMismatch, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "content_type": field.ContentType, "found": cell.ContentType}))
+				add(finding(domain.FindingContentTypeMismatch, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "content_type": domain.TextParam(field.ContentType), "found": domain.TextParam(cell.ContentType)}))
 			}
 		case domain.ReleaseEntrySecret:
 			if state, ok := in.Secrets[ref.Key]; ok {
 				if state.Expired {
 					incomplete = true
-					add(finding(domain.FindingSecretUnreadable, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "state": "expired"}))
+					add(finding(domain.FindingSecretUnreadable, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "state": domain.TextParam("expired")}))
 				} else if state.State != domain.StateEnabled {
 					incomplete = true
-					add(finding(domain.FindingSecretUnreadable, domain.FindingBlocking, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "state": state.State}))
+					add(finding(domain.FindingSecretUnreadable, domain.FindingBlocking, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "state": domain.TextParam(state.State)}))
 				}
 			}
 		}
@@ -201,14 +201,14 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 				domain.ReleaseValidationPermissionDenied, domain.ReleaseValidationContentType:
 				staleSeen[verr.Alias] = true
 				blocked = true
-				add(finding(domain.FindingReleasePinStale, domain.FindingBlocking, aliasScope(verr.Alias), map[string]any{"alias": verr.Alias, "reason": verr.Code}))
+				add(finding(domain.FindingReleasePinStale, domain.FindingBlocking, aliasScope(verr.Alias), domain.FindingParams{"alias": domain.TextParam(verr.Alias), "reason": domain.TextParam(verr.Code)}))
 			}
 		}
 		for _, field := range in.App.Contract {
 			entry, pinned := activeEntries[field.Alias]
 			if !pinned {
 				drift = true
-				add(finding(domain.FindingAliasNotInRelease, domain.FindingWarning, aliasScope(field.Alias), map[string]any{"alias": field.Alias}))
+				add(finding(domain.FindingAliasNotInRelease, domain.FindingWarning, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias)}))
 				continue
 			}
 			if entry.Ref.NS != here {
@@ -216,11 +216,11 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			}
 			if cell, present := rowFor(entry.Kind, entry.Ref.Key); present && cell.Version != entry.Version {
 				drift = true
-				add(finding(domain.FindingUnreleasedChanges, domain.FindingWarning, aliasScope(field.Alias), map[string]any{"alias": field.Alias, "current": cell.Version, "pinned": entry.Version}))
+				add(finding(domain.FindingUnreleasedChanges, domain.FindingWarning, aliasScope(field.Alias), domain.FindingParams{"alias": domain.TextParam(field.Alias), "current": domain.NumberParam(cell.Version), "pinned": domain.NumberParam(entry.Version)}))
 			}
 		}
 		if out.Active.IsRolledBack {
-			add(finding(domain.FindingRolledBack, domain.FindingInfo, envScope, map[string]any{"from": active.PreviousVersion}))
+			add(finding(domain.FindingRolledBack, domain.FindingInfo, envScope, domain.FindingParams{"from": domain.NumberParam(active.PreviousVersion)}))
 		}
 		if active.PreviousVersion == 0 {
 			add(finding(domain.FindingPreviousUnavailable, domain.FindingInfo, envScope, nil))
@@ -251,7 +251,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			add(finding(domain.FindingNoSubscribers, domain.FindingInfo, envScope, nil))
 		}
 		if n := len(out.Rollout.OtherReleaseNames); n > 0 {
-			add(finding(domain.FindingSubscriberOtherRelease, domain.FindingWarning, envScope, map[string]any{"count": otherReleaseInstanceCount(in.Acks, in.App.ReleaseName, in.Now), "names": strings.Join(out.Rollout.OtherReleaseNames, ",")}))
+			add(finding(domain.FindingSubscriberOtherRelease, domain.FindingWarning, envScope, domain.FindingParams{"count": domain.NumberParam(otherReleaseInstanceCount(in.Acks, in.App.ReleaseName, in.Now)), "names": domain.TextParam(strings.Join(out.Rollout.OtherReleaseNames, ","))}))
 		}
 		emitted := 0
 		for _, inst := range liveInstances(filterAcks(in.Acks, in.App.ReleaseName), in.Now) {
@@ -260,7 +260,7 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			}
 			class := classifyInstance(inst, currentRevision)
 			scope := domain.FindingScope{Env: env, Instance: inst.InstanceID}
-			params := map[string]any{"client_name": inst.ClientName, "instance_id": inst.InstanceID, "identity": inst.Identity}
+			params := domain.FindingParams{"client_name": domain.TextParam(inst.ClientName), "instance_id": domain.TextParam(inst.InstanceID), "identity": domain.TextParam(inst.Identity)}
 			switch class {
 			case instanceApplied:
 				// An applied instance is only worth a finding when the generation it
@@ -268,10 +268,10 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 				if !inst.AppliedDivergent {
 					continue
 				}
-				params["divergent_fields"] = int(inst.DivergentFieldCount)
+				params["divergent_fields"] = domain.NumberParam(int(inst.DivergentFieldCount))
 				add(finding(domain.FindingInstanceDivergent, domain.FindingWarning, scope, params))
 			case instanceRejected:
-				params["category"] = inst.RejectionCategory
+				params["category"] = domain.TextParam(inst.RejectionCategory)
 				add(finding(domain.FindingInstanceRejected, domain.FindingWarning, scope, params))
 			case instancePending:
 				add(finding(domain.FindingInstancePending, domain.FindingInfo, scope, params))
@@ -624,7 +624,7 @@ func computeApplicationFindings(in applicationReadinessInput) (string, []domain.
 	case in.App.SchemaVersion == 0:
 		findings = append(findings, finding(domain.FindingSchemaUnpinned, domain.FindingInfo, appScope, nil))
 	case in.SchemaMissing || in.Schema == nil:
-		findings = append(findings, finding(domain.FindingSchemaMissing, domain.FindingBlocking, appScope, map[string]any{"application": in.App.Name, "release_name": in.App.ReleaseName, "schema_version": in.App.SchemaVersion}))
+		findings = append(findings, finding(domain.FindingSchemaMissing, domain.FindingBlocking, appScope, domain.FindingParams{"application": domain.TextParam(in.App.Name), "release_name": domain.TextParam(in.App.ReleaseName), "schema_version": domain.NumberParam(in.App.SchemaVersion)}))
 	default:
 		findings = append(findings, contractSchemaAlignment(in.App.Contract, in.Schema.Schema)...)
 	}
@@ -729,9 +729,9 @@ func contractSchemaAlignment(contract []domain.ApplicationContractField, schemaJ
 		property, ok := properties[field.Alias].(map[string]any)
 		if !ok {
 			if closed {
-				findings = append(findings, finding(domain.FindingAliasNotInSchema, domain.FindingWarning, scope, map[string]any{"alias": field.Alias}))
+				findings = append(findings, finding(domain.FindingAliasNotInSchema, domain.FindingWarning, scope, domain.FindingParams{"alias": domain.TextParam(field.Alias)}))
 			} else {
-				findings = append(findings, finding(domain.FindingSchemaPropertyMissingAlias, domain.FindingWarning, scope, map[string]any{"alias": field.Alias}))
+				findings = append(findings, finding(domain.FindingSchemaPropertyMissingAlias, domain.FindingWarning, scope, domain.FindingParams{"alias": domain.TextParam(field.Alias)}))
 			}
 			continue
 		}
@@ -740,7 +740,7 @@ func contractSchemaAlignment(contract []domain.ApplicationContractField, schemaJ
 			if schemaType == "" {
 				schemaType = "json"
 			}
-			findings = append(findings, finding(domain.FindingContractTypeMismatch, domain.FindingWarning, scope, map[string]any{"alias": field.Alias, "content_type": field.ContentType, "schema_type": schemaType}))
+			findings = append(findings, finding(domain.FindingContractTypeMismatch, domain.FindingWarning, scope, domain.FindingParams{"alias": domain.TextParam(field.Alias), "content_type": domain.TextParam(field.ContentType), "schema_type": domain.TextParam(schemaType)}))
 		}
 	}
 	required, _ := schema["required"].([]any)
@@ -750,7 +750,7 @@ func contractSchemaAlignment(contract []domain.ApplicationContractField, schemaJ
 			continue
 		}
 		if _, ok := parameterAliases[name]; !ok {
-			findings = append(findings, finding(domain.FindingSchemaRequiredMissingAlias, domain.FindingBlocking, domain.FindingScope{Alias: name}, map[string]any{"alias": name}))
+			findings = append(findings, finding(domain.FindingSchemaRequiredMissingAlias, domain.FindingBlocking, domain.FindingScope{Alias: name}, domain.FindingParams{"alias": domain.TextParam(name)}))
 		}
 	}
 	return findings

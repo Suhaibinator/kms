@@ -28,10 +28,64 @@ type Setting struct {
 	// Help is the flag usage text. A back-quoted word names the placeholder in
 	// help output, following the flag package's UnquoteUsage convention.
 	Help string
-	// ptr returns a pointer to the field inside cfg: *string, *int, *bool, or
-	// *Duration. The value kind is derived from the pointer type.
-	ptr func(cfg *Config) any
+	// field reads and writes the value inside a Config.
+	field settingField
 }
+
+// settingField is implemented by the typed accessors below, one per value
+// kind a setting may have.
+type settingField interface {
+	get(cfg *Config) string
+	set(cfg *Config, raw string) error
+	isBool() bool
+}
+
+type (
+	stringField   func(cfg *Config) *string
+	intField      func(cfg *Config) *int
+	boolField     func(cfg *Config) *bool
+	durationField func(cfg *Config) *Duration
+)
+
+func (f stringField) get(cfg *Config) string { return *f(cfg) }
+func (f stringField) set(cfg *Config, raw string) error {
+	*f(cfg) = raw
+	return nil
+}
+func (stringField) isBool() bool { return false }
+
+func (f intField) get(cfg *Config) string { return strconv.Itoa(*f(cfg)) }
+func (f intField) set(cfg *Config, raw string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return errors.New("not a valid integer")
+	}
+	*f(cfg) = n
+	return nil
+}
+func (intField) isBool() bool { return false }
+
+func (f boolField) get(cfg *Config) string { return strconv.FormatBool(*f(cfg)) }
+func (f boolField) set(cfg *Config, raw string) error {
+	b, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return errors.New("not a valid boolean (use true/false/1/0)")
+	}
+	*f(cfg) = b
+	return nil
+}
+func (boolField) isBool() bool { return true }
+
+func (f durationField) get(cfg *Config) string { return time.Duration(*f(cfg)).String() }
+func (f durationField) set(cfg *Config, raw string) error {
+	d, err := parseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	*f(cfg) = d
+	return nil
+}
+func (durationField) isBool() bool { return false }
 
 // Flag returns the command-line flag name, derived mechanically from Env:
 // strip the KMS_ prefix, lowercase, and replace underscores with hyphens
@@ -42,60 +96,18 @@ func (s Setting) Flag() string {
 
 // IsBool reports whether the setting is a boolean, which affects flag syntax
 // (--flag or --flag=false, never --flag false).
-func (s Setting) IsBool() bool {
-	_, ok := s.ptr(&Config{}).(*bool)
-	return ok
-}
+func (s Setting) IsBool() bool { return s.field.isBool() }
 
 // Get formats the setting's current value in cfg as a string, in the same
 // form Set accepts.
-func (s Setting) Get(cfg *Config) string {
-	switch p := s.ptr(cfg).(type) {
-	case *string:
-		return *p
-	case *int:
-		return strconv.Itoa(*p)
-	case *bool:
-		return strconv.FormatBool(*p)
-	case *Duration:
-		return time.Duration(*p).String()
-	default:
-		panic(fmt.Sprintf("config: setting %s has unsupported type %T", s.Key, p))
-	}
-}
+func (s Setting) Get(cfg *Config) string { return s.field.get(cfg) }
 
 // Set parses raw and stores it into cfg. Integers and booleans are trimmed of
 // surrounding whitespace; strings are stored verbatim; durations accept either
 // a Go duration string ("30s", "24h") or a bare number of seconds, matching the
 // YAML form. The returned error is a short phrase ("not a valid integer") so
 // callers can prefix it with the environment variable or flag name.
-func (s Setting) Set(cfg *Config, raw string) error {
-	switch p := s.ptr(cfg).(type) {
-	case *string:
-		*p = raw
-	case *int:
-		n, err := strconv.Atoi(strings.TrimSpace(raw))
-		if err != nil {
-			return errors.New("not a valid integer")
-		}
-		*p = n
-	case *bool:
-		b, err := strconv.ParseBool(strings.TrimSpace(raw))
-		if err != nil {
-			return errors.New("not a valid boolean (use true/false/1/0)")
-		}
-		*p = b
-	case *Duration:
-		d, err := parseDuration(strings.TrimSpace(raw))
-		if err != nil {
-			return err
-		}
-		*p = d
-	default:
-		panic(fmt.Sprintf("config: setting %s has unsupported type %T", s.Key, p))
-	}
-	return nil
-}
+func (s Setting) Set(cfg *Config, raw string) error { return s.field.set(cfg, raw) }
 
 func parseDuration(raw string) (Duration, error) {
 	if d, err := time.ParseDuration(raw); err == nil {
@@ -111,160 +123,160 @@ func parseDuration(raw string) (Duration, error) {
 // is the display order for help and `config show`.
 var Settings = []Setting{
 	{
-		Key:  "server.grpc_addr",
-		Env:  "KMS_GRPC_ADDR",
-		Help: "gRPC listen `address` (host:port)",
-		ptr:  func(c *Config) any { return &c.Server.GRPCAddr },
+		Key:   "server.grpc_addr",
+		Env:   "KMS_GRPC_ADDR",
+		Help:  "gRPC listen `address` (host:port)",
+		field: stringField(func(c *Config) *string { return &c.Server.GRPCAddr }),
 	},
 	{
-		Key:  "server.http_addr",
-		Env:  "KMS_HTTP_ADDR",
-		Help: "HTTP listen `address` (host:port)",
-		ptr:  func(c *Config) any { return &c.Server.HTTPAddr },
+		Key:   "server.http_addr",
+		Env:   "KMS_HTTP_ADDR",
+		Help:  "HTTP listen `address` (host:port)",
+		field: stringField(func(c *Config) *string { return &c.Server.HTTPAddr }),
 	},
 	{
-		Key:  "server.verify_defaults.requests_per_hour",
-		Env:  "KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR",
-		Help: "VerifyReleaseDefaults `requests` allowed per hour per identity",
-		ptr:  func(c *Config) any { return &c.Server.VerifyDefaults.RequestsPerHour },
+		Key:   "server.verify_defaults.requests_per_hour",
+		Env:   "KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR",
+		Help:  "VerifyReleaseDefaults `requests` allowed per hour per identity",
+		field: intField(func(c *Config) *int { return &c.Server.VerifyDefaults.RequestsPerHour }),
 	},
 	{
-		Key:  "server.verify_defaults.burst",
-		Env:  "KMS_VERIFY_DEFAULTS_BURST",
-		Help: "VerifyReleaseDefaults burst `capacity` per identity",
-		ptr:  func(c *Config) any { return &c.Server.VerifyDefaults.Burst },
+		Key:   "server.verify_defaults.burst",
+		Env:   "KMS_VERIFY_DEFAULTS_BURST",
+		Help:  "VerifyReleaseDefaults burst `capacity` per identity",
+		field: intField(func(c *Config) *int { return &c.Server.VerifyDefaults.Burst }),
 	},
 	{
-		Key:  "server.verify_defaults.mismatch_budget_per_hour",
-		Env:  "KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR",
-		Help: "VerifyReleaseDefaults mismatch `verdicts` allowed per hour per identity",
-		ptr:  func(c *Config) any { return &c.Server.VerifyDefaults.MismatchBudgetPerHour },
+		Key:   "server.verify_defaults.mismatch_budget_per_hour",
+		Env:   "KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR",
+		Help:  "VerifyReleaseDefaults mismatch `verdicts` allowed per hour per identity",
+		field: intField(func(c *Config) *int { return &c.Server.VerifyDefaults.MismatchBudgetPerHour }),
 	},
 	{
-		Key:  "storage.sqlite_path",
-		Env:  "KMS_SQLITE_PATH",
-		Help: "SQLite database file `path`",
-		ptr:  func(c *Config) any { return &c.Storage.SQLitePath },
+		Key:   "storage.sqlite_path",
+		Env:   "KMS_SQLITE_PATH",
+		Help:  "SQLite database file `path`",
+		field: stringField(func(c *Config) *string { return &c.Storage.SQLitePath }),
 	},
 	{
-		Key:  "encryption.kek_file",
-		Env:  "KMS_KEK_FILE",
-		Help: "master key file `path`; empty selects passphrase mode",
-		ptr:  func(c *Config) any { return &c.Encryption.KEKFile },
+		Key:   "encryption.kek_file",
+		Env:   "KMS_KEK_FILE",
+		Help:  "master key file `path`; empty selects passphrase mode",
+		field: stringField(func(c *Config) *string { return &c.Encryption.KEKFile }),
 	},
 	{
-		Key:  "security.tls_enabled",
-		Env:  "KMS_TLS_ENABLED",
-		Help: "serve TLS on the gRPC and HTTP listeners",
-		ptr:  func(c *Config) any { return &c.Security.TLSEnabled },
+		Key:   "security.tls_enabled",
+		Env:   "KMS_TLS_ENABLED",
+		Help:  "serve TLS on the gRPC and HTTP listeners",
+		field: boolField(func(c *Config) *bool { return &c.Security.TLSEnabled }),
 	},
 	{
-		Key:  "security.mtls_enabled",
-		Env:  "KMS_MTLS_ENABLED",
-		Help: "require and verify client certificates (implies tls_enabled)",
-		ptr:  func(c *Config) any { return &c.Security.MTLSEnabled },
+		Key:   "security.mtls_enabled",
+		Env:   "KMS_MTLS_ENABLED",
+		Help:  "require and verify client certificates (implies tls_enabled)",
+		field: boolField(func(c *Config) *bool { return &c.Security.MTLSEnabled }),
 	},
 	{
-		Key:  "security.server_cert_file",
-		Env:  "KMS_SERVER_CERT_FILE",
-		Help: "server TLS certificate `path` (PEM)",
-		ptr:  func(c *Config) any { return &c.Security.ServerCertFile },
+		Key:   "security.server_cert_file",
+		Env:   "KMS_SERVER_CERT_FILE",
+		Help:  "server TLS certificate `path` (PEM)",
+		field: stringField(func(c *Config) *string { return &c.Security.ServerCertFile }),
 	},
 	{
-		Key:  "security.server_key_file",
-		Env:  "KMS_SERVER_KEY_FILE",
-		Help: "server TLS private key `path` (PEM)",
-		ptr:  func(c *Config) any { return &c.Security.ServerKeyFile },
+		Key:   "security.server_key_file",
+		Env:   "KMS_SERVER_KEY_FILE",
+		Help:  "server TLS private key `path` (PEM)",
+		field: stringField(func(c *Config) *string { return &c.Security.ServerKeyFile }),
 	},
 	{
-		Key:  "security.client_ca_file",
-		Env:  "KMS_CLIENT_CA_FILE",
-		Help: "CA bundle `path` the server uses to verify client certificates (server-side; not the client's --ca)",
-		ptr:  func(c *Config) any { return &c.Security.ClientCAFile },
+		Key:   "security.client_ca_file",
+		Env:   "KMS_CLIENT_CA_FILE",
+		Help:  "CA bundle `path` the server uses to verify client certificates (server-side; not the client's --ca)",
+		field: stringField(func(c *Config) *string { return &c.Security.ClientCAFile }),
 	},
 	{
-		Key:  "security.trust_proxy_headers",
-		Env:  "KMS_TRUST_PROXY_HEADERS",
-		Help: "honor X-Forwarded-For for the HTTP client IP (only behind a trusted reverse proxy)",
-		ptr:  func(c *Config) any { return &c.Security.TrustProxyHeaders },
+		Key:   "security.trust_proxy_headers",
+		Env:   "KMS_TRUST_PROXY_HEADERS",
+		Help:  "honor X-Forwarded-For for the HTTP client IP (only behind a trusted reverse proxy)",
+		field: boolField(func(c *Config) *bool { return &c.Security.TrustProxyHeaders }),
 	},
 	{
-		Key:  "security.admin_require_client_cert",
-		Env:  "KMS_ADMIN_REQUIRE_CLIENT_CERT",
-		Help: "require admin identities to present a built-in-CA client certificate in addition to a bearer token (relaxed with a warning while tls_enabled is false)",
-		ptr:  func(c *Config) any { return &c.Security.AdminRequireClientCert },
+		Key:   "security.admin_require_client_cert",
+		Env:   "KMS_ADMIN_REQUIRE_CLIENT_CERT",
+		Help:  "require admin identities to present a built-in-CA client certificate in addition to a bearer token (relaxed with a warning while tls_enabled is false)",
+		field: boolField(func(c *Config) *bool { return &c.Security.AdminRequireClientCert }),
 	},
 	{
-		Key:  "frontend.enabled",
-		Env:  "KMS_FRONTEND_ENABLED",
-		Help: "serve the embedded web frontend",
-		ptr:  func(c *Config) any { return &c.Frontend.Enabled },
+		Key:   "frontend.enabled",
+		Env:   "KMS_FRONTEND_ENABLED",
+		Help:  "serve the embedded web frontend",
+		field: boolField(func(c *Config) *bool { return &c.Frontend.Enabled }),
 	},
 	{
-		Key:  "audit.enabled",
-		Env:  "KMS_AUDIT_ENABLED",
-		Help: "record audit log entries",
-		ptr:  func(c *Config) any { return &c.Audit.Enabled },
+		Key:   "audit.enabled",
+		Env:   "KMS_AUDIT_ENABLED",
+		Help:  "record audit log entries",
+		field: boolField(func(c *Config) *bool { return &c.Audit.Enabled }),
 	},
 	{
-		Key:  "audit.retain_duration",
-		Env:  "KMS_AUDIT_RETAIN_DURATION",
-		Help: "`duration` to retain audit rows; 0 keeps them forever",
-		ptr:  func(c *Config) any { return &c.Audit.RetainDuration },
+		Key:   "audit.retain_duration",
+		Env:   "KMS_AUDIT_RETAIN_DURATION",
+		Help:  "`duration` to retain audit rows; 0 keeps them forever",
+		field: durationField(func(c *Config) *Duration { return &c.Audit.RetainDuration }),
 	},
 	{
-		Key:  "audit.archive_dir",
-		Env:  "KMS_AUDIT_ARCHIVE_DIR",
-		Help: "`directory` receiving a JSONL copy of audit rows before they are retired; empty discards them",
-		ptr:  func(c *Config) any { return &c.Audit.ArchiveDir },
+		Key:   "audit.archive_dir",
+		Env:   "KMS_AUDIT_ARCHIVE_DIR",
+		Help:  "`directory` receiving a JSONL copy of audit rows before they are retired; empty discards them",
+		field: stringField(func(c *Config) *string { return &c.Audit.ArchiveDir }),
 	},
 	{
-		Key:  "metrics.enabled",
-		Env:  "KMS_METRICS_ENABLED",
-		Help: "serve Prometheus metrics on /metrics",
-		ptr:  func(c *Config) any { return &c.Metrics.Enabled },
+		Key:   "metrics.enabled",
+		Env:   "KMS_METRICS_ENABLED",
+		Help:  "serve Prometheus metrics on /metrics",
+		field: boolField(func(c *Config) *bool { return &c.Metrics.Enabled }),
 	},
 	{
-		Key:  "watch.heartbeat_interval",
-		Env:  "KMS_WATCH_HEARTBEAT_INTERVAL",
-		Help: "watch stream heartbeat `interval`",
-		ptr:  func(c *Config) any { return &c.Watch.HeartbeatInterval },
+		Key:   "watch.heartbeat_interval",
+		Env:   "KMS_WATCH_HEARTBEAT_INTERVAL",
+		Help:  "watch stream heartbeat `interval`",
+		field: durationField(func(c *Config) *Duration { return &c.Watch.HeartbeatInterval }),
 	},
 	{
-		Key:  "watch.retain_duration",
-		Env:  "KMS_WATCH_RETAIN_DURATION",
-		Help: "`duration` to retain change-log rows",
-		ptr:  func(c *Config) any { return &c.Watch.RetainDuration },
+		Key:   "watch.retain_duration",
+		Env:   "KMS_WATCH_RETAIN_DURATION",
+		Help:  "`duration` to retain change-log rows",
+		field: durationField(func(c *Config) *Duration { return &c.Watch.RetainDuration }),
 	},
 	{
-		Key:  "watch.retain_rows",
-		Env:  "KMS_WATCH_RETAIN_ROWS",
-		Help: "maximum `count` of change-log rows retained",
-		ptr:  func(c *Config) any { return &c.Watch.RetainRows },
+		Key:   "watch.retain_rows",
+		Env:   "KMS_WATCH_RETAIN_ROWS",
+		Help:  "maximum `count` of change-log rows retained",
+		field: intField(func(c *Config) *int { return &c.Watch.RetainRows }),
 	},
 	{
-		Key:  "watch.release_retain_duration",
-		Env:  "KMS_WATCH_RELEASE_RETAIN_DURATION",
-		Help: "`duration` to retain superseded release versions",
-		ptr:  func(c *Config) any { return &c.Watch.ReleaseRetainDuration },
+		Key:   "watch.release_retain_duration",
+		Env:   "KMS_WATCH_RELEASE_RETAIN_DURATION",
+		Help:  "`duration` to retain superseded release versions",
+		field: durationField(func(c *Config) *Duration { return &c.Watch.ReleaseRetainDuration }),
 	},
 	{
-		Key:  "watch.release_retain_versions",
-		Env:  "KMS_WATCH_RELEASE_RETAIN_VERSIONS",
-		Help: "maximum `count` of superseded release versions retained",
-		ptr:  func(c *Config) any { return &c.Watch.ReleaseRetainVersions },
+		Key:   "watch.release_retain_versions",
+		Env:   "KMS_WATCH_RELEASE_RETAIN_VERSIONS",
+		Help:  "maximum `count` of superseded release versions retained",
+		field: intField(func(c *Config) *int { return &c.Watch.ReleaseRetainVersions }),
 	},
 	{
-		Key:  "watch.release_subscriber_retain_duration",
-		Env:  "KMS_WATCH_RELEASE_SUBSCRIBER_RETAIN_DURATION",
-		Help: "`duration` to retain idle release subscriber records",
-		ptr:  func(c *Config) any { return &c.Watch.ReleaseSubscriberRetainDuration },
+		Key:   "watch.release_subscriber_retain_duration",
+		Env:   "KMS_WATCH_RELEASE_SUBSCRIBER_RETAIN_DURATION",
+		Help:  "`duration` to retain idle release subscriber records",
+		field: durationField(func(c *Config) *Duration { return &c.Watch.ReleaseSubscriberRetainDuration }),
 	},
 	{
-		Key:  "log.level",
-		Env:  "KMS_LOG_LEVEL",
-		Help: "log `level`: debug, info, warn, or error",
-		ptr:  func(c *Config) any { return &c.Log.Level },
+		Key:   "log.level",
+		Env:   "KMS_LOG_LEVEL",
+		Help:  "log `level`: debug, info, warn, or error",
+		field: stringField(func(c *Config) *string { return &c.Log.Level }),
 	},
 }
 
@@ -375,7 +387,7 @@ type settingValue struct {
 func (v *settingValue) String() string {
 	// The flag package constructs a zero settingValue via reflection to learn
 	// the zero-value rendering; it must not dereference nil.
-	if v == nil || v.cfg == nil || v.setting.ptr == nil {
+	if v == nil || v.cfg == nil || v.setting.field == nil {
 		return ""
 	}
 	return v.setting.Get(v.cfg)
@@ -385,7 +397,7 @@ func (v *settingValue) Set(raw string) error { return v.setting.Set(v.cfg, raw) 
 
 // IsBoolFlag lets boolean settings be written as --flag (true) or --flag=false.
 func (v *settingValue) IsBoolFlag() bool {
-	return v != nil && v.setting.ptr != nil && v.setting.IsBool()
+	return v != nil && v.setting.field != nil && v.setting.IsBool()
 }
 
 // Options controls Resolve.

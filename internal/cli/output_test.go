@@ -180,7 +180,7 @@ func TestPrintList(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name  string
-		items any
+		items []row
 		token string
 		want  string
 	}{

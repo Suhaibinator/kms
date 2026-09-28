@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"sync"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -115,11 +116,13 @@ func (s *Service) GetReleaseRolloutSnapshot(ctx context.Context, pr Principal, t
 }
 
 func projectionRevision(instances []domain.SubscriberInstance, revision uint64, filter domain.ReleaseFilter) string {
+	// AllowInvalidUTF8 keeps a stray byte in a client-reported name from
+	// failing the encode, which would collapse every revision to one hash.
 	data, _ := json.Marshal(struct {
 		Instances []domain.SubscriberInstance
 		Revision  uint64
 		Scope     domain.ReleaseFilter
-	}{instances, revision, filter})
+	}{instances, revision, filter}, jsontext.AllowInvalidUTF8(true))
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }
