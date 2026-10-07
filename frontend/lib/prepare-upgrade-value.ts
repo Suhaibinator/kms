@@ -10,6 +10,14 @@ export interface ArrayMigration {
   reason: string;
 }
 
+/** A stored enum number rewritten to its declared name (`x-kms-enum-numbers`). */
+export interface EnumConversion {
+  path: string;
+  /** The original number token, exactly as stored. */
+  from: string;
+  to: string;
+}
+
 export interface PreparedUpgradeValue {
   value: string;
   added: string[];
@@ -18,6 +26,7 @@ export interface PreparedUpgradeValue {
   appliedDefaults: string[];
   migrations: ArrayMigration[];
   suggestions: ArrayMigration[];
+  enumConversions: EnumConversion[];
 }
 const object = (v: unknown): v is JsonSchema =>
   v !== null && typeof v === "object" && !Array.isArray(v);
@@ -36,6 +45,7 @@ export function prepareUpgradeValue(
     appliedDefaults: [],
     migrations: [],
     suggestions: [],
+    enumConversions: [],
   });
   const result = unchanged();
   if (!schema || checkJson(value)) return result;
@@ -139,6 +149,20 @@ export function prepareUpgradeValue(
       return `{${parts.join(",")}}`;
     }
     return undefined;
+  }
+  // The declared name for an integer token, compared exactly so a stored number
+  // beyond 2^53 never matches a nearby enum number.
+  function enumName(s: JsonSchema | null, text: string): string | undefined {
+    const numbers = s?.["x-kms-enum-numbers"];
+    if (!s || !Array.isArray(s.enum) || !object(numbers) || !/^-?(0|[1-9]\d*)$/.test(text))
+      return undefined;
+    const stored = BigInt(text);
+    return Object.entries(numbers).find(
+      ([name, number]) =>
+        Number.isSafeInteger(number) &&
+        BigInt(number as number) === stored &&
+        (s.enum as unknown[]).includes(name),
+    )?.[0];
   }
   function walk(raw: unknown, path: string[]): string {
     const start = tokens[cursor].start;
@@ -287,12 +311,16 @@ export function prepareUpgradeValue(
       cursor++;
       return changed ? `[${parts.join(",")}]` : value.slice(start, tokens[cursor - 1].end);
     }
-    cursor++;
-    return value.slice(start, tokens[cursor - 1].end);
+    const text = value.slice(start, tokens[cursor++].end);
+    const name = tokens[cursor - 1].kind === "number" ? enumName(s, text) : undefined;
+    if (name === undefined) return text;
+    result.enumConversions.push({ path: path.join("."), from: text, to: name });
+    return JSON.stringify(name);
   }
   try {
     const prepared = walk(schema, []);
-    if (result.added.length || result.removed.length) result.value = prepared;
+    if (result.added.length || result.removed.length || result.enumConversions.length)
+      result.value = prepared;
   } catch {
     return unchanged();
   }

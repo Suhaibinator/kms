@@ -77,6 +77,9 @@ type Mode = "form" | "json";
 /** Where the operator's last Form/JSON choice is kept (same pattern as the ship modal's mode). */
 export const VALUE_EDITOR_MODE_STORAGE_KEY = "kms-value-editor-mode";
 
+/** Enum dropdowns with more options than this gain a filter box. */
+const SEARCHABLE_ENUM_OPTIONS = 10;
+
 export function readStoredEditorMode(): Mode | null {
   try {
     const raw = window.localStorage.getItem(VALUE_EDITOR_MODE_STORAGE_KEY);
@@ -175,6 +178,7 @@ function NewArrayItem({
         <AppSelect
           aria-label={label}
           disabled={disabled}
+          searchable={field.enumValues.length > SEARCHABLE_ENUM_OPTIONS}
           value={text === "" ? unset : text}
           options={[
             { value: unset, label: "Choose a value" },
@@ -773,6 +777,7 @@ export function SchemaForm({
                 }
                 disabled={disabled || isNull}
                 placeholder={isNull ? "null" : "Choose…"}
+                searchable={field.enumValues.length > SEARCHABLE_ENUM_OPTIONS}
                 options={
                   field.required ? options : [{ value: unsetValue, label: "— none —" }, ...options]
                 }
@@ -860,6 +865,7 @@ export function SchemaForm({
                 value={text}
                 disabled={disabled || isNull}
                 placeholder={isNull ? "null" : "Choose…"}
+                searchable={field.enumValues.length > SEARCHABLE_ENUM_OPTIONS}
                 options={field.required ? options : [{ value: "", label: "— none —" }, ...options]}
                 onValueChange={(next) => commit(field.path, next === "" ? undefined : Number(next))}
                 onBlur={onBlur}
@@ -1126,6 +1132,7 @@ export function SchemaForm({
                         value={text}
                         disabled={disabled}
                         placeholder="Choose…"
+                        searchable={field.enumValues.length > SEARCHABLE_ENUM_OPTIONS}
                         options={field.enumValues.map((option) => ({
                           value: String(option),
                           label: String(option),
@@ -1418,6 +1425,7 @@ export function SchemaForm({
                         aria-label={`${label} item ${index + 1}`}
                         value={String(item ?? "")}
                         disabled={disabled}
+                        searchable={field.enumValues.length > SEARCHABLE_ENUM_OPTIONS}
                         options={field.enumValues.map((option) => ({
                           value: String(option),
                           label: String(option),

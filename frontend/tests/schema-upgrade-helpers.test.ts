@@ -194,4 +194,53 @@ describe("describeSchemaEffect", () => {
     expect(result["settings.note:changed"]).toEqual({ kind: "none", text: "Documentation only" });
     expect(result["workers.[].n:changed"]).toEqual({ kind: "review", text: "minimum changed" });
   });
+  it("names added, removed and renumbered enum values", () => {
+    const enumField = (names: string[], numbers?: Record<string, number>) => ({
+      anyOf: [
+        { type: "string", enum: names, ...(numbers ? { "x-kms-enum-numbers": numbers } : {}) },
+        { type: "null" },
+      ],
+    });
+    const before = {
+      properties: {
+        role: enumField(["VIEWER", "EDITOR", "OWNER"], { VIEWER: 1, EDITOR: 2, OWNER: 3 }),
+        tier: enumField(["free", "pro"]),
+        level: { type: "integer", minimum: 0 },
+        order: enumField(["a", "b"]),
+        plain: enumField(["x"]),
+      },
+    };
+    const after = {
+      properties: {
+        role: enumField(["VIEWER", "ADMIN", "OWNER"], { VIEWER: 1, ADMIN: 2, OWNER: 4 }),
+        tier: enumField(["free", "team", "enterprise"]),
+        level: enumField(["LOW", "HIGH"], { LOW: 0, HIGH: 1 }),
+        order: enumField(["b", "a"]),
+        plain: { type: "string" },
+      },
+    };
+    const result = effects(before, after);
+    expect(result["role:changed"]).toEqual({
+      kind: "review",
+      text: "enum added ADMIN; removed EDITOR · renumbered OWNER (3 → 4)",
+    });
+    expect(result["tier:changed"]).toEqual({
+      kind: "review",
+      text: "enum added team, enterprise; removed pro",
+    });
+    expect(result["level:changed"]).toEqual({
+      kind: "review",
+      text: "minimum, type changed · now limited to 2 listed values",
+    });
+    expect(result["order:changed"]).toEqual({ kind: "review", text: "enum reordered" });
+    expect(result["plain:changed"]).toEqual({
+      kind: "review",
+      text: "no longer limited to listed values",
+    });
+    const renumbered = effects(
+      { properties: { role: enumField(["A"], { A: 1 }) } },
+      { properties: { role: enumField(["A"], { A: 2 }) } },
+    );
+    expect(renumbered["role:changed"]).toEqual({ kind: "review", text: "renumbered A (1 → 2)" });
+  });
 });

@@ -1080,3 +1080,64 @@ describe("nullable scalars and maps", () => {
     expect(out()).toMatchObject({ pricing_plans: {} });
   });
 });
+
+describe("generated enums", () => {
+  const userTypes = ["USER_TYPE_UNSPECIFIED", "USER_TYPE_USER", "USER_TYPE_ADMIN"];
+  const numbers = { USER_TYPE_UNSPECIFIED: 0, USER_TYPE_USER: 1, USER_TYPE_ADMIN: 3 };
+  const roles = Array.from({ length: 12 }, (_, index) => `ROLE_${index}`);
+  const enums: JsonSchema = {
+    type: "object",
+    properties: {
+      min_user_type: {
+        anyOf: [
+          { type: "string", enum: userTypes, "x-kms-enum-numbers": numbers },
+          { type: "null" },
+        ],
+        default: "USER_TYPE_USER",
+        description: "Lowest user type allowed.",
+      },
+      role: { type: "string", enum: roles },
+      roles: { type: "array", items: { type: "string", enum: roles } },
+    },
+  };
+
+  it("keeps a nullable enum's dropdown and number annotation", async () => {
+    const field = buildForm(enums)?.fields?.find((f) => f.name === "min_user_type");
+    expect(field).toMatchObject({ kind: "string", nullable: true, enumValues: userTypes });
+    expect(field?.schema["x-kms-enum-numbers"]).toEqual(numbers);
+    expect(field?.description).toBe("Lowest user type allowed.");
+    render(<Harness schema={enums} initial="{}" />);
+    await chooseSelectOption(
+      screen.getByRole("combobox", { name: "min_user_type" }),
+      "USER_TYPE_ADMIN",
+    );
+    expect(out()).toEqual({ min_user_type: "USER_TYPE_ADMIN" });
+    expect(screen.queryByRole("combobox", { name: "Filter options…" })).toBeNull();
+  });
+
+  it("carries a wrapper-level number annotation onto the unwrapped schema", () => {
+    const field = buildForm({
+      type: "object",
+      properties: {
+        level: {
+          anyOf: [{ type: "string", enum: userTypes }, { type: "null" }],
+          "x-kms-enum-numbers": numbers,
+        },
+      },
+    })?.fields?.[0];
+    expect(field?.schema["x-kms-enum-numbers"]).toEqual(numbers);
+  });
+
+  it("adds a filter box to enum dropdowns with more than ten options", async () => {
+    render(<Harness schema={enums} initial='{"roles":["ROLE_1"]}' />);
+    fireEvent.click(screen.getByRole("combobox", { name: "role" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Filter options…" }), {
+      target: { value: "ROLE_11" },
+    });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("option", { name: "ROLE_11" }));
+    expect(out()).toMatchObject({ role: "ROLE_11" });
+    fireEvent.click(screen.getByRole("combobox", { name: "roles item 1" }));
+    expect(await screen.findByRole("combobox", { name: "Filter options…" })).toBeVisible();
+  });
+});
