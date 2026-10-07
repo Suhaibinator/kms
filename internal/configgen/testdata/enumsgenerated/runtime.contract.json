@@ -1,0 +1,165 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/enums",
+    "type": "Config"
+  },
+  "schema_sha256": "7a1168483190aded6c20e7f3cc86575abacf45d52899e80bcb70fcc93742c640",
+  "groups": [
+    {
+      "alias": "plan",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "interval",
+        "label",
+        "min_tier",
+        "priority",
+        "tier",
+        "weight"
+      ]
+    },
+    {
+      "alias": "routing",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "adapters",
+        "primary",
+        "routes",
+        "sinks"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "plan",
+      "json_name": "interval",
+      "go_name": "Interval",
+      "go_path": "Interval",
+      "reload": "restart",
+      "encoding": "enum-int32",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "plan",
+      "json_name": "label",
+      "go_name": "Label",
+      "go_path": "Label",
+      "reload": "hot",
+      "encoding": "string",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "plan",
+      "json_name": "min_tier",
+      "go_name": "MinTier",
+      "go_path": "MinTier",
+      "reload": "hot",
+      "encoding": "nullable-enum-int32",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "plan",
+      "json_name": "priority",
+      "go_name": "Priority",
+      "go_path": "Priority",
+      "reload": "hot",
+      "encoding": "enum-int32",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "plan",
+      "json_name": "tier",
+      "go_name": "Tier",
+      "go_path": "Tier",
+      "reload": "hot",
+      "encoding": "enum-int32",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "plan",
+      "json_name": "weight",
+      "go_name": "Weight",
+      "go_path": "Weight",
+      "reload": "hot",
+      "encoding": "int16",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "adapters",
+      "go_name": "Adapters",
+      "go_path": "Adapters",
+      "reload": "hot",
+      "encoding": "nullable-string-map",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "primary",
+      "go_name": "Primary",
+      "go_path": "Primary",
+      "reload": "hot",
+      "encoding": "enum-string",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "routes",
+      "go_name": "Routes",
+      "go_path": "Routes",
+      "reload": "hot",
+      "encoding": "nullable-array",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "sinks",
+      "go_name": "Sinks",
+      "go_path": "Sinks",
+      "reload": "hot",
+      "encoding": "nullable-array",
+      "views": [
+        "api"
+      ]
+    }
+  ],
+  "secrets": [],
+  "views": [
+    {
+      "name": "api",
+      "method": "Api",
+      "fields": [
+        "plan.interval",
+        "plan.label",
+        "plan.min_tier",
+        "plan.priority",
+        "plan.tier",
+        "plan.weight",
+        "routing.adapters",
+        "routing.primary",
+        "routing.routes",
+        "routing.sinks"
+      ]
+    }
+  ]
+}

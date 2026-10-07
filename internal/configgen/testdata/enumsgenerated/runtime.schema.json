@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan",
+    "routing"
+  ],
+  "properties": {
+    "plan": {
+      "additionalProperties": false,
+      "default": {
+        "interval": "INTERVAL_MONTHLY",
+        "label": "main",
+        "min_tier": "TIER_PRO",
+        "priority": "Normal",
+        "tier": "TIER_FREE",
+        "weight": 9
+      },
+      "properties": {
+        "interval": {
+          "default": "INTERVAL_MONTHLY",
+          "enum": [
+            "INTERVAL_UNSPECIFIED",
+            "INTERVAL_MONTHLY",
+            "INTERVAL_YEARLY"
+          ],
+          "type": "string",
+          "x-kms-enum-numbers": {
+            "INTERVAL_MONTHLY": 1,
+            "INTERVAL_UNSPECIFIED": 0,
+            "INTERVAL_YEARLY": 2
+          }
+        },
+        "label": {
+          "default": "main",
+          "type": "string"
+        },
+        "min_tier": {
+          "anyOf": [
+            {
+              "enum": [
+                "TIER_UNSPECIFIED",
+                "TIER_FREE",
+                "TIER_PRO"
+              ],
+              "type": "string",
+              "x-kms-enum-numbers": {
+                "TIER_FREE": 1,
+                "TIER_PRO": 3,
+                "TIER_UNSPECIFIED": 0
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "TIER_PRO"
+        },
+        "priority": {
+          "default": "Normal",
+          "enum": [
+            "Low",
+            "Normal",
+            "High"
+          ],
+          "type": "string",
+          "x-kms-enum-numbers": {
+            "High": 10,
+            "Low": -1,
+            "Normal": 0
+          }
+        },
+        "tier": {
+          "default": "TIER_FREE",
+          "enum": [
+            "TIER_UNSPECIFIED",
+            "TIER_FREE",
+            "TIER_PRO"
+          ],
+          "type": "string",
+          "x-kms-enum-numbers": {
+            "TIER_FREE": 1,
+            "TIER_PRO": 3,
+            "TIER_UNSPECIFIED": 0
+          }
+        },
+        "weight": {
+          "default": 9,
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "interval",
+        "label",
+        "min_tier",
+        "priority",
+        "tier",
+        "weight"
+      ],
+      "type": "object"
+    },
+    "routing": {
+      "additionalProperties": false,
+      "default": {
+        "adapters": {
+          "primary": "grpc"
+        },
+        "primary": "http",
+        "routes": [
+          {
+            "adapter": "http",
+            "tier": null
+          }
+        ],
+        "sinks": [
+          "Stdout",
+          "File"
+        ]
+      },
+      "properties": {
+        "adapters": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "enum": [
+                  "http",
+                  "grpc"
+                ],
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": {
+            "primary": "grpc"
+          }
+        },
+        "primary": {
+          "default": "http",
+          "enum": [
+            "http",
+            "grpc"
+          ],
+          "type": "string"
+        },
+        "routes": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "adapter": {
+                    "enum": [
+                      "http",
+                      "grpc"
+                    ],
+                    "type": "string"
+                  },
+                  "tier": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "TIER_UNSPECIFIED",
+                          "TIER_FREE",
+                          "TIER_PRO"
+                        ],
+                        "type": "string",
+                        "x-kms-enum-numbers": {
+                          "TIER_FREE": 1,
+                          "TIER_PRO": 3,
+                          "TIER_UNSPECIFIED": 0
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "adapter",
+                  "tier"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": [
+            {
+              "adapter": "http",
+              "tier": null
+            }
+          ]
+        },
+        "sinks": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "None",
+                  "Stdout",
+                  "File"
+                ],
+                "type": "string",
+                "x-kms-enum-numbers": {
+                  "File": 2,
+                  "None": 0,
+                  "Stdout": 1
+                }
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": [
+            "Stdout",
+            "File"
+          ]
+        }
+      },
+      "required": [
+        "adapters",
+        "primary",
+        "routes",
+        "sinks"
+      ],
+      "type": "object"
+    }
+  },
+  "x-kms-contract": [
+    {
+      "alias": "plan",
+      "kind": "parameter",
+      "content_type": "json"
+    },
+    {
+      "alias": "routing",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"math"
 	"strings"
 	"time"
 )
@@ -338,11 +339,13 @@ func (ev *defaultsEvaluator) call(call *ast.CallExpr) any {
 
 // schemaDefault converts a literal-tree value to the JSON default for a type.
 // `raw == nil` means the field was omitted from the literal, i.e. Go's zero
-// value. The boolean reports whether the default is fully known.
-func schemaDefault(value *typeIR, raw any) (any, bool) {
+// value. The boolean reports whether the default is fully known. An enum
+// default must be a declared member; anything else is an error because the
+// generated store could not encode it either.
+func schemaDefault(value *typeIR, raw any) (any, bool, error) {
 	switch raw.(type) {
 	case unknownDefault:
-		return nil, false
+		return nil, false, nil
 	case nilDefault:
 		raw = nil
 	case zeroDefault:
@@ -354,66 +357,75 @@ func schemaDefault(value *typeIR, raw any) (any, bool) {
 	switch value.Kind {
 	case typeBool:
 		if raw == nil {
-			return false, true
+			return false, true, nil
 		}
 		if c, ok := raw.(constDefault); ok && c.value.Kind() == constant.Bool {
-			return constant.BoolVal(c.value), true
+			return constant.BoolVal(c.value), true, nil
 		}
 	case typeString:
 		if raw == nil {
-			return "", true
+			return stringEnumDefault(value, "")
 		}
 		if c, ok := raw.(constDefault); ok && c.value.Kind() == constant.String {
-			return constant.StringVal(c.value), true
+			return stringEnumDefault(value, constant.StringVal(c.value))
 		}
 	case typeInt:
 		if raw == nil {
-			return int64(0), true
+			return enumDefault(value, 0)
 		}
 		if c, ok := raw.(constDefault); ok {
 			if n, exact := constant.Int64Val(constant.ToInt(c.value)); exact {
-				return n, true
+				return enumDefault(value, n)
 			}
 		}
 	case typeUint:
 		if raw == nil {
-			return uint64(0), true
+			if len(value.Enum) != 0 {
+				return enumDefault(value, 0)
+			}
+			return uint64(0), true, nil
 		}
 		if c, ok := raw.(constDefault); ok {
 			if n, exact := constant.Uint64Val(constant.ToInt(c.value)); exact {
-				return n, true
+				if len(value.Enum) == 0 {
+					return n, true, nil
+				}
+				if n > math.MaxInt64 {
+					return nil, false, fmt.Errorf("default %d is not a declared member of enum %s", n, types.TypeString(value.GoType, nil))
+				}
+				return enumDefault(value, int64(n))
 			}
 		}
 	case typeFloat:
 		if raw == nil {
-			return float64(0), true
+			return float64(0), true, nil
 		}
 		if c, ok := raw.(constDefault); ok {
 			if f, _ := constant.Float64Val(constant.ToFloat(c.value)); c.value.Kind() != constant.Unknown {
-				return f, true
+				return f, true, nil
 			}
 		}
 	case typeDuration:
 		if raw == nil {
-			return "0s", true
+			return "0s", true, nil
 		}
 		if c, ok := raw.(constDefault); ok {
 			if n, exact := constant.Int64Val(constant.ToInt(c.value)); exact {
-				return time.Duration(n).String(), true
+				return time.Duration(n).String(), true, nil
 			}
 		}
 	case typePointer:
 		if raw == nil {
-			return nil, true
+			return nil, true, nil
 		}
 		return schemaDefault(value.Elem, raw)
 	case typeBytes:
 		if raw == nil {
-			return nil, true
+			return nil, true, nil
 		}
 	case typeSlice:
 		if raw == nil {
-			return nil, true
+			return nil, true, nil
 		}
 		if items, ok := raw.([]any); ok {
 			return schemaDefaultList(value.Elem, items)
@@ -427,23 +439,23 @@ func schemaDefault(value *typeIR, raw any) (any, bool) {
 		}
 	case typeMap:
 		if raw == nil {
-			return nil, true
+			return nil, true, nil
 		}
 		if entries, ok := raw.(map[string]any); ok {
 			out := make(map[string]any, len(entries))
 			for key, item := range entries {
-				converted, known := schemaDefault(value.Elem, item)
-				if !known {
-					return nil, false
+				converted, known, err := schemaDefault(value.Elem, item)
+				if err != nil || !known {
+					return nil, false, err
 				}
 				out[key] = converted
 			}
-			return out, true
+			return out, true, nil
 		}
 	case typeStruct:
 		tree, _ := raw.(map[string]any)
 		if raw != nil && tree == nil {
-			return nil, false
+			return nil, false, nil
 		}
 		out := make(map[string]any, len(value.Fields))
 		for _, field := range value.Fields {
@@ -454,27 +466,55 @@ func schemaDefault(value *typeIR, raw any) (any, bool) {
 			if tree != nil {
 				child = tree[field.GoName]
 			}
-			converted, known := schemaDefault(field.Type, child)
-			if !known {
-				return nil, false
+			converted, known, err := schemaDefault(field.Type, child)
+			if err != nil || !known {
+				return nil, false, err
 			}
 			out[field.JSONName] = converted
 		}
-		return out, true
+		return out, true, nil
 	}
-	return nil, false
+	return nil, false, nil
 }
 
-func schemaDefaultList(elem *typeIR, items []any) (any, bool) {
+// enumDefault returns a signed integer default, or for an enum the name of
+// the declared member with that number.
+func enumDefault(value *typeIR, number int64) (any, bool, error) {
+	if len(value.Enum) == 0 {
+		return number, true, nil
+	}
+	for _, member := range value.Enum {
+		if member.Number == number {
+			return member.Name, true, nil
+		}
+	}
+	return nil, false, fmt.Errorf("default %d is not a declared member of enum %s", number, types.TypeString(value.GoType, nil))
+}
+
+// stringEnumDefault returns a string default, which for a string enum must be
+// one of the declared values.
+func stringEnumDefault(value *typeIR, text string) (any, bool, error) {
+	if len(value.Enum) == 0 {
+		return text, true, nil
+	}
+	for _, member := range value.Enum {
+		if member.Name == text {
+			return text, true, nil
+		}
+	}
+	return nil, false, fmt.Errorf("default %q is not a declared value of enum %s", text, types.TypeString(value.GoType, nil))
+}
+
+func schemaDefaultList(elem *typeIR, items []any) (any, bool, error) {
 	out := make([]any, 0, len(items))
 	for _, item := range items {
-		converted, known := schemaDefault(elem, item)
-		if !known {
-			return nil, false
+		converted, known, err := schemaDefault(elem, item)
+		if err != nil || !known {
+			return nil, false, err
 		}
 		out = append(out, converted)
 	}
-	return out, true
+	return out, true, nil
 }
 
 // managedFieldDefault walks the defaults tree along a managed field's Go path

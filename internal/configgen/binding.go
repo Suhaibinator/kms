@@ -19,6 +19,8 @@ type bindingRenderer struct {
 	usedAliases    map[string]bool
 	helpers        []*typeIR
 	helperByType   map[types.Type]int
+	enumTables     []*typeIR
+	enumByType     map[types.Type]int
 	rootTypeString string
 }
 
@@ -31,6 +33,7 @@ func renderBinding(model *ir, packageName string, contract renderedContract, sch
 		imports:      make(map[string]string),
 		usedAliases:  make(map[string]bool),
 		helperByType: make(map[types.Type]int),
+		enumByType:   make(map[types.Type]int),
 	}
 	for _, imported := range []struct{ path, alias string }{
 		{"context", "context"}, {"encoding/json/jsontext", "jsontext"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
@@ -447,6 +450,38 @@ func (r *bindingRenderer) renderGroupCodecs() {
 		r.line("}")
 		r.line("")
 	}
+	r.renderEnumTables()
+}
+
+// renderEnumTables emits each enum type's member table once, with literal
+// numbers, so the binding does not depend on the enum's constant names and
+// fields sharing an enum share its table.
+func (r *bindingRenderer) renderEnumTables() {
+	for index, value := range r.enumTables {
+		r.line("var enumMembers%d = []configstore.EnumMember{", index)
+		for _, member := range value.Enum {
+			if value.Kind == typeString {
+				r.line("\t{Name: %s},", strconv.Quote(member.Name))
+			} else {
+				r.line("\t{Name: %s, Number: %d},", strconv.Quote(member.Name), member.Number)
+			}
+		}
+		r.line("}")
+		r.line("")
+	}
+}
+
+func (r *bindingRenderer) enumTable(value *typeIR) string {
+	if len(value.Enum) == 0 {
+		return ""
+	}
+	index, ok := r.enumByType[value.GoType]
+	if !ok {
+		index = len(r.enumTables)
+		r.enumByType[value.GoType] = index
+		r.enumTables = append(r.enumTables, value)
+	}
+	return fmt.Sprintf(", Enum: enumMembers%d", index)
 }
 
 func (r *bindingRenderer) codecLiteral(value *typeIR, indent string) string {
@@ -471,9 +506,9 @@ func (r *bindingRenderer) codecLiteral(value *typeIR, indent string) string {
 		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Element: &%s}", kind, r.codecLiteral(value.Elem, indent+"\t"))
 	}
 	if value.Kind == typeInt || value.Kind == typeUint || value.Kind == typeFloat {
-		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Bits: %d}", kind, value.Bits)
+		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Bits: %d%s}", kind, value.Bits, r.enumTable(value))
 	}
-	return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s}", kind)
+	return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s%s}", kind, r.enumTable(value))
 }
 
 func (r *bindingRenderer) renderSnapshots() {
@@ -573,6 +608,8 @@ func reportNeedsProjection(value *typeIR) bool {
 	switch value.Kind {
 	case typeDuration:
 		return true
+	case typeInt, typeUint:
+		return len(value.Enum) != 0
 	case typePointer, typeArray, typeSlice, typeMap:
 		return reportNeedsProjection(value.Elem)
 	case typeStruct:
@@ -711,6 +748,14 @@ func (r *bindingRenderer) renderReportHelper(index int, value *typeIR) {
 	switch value.Kind {
 	case typeDuration:
 		r.line("\treturn value.String()")
+	case typeInt, typeUint:
+		// Reports show enum names; a number without one is reported as is.
+		r.line("\tswitch value {")
+		for _, member := range value.Enum {
+			r.line("\tcase %d: return %s", member.Number, strconv.Quote(member.Name))
+		}
+		r.line("\t}")
+		r.line("\treturn value")
 	case typePointer:
 		r.line("\tif value == nil { return nil }")
 		r.line("\treturn reportValue%d(*value)", r.helperByType[value.Elem.GoType])

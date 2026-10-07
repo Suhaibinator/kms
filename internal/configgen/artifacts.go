@@ -41,7 +41,10 @@ func renderSchema(model *ir) ([]byte, error) {
 		for _, field := range group.Fields {
 			required = append(required, field.JSONName)
 			raw := managedFieldDefault(model.Annotations.defaults, field.GoPath)
-			property := annotatedSchema(field.Type, model.Annotations.docs[field.Position], raw, model.Annotations.docs)
+			property, err := annotatedSchema(field.Type, model.Annotations.docs[field.Position], raw, model.Annotations.docs)
+			if err != nil {
+				return nil, fmt.Errorf("configgen: field %s default: %w", field.GoPath, err)
+			}
 			properties[field.JSONName] = property
 			if value, known := property["default"]; known {
 				groupDefault[field.JSONName] = value
@@ -84,7 +87,7 @@ func schemaContract(model *ir) []contractEntry {
 // description and the evaluated default when they are known. Nested struct
 // properties are annotated the same way so a form can show help and defaults
 // per field, not just per group.
-func annotatedSchema(value *typeIR, description string, raw any, docs map[token.Pos]string) map[string]any {
+func annotatedSchema(value *typeIR, description string, raw any, docs map[token.Pos]string) (map[string]any, error) {
 	schema := schemaForType(value)
 	inner := schema
 	if nullable, ok := schema["anyOf"].([]any); ok && len(nullable) == 2 {
@@ -92,32 +95,40 @@ func annotatedSchema(value *typeIR, description string, raw any, docs map[token.
 			inner = first
 		}
 	}
+	var err error
 	switch value.Kind {
 	case typePointer:
-		annotateStructProperties(value.Elem, inner, raw, docs)
+		err = annotateStructProperties(value.Elem, inner, raw, docs)
 	case typeMap:
 		if elem, ok := inner["additionalProperties"].(map[string]any); ok {
-			annotateElementDocs(value.Elem, elem, docs)
+			err = annotateElementDocs(value.Elem, elem, docs)
 		}
 	case typeSlice, typeArray:
 		if elem, ok := inner["items"].(map[string]any); ok {
-			annotateElementDocs(value.Elem, elem, docs)
+			err = annotateElementDocs(value.Elem, elem, docs)
 		}
 	default:
-		annotateStructProperties(value, inner, raw, docs)
+		err = annotateStructProperties(value, inner, raw, docs)
+	}
+	if err != nil {
+		return nil, err
 	}
 	if description != "" {
 		schema["description"] = description
 	}
-	if converted, known := schemaDefault(value, raw); known {
+	converted, known, err := schemaDefault(value, raw)
+	if err != nil {
+		return nil, err
+	}
+	if known {
 		schema["default"] = converted
 	}
-	return schema
+	return schema, nil
 }
 
 // annotateElementDocs adds descriptions (never defaults — elements have no
 // single default) to struct fields reached through a map value or list item.
-func annotateElementDocs(value *typeIR, schema map[string]any, docs map[token.Pos]string) {
+func annotateElementDocs(value *typeIR, schema map[string]any, docs map[token.Pos]string) error {
 	inner := schema
 	if nullable, ok := schema["anyOf"].([]any); ok && len(nullable) == 2 {
 		if first, ok := nullable[0].(map[string]any); ok {
@@ -126,27 +137,28 @@ func annotateElementDocs(value *typeIR, schema map[string]any, docs map[token.Po
 	}
 	switch value.Kind {
 	case typePointer:
-		annotateElementDocs(value.Elem, inner, docs)
+		return annotateElementDocs(value.Elem, inner, docs)
 	case typeMap:
 		if elem, ok := inner["additionalProperties"].(map[string]any); ok {
-			annotateElementDocs(value.Elem, elem, docs)
+			return annotateElementDocs(value.Elem, elem, docs)
 		}
 	case typeSlice, typeArray:
 		if elem, ok := inner["items"].(map[string]any); ok {
-			annotateElementDocs(value.Elem, elem, docs)
+			return annotateElementDocs(value.Elem, elem, docs)
 		}
 	case typeStruct:
-		annotateStructProperties(value, inner, unknownDefault{}, docs)
+		return annotateStructProperties(value, inner, unknownDefault{}, docs)
 	}
+	return nil
 }
 
-func annotateStructProperties(value *typeIR, schema map[string]any, raw any, docs map[token.Pos]string) {
+func annotateStructProperties(value *typeIR, schema map[string]any, raw any, docs map[token.Pos]string) error {
 	if value.Kind != typeStruct {
-		return
+		return nil
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
-		return
+		return nil
 	}
 	tree, _ := raw.(map[string]any)
 	for _, field := range value.Fields {
@@ -166,11 +178,19 @@ func annotateStructProperties(value *typeIR, schema map[string]any, raw any, doc
 				child = tree[field.GoName]
 			}
 		}
-		properties[field.JSONName] = annotatedSchema(field.Type, docs[field.Position], child, docs)
+		property, err := annotatedSchema(field.Type, docs[field.Position], child, docs)
+		if err != nil {
+			return err
+		}
+		properties[field.JSONName] = property
 	}
+	return nil
 }
 
 func schemaForType(value *typeIR) map[string]any {
+	if len(value.Enum) != 0 {
+		return enumSchema(value)
+	}
 	switch value.Kind {
 	case typeBool:
 		return map[string]any{"type": "boolean"}
@@ -218,6 +238,25 @@ func schemaForType(value *typeIR) map[string]any {
 	default:
 		panic("configgen: invalid normalized type")
 	}
+}
+
+// enumSchema renders an enum as a string choice. Int and uint enums also map
+// each name to its number in x-kms-enum-numbers so a console can convert
+// stored numbers and a renumbering changes the schema.
+func enumSchema(value *typeIR) map[string]any {
+	names := make([]string, len(value.Enum))
+	for i, member := range value.Enum {
+		names[i] = member.Name
+	}
+	schema := map[string]any{"type": "string", "enum": names}
+	if value.Kind != typeString {
+		numbers := make(map[string]int64, len(value.Enum))
+		for _, member := range value.Enum {
+			numbers[member.Name] = member.Number
+		}
+		schema["x-kms-enum-numbers"] = numbers
+	}
+	return schema
 }
 
 func nullableSchema(value map[string]any) map[string]any {
