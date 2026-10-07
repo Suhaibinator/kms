@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	_ "github.com/Suhaibinator/kms/internal/configgen/testdata/composedgenerated"
+	_ "github.com/Suhaibinator/kms/internal/configgen/testdata/enumsgenerated"
 	_ "github.com/Suhaibinator/kms/internal/configgen/testdata/generated"
 )
 
@@ -531,5 +532,73 @@ func TestGeneratedCollectionArtifactsAreCurrent(t *testing.T) {
 		Contract: filepath.Join(dir, "runtime.contract.json"),
 	}, artifacts); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGeneratedEnumArtifactsAreCurrent(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/enums", Type: "Config", BindingPackage: "enumsgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "internal/configgen/testdata/enumsgenerated")
+	if err := Verify(OutputPaths{
+		Binding:  filepath.Join(dir, "config.gen.go"),
+		Schema:   filepath.Join(dir, "runtime.schema.json"),
+		Contract: filepath.Join(dir, "runtime.contract.json"),
+	}, artifacts); err != nil {
+		t.Fatal(err)
+	}
+	var contract struct {
+		Fields []struct {
+			JSONName string `json:"json_name"`
+			Encoding string `json:"encoding"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(artifacts.Contract, &contract); err != nil {
+		t.Fatal(err)
+	}
+	encodings := make(map[string]string, len(contract.Fields))
+	for _, field := range contract.Fields {
+		encodings[field.JSONName] = field.Encoding
+	}
+	want := map[string]string{
+		"tier": "enum-int32", "min_tier": "nullable-enum-int32", "interval": "enum-int32", "priority": "enum-int32",
+		"primary": "enum-string", "weight": "int16", "label": "string",
+	}
+	for name, encoding := range want {
+		if encodings[name] != encoding {
+			t.Errorf("contract encoding for %s = %q, want %q", name, encodings[name], encoding)
+		}
+	}
+}
+
+func TestEnumGenerationErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		typeName string
+		defaults string
+		want     string
+	}{
+		{"EmptyName", "-", "constant Blank_ has an empty member name"},
+		{"UndeclaredDefault", "UndeclaredDefaults", "field Value default: default 0 is not a declared member of enum"},
+		{"UndeclaredStringDefault", "UndeclaredStringDefaults", `default "turbo" is not a declared value of enum`},
+		{"HugeNumber", "-", "constant HugeMax exceeds the maximum enum number"},
+		{"Unportable", "-", "constant WideLarge does not fit the portable int32 contract"},
+	}
+	root := repoRoot(t)
+	for _, test := range tests {
+		t.Run(test.typeName, func(t *testing.T) {
+			t.Parallel()
+			_, err := Generate(context.Background(), Options{
+				Dir: root, Package: "./internal/configgen/testdata/enuminvalid", Type: test.typeName, BindingPackage: "binding", DefaultsFunc: test.defaults,
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }

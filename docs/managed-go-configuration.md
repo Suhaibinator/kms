@@ -193,6 +193,8 @@ Generated schema and runtime metadata come from one normalized type model:
 | Go value | JSON representation |
 |---|---|
 | strings and named strings | string |
+| string [enums](#enums) | string restricted to the declared constant values |
+| int and uint [enums](#enums), including protobuf enums | string restricted to the declared member names |
 | booleans and named booleans | boolean |
 | `int` / `uint` and named forms | portable signed/unsigned 32-bit JSON integer |
 | explicitly sized integers and named forms | JSON integer bounded to the declared width |
@@ -225,8 +227,78 @@ through `float64`.
 
 Strict decoding rejects malformed JSON, trailing values, duplicate or unknown
 properties at any nesting level, missing required properties, wrong JSON
-types, numeric overflow, missing or extra release aliases, wrong alias kinds,
-and a parameter group whose content type is not `json`.
+types, numeric overflow, undeclared enum values, missing or extra release
+aliases, wrong alias kinds, and a parameter group whose content type is not
+`json`.
+
+### Enums
+
+The generator recognizes three kinds of enum from type information alone. A
+type's members are the exported constants of exactly that type declared in the
+type's own package:
+
+| Go type | Detected when | Member name |
+|---|---|---|
+| protobuf enum | a named `int32` whose value methods include `Descriptor() protoreflect.EnumDescriptor` and `Number() protoreflect.EnumNumber` | the proto value name: `UserType_USER_TYPE_ADMIN` is `USER_TYPE_ADMIN` |
+| int or uint enum | a named integer with a `String() string` method and at least one constant whose name starts with the type name | the constant name without the type name: `EmailProviderPostal` is `Postal` |
+| string enum | a named string with at least one constant whose name starts with the type name | the constant's value, unchanged |
+
+protoc-gen-go prefixes a top-level enum's values with the enum's Go name
+(`UserType_`) and a nested enum's values with the parent message's Go name
+(`Plan_` for the enum `Plan_Interval`). The generator uses the longest
+underscore-terminated prefix of the type name that a constant carries, so
+both shapes yield the proto value name.
+
+Constants without the prefix are not members, so `const DefaultLevel =
+LevelInfo` adds nothing. A named integer without a `String()` method or
+without prefixed constants stays a plain integer. A bit-flag type with both
+is detected as an enum, and a combination of flags then fails to encode;
+leave such a type without a `String()` method or without type-prefixed
+constants. When several constants share a value (proto `allow_alias`, or a
+second name for the same string), the first declared is canonical and the
+only one listed; the others still encode, as the canonical name.
+
+An int or uint enum's JSON value is the member name, not the number:
+
+```json
+{"anyOf": [
+  {"type": "string",
+   "enum": ["USER_TYPE_UNSPECIFIED", "USER_TYPE_USER", "USER_TYPE_ADMIN"],
+   "x-kms-enum-numbers": {"USER_TYPE_UNSPECIFIED": 0, "USER_TYPE_USER": 1, "USER_TYPE_ADMIN": 3}},
+  {"type": "null"}],
+ "default": "USER_TYPE_USER"}
+```
+
+`enum` lists int and uint members by number and string members in declaration
+order. `x-kms-enum-numbers` maps each int or uint member to its number, so a
+renumbering changes the schema; see
+[configuration releases](configuration-releases.md#enum-annotations).
+The contract encoding is `enum-` followed by the underlying encoding:
+`enum-int32`, `enum-uint8`, or `enum-string`. The binding's generated codec
+carries each enum's member table with literal numbers, and change and
+default-mismatch reports show member names.
+
+Decoding accepts only a declared member name: a JSON number, an alias, a Go
+constant name, or a different spelling is rejected, and the error lists the
+allowed values without echoing the rejected one. Encoding a number or string
+with no declared member fails, so a default or a value set in code must be a
+declared member. Generation fails when an evaluated default is not a member
+(including the zero value of an enum that declares nothing for it), when a
+constant's name is exactly the prefix, when a uint member exceeds the largest
+`int64`, and when a member of an `int`- or `uint`-backed enum does not fit the
+portable 32-bit contract.
+
+Generating with enum detection is a breaking wire change for every
+named-integer field it now recognizes: stored releases hold numbers, the new
+schema and binding accept only names. Register the regenerated schema and run
+the console schema upgrade, which converts each stored number listed in
+`x-kms-enum-numbers` to its name and reports the conversion. A stored number
+with no matching name is left in place and fails the target schema. Deploy
+the regenerated binding only together with a release prepared that way.
+String enums keep their wire format; only values outside the declared set are
+newly rejected. That includes the empty string, so a string enum whose zero
+value is meaningful must declare a constant for it, such as
+`HTTPAuthDefault HTTPAuth = ""`.
 
 ## Generate bindings and artifacts
 

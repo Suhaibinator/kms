@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"math"
 	"reflect"
 	"time"
 )
@@ -101,6 +102,11 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 		if source.Kind() != reflect.String {
 			return nil, descriptorError(path, "string descriptor does not match source")
 		}
+		if len(codec.Enum) != 0 {
+			if _, ok := enumNumber(codec.Enum, source.String()); !ok {
+				return nil, fmt.Errorf("configstore: value at %s is not a declared enum value", path)
+			}
+		}
 		return source.String(), nil
 
 	case CodecInt:
@@ -112,12 +118,11 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 			return nil, err
 		}
 		value := source.Int()
-		if bits < 64 {
-			minimum := -(int64(1) << (bits - 1))
-			maximum := (int64(1) << (bits - 1)) - 1
-			if value < minimum || value > maximum {
-				return nil, decodeRangeError(path, "integer")
-			}
+		if !signedFits(value, bits) {
+			return nil, decodeRangeError(path, "integer")
+		}
+		if len(codec.Enum) != 0 {
+			return encodeEnumName(codec.Enum, value, path)
 		}
 		return value, nil
 
@@ -130,8 +135,14 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 			return nil, err
 		}
 		value := source.Uint()
-		if bits < 64 && value > (uint64(1)<<bits)-1 {
+		if !unsignedFits(value, bits) {
 			return nil, decodeRangeError(path, "unsigned integer")
+		}
+		if len(codec.Enum) != 0 {
+			if value > math.MaxInt64 {
+				return nil, fmt.Errorf("configstore: value %d at %s is not a declared enum number", value, path)
+			}
+			return encodeEnumName(codec.Enum, int64(value), path)
 		}
 		return value, nil
 
@@ -205,6 +216,16 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 	default:
 		return nil, descriptorError(path, "codec kind is invalid")
 	}
+}
+
+// encodeEnumName maps an enum number to its member name; the stored value is
+// the name, so an undeclared number has no encoding.
+func encodeEnumName(members []EnumMember, number int64, path string) (string, error) {
+	name, ok := enumName(members, number)
+	if !ok {
+		return "", fmt.Errorf("configstore: value %d at %s is not a declared enum number", number, path)
+	}
+	return name, nil
 }
 
 func valueByFieldIndex(root reflect.Value, index []int) (reflect.Value, error) {

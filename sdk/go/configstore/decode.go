@@ -43,6 +43,18 @@ type ValueCodec struct {
 	Bits    int
 	Element *ValueCodec
 	Fields  []FieldCodec
+	// Enum, when non-empty, restricts a CodecInt, CodecUint, or CodecString
+	// value to the listed members. Int and uint enums travel as the member
+	// name and decode to its number; string enums travel unchanged and must
+	// equal a member name.
+	Enum []EnumMember
+}
+
+// EnumMember is one declared member of an enum codec. A string enum member's
+// Name is the permitted value itself and its Number is unused.
+type EnumMember struct {
+	Name   string
+	Number int64
 }
 
 // FieldCodec maps one required JSON property to a generated Go struct field.
@@ -302,7 +314,7 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		return nil
 	}
 	if node.kind == nodeNull {
-		return decodeTypeError(path, codecName(codec.Kind))
+		return decodeTypeError(path, codecName(codec))
 	}
 
 	switch codec.Kind {
@@ -317,15 +329,24 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 
 	case CodecString:
 		if node.kind != nodeString {
-			return decodeTypeError(path, "string")
+			return decodeTypeError(path, codecName(codec))
 		}
 		if destination.Kind() != reflect.String {
 			return descriptorError(path, "string descriptor does not match destination")
 		}
+		if len(codec.Enum) != 0 {
+			if _, ok := enumNumber(codec.Enum, node.text); !ok {
+				return unknownEnumError(path, codec.Enum)
+			}
+		}
 		destination.SetString(node.text)
 
 	case CodecInt:
-		if node.kind != nodeNumber {
+		if len(codec.Enum) != 0 {
+			if node.kind != nodeString {
+				return decodeTypeError(path, "enum name")
+			}
+		} else if node.kind != nodeNumber {
 			return decodeTypeError(path, "integer")
 		}
 		if !isSignedInteger(destination.Kind()) {
@@ -335,6 +356,17 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if err != nil {
 			return err
 		}
+		if len(codec.Enum) != 0 {
+			value, ok := enumNumber(codec.Enum, node.text)
+			if !ok {
+				return unknownEnumError(path, codec.Enum)
+			}
+			if !signedFits(value, bits) {
+				return descriptorError(path, "enum number does not fit the destination width")
+			}
+			destination.SetInt(value)
+			break
+		}
 		value, err := parseSignedJSONInteger(node.text, bits)
 		if err != nil {
 			return decodeRangeError(path, "integer")
@@ -342,7 +374,11 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		destination.SetInt(value)
 
 	case CodecUint:
-		if node.kind != nodeNumber {
+		if len(codec.Enum) != 0 {
+			if node.kind != nodeString {
+				return decodeTypeError(path, "enum name")
+			}
+		} else if node.kind != nodeNumber {
 			return decodeTypeError(path, "unsigned integer")
 		}
 		if !isUnsignedInteger(destination.Kind()) {
@@ -351,6 +387,17 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		bits, err := numericCodecBits(codec, destination, path)
 		if err != nil {
 			return err
+		}
+		if len(codec.Enum) != 0 {
+			value, ok := enumNumber(codec.Enum, node.text)
+			if !ok {
+				return unknownEnumError(path, codec.Enum)
+			}
+			if value < 0 || !unsignedFits(uint64(value), bits) {
+				return descriptorError(path, "enum number does not fit the destination width")
+			}
+			destination.SetUint(uint64(value))
+			break
 		}
 		value, err := parseUnsignedJSONInteger(node.text, bits)
 		if err != nil {
@@ -472,18 +519,50 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 
 func parseSignedJSONInteger(text string, bits int) (int64, error) {
 	integer, err := exactJSONInteger(text)
-	if err != nil || !integer.IsInt64() {
+	if err != nil || !integer.IsInt64() || !signedFits(integer.Int64(), bits) {
 		return 0, errors.New("integer out of range")
 	}
-	value := integer.Int64()
-	if bits < 64 {
-		minimum := -(int64(1) << (bits - 1))
-		maximum := (int64(1) << (bits - 1)) - 1
-		if value < minimum || value > maximum {
-			return 0, errors.New("integer out of range")
+	return integer.Int64(), nil
+}
+
+func signedFits(value int64, bits int) bool {
+	if bits >= 64 {
+		return true
+	}
+	return value >= -(int64(1)<<(bits-1)) && value <= (int64(1)<<(bits-1))-1
+}
+
+func unsignedFits(value uint64, bits int) bool {
+	return bits >= 64 || value <= (uint64(1)<<bits)-1
+}
+
+// enumNumber looks up a member by name; the first match wins.
+func enumNumber(members []EnumMember, name string) (int64, bool) {
+	for _, member := range members {
+		if member.Name == name {
+			return member.Number, true
 		}
 	}
-	return value, nil
+	return 0, false
+}
+
+// enumName looks up a member by number; the first match wins.
+func enumName(members []EnumMember, number int64) (string, bool) {
+	for _, member := range members {
+		if member.Number == number {
+			return member.Name, true
+		}
+	}
+	return "", false
+}
+
+// unknownEnumError lists the generated member names, never the rejected value.
+func unknownEnumError(path string, members []EnumMember) error {
+	names := make([]string, len(members))
+	for i, member := range members {
+		names[i] = strconv.Quote(member.Name)
+	}
+	return decodeDiagnostic(path, fmt.Errorf("configstore: unknown enum value at %s; allowed values are %s", path, strings.Join(names, ", ")))
 }
 
 func numericCodecBits(codec ValueCodec, destination reflect.Value, path string) (int, error) {
@@ -503,11 +582,10 @@ func parseUnsignedJSONInteger(text string, bits int) (uint64, error) {
 	if err != nil || !integer.IsUint64() {
 		return 0, errors.New("unsigned integer out of range")
 	}
-	value := integer.Uint64()
-	if bits < 64 && value > (uint64(1)<<bits)-1 {
+	if !unsignedFits(integer.Uint64(), bits) {
 		return 0, errors.New("unsigned integer out of range")
 	}
-	return value, nil
+	return integer.Uint64(), nil
 }
 
 // exactJSONInteger accepts every JSON number that is mathematically integral,
@@ -614,8 +692,11 @@ func childPath(parent, child string) string {
 	return parent + "." + child
 }
 
-func codecName(kind CodecKind) string {
-	switch kind {
+func codecName(codec ValueCodec) string {
+	if len(codec.Enum) != 0 && (codec.Kind == CodecString || codec.Kind == CodecInt || codec.Kind == CodecUint) {
+		return "enum"
+	}
+	switch codec.Kind {
 	case CodecBool:
 		return "boolean"
 	case CodecString:

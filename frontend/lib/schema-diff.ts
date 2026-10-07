@@ -193,6 +193,56 @@ function describeRequired(a: JsonSchema | null, b: JsonSchema | null): string {
   return parts.join("; ") || "required changed";
 }
 
+const enumLabel = (value: unknown): string =>
+  typeof value === "string" ? value : canonical(value);
+
+function describeEnum(a: JsonSchema | null, b: JsonSchema | null): string {
+  if (!Array.isArray(b?.enum)) return "no longer limited to listed values";
+  if (!Array.isArray(a?.enum)) {
+    return `now limited to ${b.enum.length} listed value${b.enum.length === 1 ? "" : "s"}`;
+  }
+  const before = new Set(a.enum.map(canonical));
+  const after = new Set(b.enum.map(canonical));
+  const added = b.enum.filter((value) => !before.has(canonical(value))).map(enumLabel);
+  const removed = a.enum.filter((value) => !after.has(canonical(value))).map(enumLabel);
+  const parts: string[] = [];
+  if (added.length) parts.push(`added ${added.join(", ")}`);
+  if (removed.length) parts.push(`removed ${removed.join(", ")}`);
+  return parts.length ? `enum ${parts.join("; ")}` : "enum reordered";
+}
+
+/**
+ * Renumbered names change what a stored integer converts to, so they are
+ * reported even when the names themselves are unchanged. Names that only
+ * appear on one side are already reported by the `enum` keyword.
+ */
+function describeEnumNumbers(a: JsonSchema | null, b: JsonSchema | null): string | null {
+  const before = isSchemaObject(a?.["x-kms-enum-numbers"]) ? a["x-kms-enum-numbers"] : null;
+  const after = isSchemaObject(b?.["x-kms-enum-numbers"]) ? b["x-kms-enum-numbers"] : null;
+  const enumChanged = canonical(a?.enum) !== canonical(b?.enum);
+  if (!before || !after) return enumChanged ? null : "enum numbers changed";
+  const renumbered = Object.keys(after)
+    .filter(
+      (name) => Object.hasOwn(before, name) && canonical(before[name]) !== canonical(after[name]),
+    )
+    .map((name) => `${name} (${canonical(before[name])} → ${canonical(after[name])})`);
+  if (renumbered.length) return `renumbered ${renumbered.join(", ")}`;
+  return enumChanged ? null : "enum numbers changed";
+}
+
+function describeKeyword(
+  keyword: string,
+  a: JsonSchema | null,
+  b: JsonSchema | null,
+): string | null {
+  if (keyword === "required") return describeRequired(a, b);
+  if (keyword === "enum") return describeEnum(a, b);
+  if (keyword === "x-kms-enum-numbers") return describeEnumNumbers(a, b);
+  return keyword;
+}
+
+const DESCRIBED_KEYWORDS = new Set(["required", "enum", "x-kms-enum-numbers"]);
+
 /**
  * What one schema difference means for a stored value: whether the operator
  * must provide, remove or review something, or nothing at all.
@@ -229,7 +279,8 @@ export function describeSchemaEffect(
   const keywords = changedKeywords(a.node, b.node);
   const meaningful = keywords.filter((keyword) => !DOCUMENTATION_KEYWORDS.has(keyword));
   const detail = meaningful
-    .map((keyword) => (keyword === "required" ? describeRequired(a.node, b.node) : keyword))
+    .map((keyword) => describeKeyword(keyword, a.node, b.node))
+    .filter((text): text is string => text !== null)
     .join(", ");
   if (isRequired && !wasRequired) {
     return {
@@ -244,10 +295,13 @@ export function describeSchemaEffect(
   }
   if (!keywords.length) return { kind: "review", text: "Constraints changed" };
   if (!meaningful.length) return { kind: "none", text: "Documentation only" };
+  const generic = meaningful.filter((keyword) => !DESCRIBED_KEYWORDS.has(keyword));
+  const described = meaningful
+    .filter((keyword) => DESCRIBED_KEYWORDS.has(keyword))
+    .map((keyword) => describeKeyword(keyword, a.node, b.node))
+    .filter((text): text is string => text !== null);
   return {
     kind: "review",
-    text: meaningful.every((keyword) => keyword === "required")
-      ? detail
-      : `${meaningful.filter((k) => k !== "required").join(", ")} changed${meaningful.includes("required") ? ` · ${describeRequired(a.node, b.node)}` : ""}`,
+    text: [...(generic.length ? [`${generic.join(", ")} changed`] : []), ...described].join(" · "),
   };
 }

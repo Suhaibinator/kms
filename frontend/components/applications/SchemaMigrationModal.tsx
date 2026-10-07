@@ -1660,6 +1660,7 @@ function UpgradeValuePreparation({
     previous === undefined &&
     !prepared.added.length &&
     !prepared.removed.length &&
+    !prepared.enumConversions.length &&
     !baseline.suggestions.length
   )
     return null;
@@ -1690,8 +1691,9 @@ function UpgradeValuePreparation({
         <>
           <strong>Prepare this value for the target schema</strong>
           <p>
-            Review suggested conversions, initialize allowed empty lists, apply schema defaults, and
-            remove forbidden fields. Unaccepted conversions keep their old fields for manual review.
+            Review suggested conversions, initialize allowed empty lists, apply schema defaults,
+            rename enum numbers, and remove forbidden fields. Unaccepted conversions keep their old
+            fields for manual review.
           </p>
           {baseline.suggestions.map((migration) => (
             <div key={migration.id} className="checkbox-row">
@@ -1764,6 +1766,12 @@ function PreparationSummary({ prepared }: { prepared: PreparedUpgradeValue }) {
       {prepared.migrations.map((migration) => (
         <li key={migration.id}>
           Convert {migration.from} → {migration.to}: {migration.reason}
+        </li>
+      ))}
+      {prepared.enumConversions.map((conversion) => (
+        <li key={conversion.path}>
+          Convert {conversion.from} → {conversion.to}
+          {conversion.path ? ` at ${conversion.path}` : ""}
         </li>
       ))}
       {addedObjects.length > 0 && <li>Add required object fields: {addedObjects.join(", ")}</li>}

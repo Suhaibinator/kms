@@ -918,4 +918,49 @@ describe("SchemaMigrationModal regressions", () => {
     expect(within(dialog).queryByText("Backend validation passed.")).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /Review contract/ })).toBeVisible();
   });
+
+  it("converts stored enum numbers to names when preparing a draft", async () => {
+    const target = registeredSchema(overview.application.schema_version + 1);
+    target.schema_json = JSON.stringify({
+      type: "object",
+      properties: {
+        database: {
+          type: "object",
+          properties: {
+            min: {
+              type: "string",
+              enum: ["USER_TYPE_UNSPECIFIED", "USER_TYPE_USER", "USER_TYPE_ADMIN"],
+              "x-kms-enum-numbers": {
+                USER_TYPE_UNSPECIFIED: 0,
+                USER_TYPE_USER: 1,
+                USER_TYPE_ADMIN: 3,
+              },
+            },
+          },
+        },
+        rate_limits: { type: "integer" },
+      },
+    });
+    mocks.listSchemas.mockResolvedValue({ schemas: [target], next_page_token: "" });
+    mocks.getParameter.mockImplementation((ref: { key: string }) =>
+      Promise.resolve({
+        parameter: {
+          value: ref.key === "database" ? '{"min":3}' : "300",
+          content_type: ref.key === "database" ? "json" : "integer",
+        },
+      }),
+    );
+    render(<SchemaMigrationModal {...modalProps()} />);
+    const dialog = screen.getByRole("dialog");
+    await reachValues(dialog);
+    const prepare = await within(dialog).findByRole("region", { name: "Prepare database" });
+    expect(prepare).toHaveTextContent("Convert 3 → USER_TYPE_ADMIN at min");
+    fireEvent.click(within(prepare).getByRole("button", { name: "Prepare draft" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview migration" }));
+    await waitFor(() => expect(mocks.migrateApplicationSchema).toHaveBeenCalled());
+    const request = mocks.migrateApplicationSchema.mock.calls[0][1] as SchemaMigrationRequest;
+    expect(request.changes.find((change) => change.alias === "database")?.value).toBe(
+      '{"min":"USER_TYPE_ADMIN"}',
+    );
+  });
 });

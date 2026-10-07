@@ -256,3 +256,79 @@ it("copies exact numeric default tokens from the registered schema, including ne
     ).value,
   ).toBe('{"nullable":1.00000000000000001}');
 });
+
+describe("enum number conversion", () => {
+  const userType = {
+    type: "string",
+    enum: ["USER_TYPE_UNSPECIFIED", "USER_TYPE_USER", "USER_TYPE_ADMIN"],
+    "x-kms-enum-numbers": { USER_TYPE_UNSPECIFIED: 0, USER_TYPE_USER: 1, USER_TYPE_ADMIN: 3 },
+  };
+  const schema = {
+    type: "object",
+    properties: {
+      min: { anyOf: [userType, { type: "null" }], default: "USER_TYPE_USER" },
+      roles: { anyOf: [{ type: "array", items: userType }, { type: "null" }] },
+      by_org: { type: "object", additionalProperties: userType },
+      nested: {
+        type: "object",
+        properties: {
+          groups: { type: "array", items: { type: "object", properties: { t: userType } } },
+        },
+      },
+      count: { type: "integer" },
+    },
+  };
+
+  it("rewrites stored numbers to names in scalars, lists, maps and nested objects", () => {
+    const raw =
+      '{"min": 3, "roles": [1, 0], "by_org": {"a": 3}, "nested": {"groups": [{"t": 1}]}, "count": 3}';
+    const prepared = prepareUpgradeValue(raw, schema);
+    expect(JSON.parse(prepared.value)).toEqual({
+      min: "USER_TYPE_ADMIN",
+      roles: ["USER_TYPE_USER", "USER_TYPE_UNSPECIFIED"],
+      by_org: { a: "USER_TYPE_ADMIN" },
+      nested: { groups: [{ t: "USER_TYPE_USER" }] },
+      count: 3,
+    });
+    expect(prepared.enumConversions).toEqual([
+      { path: "min", from: "3", to: "USER_TYPE_ADMIN" },
+      { path: "roles.0", from: "1", to: "USER_TYPE_USER" },
+      { path: "roles.1", from: "0", to: "USER_TYPE_UNSPECIFIED" },
+      { path: "by_org.a", from: "3", to: "USER_TYPE_ADMIN" },
+      { path: "nested.groups.0.t", from: "1", to: "USER_TYPE_USER" },
+    ]);
+    expect(prepared.added).toEqual([]);
+    expect(prepared.suggestions).toEqual([]);
+  });
+
+  it("converts an alias whose value is the enum itself", () => {
+    const root = JSON.stringify({ properties: { min: schema.properties.min } });
+    expect(prepareUpgradeValue("3", root, "min")).toMatchObject({
+      value: '"USER_TYPE_ADMIN"',
+      enumConversions: [{ path: "", from: "3", to: "USER_TYPE_ADMIN" }],
+    });
+  });
+
+  it("leaves unmatched numbers, names and inexact numbers for the readiness check", () => {
+    for (const raw of [
+      '{"min":2}',
+      '{"min":"USER_TYPE_ADMIN"}',
+      '{"min":3.0}',
+      '{"min":9007199254740995}',
+      '{"min":null}',
+    ]) {
+      const prepared = prepareUpgradeValue(raw, schema);
+      expect(prepared.value).toBe(raw);
+      expect(prepared.enumConversions).toEqual([]);
+    }
+    const plain = { type: "object", properties: { t: { type: "string", enum: ["a"] } } };
+    expect(prepareUpgradeValue('{"t":0}', plain).value).toBe('{"t":0}');
+  });
+
+  it("keeps other tokens byte-for-byte when converting", () => {
+    const raw = '{ "count": 9007199254740993, "min": 3 }';
+    expect(prepareUpgradeValue(raw, schema).value).toBe(
+      '{"count":9007199254740993,"min":"USER_TYPE_ADMIN"}',
+    );
+  });
+});

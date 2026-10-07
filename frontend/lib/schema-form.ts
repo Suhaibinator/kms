@@ -155,7 +155,7 @@ export function unwrapNullable(schema: JsonSchema): JsonSchema | null {
     merged.description = schema.description;
   }
   if ("default" in schema && !("default" in merged)) merged.default = schema.default;
-  for (const keyword of ["x-kms-array", "x-kms-migrate-from"]) {
+  for (const keyword of ["x-kms-array", "x-kms-migrate-from", "x-kms-enum-numbers"]) {
     if (keyword in schema && !(keyword in merged)) merged[keyword] = schema[keyword];
   }
   if (schemaNeedsExactJson(schema) || schemaNeedsExactJson(inner)) exactJsonSchemas.add(merged);

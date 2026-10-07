@@ -4,8 +4,10 @@ package configgen
 
 import (
 	"fmt"
+	"go/constant"
 	"go/token"
 	"go/types"
+	"math"
 	"reflect"
 	"regexp"
 	"sort"
@@ -14,8 +16,9 @@ import (
 )
 
 const (
-	kmsclientPath   = "github.com/Suhaibinator/kms/sdk/go/kmsclient"
-	configstorePath = "github.com/Suhaibinator/kms/sdk/go/configstore"
+	kmsclientPath    = "github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	configstorePath  = "github.com/Suhaibinator/kms/sdk/go/configstore"
+	protoreflectPath = "google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var aliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
@@ -95,6 +98,18 @@ type typeIR struct {
 	Mutable    bool
 	Encoding   string
 	SchemaType string
+	// Enum lists the declared members of an enum-typed scalar: int and uint
+	// enums ordered by number, string enums in declaration order. Empty for
+	// every other type.
+	Enum []enumMember
+}
+
+// enumMember is one canonical enum member. Int and uint enums travel as Name
+// and decode to Number; a string enum member's Name is its constant value and
+// Number is unused.
+type enumMember struct {
+	Name   string
+	Number int64
 }
 
 type nestedFieldIR struct {
@@ -471,8 +486,10 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 
 	named := false
 	underlying := t
+	var namedType *types.Named
 	if n, ok := t.(*types.Named); ok {
 		named = true
+		namedType = n
 		if n.Obj() != nil && !n.Obj().Exported() {
 			return nil, fmt.Errorf("configgen: %s uses unexported named type %s, which a separate binding package cannot name", location, n.Obj().Name())
 		}
@@ -492,20 +509,33 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 		if basic.Kind() == types.Int || basic.Kind() == types.Uint {
 			bits = 32
 		}
+		var result *typeIR
 		switch {
 		case info&types.IsBoolean != 0:
 			return &typeIR{Kind: typeBool, GoType: t, Named: named, Encoding: "boolean", SchemaType: "boolean"}, nil
 		case info&types.IsString != 0:
-			return &typeIR{Kind: typeString, GoType: t, Named: named, Encoding: "string", SchemaType: "string"}, nil
+			result = &typeIR{Kind: typeString, GoType: t, Named: named, Encoding: "string", SchemaType: "string"}
 		case info&types.IsInteger != 0 && info&types.IsUnsigned == 0:
-			return &typeIR{Kind: typeInt, GoType: t, Named: named, Bits: bits, Encoding: fmt.Sprintf("int%d", bits), SchemaType: "integer"}, nil
+			result = &typeIR{Kind: typeInt, GoType: t, Named: named, Bits: bits, Encoding: fmt.Sprintf("int%d", bits), SchemaType: "integer"}
 		case info&types.IsInteger != 0 && info&types.IsUnsigned != 0 && basic.Kind() != types.Uintptr:
-			return &typeIR{Kind: typeUint, GoType: t, Named: named, Bits: bits, Encoding: fmt.Sprintf("uint%d", bits), SchemaType: "integer"}, nil
+			result = &typeIR{Kind: typeUint, GoType: t, Named: named, Bits: bits, Encoding: fmt.Sprintf("uint%d", bits), SchemaType: "integer"}
 		case info&types.IsFloat != 0:
 			return &typeIR{Kind: typeFloat, GoType: t, Named: named, Bits: bits, Encoding: fmt.Sprintf("float%d", bits), SchemaType: "number"}, nil
 		default:
 			return nil, fmt.Errorf("configgen: %s has unsupported scalar type %s", location, types.TypeString(t, nil))
 		}
+		if namedType != nil {
+			members, err := enumMembers(namedType, basic, result.Bits, location)
+			if err != nil {
+				return nil, err
+			}
+			if len(members) != 0 {
+				result.Enum = members
+				result.Encoding = "enum-" + result.Encoding
+				result.SchemaType = "string"
+			}
+		}
+		return result, nil
 	}
 
 	if stack[t] {
@@ -605,4 +635,147 @@ func (t *typeIR) isScalar() bool {
 	default:
 		return false
 	}
+}
+
+// enumMembers reports the declared members of a named int, uint, or string
+// type, or none when the type is not an enum. Only type information is used:
+// members are the exported constants of exactly this type in its declaring
+// package, which go/packages loads completely for dependencies too.
+//
+//   - A protobuf enum (a named int32 whose value methods include
+//     Descriptor() protoreflect.EnumDescriptor and Number()
+//     protoreflect.EnumNumber) names each member by its proto value name, the
+//     constant name without protoc-gen-go's prefix.
+//   - A named int or uint with a String() string method names each constant
+//     prefixed by the type name by the remainder (EmailProviderPostal is
+//     Postal).
+//   - A named string type's constants prefixed by the type name contribute
+//     their values unchanged.
+//
+// Constants without the prefix are ignored. Several constants with one value
+// are aliases; the earliest declared is canonical and the only one listed.
+func enumMembers(named *types.Named, basic *types.Basic, bits int, location string) ([]enumMember, error) {
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return nil, nil
+	}
+	scope := obj.Pkg().Scope()
+	var consts []*types.Const
+	for _, name := range scope.Names() {
+		if c, ok := scope.Lookup(name).(*types.Const); ok && c.Exported() && types.Identical(c.Type(), named) {
+			consts = append(consts, c)
+		}
+	}
+	sort.Slice(consts, func(i, j int) bool { return consts[i].Pos() < consts[j].Pos() })
+	typeName := obj.Name()
+
+	if basic.Info()&types.IsString != 0 {
+		var members []enumMember
+		seen := make(map[string]bool)
+		for _, c := range consts {
+			if !strings.HasPrefix(c.Name(), typeName) {
+				continue
+			}
+			value := constant.StringVal(c.Val())
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			members = append(members, enumMember{Name: value})
+		}
+		return members, nil
+	}
+
+	var prefix string
+	switch {
+	case basic.Kind() == types.Int32 && isProtoEnum(named):
+		prefix = protoEnumPrefix(typeName, consts)
+	case hasStringMethod(named):
+		prefix = typeName
+	default:
+		return nil, nil
+	}
+	typeString := types.TypeString(named, nil)
+	unsigned := basic.Info()&types.IsUnsigned != 0
+	// One prefix per type keeps stripped names as distinct as the constant
+	// names themselves.
+	var members []enumMember
+	numbers := make(map[int64]bool)
+	for _, c := range consts {
+		if !strings.HasPrefix(c.Name(), prefix) {
+			continue
+		}
+		name := strings.TrimPrefix(c.Name(), prefix)
+		if name == "" {
+			return nil, fmt.Errorf("configgen: %s enum %s constant %s has an empty member name after removing prefix %s", location, typeString, c.Name(), prefix)
+		}
+		var number int64
+		if unsigned {
+			value, exact := constant.Uint64Val(c.Val())
+			if !exact || value > math.MaxInt64 {
+				return nil, fmt.Errorf("configgen: %s enum %s constant %s exceeds the maximum enum number %d", location, typeString, c.Name(), int64(math.MaxInt64))
+			}
+			if bits < 64 && value > uint64(1)<<bits-1 {
+				return nil, fmt.Errorf("configgen: %s enum %s constant %s does not fit the portable uint%d contract", location, typeString, c.Name(), bits)
+			}
+			number = int64(value)
+		} else {
+			value, _ := constant.Int64Val(c.Val())
+			if bits < 64 && (value < -(int64(1)<<(bits-1)) || value > int64(1)<<(bits-1)-1) {
+				return nil, fmt.Errorf("configgen: %s enum %s constant %s does not fit the portable int%d contract", location, typeString, c.Name(), bits)
+			}
+			number = value
+		}
+		if numbers[number] {
+			continue
+		}
+		numbers[number] = true
+		members = append(members, enumMember{Name: name, Number: number})
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].Number < members[j].Number })
+	return members, nil
+}
+
+// protoEnumPrefix returns the prefix protoc-gen-go put on the enum's value
+// constants. A top-level enum's values are prefixed by the enum's Go name and
+// an underscore; a nested enum Parent_Child's values by the parent message's
+// Go name (Parent_). The longest underscore-terminated prefix of the type name
+// that some constant carries is the one generated.
+func protoEnumPrefix(typeName string, consts []*types.Const) string {
+	candidate := typeName + "_"
+	for {
+		for _, c := range consts {
+			if strings.HasPrefix(c.Name(), candidate) {
+				return candidate
+			}
+		}
+		cut := strings.LastIndex(candidate[:len(candidate)-1], "_")
+		if cut < 0 {
+			return typeName + "_"
+		}
+		candidate = candidate[:cut+1]
+	}
+}
+
+func isProtoEnum(named *types.Named) bool {
+	methods := types.NewMethodSet(named)
+	return methodReturns(methods, "Descriptor", func(t types.Type) bool { return isNamedType(t, protoreflectPath, "EnumDescriptor") }) &&
+		methodReturns(methods, "Number", func(t types.Type) bool { return isNamedType(t, protoreflectPath, "EnumNumber") })
+}
+
+func hasStringMethod(named *types.Named) bool {
+	return methodReturns(types.NewMethodSet(named), "String", func(t types.Type) bool {
+		return types.Identical(t, types.Typ[types.String])
+	})
+}
+
+// methodReturns reports whether the value method set has a niladic method
+// name with exactly one result accepted by result.
+func methodReturns(methods *types.MethodSet, name string, result func(types.Type) bool) bool {
+	selection := methods.Lookup(nil, name)
+	if selection == nil {
+		return false
+	}
+	sig, ok := selection.Obj().Type().(*types.Signature)
+	return ok && sig.Params().Len() == 0 && !sig.Variadic() && sig.Results().Len() == 1 && result(sig.Results().At(0).Type())
 }

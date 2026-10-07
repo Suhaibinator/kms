@@ -177,6 +177,31 @@ The source is removed only if the target schema forbids it. Complex or
 incompatible conversions remain manual. Source string tokens and unrelated
 numeric tokens are preserved exactly.
 
+### Enum annotations
+
+The Go generator annotates every int- or uint-backed enum with its member
+numbers next to the standard `enum` keyword:
+
+```json
+{
+  "type": "string",
+  "enum": ["USER_TYPE_UNSPECIFIED", "USER_TYPE_USER", "USER_TYPE_ADMIN"],
+  "x-kms-enum-numbers": { "USER_TYPE_UNSPECIFIED": 0, "USER_TYPE_USER": 1, "USER_TYPE_ADMIN": 3 }
+}
+```
+
+Validation uses only `enum`; `x-kms-enum-numbers` changes neither validation
+nor application runtime behavior. The console renders the property as a choice
+of names. During an upgrade, **Prepare draft** converts a stored JSON integer
+to the name that `x-kms-enum-numbers` maps to it, for a scalar, a list item, or
+a map value, and lists each conversion; the conversion is unambiguous, so it
+needs no confirmation. An integer with no matching name is preserved and fails
+the target schema. Because the numbers are part of the schema, renumbering a
+member produces a new schema version. The annotation is also accepted inside
+the supported nullable wrapper. See
+[enums in managed Go configuration](managed-go-configuration.md#enums) for how
+the generator detects enums and derives names.
+
 ### Registry semantics
 
 `ConfigurationSchemaService` provides immutable `CreateSchema`, `GetSchema`,
