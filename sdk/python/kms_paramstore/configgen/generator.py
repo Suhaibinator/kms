@@ -262,14 +262,14 @@ def _schema_for(annotation: Any) -> dict[str, Any]:
         members = tuple(item for item in args if item is not type(None))
         if len(members) != 1 or len(members) == len(args):
             raise TypeError("configgen: only optional unions are portable")
-        member = Annotated[(members[0], *metadata)] if metadata else members[0]
+        member = Annotated[(members[0],) + tuple(metadata)] if metadata else members[0]
         schema = {"anyOf": [_schema_for(member), {"type": "null"}]}
     elif isinstance(core, type) and issubclass(core, BaseModel):
         properties: dict[str, Any] = {}
         required: list[str] = []
         for name, field in core.model_fields.items():
             json_name = field.serialization_alias or field.alias or name
-            nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
+            nested = Annotated[(field.annotation,) + tuple(field.metadata)] if field.metadata else field.annotation
             properties[json_name] = _schema_for(nested)
             if field.is_required():
                 required.append(json_name)

@@ -294,4 +294,4 @@ def _validation_annotation(annotation: Any, metadata: list[Any]) -> Any:
     )
     if not validation:
         return annotation
-    return Annotated[(annotation, *validation)]
+    return Annotated[(annotation,) + tuple(validation)]

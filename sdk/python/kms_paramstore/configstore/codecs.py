@@ -97,7 +97,7 @@ def decode_value(annotation: Any, value: Any) -> Any:
             wire_name = field.serialization_alias or field.alias or name
             input_name = field.validation_alias if isinstance(field.validation_alias, str) else field.alias or name
             if wire_name in value:
-                nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
+                nested = Annotated[(field.annotation,) + tuple(field.metadata)] if field.metadata else field.annotation
                 decoded_fields[input_name] = decode_value(nested, value[wire_name])
         if set(value) - {
             (field.serialization_alias or field.alias or name)
@@ -150,7 +150,7 @@ def encode_value(annotation: Any, value: Any) -> Any:
         output: dict[str, Any] = {}
         for name, field in value.__class__.model_fields.items():
             wire_name = field.serialization_alias or field.alias or name
-            nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
+            nested = Annotated[(field.annotation,) + tuple(field.metadata)] if field.metadata else field.annotation
             output[wire_name] = encode_value(nested, getattr(value, name))
         return output
     return TypeAdapter(annotation).dump_python(value, mode="json", round_trip=True)
