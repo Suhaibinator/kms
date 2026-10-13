@@ -283,8 +283,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [toast],
   );
 
-  const logout = useCallback(() => {
-    if (!confirmDiscardWork()) return;
+  const signOut = useCallback(() => {
     discardUnsavedWork();
     recoveryIdentity.current = null;
     generation.current += 1;
@@ -297,6 +296,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession({ authenticated: false, signedOut: true });
     setReady(true);
   }, []);
+
+  const logout = useCallback(() => {
+    if (!hasUnsavedWork()) signOut();
+    else
+      void confirmDiscardWork().then((discard) => {
+        if (discard) signOut();
+      });
+  }, [signOut]);
 
   const value = useMemo<AuthState>(
     () => ({
