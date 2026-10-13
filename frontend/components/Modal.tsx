@@ -20,8 +20,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { cn } from "@/lib/utils";
 
 export interface ModalHandle {
   /** A confirmed save may navigate before React commits the dialog's close. */
@@ -250,6 +250,7 @@ export function Modal({
 }
 
 export function ConfirmDialog({
+  ref,
   open,
   title,
   message,
@@ -262,6 +263,8 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: {
+  /** Call `markSaved` before a confirmed action navigates while still busy. */
+  ref?: Ref<ModalHandle>;
   open: boolean;
   title: ReactNode;
   message: ReactNode;
@@ -291,6 +294,7 @@ export function ConfirmDialog({
 
   return (
     <Modal
+      ref={ref}
       open={open}
       title={title}
       onClose={busy ? () => undefined : onCancel}

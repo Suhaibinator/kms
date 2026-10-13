@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReleaseWorkspace } from "@/components/releases/ReleaseWorkspace";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
+import { hasUnsavedWork } from "@/lib/unsaved-work";
 import ReleasesPage from "@/pages/releases";
 import { projectedSubscribers } from "./fixtures/subscriber-projection";
 import { chooseSelectOption } from "./select-test-utils";
@@ -1284,6 +1285,36 @@ describe("ReleasesPage", () => {
 
     await waitFor(() => expect(mocks.createRelease).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
+  });
+
+  it("releases the builder's pending work before showing the created release", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.applicationOverview.mockResolvedValue(dashboardWithContract);
+    mocks.createRelease.mockResolvedValue({ release: releaseV2 });
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    // The builder is still saving when onCreated retargets the URL; if it still
+    // owned pending work then, the route guard would ask to discard it.
+    const pendingAtNavigation: boolean[] = [];
+    mocks.replace.mockImplementation(async () => {
+      pendingAtNavigation.push(hasUnsavedWork());
+      return true;
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ name: releaseV2.name }) }),
+        undefined,
+        expect.anything(),
+      ),
+    );
+    expect(pendingAtNavigation.length).toBeGreaterThan(0);
+    expect(pendingAtNavigation.every((pending) => !pending)).toBe(true);
   });
 
   it("submits an immutable release only once while creation is pending", async () => {

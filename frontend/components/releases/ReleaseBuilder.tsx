@@ -1,7 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
-import { Modal } from "@/components/Modal";
+import { Modal, type ModalHandle } from "@/components/Modal";
 import { SectionHeader } from "@/components/SectionHeader";
 import { Button, Field, Input, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
@@ -9,8 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { useFocusFirstInvalid } from "@/lib/forms";
-import { schemaVersionError } from "@/lib/schema";
 import { useFieldErrors } from "@/lib/hooks";
+import { schemaVersionError } from "@/lib/schema";
 import type {
   ApplicationOverview,
   ConfigurationRelease,
@@ -221,6 +221,7 @@ export function ReleaseBuilder({
   // Claim creation synchronously so repeated Cmd/Ctrl+Enter events cannot
   // allocate two immutable versions before React paints the loading state.
   const savingRef = useRef(false);
+  const modal = useRef<ModalHandle>(null);
   const [mode, setMode] = useState<"guided" | "json">("guided");
   const [modeMessage, setModeMessage] = useState("");
   const [name, setName] = useState("runtime");
@@ -458,6 +459,9 @@ export function ReleaseBuilder({
       const result = await api.createRelease(request);
       if (generation.current !== submittedGeneration) return;
       toast.success(`Created ${result.release.name}@${result.release.version}`);
+      // Still saving, so the modal still owns pending work: release it before
+      // onCreated retargets the page, or the route guard asks to discard it.
+      modal.current?.markSaved();
       onCreated(result.release);
       onClose();
     } catch (error) {
@@ -477,6 +481,7 @@ export function ReleaseBuilder({
 
   return (
     <Modal
+      ref={modal}
       mobileFullScreen
       open={open}
       workspace
