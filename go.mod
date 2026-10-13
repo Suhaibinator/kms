@@ -1,6 +1,6 @@
 module github.com/Suhaibinator/kms
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/glebarez/sqlite v1.11.0
@@ -40,7 +40,7 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 // indirect
