@@ -54,6 +54,8 @@ test("session expiry keeps the actual editor draft through in-place sign-in", as
     route.fulfill({ json: { identity: state.identity, auth_method: "token" } }),
   );
   await page.goto("/secrets?env=prod&app=gradethis");
+  // Wait for namespace seeding before opening its in-place editor.
+  await expect(page.getByRole("link", { name: "db_password", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "New secret", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "New secret", exact: true });
   await editor.getByLabel("Secret key", { exact: true }).fill("recover-me");
@@ -75,6 +77,8 @@ test("session expiry keeps the actual editor draft through in-place sign-in", as
 test("Discard draft and sign out does not ask a second time", async ({ page }) => {
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
+  // Wait for namespace seeding before opening its in-place editor.
+  await expect(page.getByRole("link", { name: "db_password", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "New secret", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "New secret", exact: true });
   await editor.getByLabel("Secret key", { exact: true }).fill("recover-me");
@@ -120,6 +124,8 @@ test("a create request rejected with 401 retains the pending secret draft", asyn
     });
   });
   await page.goto("/secrets?env=prod&app=gradethis");
+  // Wait for namespace seeding before opening its in-place editor.
+  await expect(page.getByRole("link", { name: "db_password", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "New secret", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "New secret", exact: true });
   await editor.getByLabel("Secret key", { exact: true }).fill("retry-after-auth");

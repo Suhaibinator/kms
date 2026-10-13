@@ -361,7 +361,9 @@ jobs:
   frontend:
     name: Frontend (quality, tests & build)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Includes 381 browser cases across desktop Chromium, mobile Chromium,
+    # and WebKit, plus dependency/browser installation and the static build.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: frontend
