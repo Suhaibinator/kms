@@ -10,6 +10,7 @@ import type {
   ParameterMetadata,
   SecretMetadata,
 } from "@/lib/types";
+import { hasUnsavedWork } from "@/lib/unsaved-work";
 import ParameterDetailPage from "@/pages/parameters/detail";
 import SecretDetailPage from "@/pages/secrets/detail";
 import { chooseSelectOption } from "./select-test-utils";
@@ -309,6 +310,10 @@ describe("detail page refreshes", () => {
     vi.spyOn(api, "parameterMetadata").mockResolvedValue(PARAMETER_META);
     vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
     vi.spyOn(api, "deleteParameter").mockResolvedValue({ revision: 3 });
+    // The busy confirmation must not still own pending work when it navigates,
+    // or the route guard asks to discard a delete that already succeeded.
+    const pendingAtNavigation: boolean[] = [];
+    mocks.router.push.mockImplementation(async () => pendingAtNavigation.push(hasUnsavedWork()));
 
     render(<ParameterDetailPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
@@ -320,6 +325,26 @@ describe("detail page refreshes", () => {
     );
     // A back-navigation must not land on a confirmation for a deleted parameter.
     expect(screen.queryByRole("dialog", { name: "Delete parameter?" })).not.toBeInTheDocument();
+    expect(pendingAtNavigation).toEqual([false]);
+  });
+
+  it("releases the secret delete confirmation before navigating away", async () => {
+    mocks.router.query = { env: SECRET.env, app: SECRET.app, key: SECRET.key };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+    vi.spyOn(api, "deleteSecret").mockResolvedValue({ revision: 3 });
+    const pendingAtNavigation: boolean[] = [];
+    mocks.router.push.mockImplementation(async () => pendingAtNavigation.push(hasUnsavedWork()));
+
+    render(<SecretDetailPage />);
+    expect(await screen.findByText("Content type")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = await screen.findByRole("dialog", { name: "Delete secret?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete secret" }));
+
+    await vi.waitFor(() =>
+      expect(mocks.router.push).toHaveBeenCalledWith("/secrets?env=prod&app=billing"),
+    );
+    expect(pendingAtNavigation).toEqual([false]);
   });
 });
 

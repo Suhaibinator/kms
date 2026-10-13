@@ -1,12 +1,12 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AppProps } from "next/app";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
+import { hasUnsavedWork, useUnsavedWork } from "@/lib/unsaved-work";
 import App from "@/pages/_app";
-import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const mocks = vi.hoisted(() => ({
   whoami: vi.fn(),
@@ -102,6 +102,15 @@ function DraftProbe() {
   useUnsavedWork(Boolean(draft));
   return (
     <input aria-label="Draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
+  );
+}
+
+function DraftWithSignOut() {
+  return (
+    <>
+      <DraftProbe />
+      <Probe />
+    </>
   );
 }
 
@@ -547,6 +556,32 @@ describe("Protected redirects", () => {
     expect(lastNamespace()).toBeNull();
   });
 
+  it("asks in-app before signing out over a draft, and keeps it on Keep editing", async () => {
+    mocks.token = "stored-token";
+    mocks.whoami.mockResolvedValue({ name: "admin", kind: "admin" });
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    render(<App {...({ Component: DraftWithSignOut, pageProps: {} } as unknown as AppProps)} />);
+    await waitFor(() => expect(screen.getByTestId("authenticated")).toHaveTextContent("true"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Draft" }), {
+      target: { value: "unsaved configuration" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const prompt = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    fireEvent.click(within(prompt).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByTestId("authenticated")).toHaveTextContent("true");
+    expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue("unsaved configuration");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const again = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    fireEvent.click(within(again).getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
+    expect(confirm).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("offers persistent recovery after an uncached session check fails", async () => {
     mocks.token = "stored-token";
     mocks.cachedIdentity = null;
@@ -589,5 +624,23 @@ describe("Protected redirects", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue("unsaved configuration");
     expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("signs out from recovery's Discard draft button without asking again", async () => {
+    mocks.token = "stored-token";
+    mocks.whoami.mockResolvedValue({ name: "admin", kind: "admin" });
+    render(<App {...({ Component: DraftProbe, pageProps: {} } as unknown as AppProps)} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft" }), {
+      target: { value: "unsaved configuration" },
+    });
+    act(() => {
+      mocks.token = null;
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    });
+    const recovery = await screen.findByRole("dialog", { name: "Sign in to resume your draft" });
+    fireEvent.click(within(recovery).getByRole("button", { name: "Discard draft and sign out" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    expect(hasUnsavedWork()).toBe(false);
   });
 });

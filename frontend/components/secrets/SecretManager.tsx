@@ -4,14 +4,14 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
-import { ConfirmDialog, Modal } from "@/components/Modal";
+import { ConfirmDialog, Modal, type ModalHandle } from "@/components/Modal";
+import { SectionHeader } from "@/components/SectionHeader";
 import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { type BindingAction, BindingActionModal } from "@/components/secrets/BindingActionModal";
 import { BINDING_ACTION_LABELS, bindingActions } from "@/components/secrets/binding-actions";
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
-import { SectionHeader } from "@/components/SectionHeader";
 import {
   Badge,
   Checkbox,
@@ -144,6 +144,7 @@ export default function SecretManager({
   const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
   const refKey = `${env}\u0000${app}\u0000${key}`;
   const activeRefKey = useRef(refKey);
+  const actionDialog = useRef<ModalHandle>(null);
   // Update during render so a response cannot land in the gap between a route
   // change rendering and its effect cleanup aborting the previous request.
   activeRefKey.current = refKey;
@@ -368,6 +369,9 @@ export default function SecretManager({
         await api.deleteSecret(ref);
         if (activeRefKey.current !== actionRefKey) return;
         toast.success("Secret deleted", displayPath(ref));
+        // The busy confirmation still owns pending work until React commits
+        // its close; release it so the route guard does not ask to discard it.
+        actionDialog.current?.markSaved();
         setConfirm(null);
         if (surface === "workspace") {
           onDeleted?.(ref);
@@ -897,6 +901,7 @@ export default function SecretManager({
 
       {/* Version / delete confirmations */}
       <ConfirmDialog
+        ref={actionDialog}
         open={confirm !== null && confirm.refKey === refKey && confirm.kind !== "destroy"}
         title={
           confirm?.kind === "delete"
