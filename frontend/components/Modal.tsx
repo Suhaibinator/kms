@@ -20,8 +20,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  answerDiscardPrompt,
+  useDiscardPromptHost,
+  useDiscardPromptOpen,
+  useUnsavedWork,
+} from "@/lib/unsaved-work";
 import { cn } from "@/lib/utils";
-import { useUnsavedWork } from "@/lib/unsaved-work";
 
 export interface ModalHandle {
   /** A confirmed save may navigate before React commits the dialog's close. */
@@ -45,6 +50,7 @@ export function Modal({
   discardTitle = "Discard changes?",
   discardMessage = "Your edits in this dialog have not been saved.",
   trackUnsavedWork = true,
+  hostDiscardPrompt = true,
   initialFocus,
 }: {
   ref?: Ref<ModalHandle>;
@@ -82,6 +88,8 @@ export function Modal({
   discardMessage?: ReactNode;
   /** Recovery UI does not itself own a draft or pending application write. */
   trackUnsavedWork?: boolean;
+  /** Only the discard prompt itself opts out of hosting the discard prompt. */
+  hostDiscardPrompt?: boolean;
   /** Element focused when the dialog opens; defaults to Base UI's own choice. */
   initialFocus?: DialogPrimitive.Popup.Props["initialFocus"];
 }) {
@@ -89,6 +97,7 @@ export function Modal({
   // own pending work: an auth failure or browser Back must not unmount them.
   const releaseDraft = useUnsavedWork(trackUnsavedWork && open && (dirty || !dismissible));
   useImperativeHandle(ref, () => ({ markSaved: releaseDraft }), [releaseDraft]);
+  const hostsPrompt = useDiscardPromptHost(hostDiscardPrompt && open);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const [popupElement, setPopupElement] = useState<HTMLDivElement | null>(null);
@@ -244,12 +253,35 @@ export function Modal({
             onCancel={() => setConfirmingDiscard(false)}
           />
         ) : null}
+        {hostsPrompt ? <DiscardWorkPrompt /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
+/**
+ * "Discard unsaved changes?" for leaving the page or signing out over unsaved
+ * work. The newest open Modal renders it nested; otherwise UnsavedWorkGuard.
+ */
+export function DiscardWorkPrompt() {
+  const open = useDiscardPromptOpen();
+  return (
+    <ConfirmDialog
+      open={open}
+      title="Discard unsaved changes?"
+      message="Your edits have not been saved. Leaving now discards them."
+      danger
+      confirmLabel="Discard and leave"
+      cancelLabel="Keep editing"
+      hostDiscardPrompt={false}
+      onConfirm={() => answerDiscardPrompt(true)}
+      onCancel={() => answerDiscardPrompt(false)}
+    />
+  );
+}
+
 export function ConfirmDialog({
+  ref,
   open,
   title,
   message,
@@ -259,9 +291,12 @@ export function ConfirmDialog({
   busy,
   confirmDisabled: confirmDisabledProp,
   requireText,
+  hostDiscardPrompt,
   onConfirm,
   onCancel,
 }: {
+  /** Call `markSaved` before a confirmed action navigates while still busy. */
+  ref?: Ref<ModalHandle>;
   open: boolean;
   title: ReactNode;
   message: ReactNode;
@@ -273,6 +308,7 @@ export function ConfirmDialog({
   confirmDisabled?: boolean;
   /** Exact text the user must enter before an irreversible action is enabled. */
   requireText?: string;
+  hostDiscardPrompt?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -291,10 +327,12 @@ export function ConfirmDialog({
 
   return (
     <Modal
+      ref={ref}
       open={open}
       title={title}
       onClose={busy ? () => undefined : onCancel}
       dismissible={!busy}
+      hostDiscardPrompt={hostDiscardPrompt}
       initialFocus={requireText ? inputRef : undefined}
       footer={
         <>

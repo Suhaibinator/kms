@@ -1,6 +1,7 @@
 import { type NextRouter, useRouter } from "next/router";
 import { useEffect } from "react";
-import { confirmDiscardWork, hasUnsavedWork } from "@/lib/unsaved-work";
+import { DiscardWorkPrompt } from "@/components/Modal";
+import { confirmDiscardWork, hasUnsavedWork, useDiscardPromptUnhosted } from "@/lib/unsaved-work";
 
 const HISTORY_INDEX = "kmsDraftHistoryIndex";
 const SCOPE_KEYS = ["app", "env", "key", "schema_version", "name", "release"];
@@ -37,17 +38,28 @@ export function installUnsavedWorkGuard(router: NextRouter): () => void {
   };
   window.addEventListener("beforeunload", onUnload);
 
+  // Only the latest navigation blocked behind the prompt runs once it is
+  // confirmed; earlier ones resolve false, as a superseded route change would.
+  let latest: symbol | undefined;
+  function afterPrompt(navigate: () => Promise<boolean>): Promise<boolean> {
+    const request = Symbol("navigation");
+    latest = request;
+    return confirmDiscardWork().then((discard) =>
+      discard && latest === request ? navigate() : false,
+    );
+  }
+
   const push = router.push;
   const replace = router.replace;
   router.push = (...args) => {
-    if (changesWorkspace(router, args[1] ?? args[0], args[2]?.shallow) && !confirmDiscardWork())
-      return Promise.resolve(false);
-    return push.apply(router, args);
+    if (!hasUnsavedWork() || !changesWorkspace(router, args[1] ?? args[0], args[2]?.shallow))
+      return push.apply(router, args);
+    return afterPrompt(() => push.apply(router, args));
   };
   router.replace = (...args) => {
-    if (changesWorkspace(router, args[1] ?? args[0], args[2]?.shallow) && !confirmDiscardWork())
-      return Promise.resolve(false);
-    return replace.apply(router, args);
+    if (!hasUnsavedWork() || !changesWorkspace(router, args[1] ?? args[0], args[2]?.shallow))
+      return replace.apply(router, args);
+    return afterPrompt(() => replace.apply(router, args));
   };
 
   // Mark browser entries so rejecting Back/Forward can restore the existing
@@ -56,7 +68,10 @@ export function installUnsavedWorkGuard(router: NextRouter): () => void {
   const pushState = history.pushState;
   const replaceState = history.replaceState;
   let index: number = history.state?.[HISTORY_INDEX] ?? 0;
+  // The pop that puts back the entry a blocked Back/Forward left.
   let restoring = false;
+  // The pop that replays a Back/Forward once the prompt is confirmed.
+  let leaving = false;
   replaceState.call(history, { ...history.state, [HISTORY_INDEX]: index }, "");
   let currentState = history.state;
   let currentUrl = window.location.href;
@@ -76,20 +91,32 @@ export function installUnsavedWorkGuard(router: NextRouter): () => void {
       return false;
     }
     const target: number | undefined = history.state?.[HISTORY_INDEX];
-    if (!confirmDiscardWork()) {
-      if (target === undefined) {
-        // A preexisting entry has no knowable delta (the history menu may jump
-        // several entries). Restore the current workspace rather than guessing
-        // +1 and leaving the URL and editor referring to different resources.
-        pushState.call(history, currentState, "", currentUrl);
-      } else {
-        restoring = true;
-        history.go(index - target);
-      }
-      return false;
+    if (leaving || !hasUnsavedWork()) {
+      leaving = false;
+      index = target ?? index - 1;
+      return true;
     }
-    index = target ?? index - 1;
-    return true;
+    // The browser has already moved. Put the workspace back while the prompt
+    // is open, so the URL and the editor keep referring to the same resource,
+    // and replay the move only if the operator chooses to discard.
+    let replay: number;
+    if (target === undefined) {
+      // A preexisting entry has no knowable delta (the history menu may jump
+      // several entries). Re-enter the current workspace directly after it
+      // rather than guessing, which leaves the target exactly one step back.
+      pushState.call(history, currentState, "", currentUrl);
+      replay = -1;
+    } else {
+      restoring = true;
+      history.go(index - target);
+      replay = target - index;
+    }
+    void afterPrompt(async () => {
+      leaving = true;
+      history.go(replay);
+      return true;
+    });
+    return false;
   });
 
   return () => {
@@ -105,5 +132,6 @@ export function installUnsavedWorkGuard(router: NextRouter): () => void {
 export function UnsavedWorkGuard() {
   const router = useRouter();
   useEffect(() => installUnsavedWorkGuard(router), [router]);
-  return null;
+  // An open Modal nests the prompt itself (see useDiscardPromptHost).
+  return useDiscardPromptUnhosted() ? <DiscardWorkPrompt /> : null;
 }

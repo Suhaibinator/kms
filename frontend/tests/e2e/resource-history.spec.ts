@@ -34,12 +34,13 @@ test("history jumps protect parameter drafts until discard is confirmed", async 
   await dialog.getByLabel("Value", { exact: true }).fill("draft for beta");
 
   // Equivalent to selecting alpha directly from the browser's history menu.
-  page.once("dialog", (confirmation) => confirmation.dismiss());
+  const prompt = page.getByRole("dialog", { name: "Discard unsaved changes?" });
   await page.evaluate(() => history.go(-2));
+  await prompt.getByRole("button", { name: "Keep editing" }).click();
   await expect(page).toHaveURL(/key=beta/);
   await expect(dialog.getByLabel("Value", { exact: true })).toHaveValue("draft for beta");
-  page.once("dialog", (confirmation) => confirmation.accept());
   await page.evaluate(() => history.go(-2));
+  await prompt.getByRole("button", { name: "Discard and leave" }).click();
   await expect(page).toHaveURL(/key=alpha/);
   await expect(dialog).toBeHidden();
   await page.getByRole("button", { name: "New version", exact: true }).click();

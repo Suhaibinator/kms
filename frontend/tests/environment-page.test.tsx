@@ -4,6 +4,7 @@ import type { ShipModalProps } from "@/components/applications/contracts";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
 import type { ApplicationOverview, Namespace } from "@/lib/types";
+import { hasUnsavedWork } from "@/lib/unsaved-work";
 import EnvironmentPage from "@/pages/applications/environment";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 import { chooseSelectOption } from "./select-test-utils";
@@ -354,6 +355,12 @@ describe("EnvironmentPage", () => {
 
   it("deletes an empty environment and returns to the application", async () => {
     mocks.deleteNamespace.mockResolvedValue({});
+    // The busy confirmation must not still own pending work when it navigates.
+    const pendingAtNavigation: boolean[] = [];
+    mocks.replace.mockImplementation(async () => {
+      pendingAtNavigation.push(hasUnsavedWork());
+      return true;
+    });
     mocks.namespaces.namespaces = [listedNamespace("dev"), listedNamespace("prod")];
     await renderPage(
       overviewWith("dev", { parameter_count: 0, secret_count: 0, identity_count: 0 }),
@@ -365,6 +372,7 @@ describe("EnvironmentPage", () => {
       expect(mocks.deleteNamespace).toHaveBeenCalledWith({ env: "dev", app: "gradethis" }),
     );
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith(links.application("gradethis")));
+    expect(pendingAtNavigation).toEqual([false]);
   });
 
   it("says when the environment is not part of the application", async () => {

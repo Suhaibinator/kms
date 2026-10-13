@@ -6,7 +6,7 @@ import { Icon } from "@/components/icons";
 import { JsonDiff } from "@/components/JsonDiff";
 import { JsonEditor } from "@/components/JsonEditor";
 import { JsonView, ValueView } from "@/components/JsonView";
-import { ConfirmDialog, Modal } from "@/components/Modal";
+import { ConfirmDialog, Modal, type ModalHandle } from "@/components/Modal";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
 import { SectionHeader } from "@/components/SectionHeader";
 import {
@@ -118,6 +118,7 @@ export default function ParameterManager({
   // Detail pages remain mounted while Next changes only their query. Keep this
   // current during render so an old request cannot commit in the effect gap.
   const activeRefKey = useRef(refKey);
+  const deleteDialog = useRef<ModalHandle>(null);
   activeRefKey.current = refKey;
 
   const [meta, setMeta] = useState<ParameterMetadata | null>(null);
@@ -446,6 +447,9 @@ export default function ParameterManager({
       await api.deleteParameter(ref);
       if (!run.current || activeRefKey.current !== refKey) return;
       toast.success("Parameter deleted", displayPath(ref));
+      // The busy confirmation still owns pending work until React commits its
+      // close; release it so the route guard does not ask to discard it.
+      deleteDialog.current?.markSaved();
       // Closed before navigating, so a back-navigation cannot land on an open
       // confirmation for a parameter that no longer exists.
       setDeleteOpen(false);
@@ -1042,6 +1046,7 @@ export default function ParameterManager({
         </form>
       </Modal>
       <ConfirmDialog
+        ref={deleteDialog}
         open={deleteOpen && deleteRefKey === refKey}
         title="Delete parameter?"
         danger

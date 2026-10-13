@@ -7,7 +7,7 @@ import type { Identity } from "@/lib/types";
 
 /** Reauthenticate in place: page and editor state never leave memory. */
 export function SessionRecovery({ identity }: { identity: Identity }) {
-  const { login, logout } = useAuth();
+  const { login, discardAndLogout } = useAuth();
   const formId = useId();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -22,7 +22,7 @@ export function SessionRecovery({ identity }: { identity: Identity }) {
       onClose={() => {}}
       footer={
         <>
-          <Button variant="outline" disabled={busy} onClick={logout}>
+          <Button variant="outline" disabled={busy} onClick={discardAndLogout}>
             Discard draft and sign out
           </Button>
           <Button form={formId} type="submit" loading={busy}>

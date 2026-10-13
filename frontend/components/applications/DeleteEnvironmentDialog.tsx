@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ConfirmDialog } from "@/components/Modal";
+import { useRef, useState } from "react";
+import { ConfirmDialog, type ModalHandle } from "@/components/Modal";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { countNoun } from "@/lib/format";
@@ -60,6 +60,7 @@ export function DeleteEnvironmentDialog({
 }) {
   const toast = useToast();
   const [deleting, setDeleting] = useState(false);
+  const dialog = useRef<ModalHandle>(null);
 
   async function onDelete() {
     if (!namespace) return;
@@ -67,6 +68,9 @@ export function DeleteEnvironmentDialog({
     try {
       await api.deleteNamespace({ env: namespace.env, app: namespace.app });
       toast.success("Namespace deleted", `${namespace.env}/${namespace.app}`);
+      // Still busy, so the dialog owns pending work: release it before
+      // onDeleted navigates, or the route guard asks to discard it.
+      dialog.current?.markSaved();
       onDeleted(namespace);
     } catch (err) {
       toast.error(err, "Failed to delete namespace");
@@ -77,6 +81,7 @@ export function DeleteEnvironmentDialog({
 
   return (
     <ConfirmDialog
+      ref={dialog}
       open={namespace !== null}
       title={`Delete ${noun}?`}
       danger
