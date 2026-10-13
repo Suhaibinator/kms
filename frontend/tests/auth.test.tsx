@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
-import { useUnsavedWork } from "@/lib/unsaved-work";
+import { hasUnsavedWork, useUnsavedWork } from "@/lib/unsaved-work";
 import App from "@/pages/_app";
 
 const mocks = vi.hoisted(() => ({
@@ -624,5 +624,23 @@ describe("Protected redirects", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue("unsaved configuration");
     expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("signs out from recovery's Discard draft button without asking again", async () => {
+    mocks.token = "stored-token";
+    mocks.whoami.mockResolvedValue({ name: "admin", kind: "admin" });
+    render(<App {...({ Component: DraftProbe, pageProps: {} } as unknown as AppProps)} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft" }), {
+      target: { value: "unsaved configuration" },
+    });
+    act(() => {
+      mocks.token = null;
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    });
+    const recovery = await screen.findByRole("dialog", { name: "Sign in to resume your draft" });
+    fireEvent.click(within(recovery).getByRole("button", { name: "Discard draft and sign out" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    expect(hasUnsavedWork()).toBe(false);
   });
 });

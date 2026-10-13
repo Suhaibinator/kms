@@ -72,7 +72,7 @@ test("session expiry keeps the actual editor draft through in-place sign-in", as
   await expect(page).toHaveURL(/\/secrets\?/);
 });
 
-test("signing out from session recovery asks above the recovery dialog", async ({ page }) => {
+test("Discard draft and sign out does not ask a second time", async ({ page }) => {
   await mockConsole(page, incidentState());
   await page.goto("/secrets?env=prod&app=gradethis");
   await page.getByRole("link", { name: "New secret", exact: true }).click();
@@ -82,18 +82,16 @@ test("signing out from session recovery asks above the recovery dialog", async (
     sessionStorage.removeItem("kms_token");
     window.dispatchEvent(new Event("kms:unauthorized"));
   });
+  const nativeDialogs: string[] = [];
+  page.on("dialog", (dialog) => {
+    nativeDialogs.push(dialog.message());
+    void dialog.dismiss();
+  });
   const recovery = page.getByRole("dialog", { name: "Sign in to resume your draft" });
   await recovery.getByRole("button", { name: "Discard draft and sign out" }).click();
-  const prompt = page.getByRole("dialog", { name: "Discard unsaved changes?" });
-  await expect(prompt.getByRole("button", { name: "Keep editing" })).toBeFocused();
-  await prompt.getByRole("button", { name: "Keep editing" }).click();
-  await expect(prompt).toBeHidden();
-  await expect(recovery).toBeVisible();
-  await expect(editor.getByLabel("Secret key", { exact: true })).toHaveValue("recover-me");
-
-  await recovery.getByRole("button", { name: "Discard draft and sign out" }).click();
-  await prompt.getByRole("button", { name: "Discard and leave" }).click();
   await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("dialog", { name: "Discard unsaved changes?" })).toHaveCount(0);
+  expect(nativeDialogs).toEqual([]);
 });
 
 test("full-page secret Cancel protects a draft", async ({ page }) => {

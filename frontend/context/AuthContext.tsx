@@ -41,7 +41,10 @@ interface AuthState {
   verifying: boolean;
   retryVerification: () => void;
   login: (token: string, expectedIdentity?: Identity) => Promise<Identity>;
+  /** Asks before discarding unsaved work, then signs out. */
   logout: () => void;
+  /** For a control that already says it discards the draft: no second question. */
+  discardAndLogout: () => void;
 }
 
 interface Session {
@@ -316,8 +319,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       retryVerification: () => setAttempt((n) => n + 1),
       login,
       logout,
+      discardAndLogout: signOut,
     }),
-    [identity, ready, session, verificationPending, verifying, login, logout],
+    [identity, ready, session, verificationPending, verifying, login, logout, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
