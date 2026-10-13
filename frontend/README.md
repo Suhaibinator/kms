@@ -19,6 +19,10 @@ Start the Go HTTP server on `localhost:8080`, then run:
 npm run dev
 ```
 
+Development and production builds both use Webpack. With Next.js 16.4 and
+Lucide 1.52, Turbopack can omit icon module factories during cross-page
+navigation, crashing the policies page and browser tests.
+
 The Next.js development server proxies `/api/*` to
 `http://localhost:8080/api/*`. Open the URL printed by Next.js and sign in with
 an identity token. See the root [quickstart](../README.md#initialize-and-run-locally)
