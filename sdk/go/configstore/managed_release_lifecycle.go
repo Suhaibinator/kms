@@ -81,8 +81,11 @@ func runManagedReleaseLifecycle[P ~string, T any](args []string, stdout, stderr 
 		writeManagedConfigError(stderr, err)
 		return 2
 	}
-	resolveManagedConnectionFlags(set, &connection)
-	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{endpoint: connection.endpoint, insecure: connection.insecure, ca: connection.ca, cert: connection.cert, key: connection.key}, namespace)
+	if err := resolveManagedConnectionFlags(set, &connection); err != nil {
+		writeManagedConfigError(stderr, err)
+		return 2
+	}
+	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{managedConnectionFlags: connection}, namespace)
 	if err != nil {
 		writeManagedConfigError(stderr, err)
 		return 2
