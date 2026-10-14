@@ -199,7 +199,9 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	if set.NArg() != 0 {
 		return defaultsApplierFlags{}, false, errors.New("positional arguments are not supported")
 	}
-	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
+	if err := resolveManagedConnectionFlags(set, &result.managedConnectionFlags); err != nil {
+		return defaultsApplierFlags{}, false, err
+	}
 	if !canonicalDefaultsText(result.profile, false) {
 		return defaultsApplierFlags{}, false, errors.New("--profile must be nonempty and canonical")
 	}
@@ -223,6 +225,7 @@ func defaultsApplierUsage() string {
 		"  --insecure                Disable TLS for local development\n" +
 		"  --ca FILE                 CA bundle for server verification (env KMS_CA_FILE)\n" +
 		"  --cert FILE --key FILE    Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
+		"  --timeout DURATION        Per-RPC timeout (env KMS_RPC_TIMEOUT; default 60s)\n" +
 		"  --help                    Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }
@@ -236,6 +239,7 @@ func defaultsApplierClientConfig(flags defaultsApplierFlags, namespace string) (
 	}
 	config := kmsclient.Config{
 		Endpoint: flags.endpoint, Namespace: namespace, Token: os.Getenv("KMS_TOKEN"), Insecure: flags.insecure,
+		Timeout: flags.timeout,
 	}
 	if flags.insecure {
 		return config, nil
