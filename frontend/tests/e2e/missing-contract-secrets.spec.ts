@@ -1,9 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { incidentState, mockConsole } from "./fakes/console-api";
 
-test("the secrets list offers the contract secrets an environment is missing", async ({
-  page,
-}) => {
+test("the secrets list offers the contract secrets an environment is missing", async ({ page }) => {
   const state = incidentState();
   const app = state.application.name;
   const missing = state.application.contract
