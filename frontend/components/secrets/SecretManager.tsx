@@ -550,10 +550,15 @@ export default function SecretManager({
     );
   }
   if (loadState === "not-found") {
+    // A release or contract can name a secret before it has a value; the
+    // dead end becomes the way to give it one, with the path filled in.
+    const createAction = (
+      <ButtonLink href={links.newSecret({ env, app }, key)}>Create this secret</ButtonLink>
+    );
     if (surface === "workspace") {
       return (
         <Modal mobileFullScreen open workspace title="Secret not found" onClose={() => onClose?.()}>
-          <EmptyState icon={<Icon.secret size={20} />} title="Not found">
+          <EmptyState icon={<Icon.secret size={20} />} title="Not found" actions={createAction}>
             No secret exists at <span className="mono">{displayPath(ref)}</span>.
           </EmptyState>
         </Modal>
@@ -570,7 +575,7 @@ export default function SecretManager({
             </ButtonLink>
           }
         />
-        <EmptyState icon={<Icon.secret size={20} />} title="Not found">
+        <EmptyState icon={<Icon.secret size={20} />} title="Not found" actions={createAction}>
           No secret exists at <span className="mono">{displayPath(ref)}</span>.
         </EmptyState>
       </>
