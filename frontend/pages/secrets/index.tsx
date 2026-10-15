@@ -2,6 +2,7 @@ import { RefreshCw, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
+import type { QuickSecretSeed } from "@/components/applications/shared";
 import {
   BulkActionBar,
   BulkDeleteDialog,
@@ -19,6 +20,11 @@ import {
   SortHeaderRow,
   useSort,
 } from "@/components/SortableTable";
+import {
+  type MissingContractSecret,
+  MissingContractSecretsPanel,
+  useMissingContractSecrets,
+} from "@/components/secrets/MissingContractSecrets";
 import { BindingModeBadge } from "@/components/secrets/SecretBadges";
 import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { EmptyState, PageHeader, Pagination, TableSkeleton, TableSummary } from "@/components/ui";
@@ -124,7 +130,9 @@ export default function SecretsPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDone, setBulkDone] = useState(0);
-  const [newSecretOpen, setNewSecretOpen] = useState(false);
+  // "New secret" opens a blank form; a missing contract secret pre-fills its
+  // key and stays on the list, so the next one is a click away.
+  const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
   const [secretSaving, setSecretSaving] = useState(false);
   const [secretTarget, setSecretTarget] = useState<ResourceRef | null>(null);
 
@@ -258,13 +266,17 @@ export default function SecretsPage() {
     [searchable, query, searchMode],
   );
 
+  const contract = useMissingContractSecrets(ns.env, ns.app);
+  const { reload: reloadMissing } = contract;
+
   /** Re-reads whatever the current mode is showing after a write. The other
    *  mode is only marked stale: its rows are refetched when it comes back. */
   const refresh = useCallback(() => {
     invalidateIndex();
+    void reloadMissing();
     if (searchMode) requestedScope.current = null;
     else void load(pageToken, ns);
-  }, [invalidateIndex, load, ns, pageToken, searchMode]);
+  }, [invalidateIndex, load, ns, pageToken, reloadMissing, searchMode]);
 
   function onSelectNamespace(next: NamespaceSelection) {
     appliedScope.current = seedScope(next, query);
@@ -304,8 +316,15 @@ export default function SecretsPage() {
     [namespaces, ns.app],
   );
 
+  /** A missing contract secret: its key filled in, and the list kept after the save. */
+  function addMissingSecret(secret: MissingContractSecret) {
+    const then = "stay";
+    setSecretSeed({ environment: ns.env, key: secret.key, then });
+  }
+
   function openNewSecret(event: React.MouseEvent<HTMLElement>) {
-    if (hasNs && shouldOpenWorkspace(event)) setNewSecretOpen(true);
+    if (!hasNs || !shouldOpenWorkspace(event)) return;
+    setSecretSeed({ environment: ns.env, key: "" });
   }
 
   // A deep link's env/app land one frame after mount, so "Choose an
@@ -409,6 +428,15 @@ export default function SecretsPage() {
           />
         </div>
       </div>
+
+      {hasNs && !awaitingDeepLink ? (
+        <MissingContractSecretsPanel
+          env={ns.env}
+          app={ns.app}
+          missing={contract.missing}
+          onAdd={addMissingSecret}
+        />
+      ) : null}
 
       {awaitingDeepLink ? (
         <TableSkeleton
@@ -577,9 +605,9 @@ export default function SecretsPage() {
       <QuickSecretModal
         app={ns.app}
         environments={secretEnvironments}
-        seed={newSecretOpen ? { environment: ns.env, key: "" } : null}
+        seed={secretSeed}
         saving={secretSaving}
-        onClose={() => setNewSecretOpen(false)}
+        onClose={() => setSecretSeed(null)}
         onSave={async (request) => {
           setSecretSaving(true);
           try {
@@ -611,8 +639,8 @@ export default function SecretsPage() {
           }
         }}
         onCreated={(ref) => {
-          setNewSecretOpen(false);
-          setSecretTarget(ref);
+          if (secretSeed?.then !== "stay") setSecretTarget(ref);
+          setSecretSeed(null);
           refresh();
         }}
       />

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { missingContractSecrets } from "@/components/secrets/MissingContractSecrets";
 import {
   ApiError,
   api,
@@ -9,10 +10,11 @@ import {
   SECRET_OPERATION_FAILED_MESSAGE,
 } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
-import type { Namespace, SecretMetadata } from "@/lib/types";
+import type { ApplicationOverview, Namespace, SecretMetadata } from "@/lib/types";
 import SecretDetailPage from "@/pages/secrets/detail";
 import SecretsPage from "@/pages/secrets/index";
 import NewSecretPage from "@/pages/secrets/new";
+import readyJson from "./fixtures/backend/overview-ready.json";
 import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
@@ -89,6 +91,11 @@ beforeEach(() => {
     namespaces: [NAMESPACE],
     next_page_token: "",
   });
+  // Most namespaces here are not applications; the missing-secrets panel then
+  // has nothing to say.
+  vi.spyOn(api, "applicationOverview").mockRejectedValue(
+    new ApiError("not_found", "application not found", 404),
+  );
 });
 
 afterEach(() => {
@@ -1561,5 +1568,126 @@ describe("secrets search failures", () => {
     list.mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(keyColumn()).toEqual([SECRET.key]));
+  });
+});
+
+/** The backend's ready overview, renamed onto the fixture namespace, with every
+ *  contract secret in `env` reported the way the overview reports a missing
+ *  value: present false, no key. */
+function overviewMissingSecrets(env: string = NAMESPACE.env): ApplicationOverview {
+  const overview = JSON.parse(JSON.stringify(readyJson)) as ApplicationOverview;
+  overview.application.name = NAMESPACE.app;
+  for (const environment of overview.environments) {
+    environment.namespace.app = NAMESPACE.app;
+    if (environment.namespace.env !== env) continue;
+    environment.values = environment.values.map((value) =>
+      value.kind === "secret" ? { alias: value.alias, kind: value.kind, present: false } : value,
+    );
+  }
+  return overview;
+}
+
+const READY_SECRET_ALIASES = (readyJson as unknown as ApplicationOverview).application.contract
+  .filter((field) => field.kind === "secret")
+  .map((field) => field.alias);
+
+describe("missing contract secrets", () => {
+  it("has a contract secret in the ready fixture to go missing", () => {
+    expect(READY_SECRET_ALIASES.length).toBeGreaterThan(0);
+    expect(
+      (readyJson as unknown as ApplicationOverview).environments.some(
+        (environment) => environment.namespace.env === NAMESPACE.env,
+      ),
+    ).toBe(true);
+  });
+
+  it("lists the contract secrets with no value in this environment", () => {
+    const overview = overviewMissingSecrets();
+    expect(missingContractSecrets(overview, NAMESPACE.env).map((secret) => secret.alias)).toEqual(
+      READY_SECRET_ALIASES,
+    );
+    // The other environments keep their values.
+    const other = overview.environments.find(
+      (environment) => environment.namespace.env !== NAMESPACE.env,
+    );
+    if (other) expect(missingContractSecrets(overview, other.namespace.env)).toEqual([]);
+    // An environment the overview did not return, or an archived application, says nothing.
+    expect(missingContractSecrets(overview, "nowhere")).toEqual([]);
+    overview.application.archived_at_unix_ms = 1;
+    expect(missingContractSecrets(overview, NAMESPACE.env)).toEqual([]);
+  });
+
+  it("offers each missing secret on the list and creates it without leaving the list", async () => {
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
+    const overview = vi
+      .spyOn(api, "applicationOverview")
+      .mockResolvedValueOnce(overviewMissingSecrets())
+      .mockResolvedValue(JSON.parse(JSON.stringify(readyJson)) as ApplicationOverview);
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ secret: SECRET, version: 1 } as never);
+    const metadata = vi.spyOn(api, "secretMetadata");
+
+    render(<SecretsPage />);
+    await chooseNamespace();
+
+    const panel = await screen.findByTestId("missing-contract-secrets");
+    // One request, one environment wide.
+    expect(overview).toHaveBeenCalledWith(NAMESPACE.app, [NAMESPACE.env], expect.anything());
+    for (const alias of READY_SECRET_ALIASES) {
+      expect(within(panel).getByText(alias)).toBeVisible();
+    }
+    expect(within(panel).getByRole("link", { name: NAMESPACE.app })).toHaveAttribute(
+      "href",
+      `/applications?app=${NAMESPACE.app}&env=${NAMESPACE.env}`,
+    );
+
+    const [first] = READY_SECRET_ALIASES;
+    fireEvent.click(within(panel).getByRole("button", { name: `Add secret ${first}` }));
+    const dialog = await screen.findByRole("dialog", { name: "New secret" });
+    expect(within(dialog).getByLabelText("Secret key")).toHaveValue(first);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Secret value" }), {
+      target: { value: "a value" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create secret" }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({
+      env: NAMESPACE.env,
+      app: NAMESPACE.app,
+      key: first,
+      create_only: true,
+    });
+    // The list stays put so the next missing secret is one click away, and the
+    // panel re-reads the overview: here every secret now has a value.
+    await waitFor(() =>
+      expect(screen.queryByTestId("missing-contract-secrets")).not.toBeInTheDocument(),
+    );
+    expect(overview).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog", { name: "New secret" })).not.toBeInTheDocument();
+    expect(metadata).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet for a namespace that is not an application", async () => {
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    render(<SecretsPage />);
+    await chooseNamespace();
+    expect(await screen.findByText(SECRET.key)).toBeVisible();
+    await waitFor(() => expect(api.applicationOverview).toHaveBeenCalled());
+    expect(screen.queryByTestId("missing-contract-secrets")).not.toBeInTheDocument();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it("turns a missing secret's detail page into a way to create it", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key: "stripe/webhook" };
+    vi.spyOn(api, "secretMetadata").mockRejectedValue(
+      new ApiError("not_found", "secret not found", 404),
+    );
+    render(<SecretDetailPage />);
+    const create = await screen.findByRole("link", { name: "Create this secret" });
+    expect(create).toHaveAttribute(
+      "href",
+      `/secrets/new?env=${NAMESPACE.env}&app=${NAMESPACE.app}&key=stripe%2Fwebhook`,
+    );
   });
 });

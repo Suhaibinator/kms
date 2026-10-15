@@ -3151,6 +3151,45 @@
     margin-bottom: 0;
   }
 
+  /* Secrets list: contract secrets with no value here. The rows share one
+     column track so every "Add secret" lines up just past the longest key,
+     not across the page from it. */
+  .missing-secrets {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .missing-secrets-head > p {
+    margin: var(--space-1) 0 0;
+  }
+  .missing-secrets-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: minmax(0, max-content) max-content;
+    justify-content: start;
+    gap: var(--space-2) var(--space-4);
+    align-items: center;
+  }
+  .missing-secrets-list > li {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+  }
+  .missing-secrets-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .missing-secrets-key {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--text);
+  }
+
   /* application identity onboarding */
   .certificate-map {
     background: var(--surface);
