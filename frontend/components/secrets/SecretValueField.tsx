@@ -51,6 +51,10 @@ export function SecretValueField({
               id={storeEmptyId}
               checked={storeEmpty}
               disabled={props.disabled}
+              // Ticking this disables the textarea, and a field holding any
+              // disabled control fades every checkbox in it; this one stays
+              // live so the choice can be undone, so it must not look dead.
+              className={props.disabled ? undefined : "group-has-disabled/field:opacity-100"}
               onCheckedChange={(checked) => {
                 const next = checked === true;
                 if (next) {
