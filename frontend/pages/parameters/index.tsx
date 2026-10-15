@@ -58,7 +58,7 @@ import {
   searchIndex,
 } from "@/lib/key-search";
 import { links } from "@/lib/links";
-import { rememberNamespace } from "@/lib/namespace-memory";
+import { useRestoreWorkspace } from "@/lib/navigation-namespace";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { Parameter } from "@/lib/types";
@@ -130,6 +130,9 @@ export default function ParametersPage() {
     "key_prefix",
   ]);
   const replaceQuery = useQueryReplace("/parameters");
+  // A bare arrival resumes the current workspace through the URL; the seeding
+  // effect below then picks it up like any deep link.
+  const restoringWorkspace = useRestoreWorkspace("/parameters");
   const sort = useSort<Parameter>("/parameters", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
@@ -215,11 +218,6 @@ export default function ParametersPage() {
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
-
-  // The sidebar carries the settled namespace to the other list pages.
-  useEffect(() => {
-    if (hasNs) rememberNamespace({ env: ns.env, app: ns.app });
-  }, [hasNs, ns.env, ns.app]);
 
   // Client-side mirrors of the server's validators (see lib/validation.ts).
   // They fail fast on input the API is certain to reject; the server still has
@@ -472,12 +470,13 @@ export default function ParametersPage() {
   // A deep link's env/app land one frame after mount, so "Choose an
   // environment" would flash before the list it asked for.
   const awaitingDeepLink =
-    !seeded &&
-    (!queryReady ||
-      !!queryValues.env ||
-      !!queryValues.app ||
-      !!queryValues.q ||
-      !!queryValues.key_prefix);
+    restoringWorkspace ||
+    (!seeded &&
+      (!queryReady ||
+        !!queryValues.env ||
+        !!queryValues.app ||
+        !!queryValues.q ||
+        !!queryValues.key_prefix));
   // A response has arrived for exactly this namespace/page — or, in search
   // mode, the index has finished loading. Gating on this rather than on
   // `loading` keeps the empty state from flashing before the first request has

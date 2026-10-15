@@ -29,14 +29,15 @@ import {
   TableSkeleton,
   TableSummary,
 } from "@/components/ui";
-import { ButtonLink } from "@/components/ui/button";
 import { AppSelect } from "@/components/ui/app-select";
+import { ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import { useCursorPagination, useLatestRequest, useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
+import { useRestoreWorkspace } from "@/lib/navigation-namespace";
 import { isProductionEnvironment } from "@/lib/readiness";
 import { parseSchemaVersion } from "@/lib/schema";
 import type { SortColumn } from "@/lib/sort";
@@ -142,6 +143,9 @@ export default function ReleasesPage() {
   const refreshController = useRef<AbortController | null>(null);
   const linkRun = useRef(0);
   const replaceQuery = useQueryReplace("/releases");
+  // A bare arrival resumes the current workspace through the URL; the filters
+  // below then follow it like any deep link.
+  const restoringWorkspace = useRestoreWorkspace("/releases");
   const sort = useSort<ReleaseSummary>("/releases", COLUMNS);
 
   const queryTab = queryValue(router.query.tab);
@@ -930,7 +934,7 @@ export default function ReleasesPage() {
             </div>
           ) : null}
 
-          {seeded && !hasNS ? (
+          {seeded && !restoringWorkspace && !hasNS ? (
             <EmptyState
               icon={<Icon.namespace size={20} />}
               title="Choose an application and environment"
@@ -941,7 +945,7 @@ export default function ReleasesPage() {
             <EmptyState title="Select a schema version">
               Enter the exact schema version above to load its release history.
             </EmptyState>
-          ) : !seeded || !settled || releasesLoading ? (
+          ) : !seeded || restoringWorkspace || !settled || releasesLoading ? (
             <TableSkeleton
               headers={headerLabels(COLUMNS)}
               toolbar

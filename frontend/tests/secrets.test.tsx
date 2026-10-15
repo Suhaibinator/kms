@@ -10,7 +10,8 @@ import {
   SECRET_OPERATION_FAILED_MESSAGE,
 } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
-import type { ApplicationOverview, Namespace, SecretMetadata } from "@/lib/types";
+import { rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
+import type { ApplicationOverview, Identity, Namespace, SecretMetadata } from "@/lib/types";
 import SecretDetailPage from "@/pages/secrets/detail";
 import SecretsPage from "@/pages/secrets/index";
 import NewSecretPage from "@/pages/secrets/new";
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
     success: vi.fn(),
     info: vi.fn(),
   },
-  identity: { name: "root", kind: "admin" as "admin" | "client", namespace: null },
+  identity: { name: "root", kind: "admin", namespace: null } as Identity,
 }));
 
 vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
@@ -206,6 +207,46 @@ describe("secret list search", () => {
         { shallow: true, scroll: false },
       ),
     );
+  });
+
+  describe("on a bare arrival", () => {
+    beforeEach(() => resetNamespaceMemory());
+    afterEach(() => resetNamespaceMemory());
+
+    it("resumes the remembered workspace through the URL, keeping other params", async () => {
+      vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
+      rememberNamespace({ env: NAMESPACE.env, app: NAMESPACE.app });
+      mocks.router.query = { q: "db" };
+      render(<SecretsPage />);
+      await waitFor(() =>
+        expect(mocks.router.replace).toHaveBeenCalledWith(
+          { pathname: "/secrets", query: { q: "db", app: NAMESPACE.app, env: NAMESPACE.env } },
+          undefined,
+          { shallow: true, scroll: false },
+        ),
+      );
+      expect(mocks.router.replace).toHaveBeenCalledTimes(1);
+    });
+
+    it("resumes a client identity's binding rather than another session's memory", async () => {
+      vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
+      rememberNamespace({ env: "staging", app: "search" });
+      mocks.identity = { name: "svc", kind: "client", namespace: { env: "prod", app: "billing" } };
+      render(<SecretsPage />);
+      await waitFor(() =>
+        expect(mocks.router.replace).toHaveBeenCalledWith(
+          { pathname: "/secrets", query: { app: "billing", env: "prod" } },
+          undefined,
+          { shallow: true, scroll: false },
+        ),
+      );
+    });
+
+    it("stays empty with nothing to resume", async () => {
+      render(<SecretsPage />);
+      expect(await screen.findByText("Choose an environment")).toBeVisible();
+      expect(mocks.router.replace).not.toHaveBeenCalled();
+    });
   });
 
   it("opens a legacy ?key_prefix= link as a search", async () => {

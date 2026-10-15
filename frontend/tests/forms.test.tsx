@@ -122,4 +122,21 @@ describe("namespace memory", () => {
     sessionStorage.setItem("kms.lastNamespace", '{"env":1}');
     expect(lastNamespace()).toBeNull();
   });
+
+  it("remembers an application chosen before its environment", () => {
+    rememberNamespace({ app: "billing" });
+    expect(lastNamespace()).toEqual({ app: "billing" });
+    expect(sessionStorage.getItem("kms.lastNamespace")).toBe(JSON.stringify({ app: "billing" }));
+
+    // An empty environment is the same app-only selection.
+    rememberNamespace({ app: "search", env: "" });
+    expect(lastNamespace()).toEqual({ app: "search" });
+
+    resetNamespaceMemory();
+    sessionStorage.setItem("kms.lastNamespace", JSON.stringify({ app: "billing" }));
+    expect(lastNamespace()).toEqual({ app: "billing" });
+    resetNamespaceMemory();
+    sessionStorage.setItem("kms.lastNamespace", JSON.stringify({ app: "", env: "prod" }));
+    expect(lastNamespace()).toBeNull();
+  });
 });

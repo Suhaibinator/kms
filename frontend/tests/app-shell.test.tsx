@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AppShell, { isApplePlatform } from "@/components/AppShell";
 import { Modal } from "@/components/Modal";
-import { rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
+import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
   pathname: "/",
   query: {} as Record<string, string>,
+  namespaces: [{ app: "new-app", env: "dev" }] as Array<{ app: string; env: string }>,
 }));
 
 vi.mock("next/router", () => ({
@@ -23,7 +24,7 @@ vi.mock("next/router", () => ({
 vi.mock("@/lib/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/hooks")>()),
   useNamespaces: () => ({
-    namespaces: [{ app: "new-app", env: "dev" }],
+    namespaces: mocks.namespaces,
     loading: false,
     error: null,
     reload: vi.fn(),
@@ -66,6 +67,7 @@ describe("AppShell", () => {
     mocks.identity = admin;
     mocks.pathname = "/";
     mocks.query = {};
+    mocks.namespaces = [{ app: "new-app", env: "dev" }];
     resetNamespaceMemory();
     setPlatform("MacIntel");
   });
@@ -198,6 +200,7 @@ describe("AppShell", () => {
 
   it("does not send an invalid explicit environment to the previous workspace", () => {
     rememberNamespace({ app: "old-app", env: "prod" });
+    mocks.pathname = "/applications/environment";
     mocks.query = { app: "deleted", env: "dev" };
     render(
       <AppShell>
@@ -222,6 +225,115 @@ describe("AppShell", () => {
     expect(link).toHaveAttribute("href", "/parameters?env=dev&app=reports");
     expect(link).toHaveAttribute("aria-current", "page");
     expect(link).toHaveClass("active");
+  });
+
+  describe("current workspace", () => {
+    const href = (name: string) =>
+      within(desktopNav()).getByRole("link", { name }).getAttribute("href");
+    const renderShell = () =>
+      render(
+        <AppShell>
+          <p>page</p>
+        </AppShell>,
+      );
+
+    it("carries an app-only route's application into every workspace link", () => {
+      rememberNamespace({ env: "prod", app: "old-app" });
+      mocks.namespaces = [
+        { app: "billing", env: "dev" },
+        { app: "old-app", env: "prod" },
+      ];
+      mocks.pathname = "/applications";
+      mocks.query = { app: "billing" };
+      renderShell();
+      expect(href("Applications")).toBe("/applications?app=billing");
+      expect(href("Parameters")).toBe("/parameters?app=billing");
+      expect(href("Secrets")).toBe("/secrets?app=billing");
+      expect(href("Releases")).toBe("/releases?app=billing");
+      // Remembered app-only, so pages without a workspace in their URL agree.
+      expect(lastNamespace()).toEqual({ app: "billing" });
+    });
+
+    it("keeps the remembered environment on its own application's app-only route", () => {
+      rememberNamespace({ env: "dev", app: "new-app" });
+      mocks.pathname = "/applications";
+      mocks.query = { app: "new-app" };
+      renderShell();
+      expect(href("Secrets")).toBe("/secrets?env=dev&app=new-app");
+      expect(href("Applications")).toBe("/applications?app=new-app&env=dev");
+      expect(lastNamespace()).toEqual({ env: "dev", app: "new-app" });
+    });
+
+    it("remembers an application picked without an environment", () => {
+      // The picker drops an environment the new application does not have, so
+      // the URL is app-only; memory follows it instead of keeping the old app.
+      rememberNamespace({ env: "prod", app: "old-app" });
+      mocks.namespaces = [
+        { app: "new-app", env: "dev" },
+        { app: "old-app", env: "prod" },
+      ];
+      mocks.pathname = "/secrets";
+      mocks.query = { app: "new-app" };
+      renderShell();
+      expect(lastNamespace()).toEqual({ app: "new-app" });
+      expect(href("Parameters")).toBe("/parameters?app=new-app");
+    });
+
+    it("links Applications to the application being worked in", () => {
+      renderShell();
+      expect(href("Applications")).toBe("/applications");
+      act(() => rememberNamespace({ env: "dev", app: "new-app" }));
+      expect(href("Applications")).toBe("/applications?app=new-app&env=dev");
+      act(() => rememberNamespace({ app: "new-app" }));
+      expect(href("Applications")).toBe("/applications?app=new-app");
+    });
+
+    it("does not let the audit log's filters replace the workspace", () => {
+      rememberNamespace({ env: "prod", app: "old-app" });
+      mocks.namespaces = [
+        { app: "new-app", env: "dev" },
+        { app: "old-app", env: "prod" },
+      ];
+      mocks.pathname = "/audit";
+      mocks.query = { app: "new-app", env: "dev" };
+      renderShell();
+      expect(href("Secrets")).toBe("/secrets?env=prod&app=old-app");
+      expect(lastNamespace()).toEqual({ env: "prod", app: "old-app" });
+    });
+
+    it("does not let an identity binding prefill replace the workspace", () => {
+      rememberNamespace({ env: "prod", app: "old-app" });
+      mocks.pathname = "/identities";
+      mocks.query = { app: "new-app", env: "dev", new: "1" };
+      renderShell();
+      expect(lastNamespace()).toEqual({ env: "prod", app: "old-app" });
+    });
+
+    it("keeps links on the workspace while the namespace list is still loading", () => {
+      mocks.namespaces = [];
+      rememberNamespace({ env: "prod", app: "old-app" });
+      renderShell();
+      expect(href("Secrets")).toBe("/secrets?env=prod&app=old-app");
+    });
+
+    it("trusts an explicit route until the list can contradict it, but does not remember it", () => {
+      mocks.namespaces = [];
+      rememberNamespace({ env: "prod", app: "old-app" });
+      mocks.pathname = "/secrets";
+      mocks.query = { app: "typo", env: "dev" };
+      renderShell();
+      expect(href("Parameters")).toBe("/parameters?env=dev&app=typo");
+      expect(lastNamespace()).toEqual({ env: "prod", app: "old-app" });
+    });
+
+    it("never writes a client's binding or route into an admin's workspace memory", () => {
+      mocks.identity = client;
+      mocks.pathname = "/secrets";
+      mocks.query = { app: "new-app", env: "dev" };
+      renderShell();
+      expect(href("Secrets")).toBe("/secrets?env=prod&app=gradethis");
+      expect(lastNamespace()).toBeNull();
+    });
   });
 
   it("hides admin-only items for a client identity and shows the binding strip", () => {
