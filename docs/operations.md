@@ -544,7 +544,8 @@ codes every command shares, and the `--token-file` credential form.
 `parameters(key, value)` table, a JSON object such as `{"KEY":"value"}`, or a
 JSON array such as `[{"key":"KEY","value":"value"}]`. JSON strings import
 as their unquoted text; other JSON values retain their JSON encoding, and all
-imported values use secret content type `text/plain`. The report is plain text,
+imported values use secret content type `text/plain`. An empty string, a JSON
+`null`, or a missing array `value` imports as a zero-byte secret. The report is plain text,
 not CSV: each real-import row is `old-key -> /env/app/key`.
 
 Imports append secret versions. Preserve the mapping report and verify the
@@ -1160,7 +1161,7 @@ namespace.
 | Command | Extra flags | Purpose |
 |---|---|---|
 | `whoami` | — | Prints the identity the server resolves from the credential this invocation presents: `name`, `kind`, `namespace` (or `(unbound)`), and `auth_method` (`mtls` or `token`). Needs no permission, so it is the first command to run when a token or certificate does not behave as expected. |
-| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`) | Stores a new version. Non-empty `KMS_BINDING_KEY` binds only the new version; empty creates it unbound. There is no `--client-bound` or binding-key file flag. |
+| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`) | Stores a new version. An empty file or stdin stores a zero-byte secret, except under a JSON content type (`application/json` or `+json`), which is refused before contacting the server. Non-empty `KMS_BINDING_KEY` binds only the new version; empty creates it unbound. There is no `--client-bound` or binding-key file flag. |
 | `get-secret /env/app/key` | `--version`, `--label`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches one secret. If exact live metadata says the selected version is bound, the key comes from `KMS_BINDING_KEY` or a no-echo terminal prompt. Refuses terminal plaintext unless `--show`; there is no offline secret-read/export command. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, and content-type/bound note. Pages through the full result set. |

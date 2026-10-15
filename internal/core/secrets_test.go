@@ -490,7 +490,7 @@ func TestPutSecretValidation(t *testing.T) {
 	withKeyring(t, s)
 
 	cases := map[string]PutSecretInput{
-		"empty value":           {Ref: tref("s"), Value: nil},
+		"empty json value":      {Ref: tref("s"), Value: nil, ContentType: "application/json"},
 		"bad key":               {Ref: domain.Ref{NS: tns, Key: "bad key"}, Value: []byte("v")},
 		"invalid metadata":      {Ref: tref("s"), Value: []byte("v"), Metadata: "not-json"},
 		"short binding key":     {Ref: tref("short"), Value: []byte("v"), BindingKey: "too-short"},

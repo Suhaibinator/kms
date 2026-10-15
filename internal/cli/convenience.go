@@ -329,6 +329,12 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if err != nil {
 		return c.fail("reading value: %v", err)
 	}
+	// An empty value is a valid secret except under a JSON content type. The
+	// server enforces this too, but secret RPC errors are redacted, so check
+	// here to give the operator the reason instead of a generic failure.
+	if len(value) == 0 && domain.IsJSONMediaType(*contentType) {
+		return c.failUsage("put-secret: %s", domain.EmptyJSONSecretMessage)
+	}
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
