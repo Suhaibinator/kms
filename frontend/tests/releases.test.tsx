@@ -46,6 +46,10 @@ vi.mock("next/router", () => ({
   }),
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+// A bare arrival resumes the signed-in admin's workspace (lib/navigation-namespace).
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+}));
 vi.mock("@/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/hooks")>();
   return {

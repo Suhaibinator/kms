@@ -10,8 +10,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/AuthContext";
 import { displayNamespace } from "@/lib/format";
-import { links } from "@/lib/links";
-import type { NamespaceRef } from "@/lib/namespace-memory";
+import { links, type WorkspaceRef } from "@/lib/links";
 import { useNavigationNamespace } from "@/lib/navigation-namespace";
 import { isApplePlatform, isShortcutSheetKey } from "@/lib/shortcuts";
 import type { Identity } from "@/lib/types";
@@ -26,10 +25,11 @@ interface NavItem {
   exact?: boolean;
   adminOnly?: boolean;
   /**
-   * Deep link into the page with the operator's last namespace, so the picker
-   * does not reset on every lateral move. `href` stays bare for active matching.
+   * Deep link into the page with the operator's current workspace (an
+   * application, and its environment once chosen), so the selection does not
+   * reset on every lateral move. `href` stays bare for active matching.
    */
-  withNamespace?: (ns: NamespaceRef) => string;
+  withNamespace?: (ws: WorkspaceRef) => string;
 }
 
 interface NavGroup {
@@ -45,7 +45,13 @@ export const NAV: NavGroup[] = [
   },
   {
     items: [
-      { href: "/applications", label: "Applications", icon: <Icon.application />, adminOnly: true },
+      {
+        href: "/applications",
+        label: "Applications",
+        icon: <Icon.application />,
+        adminOnly: true,
+        withNamespace: (ws) => links.application(ws.app, { env: ws.env }),
+      },
     ],
   },
   {
@@ -56,19 +62,19 @@ export const NAV: NavGroup[] = [
         href: "/parameters",
         label: "Parameters",
         icon: <Icon.parameter />,
-        withNamespace: (ns) => links.parameters(ns),
+        withNamespace: (ws) => links.parameters(ws),
       },
       {
         href: "/secrets",
         label: "Secrets",
         icon: <Icon.secret />,
-        withNamespace: (ns) => links.secrets(ns),
+        withNamespace: (ws) => links.secrets(ws),
       },
       {
         href: "/releases",
         label: "Releases",
         icon: <Icon.release />,
-        withNamespace: (ns) => links.releases({ app: ns.app, env: ns.env }),
+        withNamespace: (ws) => links.releases({ app: ws.app, env: ws.env }),
       },
     ],
   },
@@ -132,7 +138,7 @@ function SidebarContent({
   onNavigate?: () => void;
   onSearch: () => void;
   shortcutLabel: string;
-  namespace: NamespaceRef | null;
+  namespace: WorkspaceRef | null;
 }) {
   return (
     <>

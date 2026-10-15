@@ -16,8 +16,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { useAuth } from "@/context/AuthContext";
 import { api, getToken, isAbortError } from "@/lib/api";
 import { useNamespaces } from "@/lib/hooks";
-import { links } from "@/lib/links";
-import { useNavigationNamespace } from "@/lib/navigation-namespace";
+import { links, type WorkspaceRef } from "@/lib/links";
+import { useCompleteNamespace, useNavigationNamespace } from "@/lib/navigation-namespace";
 import {
   buildPaletteIndex,
   fallthroughActions,
@@ -105,6 +105,23 @@ function useApplications(enabled: boolean, identityName: string | undefined) {
   };
 }
 
+/** A page shortcut lands in the current workspace, as the sidebar's links do. */
+function workspaceHref(item: PaletteItem, ws: WorkspaceRef | null): string {
+  if (!ws) return item.href;
+  switch (item.id) {
+    case "page:/applications":
+      return links.application(ws.app, { env: ws.env });
+    case "page:/parameters":
+      return links.parameters(ws);
+    case "page:/secrets":
+      return links.secrets(ws);
+    case "page:/releases":
+      return links.releases({ app: ws.app, env: ws.env });
+    default:
+      return item.href;
+  }
+}
+
 function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcuts?: () => void }) {
   const router = useRouter();
   const { identity } = useAuth();
@@ -122,8 +139,10 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
   );
 
   // Validated current workspace first, remembered workspace second; clients
-  // always search inside their identity binding.
-  const scope = useNavigationNamespace();
+  // always search inside their identity binding. Pages follow the workspace
+  // even with only an application chosen; key search needs the environment.
+  const workspace = useNavigationNamespace();
+  const scope = useCompleteNamespace(workspace);
 
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -160,17 +179,9 @@ function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcut
         onShortcuts?.();
         return;
       }
-      const scopedHref =
-        scope && item.id === "page:/parameters"
-          ? links.parameters(scope)
-          : scope && item.id === "page:/secrets"
-            ? links.secrets(scope)
-            : scope && item.id === "page:/releases"
-              ? links.releases(scope)
-              : item.href;
-      void router.push(scopedHref);
+      void router.push(workspaceHref(item, workspace));
     },
-    [onClose, onShortcuts, router, scope],
+    [onClose, onShortcuts, router, workspace],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {

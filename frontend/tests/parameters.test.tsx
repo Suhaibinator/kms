@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ParameterManager from "@/components/parameters/ParameterManager";
 import { api } from "@/lib/api";
-import { lastNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
-import type { Namespace, Parameter } from "@/lib/types";
 import { SEARCH_RESULT_LIMIT } from "@/lib/key-search";
+import { lastNamespace, rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
+import type { Namespace, Parameter } from "@/lib/types";
 import { MAX_KEY_LENGTH } from "@/lib/validation";
 import ParametersPage from "@/pages/parameters/index";
 import { chooseSelectOption } from "./select-test-utils";
@@ -189,11 +189,10 @@ describe("parameters page", () => {
     expect(listParameters).toHaveBeenCalledTimes(4);
   });
 
-  it("shows the environment trail and remembers the namespace once chosen", async () => {
+  it("shows the environment trail and puts the chosen namespace in the URL", async () => {
     vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
     render(<ParametersPage />);
     expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
-    expect(lastNamespace()).toBeNull();
 
     await chooseNamespace();
     const nav = await screen.findByRole("navigation", { name: "Breadcrumb" });
@@ -202,7 +201,73 @@ describe("parameters page", () => {
       "/applications?app=billing",
     );
     expect(nav).toHaveTextContent("prod");
-    expect(lastNamespace()).toEqual({ env: NAMESPACE.env, app: NAMESPACE.app });
+    // The URL is the page's only record; the shell remembers the workspace from
+    // it (lib/navigation-namespace), so the page itself never writes memory.
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/parameters", query: { env: NAMESPACE.env, app: NAMESPACE.app } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+    expect(lastNamespace()).toBeNull();
+  });
+
+  it("resumes the remembered workspace on a bare arrival through the URL", async () => {
+    const listParameters = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+    rememberNamespace({ env: NAMESPACE.env, app: NAMESPACE.app });
+    // Like the real router, the new query lands after the call returns.
+    mocks.router.replace.mockImplementation(async (url: { query: Record<string, string> }) => {
+      await Promise.resolve();
+      mocks.router.query = url.query;
+      return true;
+    });
+    const { rerender } = render(<ParametersPage />);
+    // Held on the loading state rather than flashing "Choose an environment".
+    expect(screen.queryByText("Choose an environment")).toBeNull();
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenCalledWith(
+        { pathname: "/parameters", query: { app: NAMESPACE.app, env: NAMESPACE.env } },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
+    );
+    // The mocked router does not re-render on its own.
+    rerender(<ParametersPage />);
+    expect(await screen.findByText(ALPHA.key)).toBeVisible();
+    expect(listParameters).toHaveBeenCalledWith(
+      { env: NAMESPACE.env, app: NAMESPACE.app },
+      undefined,
+      100,
+      undefined,
+      expect.anything(),
+    );
+    expect(mocks.router.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes an app-only workspace with the environment still to choose", async () => {
+    const listParameters = vi
+      .spyOn(api, "listParameters")
+      .mockResolvedValue({ parameters: [], next_page_token: "" });
+    rememberNamespace({ app: NAMESPACE.app });
+    render(<ParametersPage />);
+    await waitFor(() =>
+      expect(mocks.router.replace).toHaveBeenCalledWith(
+        { pathname: "/parameters", query: { app: NAMESPACE.app } },
+        undefined,
+        { shallow: true, scroll: false },
+      ),
+    );
+    expect(listParameters).not.toHaveBeenCalled();
+  });
+
+  it("leaves an explicit URL alone even when memory holds another workspace", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    rememberNamespace({ env: "staging", app: "search" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    render(<ParametersPage />);
+    await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(mocks.router.replace).not.toHaveBeenCalled();
   });
 
   it("focuses the key on open, caps its length and counts down near the limit", async () => {

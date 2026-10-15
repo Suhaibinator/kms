@@ -349,6 +349,27 @@ describe("CommandPalette", () => {
     expect(mocks.push).toHaveBeenCalledWith("/secrets?env=prod&app=gradethis");
   });
 
+  it("opens Applications on the application being worked in", async () => {
+    rememberNamespace({ env: "prod", app: "gradethis" });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "applications" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Applications Go to page" }));
+    expect(mocks.push).toHaveBeenCalledWith("/applications?app=gradethis&env=prod");
+  });
+
+  it("follows an app-only workspace to pages, but offers key search only with an environment", async () => {
+    rememberNamespace({ app: "gradethis" });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "secrets" } });
+    expect(
+      screen.getByText("Choose an environment to search parameter and secret keys."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Search secrets for/)).toBeNull();
+    fireEvent.click(await screen.findByRole("option", { name: "Secrets Go to page" }));
+    expect(mocks.push).toHaveBeenCalledWith("/secrets?app=gradethis");
+  });
+
   it("can dismiss search with a visible touch control", async () => {
     const onOpenChange = vi.fn();
     render(<CommandPalette open onOpenChange={onOpenChange} />);

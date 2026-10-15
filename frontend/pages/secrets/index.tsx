@@ -51,7 +51,7 @@ import {
   searchIndex,
 } from "@/lib/key-search";
 import { links } from "@/lib/links";
-import { rememberNamespace } from "@/lib/namespace-memory";
+import { useRestoreWorkspace } from "@/lib/navigation-namespace";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { SortColumn } from "@/lib/sort";
 import type { SecretMetadata } from "@/lib/types";
@@ -113,6 +113,9 @@ export default function SecretsPage() {
     "key_prefix",
   ]);
   const replaceQuery = useQueryReplace("/secrets");
+  // A bare arrival resumes the current workspace through the URL; the seeding
+  // effect below then picks it up like any deep link.
+  const restoringWorkspace = useRestoreWorkspace("/secrets");
   const sort = useSort<SecretMetadata>("/secrets", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
@@ -173,11 +176,6 @@ export default function SecretsPage() {
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
-
-  // The sidebar carries the settled namespace to the other list pages.
-  useEffect(() => {
-    if (hasNs) rememberNamespace({ env: ns.env, app: ns.app });
-  }, [hasNs, ns.env, ns.app]);
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection) => {
@@ -330,12 +328,13 @@ export default function SecretsPage() {
   // A deep link's env/app land one frame after mount, so "Choose an
   // environment" would flash before the list it asked for.
   const awaitingDeepLink =
-    !seeded &&
-    (!queryReady ||
-      !!queryValues.env ||
-      !!queryValues.app ||
-      !!queryValues.q ||
-      !!queryValues.key_prefix);
+    restoringWorkspace ||
+    (!seeded &&
+      (!queryReady ||
+        !!queryValues.env ||
+        !!queryValues.app ||
+        !!queryValues.q ||
+        !!queryValues.key_prefix));
   // A response has arrived for exactly this namespace/page — or, in search
   // mode, the index has finished loading. Gating on this rather than on
   // `loading` keeps the empty state from flashing before the first request has

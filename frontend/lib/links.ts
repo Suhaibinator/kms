@@ -14,6 +14,15 @@ export interface NamespaceRef {
   app: string;
 }
 
+/**
+ * Where an operator is working: an application, and its environment once one
+ * is chosen. A complete {@link NamespaceRef} is one of these.
+ */
+export interface WorkspaceRef {
+  app: string;
+  env?: string;
+}
+
 export interface ResourceRef extends NamespaceRef {
   key: string;
 }
@@ -26,11 +35,20 @@ function refQuery(ref: ResourceRef): string {
   return `${nsQuery(ref)}&key=${encodeURIComponent(ref.key)}`;
 }
 
-/** A list page, optionally with the search box prefilled (`?q=`). */
-function listLink(base: string, ns?: NamespaceRef, query?: string): string {
+/** `env` first when there is one, matching {@link nsQuery}. */
+function workspaceQuery(ws: WorkspaceRef): string {
+  return ws.env ? nsQuery({ env: ws.env, app: ws.app }) : `app=${encodeURIComponent(ws.app)}`;
+}
+
+/**
+ * A list page, optionally with the search box prefilled (`?q=`). An app-only
+ * workspace opens the page with that application chosen and the environment
+ * still to pick.
+ */
+function listLink(base: string, ns?: WorkspaceRef, query?: string): string {
   if (!ns) return base;
   const search = query ? `&q=${encodeURIComponent(query)}` : "";
-  return `${base}?${nsQuery(ns)}${search}`;
+  return `${base}?${workspaceQuery(ns)}${search}`;
 }
 
 export interface ApplicationLinkOptions {
@@ -161,14 +179,14 @@ export const links = {
     }
     return links.application(app, { env });
   },
-  secrets: (ns?: NamespaceRef, query?: string): string => listLink("/secrets", ns, query),
+  secrets: (ns?: WorkspaceRef, query?: string): string => listLink("/secrets", ns, query),
   secretDetail: (ref: ResourceRef): string => `/secrets/detail?${refQuery(ref)}`,
   newSecret: (ns?: NamespaceRef, key?: string): string => {
     if (!ns) return "/secrets/new";
     const keyPart = key ? `&key=${encodeURIComponent(key)}` : "";
     return `/secrets/new?${nsQuery(ns)}${keyPart}`;
   },
-  parameters: (ns?: NamespaceRef, query?: string): string => listLink("/parameters", ns, query),
+  parameters: (ns?: WorkspaceRef, query?: string): string => listLink("/parameters", ns, query),
   parameterDetail: (ref: ResourceRef): string => `/parameters/detail?${refQuery(ref)}`,
   releases: (opts?: {
     app?: string;
