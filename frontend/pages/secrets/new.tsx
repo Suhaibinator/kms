@@ -1,8 +1,8 @@
-import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { SensitiveValueField } from "@/components/SensitiveValueField";
 import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
 import { SecretValueField } from "@/components/secrets/SecretValueField";
 import { Checkbox, Field, Input, PageHeader } from "@/components/ui";
@@ -10,13 +10,13 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
-import { secretValueBase64, validateSecretValue } from "@/lib/encoding";
+import { secretWriteValueBase64, validateSecretValue } from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
-import { validateBindingKey, validateKey, validateMetadataJson } from "@/lib/validation";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { validateBindingKey, validateKey, validateMetadataJson } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -42,6 +42,7 @@ export default function NewSecretPage() {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [alreadyBase64, setAlreadyBase64] = useState(false);
+  const [storeEmpty, setStoreEmpty] = useState(false);
   const [contentType, setContentType] = useState("text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
@@ -57,6 +58,7 @@ export default function NewSecretPage() {
         expires ||
         bindVersion ||
         alreadyBase64 ||
+        storeEmpty ||
         metadataJson !== "{}" ||
         contentType !== "text/plain" ||
         (queryReady && key !== (queryValues.key ?? "")),
@@ -69,10 +71,11 @@ export default function NewSecretPage() {
   const errors = useFieldErrors<"key" | "value" | "metadata" | "expires" | "bindingKey">();
 
   // Mirrors of the server's rules. The value has no content-type parse rule —
-  // only the size cap (and the base64 alphabet when passed through) — and no
-  // message here ever quotes the value itself.
+  // only the size cap (and the base64 alphabet when passed through), plus no
+  // empty value under a JSON content type — and no message here ever quotes
+  // the value itself.
   const keyError = validateKey(key.trim());
-  const valueError = validateSecretValue(value, alreadyBase64);
+  const valueError = validateSecretValue({ value, alreadyBase64, storeEmpty, contentType });
   const metadataError = validateMetadataJson(metadataJson);
   const expiresError =
     expires && (datetimeLocalToUnixMs(expires) ?? 0) <= Date.now()
@@ -80,7 +83,9 @@ export default function NewSecretPage() {
       : null;
   const bindingKeyError = bindVersion ? validateBindingKey(bindingKey) : null;
   const shownKeyError = errors.shown("key", keyError);
-  const shownValueError = errors.shown("value", valueError);
+  // A deliberate empty value can only be wrong one way (JSON refuses it), and
+  // its textarea is disabled so it never blurs: show that verdict at once.
+  const shownValueError = storeEmpty ? valueError : errors.shown("value", valueError);
   const shownMetadataError = errors.shown("metadata", metadataError);
   const shownExpiresError = errors.shown("expires", expiresError);
   const shownBindingKeyError = errors.shown("bindingKey", bindingKeyError);
@@ -145,7 +150,7 @@ export default function NewSecretPage() {
         env: ns.env,
         app: ns.app,
         key: k,
-        value_base64: secretValueBase64(value, alreadyBase64),
+        value_base64: secretWriteValueBase64({ value, alreadyBase64, storeEmpty }),
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
         ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
@@ -240,6 +245,8 @@ export default function NewSecretPage() {
               onChange={setValue}
               base64={alreadyBase64}
               onBase64Change={setAlreadyBase64}
+              storeEmpty={storeEmpty}
+              onStoreEmptyChange={setStoreEmpty}
               onBlur={() => errors.touch("value")}
             />
           </Field>

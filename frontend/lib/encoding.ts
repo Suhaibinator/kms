@@ -96,13 +96,60 @@ export function secretValueBase64(value: string, alreadyBase64: boolean): string
   return alreadyBase64 ? value.replace(/[\r\n]/g, "") : utf8ToBase64(value);
 }
 
+/** The content type a secret write sends when the field is left blank. */
+export const DEFAULT_SECRET_CONTENT_TYPE = "text/plain";
+
 /**
- * The secret value rule: required, capped, and — when passed through as
- * base64 — a legal standard-base64 string. The message never quotes the value.
+ * True for `application/json` and any `+json` structured-syntax type, ignoring
+ * parameters such as `charset` — the server's rule for refusing an empty value.
  */
-export function validateSecretValue(value: string, alreadyBase64: boolean): string | null {
-  if (!value) return "A secret value is required.";
+export function isJsonContentType(contentType: string): boolean {
+  const mediaType = (contentType.split(";", 1)[0] ?? "").trim().toLowerCase();
+  return mediaType === "application/json" || mediaType.endsWith("+json");
+}
+
+export const SECRET_VALUE_REQUIRED_MESSAGE =
+  "A secret value is required. To store an empty secret, tick “Store an empty value”.";
+export const EMPTY_JSON_SECRET_MESSAGE =
+  "An empty value is not valid JSON. Choose a non-JSON content type to store an empty secret.";
+
+export interface SecretValueInput {
+  value: string;
+  alreadyBase64: boolean;
+  /** The operator deliberately chose to store a zero-byte value. */
+  storeEmpty: boolean;
+  /** The content type as typed; blank means {@link DEFAULT_SECRET_CONTENT_TYPE}. */
+  contentType: string;
+}
+
+/**
+ * The secret value rule: required unless the operator deliberately stores an
+ * empty value (which no JSON content type accepts), capped, and — when passed
+ * through as base64 — a legal standard-base64 string. The message never
+ * quotes the value.
+ */
+export function validateSecretValue({
+  value,
+  alreadyBase64,
+  storeEmpty,
+  contentType,
+}: SecretValueInput): string | null {
+  if (storeEmpty) {
+    return isJsonContentType(contentType.trim() || DEFAULT_SECRET_CONTENT_TYPE)
+      ? EMPTY_JSON_SECRET_MESSAGE
+      : null;
+  }
+  if (!value) return SECRET_VALUE_REQUIRED_MESSAGE;
   const size = validateValueSize(value);
   if (size) return size;
   return alreadyBase64 ? validateParameterValue(value, "binary") : null;
+}
+
+/** The `value_base64` a secret write sends: empty when storing an empty value. */
+export function secretWriteValueBase64({
+  value,
+  alreadyBase64,
+  storeEmpty,
+}: Pick<SecretValueInput, "value" | "alreadyBase64" | "storeEmpty">): string {
+  return storeEmpty ? "" : secretValueBase64(value, alreadyBase64);
 }
