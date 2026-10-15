@@ -157,9 +157,7 @@ func runManagedReleaseCreate[P ~string, T any](
 		return 1
 	}
 
-	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{
-		endpoint: flags.endpoint, insecure: flags.insecure, ca: flags.ca, cert: flags.cert, key: flags.key,
-	}, namespace)
+	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{managedConnectionFlags: flags.managedConnectionFlags}, namespace)
 	if err != nil {
 		writeManagedConfigError(stderr, err)
 		return 2
@@ -240,7 +238,9 @@ func parseManagedReleaseFlags(args []string, stdout, stderr io.Writer) (managedR
 	if set.NArg() != 0 {
 		return managedReleaseFlags{}, false, errors.New("positional arguments are not supported")
 	}
-	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
+	if err := resolveManagedConnectionFlags(set, &result.managedConnectionFlags); err != nil {
+		return managedReleaseFlags{}, false, err
+	}
 	if !canonicalDefaultsText(result.profile, false) {
 		return managedReleaseFlags{}, false, errors.New("--profile must be nonempty and canonical")
 	}
@@ -360,9 +360,7 @@ func runManagedSchemaUpload(
 		writeManagedConfigError(stderr, errors.New("generated schema is empty"))
 		return 1
 	}
-	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{
-		endpoint: flags.endpoint, insecure: flags.insecure, ca: flags.ca, cert: flags.cert, key: flags.key,
-	}, "")
+	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{managedConnectionFlags: flags.managedConnectionFlags}, "")
 	if err != nil {
 		writeManagedConfigError(stderr, err)
 		return 2
@@ -407,7 +405,9 @@ func parseManagedSchemaFlags(args []string, stdout, stderr io.Writer) (managedSc
 	if set.NArg() != 0 {
 		return managedSchemaFlags{}, false, errors.New("positional arguments are not supported")
 	}
-	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
+	if err := resolveManagedConnectionFlags(set, &result.managedConnectionFlags); err != nil {
+		return managedSchemaFlags{}, false, err
+	}
 	return result, false, nil
 }
 
@@ -446,6 +446,7 @@ func managedReleaseUsage() string {
 		"  --insecure              Disable TLS for local development\n" +
 		"  --ca FILE               CA bundle for server verification (env KMS_CA_FILE)\n" +
 		"  --cert FILE --key FILE  Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
+		"  --timeout DURATION      Per-RPC timeout (env KMS_RPC_TIMEOUT; default 60s)\n" +
 		"  --help                  Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }
@@ -458,6 +459,7 @@ func managedSchemaUsage() string {
 		"  --insecure              Disable TLS for local development\n" +
 		"  --ca FILE               CA bundle for server verification (env KMS_CA_FILE)\n" +
 		"  --cert FILE --key FILE  Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
+		"  --timeout DURATION      Per-RPC timeout (env KMS_RPC_TIMEOUT; default 60s)\n" +
 		"  --help                  Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }

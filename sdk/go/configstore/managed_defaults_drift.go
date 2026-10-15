@@ -27,7 +27,7 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 	addManagedConnectionFlags(set, &connection)
 	set.Usage = func() {
 		if stdout != nil {
-			_, _ = fmt.Fprintln(stdout, "Usage: managed-config defaults drift --profile PROFILE [--namespace ENV/APP] [--schema-version N] [--release NAME] [--output table|json]\nCompares the selected active release to the defaults compiled into this executable.\nExit codes: 0 match, 1 drift or failure, 2 usage. No values or secrets are read.\nConnection flags: --endpoint, --insecure, --ca, --cert, --key; identity token: KMS_TOKEN.")
+			_, _ = fmt.Fprintln(stdout, "Usage: managed-config defaults drift --profile PROFILE [--namespace ENV/APP] [--schema-version N] [--release NAME] [--output table|json]\nCompares the selected active release to the defaults compiled into this executable.\nExit codes: 0 match, 1 drift or failure, 2 usage. No values or secrets are read.\nConnection flags: --endpoint, --insecure, --ca, --cert, --key, --timeout (env KMS_RPC_TIMEOUT; default 60s); identity token: KMS_TOKEN.")
 		}
 	}
 	if err := set.Parse(args); err != nil {
@@ -73,7 +73,10 @@ func runManagedDefaultsDrift[P ~string, T any](args []string, stdout, stderr io.
 		writeManagedConfigError(stderr, errors.New("namespace must name the configured application"))
 		return 2
 	}
-	resolveManagedConnectionFlags(set, &connection)
+	if err := resolveManagedConnectionFlags(set, &connection); err != nil {
+		writeManagedConfigError(stderr, err)
+		return 2
+	}
 	clientConfig, err := defaultsApplierClientConfig(defaultsApplierFlags{managedConnectionFlags: connection}, ns)
 	if err != nil {
 		writeManagedConfigError(stderr, err)
