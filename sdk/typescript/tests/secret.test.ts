@@ -56,6 +56,31 @@ describe("Secret", () => {
     expect(clone.length).toBe(6);
   });
 
+  it("is set when resolved from KMS, even when empty, or when it carries bytes", () => {
+    const cases: Array<[string, Secret, boolean, boolean]> = [
+      ["zero", new Secret(), false, true],
+      [
+        "declaration",
+        new Secret("", { bindKey: "declaration-binding-key-0123456789" }),
+        false,
+        true,
+      ],
+      ["local empty", new Secret(""), false, true],
+      ["local value", newSecret("value"), true, false],
+      ["path without a version", new Secret("", { path: "/prod/api/key" }), false, true],
+      ["resolved empty", new Secret("", { path: "/prod/api/key", version: 1n }), true, true],
+      ["resolved value", new Secret("value", { path: "/prod/api/key", version: 2n }), true, false],
+    ];
+    for (const [name, secret, set, empty] of cases) {
+      expect({ name, isSet: secret.isSet, isEmpty: secret.isEmpty }).toEqual({
+        name,
+        isSet: set,
+        isEmpty: empty,
+      });
+      expect(secret.clone().isSet).toBe(set);
+    }
+  });
+
   it("preserves a declaration binding key without exposing it through serialization", () => {
     const bindingKey = "declaration-binding-key-never-render";
     const declaration = new Secret("", { bindKey: bindingKey });

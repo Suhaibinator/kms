@@ -91,12 +91,17 @@ func (c *Config) Validate() error {
     if c.RequestLimit <= 0 {
         return fmt.Errorf("request_limit must be positive")
     }
-    if c.DBPassword.IsZero() {
+    if !c.DBPassword.IsSet() {
         return fmt.Errorf("db_password is required")
     }
     return nil
 }
 ```
+
+Check required secrets with `IsSet`, not `IsZero`: KMS can store an empty
+(zero-byte) secret, which resolves with `IsSet() == true` and
+`IsZero() == true`. A `NewSecret` value supplied for local configuration is set
+only when it carries bytes.
 
 The minimal application contract is:
 
@@ -391,6 +396,9 @@ func main() {
 
 `NewLocal` clones before and after application validation and removes secret
 binding keys. Optional empty secrets are allowed when `Validate` permits them.
+A `NewSecret` value has no store provenance, so an empty one reports
+`IsSet() == false`; a `Validate` that requires the secret with `IsSet` rejects
+it, as the earlier `IsZero` check did.
 The existing typed snapshots and views remain unchanged. Configuration stays
 fixed until process restart; changing the input or an environment variable
 does not update the store.
@@ -445,7 +453,8 @@ oauthDefaults := struct {
 
 Every default `kmsclient.Secret` must contain no plaintext, path, version, or
 content type. It may contain the declaration-only `BindKey`; `Secret.IsZero`
-still treats that as zero for secret-value purposes. Generated `Start` extracts
+still treats that as zero and `Secret.IsSet` as unset for secret-value
+purposes. Generated `Start` extracts
 non-empty keys into a private alias-keyed loader map, then clears them from its
 cloned defaults and every published snapshot. Directly fetched/resolved secrets
 also have an empty `BindKey`. Secrets themselves must come only from exact

@@ -396,8 +396,14 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 	if resp == nil || !sameResourceRef(resp.GetRef(), r.resourceProto()) || resp.GetVersion() == 0 || (o.version != 0 && resp.GetVersion() != o.version) {
 		return Secret{}, errSecretResponseIdentityMismatch
 	}
+	value := resp.GetValue()
+	if value == nil {
+		// Protobuf decodes an empty bytes field as nil. Keep an empty secret
+		// non-nil so it reads, clones, and compares like the server's value.
+		value = []byte{}
+	}
 	s := Secret{
-		value:       resp.GetValue(),
+		value:       value,
 		path:        display,
 		version:     resp.GetVersion(),
 		contentType: resp.GetContentType(),

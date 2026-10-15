@@ -120,7 +120,9 @@ An existing `AppConfig` instance can also be supplied; it is strictly
 revalidated, including nested model instances. Local factories clone before
 validation and again before publication, strip binding keys, and use the same
 generated snapshots/views. Model validation decides whether an empty secret
-is acceptable. Failures raise a redacting `CandidateError`.
+is acceptable; require a secret with `is_set()`, which is true for any secret
+resolved from KMS (even an empty one) and for a local `Secret` that carries
+bytes. Failures raise a redacting `CandidateError`.
 
 For asyncio applications, use the equivalent lifecycle:
 

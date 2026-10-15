@@ -420,7 +420,7 @@ const { store, manager } = await createLocalStore(
     databasePassword: new Secret(process.env.DATABASE_PASSWORD ?? ""),
   },
   async (candidate) => {
-    if (candidate.requestTimeoutMs <= 0 || candidate.databasePassword.isEmpty) {
+    if (candidate.requestTimeoutMs <= 0 || !candidate.databasePassword.isSet) {
       throw new Error("positive timeout and database password required");
     }
   },
@@ -434,7 +434,10 @@ await lifecycle.wait();
 
 Local construction validates field codecs and awaits the application validator,
 clones inputs and validated output, and strips secret binding keys. Empty
-secrets are allowed if your validator permits them. Validation failures are
+secrets are allowed if your validator permits them. Check required secrets with
+`isSet`: it is true for any secret resolved from KMS, including an empty
+(zero-byte) one, while a locally constructed `Secret` is set only when it
+carries bytes. `isEmpty` only reports that there are no bytes. Validation failures are
 redacting `CandidateError`s. No callbacks, release identity, credentials, or
 network connection are required.
 

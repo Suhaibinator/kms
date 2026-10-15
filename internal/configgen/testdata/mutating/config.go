@@ -23,7 +23,7 @@ func Defaults() *Config {
 var ValidationObserver func(*Config)
 
 func (c *Config) Validate() error {
-	if c.Token.IsZero() {
+	if !c.Token.IsSet() {
 		return errors.New("token is required")
 	}
 	if strings.TrimSpace(c.Name) == "mutate secret" {

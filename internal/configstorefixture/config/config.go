@@ -77,7 +77,7 @@ func (c *Config) Validate() error {
 	// Collection presence is intentionally unconstrained in this fixture so
 	// integration tests can exercise the distinct valid nil and non-nil-empty
 	// encodings through admission, drift reporting, and restoration.
-	if c.Password.IsZero() || c.RuntimeToken.IsZero() {
+	if !c.Password.IsSet() || !c.RuntimeToken.IsSet() {
 		return errors.New("required secrets are unavailable")
 	}
 	return nil

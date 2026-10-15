@@ -223,6 +223,13 @@ tooling. The read-only `bind_key` property is declaration-only: cloning
 preserves it for generated-store extraction, but a fetched secret omits it,
 and normal string/format/Pydantic serialization surfaces remain redacted.
 
+KMS stores empty (zero-byte) secrets. `is_empty()` and truthiness mean "no
+plaintext bytes", so a resolved empty secret is falsy. `is_set()` is true for
+every secret resolved from KMS (it records the key and a non-zero version),
+including an empty one; a locally constructed `Secret` has no store version
+and is set only when it carries bytes. Check required secrets with `is_set()`,
+not `is_empty()` or `bool(secret)`.
+
 Writes (mainly for tooling, not typical application code):
 
 ```python

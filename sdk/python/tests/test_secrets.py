@@ -28,6 +28,16 @@ def test_put_and_get_secret(client):
     assert str(got) == "[REDACTED]"
 
 
+def test_empty_secret_round_trips_as_set_but_empty(client):
+    client.put_secret("empty", b"", content_type="text/plain")
+    got = client.get_secret("empty")
+    assert got.value == b""
+    assert got.is_empty()
+    assert not got
+    assert got.is_set()
+    assert got.clone().is_set()
+
+
 def test_put_secret_accepts_str_value(client):
     client.put_secret("str", "as-string")
     assert client.get_secret("str").value == b"as-string"
