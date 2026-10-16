@@ -272,6 +272,7 @@ function unescapePointer(pointer: string): string[] {
 const KEYWORD_MATCHERS: Record<string, (message: string) => boolean> = {
   required: (m) => m === "is required",
   additionalProperties: (m) => m === "is not a declared property",
+  propertyNames: (m) => m.startsWith("key "),
   type: (m) => m.startsWith("must be ") && m.includes(", got "),
   minimum: (m) => m.startsWith("must be at least ") && !m.endsWith(" characters"),
   maximum: (m) => m.startsWith("must be at most ") && !m.endsWith(" characters"),
@@ -316,7 +317,9 @@ export function matchProblemPath(
   const candidates = matches
     ? issues.filter(
         (issue) =>
-          matches(issue.message) &&
+          matches(
+            keyword === "propertyNames" ? issue.message : issue.message.replace(/^key /, ""),
+          ) &&
           (keyword !== "required" ||
             quoted.length === 0 ||
             quoted.includes(issue.path[issue.path.length - 1] ?? "")),

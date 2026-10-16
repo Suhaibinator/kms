@@ -568,6 +568,7 @@ func TestGeneratedEnumArtifactsAreCurrent(t *testing.T) {
 	want := map[string]string{
 		"tier": "enum-int32", "min_tier": "nullable-enum-int32", "interval": "enum-int32", "priority": "enum-int32",
 		"primary": "enum-string", "weight": "int16", "label": "string",
+		"tier_routes": "nullable-enum-key-map", "sink_levels": "nullable-enum-key-map", "adapter_routes": "nullable-enum-key-map",
 	}
 	for name, encoding := range want {
 		if encodings[name] != encoding {
@@ -584,6 +585,9 @@ func TestEnumGenerationErrors(t *testing.T) {
 		want     string
 	}{
 		{"EmptyName", "-", "constant Blank_ has an empty member name"},
+		{"UndeclaredMapDefault", "UndeclaredMapDefaults", "default 0 is not a declared member of enum"},
+		{"UndeclaredStringMapDefault", "UndeclaredStringMapDefaults", `default "turbo" is not a declared value of enum`},
+		{"PlainIntegerMap", "-", "map keys must be strings or declared enums"},
 		{"UndeclaredDefault", "UndeclaredDefaults", "field Value default: default 0 is not a declared member of enum"},
 		{"UndeclaredStringDefault", "UndeclaredStringDefaults", `default "turbo" is not a declared value of enum`},
 		{"HugeNumber", "-", "constant HugeMax exceeds the maximum enum number"},

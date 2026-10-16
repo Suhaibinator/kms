@@ -1,0 +1,81 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "language": "typescript",
+    "module": "./config.js",
+    "type": "Config"
+  },
+  "schema_sha256": "8f78c37169ed4867ac23e30aa0ae597aaeb12d615106004bb0d2f4e8003acc27",
+  "groups": [
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "nested",
+        "protocols",
+        "roles",
+        "wide"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "runtime",
+      "json_name": "nested",
+      "ts_name": "nested",
+      "ts_path": "nested",
+      "reload": "hot",
+      "encoding": "object",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "protocols",
+      "ts_name": "protocols",
+      "ts_path": "protocols",
+      "reload": "restart",
+      "encoding": "nullable-enum-key-map",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "roles",
+      "ts_name": "roles",
+      "ts_path": "roles",
+      "reload": "hot",
+      "encoding": "nullable-enum-key-map",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "wide",
+      "ts_name": "wide",
+      "ts_path": "wide",
+      "reload": "hot",
+      "encoding": "nullable-enum-key-map",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [],
+  "views": [
+    {
+      "name": "worker",
+      "method": "worker",
+      "fields": [
+        "runtime.nested",
+        "runtime.protocols",
+        "runtime.roles",
+        "runtime.wide"
+      ]
+    }
+  ]
+}

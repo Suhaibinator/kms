@@ -6,6 +6,8 @@ export {
   codecs,
   decodeGroup,
   encodeGroup,
+  type EnumMapKey,
+  type EnumMapMember,
   type FieldCodec,
   type FloatCodecOptions,
   field,

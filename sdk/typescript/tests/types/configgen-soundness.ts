@@ -25,6 +25,56 @@ const nullableRecord: ValueCodec<Readonly<Record<string, string>> | null> = code
   Readonly<Record<string, string>>
 >(codecs.string);
 
+enum Role {
+  Unspecified = 0,
+  Admin = 3,
+}
+enum Protocol {
+  Http = "http",
+  Grpc = "grpc",
+}
+const numericMap: ValueCodec<Map<Role, string> | null> = codecs.enumMap<Role, string>(
+  [
+    ["UNSPECIFIED", 0],
+    ["ADMIN", 3],
+  ],
+  codecs.string,
+);
+const stringMap: ValueCodec<ReadonlyMap<Protocol, string> | null> = codecs.enumMap<
+  Protocol,
+  string,
+  ReadonlyMap<Protocol, string>
+>(
+  [
+    ["http", "http"],
+    ["grpc", "grpc"],
+  ],
+  codecs.string,
+);
+const wideMap: ValueCodec<Map<9007199254740993n, string> | null> = codecs.enumMap<
+  9007199254740993n,
+  string
+>([["WIDE", 9007199254740993n]], codecs.string);
+// @ts-expect-error Numeric enum map descriptors cannot supply undeclared numeric members.
+codecs.enumMap<Role, string>([["INVALID", 5]], codecs.string);
+// @ts-expect-error String enum map descriptors must use values from the source enum.
+codecs.enumMap<Protocol, string>([["ftp", "ftp"]], codecs.string);
+// @ts-expect-error Maps decode null as well as objects.
+const nonnullableMap: ValueCodec<Map<Role, string>> = codecs.enumMap<Role, string>(
+  [["ADMIN", 3]],
+  codecs.string,
+);
+type BrandedMap = Map<Role, string> & { readonly brand: true };
+// @ts-expect-error Decoders create plain Maps, not branded containers.
+codecs.enumMap<Role, string, BrandedMap>([["ADMIN", 3]], codecs.string);
+// @ts-expect-error Enum-map descriptors cannot describe legacy records.
+codecs.enumMap<Role, string, Record<string, string>>([["ADMIN", 3]], codecs.string);
+// @ts-expect-error Values in an enum map must match their codec.
+const wrongMapValues: ValueCodec<Map<Role, number> | null> = codecs.enumMap<Role, string>(
+  [["ADMIN", 3]],
+  codecs.string,
+);
+
 // A variable-array descriptor must preserve JSON null and must not masquerade
 // as a fixed tuple merely because both values are JavaScript arrays.
 // @ts-expect-error Variable arrays decode JSON null.
@@ -119,6 +169,11 @@ void readonlyPair;
 void mutablePair;
 void mutableRecord;
 void nullableRecord;
+void numericMap;
+void stringMap;
+void wideMap;
+void nonnullableMap;
+void wrongMapValues;
 void nonnullableArray;
 void wrongFixedLength;
 void nonnullableRecord;

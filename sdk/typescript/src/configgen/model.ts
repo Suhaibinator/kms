@@ -5,6 +5,25 @@ export const MAX_RELEASE_ENTRIES = 256;
 
 export type ReloadPolicy = "hot" | "restart";
 
+/** Canonical wire names paired with application enum values. Integer values are exact decimal strings. */
+export type EnumMapKeyDescriptor =
+  | {
+      readonly kind: "string";
+      readonly members: readonly EnumMapKeyMember[];
+    }
+  | {
+      readonly kind: "integer";
+      readonly bits: number;
+      readonly unsigned: boolean;
+      readonly representation: "number" | "bigint";
+      readonly members: readonly EnumMapKeyMember[];
+    };
+
+export interface EnumMapKeyMember {
+  readonly name: string;
+  readonly value: string;
+}
+
 export type TypeDescriptor =
   | { readonly kind: "boolean" }
   | { readonly kind: "string" }
@@ -25,6 +44,7 @@ export type TypeDescriptor =
       readonly length: number;
     }
   | { readonly kind: "record"; readonly value: TypeDescriptor }
+  | { readonly kind: "enumMap"; readonly key: EnumMapKeyDescriptor; readonly value: TypeDescriptor }
   | { readonly kind: "object"; readonly fields: readonly NestedFieldDescriptor[] };
 
 export interface NestedFieldDescriptor {
@@ -292,6 +312,14 @@ function normalizeType(value: unknown, path: string, depth: number): TypeDescrip
         kind: "record",
         value: normalizeType(raw.value, `${path}.value`, depth + 1),
       });
+    case "enumMap":
+      assertKeys(raw, path, ["kind", "key", "value"]);
+      if (raw.value === undefined) throw descriptorError(`${path}.value is required`);
+      return freeze({
+        kind: "enumMap",
+        key: normalizeEnumMapKey(raw.key, `${path}.key`),
+        value: normalizeType(raw.value, `${path}.value`, depth + 1),
+      });
     case "object": {
       assertKeys(raw, path, ["kind", "fields"]);
       const fields = expectArray(raw.fields, `${path}.fields`);
@@ -316,6 +344,86 @@ function normalizeType(value: unknown, path: string, depth: number): TypeDescrip
     default:
       throw descriptorError(`${path}.kind is unsupported`);
   }
+}
+
+function normalizeEnumMapKey(value: unknown, path: string): EnumMapKeyDescriptor {
+  const raw = expectObjectWithKind(value, path);
+  if (raw.kind !== "string" && raw.kind !== "integer") {
+    throw descriptorError(`${path}.kind must be string or integer`);
+  }
+  assertKeys(
+    raw,
+    path,
+    raw.kind === "string"
+      ? ["kind", "members"]
+      : ["kind", "bits", "unsigned", "representation", "members"],
+  );
+  const integer =
+    raw.kind === "integer"
+      ? normalizeType(
+          {
+            kind: "integer",
+            bits: raw.bits,
+            unsigned: raw.unsigned,
+            representation: raw.representation,
+          },
+          path,
+          0,
+        )
+      : undefined;
+  const members = expectArray(raw.members, `${path}.members`);
+  if (members.length === 0) throw descriptorError(`${path}.members must not be empty`);
+  const names = new Map<string, string>();
+  const values = new Set<string>();
+  const canonical: EnumMapKeyMember[] = [];
+  for (const [index, member] of members.entries()) {
+    const memberPath = `${path}.members[${index}]`;
+    const entry = expectObject(member, memberPath, ["name", "value"]);
+    if (typeof entry.name !== "string" || typeof entry.value !== "string") {
+      throw descriptorError(`${memberPath} name and value must be strings`);
+    }
+    const name = entry.name;
+    const memberValue = entry.value;
+    if (names.has(name) && names.get(name) !== memberValue) {
+      throw descriptorError(`${memberPath}.name is duplicated`);
+    }
+    names.set(name, memberValue);
+    if (integer?.kind === "integer") {
+      expectNonemptyString(name, `${memberPath}.name`);
+      if (!/^(?:0|-?[1-9][0-9]*)$/u.test(memberValue)) {
+        throw descriptorError(`${memberPath}.value must be a canonical decimal string`);
+      }
+      const number = BigInt(memberValue);
+      const width = BigInt(integer.bits);
+      const minimum = integer.unsigned ? 0n : -(1n << (width - 1n));
+      const maximum = integer.unsigned ? (1n << width) - 1n : (1n << (width - 1n)) - 1n;
+      if (
+        number < minimum ||
+        number > maximum ||
+        number < -(1n << 63n) ||
+        number > (1n << 63n) - 1n
+      ) {
+        throw descriptorError(`${memberPath}.value is outside the enum integer range`);
+      }
+    } else if (name !== memberValue) {
+      throw descriptorError(`${memberPath} string enum names must equal their values`);
+    }
+    // Declaration order selects the only accepted wire name for aliases.
+    if (!values.has(memberValue)) canonical.push(freeze({ name, value: memberValue }));
+    values.add(memberValue);
+  }
+  if (integer?.kind === "integer") {
+    canonical.sort((left, right) =>
+      BigInt(left.value) < BigInt(right.value)
+        ? -1
+        : BigInt(left.value) > BigInt(right.value)
+          ? 1
+          : 0,
+    );
+  }
+  return integer?.kind === "integer"
+    ? freeze({ ...integer, members: freeze(canonical) })
+    : freeze({ kind: "string", members: freeze(canonical) });
 }
 
 function normalizeViews(

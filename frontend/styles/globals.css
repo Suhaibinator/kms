@@ -1115,6 +1115,9 @@
     font-size: var(--text-sm);
     overflow-wrap: anywhere;
   }
+  .schema-form-map-row-enum {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
   .schema-form-map-error {
     grid-column: 1 / -1;
   }

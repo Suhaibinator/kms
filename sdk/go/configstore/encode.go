@@ -78,8 +78,8 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 				return nil, descriptorError(path, "slice descriptor does not match source")
 			}
 		case CodecMap:
-			if source.Kind() != reflect.Map || source.Type().Key().Kind() != reflect.String || codec.Element == nil {
-				return nil, descriptorError(path, "map descriptor does not match source")
+			if err := validateMapCodec(source.Type(), codec, path); err != nil {
+				return nil, err
 			}
 		case CodecBytes:
 			if source.Kind() != reflect.Slice || source.Type().Elem().Kind() != reflect.Uint8 {
@@ -201,7 +201,19 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 		items := make(map[string]any, source.Len())
 		iterator := source.MapRange()
 		for iterator.Next() {
-			key := iterator.Key().String()
+			key := ""
+			if codec.Key == nil {
+				key = iterator.Key().String()
+			} else {
+				encodedKey, err := encodeValue(iterator.Key(), *codec.Key, path+"[*]")
+				if err != nil {
+					return nil, fmt.Errorf("configstore: invalid enum map key at %s[*]", path)
+				}
+				key = encodedKey.(string)
+			}
+			if _, exists := items[key]; exists {
+				return nil, descriptorError(path, "duplicate encoded map key")
+			}
 			encoded, err := encodeValue(iterator.Value(), *codec.Element, path+"[*]")
 			if err != nil {
 				return nil, err

@@ -209,7 +209,7 @@ Generated schema and runtime metadata come from one normalized type model:
 | struct | strict object with all encoded fields required |
 | array | fixed-length array |
 | slice | array or `null` |
-| string-keyed map | object or `null` |
+| string-keyed or enum-keyed map | object or `null` |
 | `[]byte` | canonical base64 string or `null` |
 
 Recursive types, interfaces, functions, channels, ambiguous embedded fields,
@@ -292,6 +292,29 @@ declared member. Generation fails when an evaluated default is not a member
 constant's name is exactly the prefix, when a uint member exceeds the largest
 `int64`, and when a member of an `int`- or `uint`-backed enum does not fit the
 portable 32-bit contract.
+
+Maps may use recognized enum types as keys, including protobuf enums, signed
+and unsigned integer enums, and string enums. JSON property names use exactly
+the same canonical member names as scalar values; plain integer keys are
+unsupported. A declared zero member is permitted. Unknown names and
+noncanonical aliases are rejected. Integer enum keys also reject numeric
+spellings. String enum keys retain their exact declared values, including
+empty strings and whitespace; all key matching is case-sensitive.
+
+For example, `map[UserType]AccessPolicy` stores
+`{"USER_TYPE_ADMIN": {"enabled": true}}`. The generated object schema has
+`propertyNames` containing the key enum and its `x-kms-enum-numbers` annotation,
+with the policy schema in `additionalProperties`. Map entries remain optional;
+`null` and an empty object retain their distinct meanings. The contract encoding
+is `nullable-enum-key-map`. Defaults, exported artifacts, snapshots, and change
+and default-mismatch reports use canonical member names for keys.
+
+Existing `map[string]V` fields and named string keys without enum members keep
+their current behavior. Regenerating a map keyed by a named string enum now
+constrains its previously unrestricted keys to declared members. Converting a
+string-keyed field to an enum-keyed field is an ordinary schema upgrade:
+existing lowercase or numeric key spellings remain unchanged until explicitly
+renamed to valid canonical names in the console or source data.
 
 Generating with enum detection is a breaking wire change for every
 named-integer field it now recognizes: stored releases hold numbers, the new

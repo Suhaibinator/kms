@@ -12,11 +12,54 @@
           "maximum": 9223372036854775807,
           "minimum": -9223372036854775808,
           "type": "integer"
+        },
+        "transports": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "enum": [
+                  "http",
+                  "grpc"
+                ],
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "weights": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "LOW",
+              "UNSPECIFIED",
+              "ADMIN"
+            ],
+            "type": "string",
+            "x-kms-enum-numbers": {
+              "ADMIN": 3,
+              "LOW": -1,
+              "UNSPECIFIED": 0
+            }
+          },
+          "type": "object"
         }
       },
       "required": [
         "debug",
-        "port"
+        "port",
+        "transports",
+        "weights"
       ],
       "type": "object"
     }

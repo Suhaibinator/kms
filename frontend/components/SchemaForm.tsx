@@ -926,7 +926,20 @@ export function SchemaForm({
           : {};
         const newKeyKey = `${key} \0newkey`;
         const newKey = drafts[newKeyKey];
-        const keyTaken = newKey !== undefined && entries.some(([name]) => name === newKey.text);
+        const keyChoices = field.keyEnumValues?.map((name, index) => ({
+          name,
+          value: `key-${index}`,
+          label: name.trim() === "" ? JSON.stringify(name) : name,
+        }));
+        const availableKeys = keyChoices?.filter(
+          ({ name }) => !entries.some(([key]) => key === name),
+        );
+        const newEntryName = keyChoices
+          ? keyChoices.find(({ value }) => value === newKey?.text)?.name
+          : newKey?.text.trim() || undefined;
+        const keyTaken =
+          newEntryName !== undefined && entries.some(([name]) => name === newEntryName);
+        const canAdd = newEntryName !== undefined && !keyTaken;
         const dropDrafts = (prefix: string) =>
           setDrafts((previous) =>
             Object.fromEntries(
@@ -946,6 +959,61 @@ export function SchemaForm({
           const rest = { ...(isJsonObject(current) ? current : {}) };
           delete rest[name];
           commit(field.path, rest);
+        };
+        const renameEntry = (name: string, nextName: string) => {
+          if (name === nextName || entries.some(([key]) => key === nextName)) return;
+          const from = pathKey([...field.path, name]);
+          const to = pathKey([...field.path, nextName]);
+          setDrafts((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).map(([draftKey, draft]) => [
+                draftKey === from || draftKey.startsWith(`${from} `)
+                  ? `${to}${draftKey.slice(from.length)}`
+                  : draftKey,
+                draft,
+              ]),
+            ),
+          );
+          commit(
+            field.path,
+            Object.fromEntries(
+              entries.map(([key, value]) => [key === name ? nextName : key, value]),
+            ),
+          );
+        };
+        const keyControl = (name: string) => {
+          if (!keyChoices) return null;
+          const selected = keyChoices.find((choice) => choice.name === name);
+          const options = keyChoices.filter(
+            (choice) => choice.name === name || !entries.some(([key]) => key === choice.name),
+          );
+          return (
+            <AppSelect
+              className="min-w-0"
+              aria-label={`${label} key ${JSON.stringify(name)}`}
+              aria-invalid={!selected || undefined}
+              value={selected?.value ?? "invalid-key"}
+              disabled={disabled}
+              searchable={keyChoices.length > SEARCHABLE_ENUM_OPTIONS}
+              options={[
+                ...(selected
+                  ? []
+                  : [
+                      {
+                        value: "invalid-key",
+                        label: `${JSON.stringify(name)} (invalid)`,
+                        disabled: true,
+                      },
+                    ]),
+                ...options,
+              ]}
+              onValueChange={(next) => {
+                const choice = keyChoices.find((choice) => choice.value === next);
+                if (choice) renameEntry(name, choice.name);
+              }}
+              onBlur={onBlur}
+            />
+          );
         };
         const initialEntry = (): unknown => {
           if (field.itemField) return initialValue(field.itemField) ?? {};
@@ -971,32 +1039,47 @@ export function SchemaForm({
           <div className="row-wrap">
             {newKey !== undefined ? (
               <>
-                <Input
-                  className="font-mono"
-                  aria-label={`New ${label} key`}
-                  value={newKey.text}
-                  disabled={disabled}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="key"
-                  onChange={(event) =>
-                    setDraft(newKeyKey, event.target.value, "Add or cancel the new entry.")
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || !newKey.text.trim() || keyTaken) return;
-                    event.preventDefault();
-                    setDraft(newKeyKey, undefined);
-                    setEntry(newKey.text.trim(), initialEntry());
-                  }}
-                />
+                {keyChoices ? (
+                  <AppSelect
+                    aria-label={`New ${label} key`}
+                    value={newKey.text}
+                    disabled={disabled}
+                    placeholder="Choose key…"
+                    searchable={keyChoices.length > SEARCHABLE_ENUM_OPTIONS}
+                    options={availableKeys ?? []}
+                    onValueChange={(next) =>
+                      setDraft(newKeyKey, next, "Add or cancel the new entry.")
+                    }
+                  />
+                ) : (
+                  <Input
+                    className="font-mono"
+                    aria-label={`New ${label} key`}
+                    value={newKey.text}
+                    disabled={disabled}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="key"
+                    onChange={(event) =>
+                      setDraft(newKeyKey, event.target.value, "Add or cancel the new entry.")
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" || newEntryName === undefined || keyTaken) return;
+                      event.preventDefault();
+                      setDraft(newKeyKey, undefined);
+                      setEntry(newEntryName, initialEntry());
+                    }}
+                  />
+                )}
                 <Button
                   type="button"
                   size="sm"
-                  disabled={disabled || !newKey.text.trim() || keyTaken}
+                  disabled={disabled || !canAdd}
                   aria-label={`Add new ${label} entry`}
                   onClick={() => {
                     setDraft(newKeyKey, undefined);
-                    setEntry(newKey.text.trim(), initialEntry());
+                    if (newEntryName !== undefined && !keyTaken)
+                      setEntry(newEntryName, initialEntry());
                   }}
                 >
                   Add entry
@@ -1022,11 +1105,14 @@ export function SchemaForm({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={disabled}
+                disabled={disabled || availableKeys?.length === 0}
                 onClick={() => setDraft(newKeyKey, "", "Add or cancel the new entry.")}
               >
                 <Plus size={14} aria-hidden /> Add {label} entry
               </Button>
+            ) : null}
+            {availableKeys?.length === 0 ? (
+              <span className="faint text-sm">All keys are in use.</span>
             ) : null}
             {newKey === undefined && state !== "set" && state !== "invalid" ? (
               <Button
@@ -1081,6 +1167,7 @@ export function SchemaForm({
             {stateControl}
             <ul className="schema-form-list" aria-label={`${label} entries`}>
               {entries.map(([name, value]) => {
+                const entryLabel = keyChoices && name.trim() === "" ? JSON.stringify(name) : name;
                 const entryPath = [...field.path, name];
                 const entryKey = pathKey(entryPath);
                 const remove = (
@@ -1088,7 +1175,7 @@ export function SchemaForm({
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Remove ${label} entry ${name}`}
+                    aria-label={`Remove ${label} entry ${entryLabel}`}
                     disabled={disabled}
                     onClick={() => removeEntry(name)}
                   >
@@ -1100,7 +1187,14 @@ export function SchemaForm({
                   if (!entry) return null;
                   return (
                     <li key={entryKey} className="schema-form-list-item">
-                      {renderField(entry)}
+                      {keyChoices ? (
+                        <div className="grid min-w-0 gap-2">
+                          {keyControl(name)}
+                          {renderField({ ...entry, name: entryLabel })}
+                        </div>
+                      ) : (
+                        renderField(entry)
+                      )}
                       {remove}
                     </li>
                   );
@@ -1113,14 +1207,21 @@ export function SchemaForm({
                   entryDraft ??
                   (typeof value === "string" || typeof value === "number" ? String(value) : "");
                 return (
-                  <li key={entryKey} className="schema-form-map-row">
-                    <label htmlFor={entryId} className="mono schema-form-map-key">
-                      {name}
-                    </label>
+                  <li
+                    key={entryKey}
+                    className={cn("schema-form-map-row", keyChoices && "schema-form-map-row-enum")}
+                  >
+                    {keyChoices ? (
+                      keyControl(name)
+                    ) : (
+                      <label htmlFor={entryId} className="mono schema-form-map-key">
+                        {name}
+                      </label>
+                    )}
                     {field.item === "boolean" ? (
                       <Checkbox
                         id={entryId}
-                        aria-label={`${label} entry ${name}`}
+                        aria-label={`${label} entry ${entryLabel}`}
                         checked={value === true}
                         disabled={disabled}
                         onCheckedChange={(next) => setEntry(name, next === true)}
@@ -1128,7 +1229,7 @@ export function SchemaForm({
                     ) : field.enumValues ? (
                       <AppSelect
                         id={entryId}
-                        aria-label={`${label} entry ${name}`}
+                        aria-label={`${label} entry ${entryLabel}`}
                         value={text}
                         disabled={disabled}
                         placeholder="Choose…"
@@ -1145,7 +1246,7 @@ export function SchemaForm({
                       <Input
                         id={entryId}
                         className="font-mono"
-                        aria-label={`${label} entry ${name}`}
+                        aria-label={`${label} entry ${entryLabel}`}
                         aria-invalid={entryError ? true : undefined}
                         inputMode={
                           field.item === "number"

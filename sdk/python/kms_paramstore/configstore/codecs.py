@@ -7,11 +7,14 @@ import binascii
 import datetime as dt
 import re
 import types
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
-from typing import Annotated, Any, Mapping, Union, get_args, get_origin
+from typing import Annotated, Any, Union, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter
+
+from .enum_keys import enum_keys
 
 _DURATION_PART = re.compile(r"((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(ns|us|µs|μs|ms|s|m|h)")
 _DURATION_SCALE = {
@@ -79,7 +82,13 @@ def decode_value(annotation: Any, value: Any) -> Any:
     elif origin in (dict, Mapping):
         if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
             raise TypeError("expected string-keyed object")
-        decoded = {key: decode_value(args[1], item) for key, item in value.items()}
+        keys = enum_keys(args[0])
+        if keys is None and args[0] is not str:
+            raise TypeError("mappings must use string or enum keys")
+        decoded = {
+            keys.decode(key) if keys else key: decode_value(args[1], item)
+            for key, item in value.items()
+        }
     elif origin in (Union, types.UnionType):
         failures: list[Exception] = []
         for member in args:
@@ -138,7 +147,15 @@ def encode_value(annotation: Any, value: Any) -> Any:
         item_types = [args[0]] * len(value) if len(args) == 2 and args[1] is Ellipsis else args
         return [encode_value(item_type, item) for item_type, item in zip(item_types, value)]
     if origin in (dict, Mapping):
-        return {key: encode_value(args[1], item) for key, item in value.items()}
+        keys = enum_keys(args[0])
+        if keys is None and args[0] is not str:
+            raise TypeError("mappings must use string or enum keys")
+        if keys is None and any(type(key) is not str for key in value):
+            raise TypeError("expected string-keyed object")
+        return {
+            keys.encode(key) if keys else key: encode_value(args[1], item)
+            for key, item in value.items()
+        }
     if origin in (Union, types.UnionType):
         for member in args:
             try:

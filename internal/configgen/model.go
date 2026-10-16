@@ -91,6 +91,7 @@ type typeIR struct {
 	Kind       typeKind
 	GoType     types.Type
 	Elem       *typeIR
+	Key        *typeIR
 	Fields     []*nestedFieldIR
 	Len        int64
 	Bits       int
@@ -573,15 +574,22 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 		}
 		return &typeIR{Kind: typeArray, GoType: t, Elem: elem, Len: value.Len(), Named: named, Mutable: elem.Mutable, Encoding: "array", SchemaType: "array"}, nil
 	case *types.Map:
-		keyBasic, ok := types.Unalias(value.Key()).Underlying().(*types.Basic)
-		if !ok || keyBasic.Info()&types.IsString == 0 {
-			return nil, fmt.Errorf("configgen: %s has map with unsupported key type %s; map keys must be strings", location, types.TypeString(value.Key(), nil))
+		key, err := analyzeType(value.Key(), sizes, stack, location+" map key")
+		if err != nil {
+			return nil, err
+		}
+		if key.Kind != typeString && ((key.Kind != typeInt && key.Kind != typeUint) || len(key.Enum) == 0) {
+			return nil, fmt.Errorf("configgen: %s has map with unsupported key type %s; map keys must be strings or declared enums", location, types.TypeString(value.Key(), nil))
+		}
+		encoding := "string-map"
+		if len(key.Enum) != 0 {
+			encoding = "enum-key-map"
 		}
 		elem, err := analyzeType(value.Elem(), sizes, stack, location+" map value")
 		if err != nil {
 			return nil, err
 		}
-		return &typeIR{Kind: typeMap, GoType: t, Elem: elem, Named: named, Mutable: true, Encoding: "string-map", SchemaType: "object"}, nil
+		return &typeIR{Kind: typeMap, GoType: t, Key: key, Elem: elem, Named: named, Mutable: true, Encoding: encoding, SchemaType: "object"}, nil
 	case *types.Struct:
 		result := &typeIR{Kind: typeStruct, GoType: t, Named: named, Encoding: "object", SchemaType: "object"}
 		jsonNames := make(map[string]string)

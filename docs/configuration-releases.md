@@ -95,7 +95,7 @@ the same environment; create missing secrets through normal secret management.
 From **Review contract** onward the wizard shows a **Release readiness**
 checklist. It runs the console's local schema checks (type, required
 properties, enum and const, numeric bounds, string length and pattern, list
-bounds, and `additionalProperties: false`) over every draft value as the
+bounds, `propertyNames`, and `additionalProperties: false`) over every draft value as the
 server will type it, and lists each alias and nested field that must be
 provided or changed, grouped by fix. Every row carries the same status chip
 ("Value needed", "Fails target schema", "Passes local checks", …), and the
@@ -201,6 +201,15 @@ member produces a new schema version. The annotation is also accepted inside
 the supported nullable wrapper. See
 [enums in managed Go configuration](managed-go-configuration.md#enums) for how
 the generator detects enums and derives names.
+
+Enum-keyed maps declare their canonical names in `propertyNames.enum`, with
+numeric metadata, when present, inside `propertyNames`. The console offers
+unused names when adding entries and a key selector for renaming existing
+entries, preserving their values and incomplete edits. Both scalar and
+structured map values are supported. Invalid stored keys remain visible for
+explicit repair or removal; JSON editing and release readiness report key
+validation errors. **Prepare draft** does not convert map keys, including old
+lowercase spellings or strings containing enum numbers.
 
 ### Registry semantics
 

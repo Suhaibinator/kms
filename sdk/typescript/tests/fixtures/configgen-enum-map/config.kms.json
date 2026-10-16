@@ -1,0 +1,106 @@
+{
+  "format": "kms-config-descriptor/v1",
+  "source": { "module": "./config.js", "type": "Config" },
+  "groups": [
+    {
+      "alias": "runtime",
+      "fields": [
+        {
+          "property": "roles",
+          "jsonName": "roles",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": {
+            "kind": "enumMap",
+            "key": {
+              "kind": "integer",
+              "bits": 32,
+              "members": [
+                { "name": "LOW", "value": "-1" },
+                { "name": "UNSPECIFIED", "value": "0" },
+                { "name": "ADMIN", "value": "3" },
+                { "name": "ADMIN_ALIAS", "value": "3" }
+              ]
+            },
+            "value": {
+              "kind": "object",
+              "fields": [
+                { "property": "enabled", "jsonName": "enabled", "type": { "kind": "boolean" } }
+              ]
+            }
+          }
+        },
+        {
+          "property": "protocols",
+          "jsonName": "protocols",
+          "reload": "restart",
+          "views": ["worker"],
+          "type": {
+            "kind": "enumMap",
+            "key": {
+              "kind": "string",
+              "members": [
+                { "name": "http", "value": "http" },
+                { "name": "__proto__", "value": "__proto__" },
+                { "name": "", "value": "" },
+                { "name": " ", "value": " " }
+              ]
+            },
+            "value": { "kind": "string" }
+          }
+        },
+        {
+          "property": "wide",
+          "jsonName": "wide",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": {
+            "kind": "enumMap",
+            "key": {
+              "kind": "integer",
+              "bits": 64,
+              "representation": "bigint",
+              "members": [
+                { "name": "WIDE", "value": "9007199254740993" },
+                { "name": "MAX", "value": "9223372036854775807" }
+              ]
+            },
+            "value": { "kind": "string" }
+          }
+        },
+        {
+          "property": "nested",
+          "jsonName": "nested",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": {
+            "kind": "object",
+            "fields": [
+              {
+                "property": "maps",
+                "jsonName": "maps",
+                "type": {
+                  "kind": "array",
+                  "element": {
+                    "kind": "enumMap",
+                    "key": {
+                      "kind": "integer",
+                      "bits": 32,
+                      "members": [
+                        { "name": "UNSPECIFIED", "value": "0" },
+                        { "name": "LOW", "value": "-1" },
+                        { "name": "ADMIN", "value": "3" }
+                      ]
+                    },
+                    "value": { "kind": "string" }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "secrets": []
+}

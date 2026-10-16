@@ -1,0 +1,74 @@
+{
+  "cases": [
+    {
+      "name": "integer canonical members including zero and negative",
+      "key_kind": "integer",
+      "members": [{"name":"LOW","number":-1},{"name":"UNSPECIFIED","number":0},{"name":"ADMIN","number":3}],
+      "document": "{\"entries\":{\"ADMIN\":\"admin\",\"LOW\":\"low\",\"UNSPECIFIED\":\"anonymous\"}}",
+      "valid": true
+    },
+    {
+      "name": "integer unknown member",
+      "key_kind": "integer",
+      "members": [{"name":"LOW","number":-1},{"name":"UNSPECIFIED","number":0},{"name":"ADMIN","number":3}],
+      "document": "{\"entries\":{\"PRIVATE_UNKNOWN_KEY\":\"hidden\"}}",
+      "valid": false
+    },
+    {
+      "name": "integer alias is not a wire name",
+      "key_kind": "integer",
+      "members": [{"name":"LOW","number":-1},{"name":"UNSPECIFIED","number":0},{"name":"ADMIN","number":3}],
+      "document": "{\"entries\":{\"ADMIN_ALIAS\":\"admin\"}}",
+      "valid": false
+    },
+    {
+      "name": "integer numeric spelling is not a wire name",
+      "key_kind": "integer",
+      "members": [{"name":"LOW","number":-1},{"name":"UNSPECIFIED","number":0},{"name":"ADMIN","number":3}],
+      "document": "{\"entries\":{\"0\":\"anonymous\"}}",
+      "valid": false
+    },
+    {
+      "name": "integer lowercase is not a wire name",
+      "key_kind": "integer",
+      "members": [{"name":"LOW","number":-1},{"name":"UNSPECIFIED","number":0},{"name":"ADMIN","number":3}],
+      "document": "{\"entries\":{\"admin\":\"admin\"}}",
+      "valid": false
+    },
+    {
+      "name": "string exact keys including empty whitespace and object names",
+      "key_kind": "string",
+      "members": [{"name":""},{"name":" "},{"name":"__proto__"},{"name":"constructor"},{"name":"http"}],
+      "document": "{\"entries\":{\"\":\"empty\",\" \":\"space\",\"__proto__\":\"prototype\",\"constructor\":\"constructor\",\"http\":\"http\"}}",
+      "valid": true
+    },
+    {
+      "name": "string unknown member",
+      "key_kind": "string",
+      "members": [{"name":"http"},{"name":"grpc"}],
+      "document": "{\"entries\":{\"ftp\":\"hidden\"}}",
+      "valid": false
+    },
+    {
+      "name": "null map",
+      "key_kind": "integer",
+      "members": [{"name":"UNSPECIFIED","number":0}],
+      "document": "{\"entries\":null}",
+      "valid": true
+    },
+    {
+      "name": "empty map",
+      "key_kind": "integer",
+      "members": [{"name":"UNSPECIFIED","number":0}],
+      "document": "{\"entries\":{}}",
+      "valid": true
+    },
+    {
+      "name": "duplicate map key",
+      "key_kind": "integer",
+      "members": [{"name":"UNSPECIFIED","number":0}],
+      "document": "{\"entries\":{\"UNSPECIFIED\":\"first\",\"UNSPECIFIED\":\"second\"}}",
+      "valid": false
+    }
+  ]
+}

@@ -16,6 +16,7 @@ export type CodecKind =
   | "object"
   | "array"
   | "record"
+  | "enumMap"
   | "nullable";
 
 /** Runtime codec emitted by generated managed-configuration bindings. */
@@ -46,6 +47,24 @@ interface ErasedValueCodec {
 
 type IsAny<T> = 0 extends 1 & T ? true : false;
 type NoExtraKeys<Value, Base> = Exclude<keyof Value, keyof Base> extends never ? true : false;
+export type EnumMapKey = string | number | bigint;
+/** String enums are unwrapped to literals so generated bindings need no value imports. */
+export type EnumMapMember<K extends EnumMapKey> = readonly [
+  name: string,
+  value: K | (K extends string ? `${K}` : never),
+];
+type MapBase<K, V, M extends ReadonlyMap<K, V>> =
+  M extends Map<K, V> ? Map<K, V> : ReadonlyMap<K, V>;
+type IsPlainMap<K, V, M extends ReadonlyMap<K, V>> =
+  IsAny<M> extends true
+    ? false
+    : [M] extends [never]
+      ? false
+      : NoExtraKeys<M, MapBase<K, V, M>> extends true
+        ? MapBase<K, V, M> extends M
+          ? true
+          : false
+        : false;
 type VariableArrayBase<T, TArray extends readonly T[]> = TArray extends T[] ? T[] : readonly T[];
 type IsPlainVariableArray<T, TArray extends readonly T[]> =
   IsAny<TArray> extends true
@@ -305,6 +324,14 @@ export const codecs = Object.freeze({
     return recordCodec<T, TRecord>(element);
   },
 
+  /** Sparse enum-keyed Map. Wire objects use canonical names; null remains distinct from empty. */
+  enumMap<K extends EnumMapKey, V, M extends ReadonlyMap<K, V> = Map<K, V>>(
+    members: readonly EnumMapMember<K>[],
+    element: ValueCodec<V> & (IsPlainMap<K, V, M> extends true ? unknown : never),
+  ): ValueCodec<IsPlainMap<K, V, M> extends true ? M | null : never> {
+    return enumMapCodec<K, V, M>(members, element);
+  },
+
   nullable<T>(element: ValueCodec<T>): ValueCodec<T | null> {
     return scalarCodec<T | null>(
       "nullable",
@@ -545,6 +572,86 @@ function recordCodec<T, TRecord extends Readonly<Record<string, T>>>(
 
 function compareUtf16(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function enumMapCodec<K extends EnumMapKey, V, M extends ReadonlyMap<K, V>>(
+  members: readonly EnumMapMember<K>[],
+  element: ValueCodec<V>,
+): ValueCodec<IsPlainMap<K, V, M> extends true ? M | null : never> {
+  assertElementCodec(element);
+  if (!Array.isArray(members) || members.length === 0) {
+    throw new TypeError("enum map requires at least one member");
+  }
+  const names = new Map<string, K>();
+  const declaredNames = new Map<string, K>();
+  const values = new Map<K, string>();
+  let keyKind: string | undefined;
+  for (const member of members) {
+    if (!Array.isArray(member) || member.length !== 2) {
+      throw new TypeError("enum map members must be name/value pairs");
+    }
+    const [name, value] = member;
+    const kind = typeof value;
+    if (
+      typeof name !== "string" ||
+      !["string", "number", "bigint"].includes(kind) ||
+      (keyKind !== undefined && kind !== keyKind)
+    ) {
+      throw new TypeError("enum map members must have one primitive key type");
+    }
+    if ((kind === "string" && name !== value) || (kind !== "string" && name.length === 0)) {
+      throw new TypeError("enum map has an invalid canonical member name");
+    }
+    if (
+      (typeof value === "number" &&
+        (!Number.isSafeInteger(value) || BigInt(value) < INT64_MIN || BigInt(value) > INT64_MAX)) ||
+      (typeof value === "bigint" && (value < INT64_MIN || value > INT64_MAX))
+    ) {
+      throw new RangeError("enum map numeric members must be exact signed int64 values");
+    }
+    keyKind = kind;
+    const key = value as K;
+    if (declaredNames.has(name) && declaredNames.get(name) !== key) {
+      throw new TypeError("enum map member names must be unique");
+    }
+    declaredNames.set(name, key);
+    // Ignore aliases after the first declaration: they are not accepted wire keys.
+    if (values.has(key)) continue;
+    names.set(name, key);
+    values.set(key, name);
+  }
+  type Result = IsPlainMap<K, V, M> extends true ? M | null : never;
+  return scalarCodec<Result>(
+    "enumMap",
+    (node, path) => {
+      if (node.kind === "null") return null as Result;
+      if (node.kind !== "object") throw typeError(path, "object");
+      const result = new Map<K, V>();
+      for (const property of node.properties) {
+        if (!names.has(property.name)) {
+          throw diagnostic(path, `configstore: unknown enum map key at ${path}`);
+        }
+        const key = names.get(property.name) as K;
+        if (result.has(key)) throw diagnostic(path, `configstore: duplicate map key at ${path}`);
+        result.set(key, element.decodeNode(property.value, `${path}[*]`));
+      }
+      return result as unknown as Result;
+    },
+    (value, path) => {
+      if (value === null) return { kind: "null" };
+      if (!(value instanceof Map))
+        throw descriptorError(path, "enum map codec does not match source");
+      const properties: { name: string; value: JsonNode }[] = [];
+      for (const [key, item] of Map.prototype.entries.call(value) as MapIterator<[K, V]>) {
+        const name = values.get(key);
+        if (name === undefined)
+          throw descriptorError(path, "enum map key is not a declared member");
+        properties.push({ name, value: element.encodeNode(item, `${path}[*]`) });
+      }
+      properties.sort((left, right) => compareUtf16(left.name, right.name));
+      return { kind: "object", properties };
+    },
+  );
 }
 
 function assertElementCodec<T>(codec: ValueCodec<T>): void {

@@ -218,7 +218,11 @@ func schemaForType(value *typeIR) map[string]any {
 	case typeSlice:
 		return nullableSchema(map[string]any{"type": "array", "items": schemaForType(value.Elem)})
 	case typeMap:
-		return nullableSchema(map[string]any{"type": "object", "additionalProperties": schemaForType(value.Elem)})
+		schema := map[string]any{"type": "object", "additionalProperties": schemaForType(value.Elem)}
+		if value.Key != nil && len(value.Key.Enum) != 0 {
+			schema["propertyNames"] = enumSchema(value.Key)
+		}
+		return nullableSchema(schema)
 	case typeStruct:
 		required := make([]string, 0, len(value.Fields))
 		properties := make(map[string]any)

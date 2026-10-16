@@ -89,3 +89,28 @@ type Unportable struct {
 }
 
 func (*Unportable) Validate() error { return nil }
+
+// Map defaults must use declared members, even when the compiler permits a cast.
+type UndeclaredMapDefault struct {
+	Value map[Level]string `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*UndeclaredMapDefault) Validate() error { return nil }
+func UndeclaredMapDefaults() *UndeclaredMapDefault {
+	return &UndeclaredMapDefault{Value: map[Level]string{0: "zero"}}
+}
+
+type UndeclaredStringMapDefault struct {
+	Value map[Mode]string `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*UndeclaredStringMapDefault) Validate() error { return nil }
+func UndeclaredStringMapDefaults() *UndeclaredStringMapDefault {
+	return &UndeclaredStringMapDefault{Value: map[Mode]string{"turbo": "value"}}
+}
+
+type PlainIntegerMap struct {
+	Value map[int]string `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*PlainIntegerMap) Validate() error { return nil }

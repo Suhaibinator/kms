@@ -138,6 +138,22 @@ function schemaForType(type: TypeDescriptor): JsonValue {
       };
     case "record":
       return nullable({ type: "object", additionalProperties: schemaForType(type.value) });
+    case "enumMap": {
+      const propertyNames: Record<string, JsonValue> = {
+        type: "string",
+        enum: type.key.members.map((member) => member.name),
+      };
+      if (type.key.kind === "integer") {
+        propertyNames["x-kms-enum-numbers"] = Object.fromEntries(
+          type.key.members.map((member) => [member.name, raw(BigInt(member.value))]),
+        );
+      }
+      return nullable({
+        type: "object",
+        propertyNames,
+        additionalProperties: schemaForType(type.value),
+      });
+    }
     case "object": {
       const required: JsonValue[] = [];
       const properties: Record<string, JsonValue> = Object.create(null) as Record<
@@ -279,6 +295,8 @@ function encodingForType(type: TypeDescriptor): string {
       return "array";
     case "record":
       return "nullable-string-map";
+    case "enumMap":
+      return "nullable-enum-key-map";
     case "object":
       return "object";
   }
@@ -299,6 +317,9 @@ function renderBinding(
   );
   const root = "RootConfig";
   const hasGroups = descriptor.groups.length > 0;
+  const hasEnumMaps = descriptor.groups.some((groupDescriptor) =>
+    groupDescriptor.fields.some((fieldDescriptor) => containsEnumMap(fieldDescriptor.type)),
+  );
   const hasSecrets = descriptor.secrets.length > 0;
   const hasRestartFields = descriptor.groups.some((groupDescriptor) =>
     groupDescriptor.fields.some((fieldDescriptor) => fieldDescriptor.reload === "restart"),
@@ -349,6 +370,7 @@ function renderBinding(
     "VerifyResult",
   ];
   if (hasGroups) runtimeTypes.push("GroupCodec", "ValueCodec");
+  if (hasEnumMaps) runtimeTypes.push("EnumMapKey");
   for (const name of runtimeTypes) {
     line(`  ${name},`);
   }
@@ -379,6 +401,13 @@ function renderBinding(
   ];
   line(`assertRootCoverage<${root}, ${rootProperties.map(quote).join(" | ")}>();`);
   line();
+  if (hasEnumMaps) {
+    line(
+      "type MapKey<T> = NonNullable<T> extends ReadonlyMap<infer K, unknown> ? Extract<K, EnumMapKey> : never;",
+    );
+    line("type MapValue<T> = NonNullable<T> extends ReadonlyMap<unknown, infer V> ? V : never;");
+    line();
+  }
 
   for (const [index, groupDescriptor] of descriptor.groups.entries()) {
     const typeName = `Group${index}`;
@@ -671,7 +700,7 @@ function renderBinding(
   for (const [groupIndex, groupDescriptor] of descriptor.groups.entries()) {
     for (const [fieldIndex, fieldDescriptor] of groupDescriptor.fields.entries()) {
       line(
-        `    appendDifference(defaultDifferences, ${quote(`${groupDescriptor.alias}.${fieldDescriptor.jsonName}`)}, valueCodec${groupIndex}_${fieldIndex}, validatedDefaults[${quote(fieldDescriptor.property)}], validatedCandidate[${quote(fieldDescriptor.property)}]);`,
+        `    appendDifference(defaultDifferences, ${quote(`${groupDescriptor.alias}.${fieldDescriptor.jsonName}`)}, valueCodec${groupIndex}_${fieldIndex}, validatedDefaults[${quote(fieldDescriptor.property)}], validatedCandidate[${quote(fieldDescriptor.property)}]${containsEnumMap(fieldDescriptor.type) ? ", true" : ""});`,
       );
     }
   }
@@ -704,7 +733,7 @@ function renderBinding(
   for (const [groupIndex, groupDescriptor] of descriptor.groups.entries()) {
     for (const [fieldIndex, fieldDescriptor] of groupDescriptor.fields.entries()) {
       line(
-        `      appendChange(changed, ${quote(`${groupDescriptor.alias}.${fieldDescriptor.jsonName}`)}, valueCodec${groupIndex}_${fieldIndex}, active.get(${quote(fieldDescriptor.property)}), validatedCandidate[${quote(fieldDescriptor.property)}]);`,
+        `      appendChange(changed, ${quote(`${groupDescriptor.alias}.${fieldDescriptor.jsonName}`)}, valueCodec${groupIndex}_${fieldIndex}, active.get(${quote(fieldDescriptor.property)}), validatedCandidate[${quote(fieldDescriptor.property)}]${containsEnumMap(fieldDescriptor.type) ? ", true" : ""});`,
       );
     }
   }
@@ -803,8 +832,13 @@ function renderBinding(
     line("  codec: ValueCodec<T>,");
     line("  expected: T,");
     line("  actual: T,");
+    if (hasEnumMaps) line("  project = false,");
     line("): void {");
-    line("  if (!sameEncoded(codec, expected, actual)) result.push({ path, expected, actual });");
+    line(
+      hasEnumMaps
+        ? '  if (!sameEncoded(codec, expected, actual)) result.push({ path, expected: project ? reportValue(codec.encodeNode(expected, "$")) : expected, actual: project ? reportValue(codec.encodeNode(actual, "$")) : actual });'
+        : "  if (!sameEncoded(codec, expected, actual)) result.push({ path, expected, actual });",
+    );
     line("}");
     line();
     line("function appendChange<T>(");
@@ -813,10 +847,31 @@ function renderBinding(
     line("  codec: ValueCodec<T>,");
     line("  previous: T,");
     line("  current: T,");
+    if (hasEnumMaps) line("  project = false,");
     line("): void {");
-    line("  if (!sameEncoded(codec, previous, current)) result.push({ path, previous, current });");
+    line(
+      hasEnumMaps
+        ? '  if (!sameEncoded(codec, previous, current)) result.push({ path, previous: project ? reportValue(codec.encodeNode(previous, "$")) : previous, current: project ? reportValue(codec.encodeNode(current, "$")) : current });'
+        : "  if (!sameEncoded(codec, previous, current)) result.push({ path, previous, current });",
+    );
     line("}");
     line();
+    if (hasEnumMaps) {
+      line("function reportValue(node: EncodedNode): unknown {");
+      line("  switch (node.kind) {");
+      line('    case "null": return null;');
+      line('    case "boolean": case "string": return node.value;');
+      line(
+        '    case "number": return /^-?(?:0|[1-9][0-9]*)$/u.test(node.lexeme) && !Number.isSafeInteger(Number(node.lexeme)) ? BigInt(node.lexeme) : Number(node.lexeme);',
+      );
+      line('    case "array": return node.elements.map(reportValue);');
+      line(
+        '    case "object": return Object.fromEntries(node.properties.map(({ name, value }) => [name, reportValue(value)]));',
+      );
+      line("  }");
+      line("}");
+      line();
+    }
     if (hasRestartFields) {
       line(
         "function appendRestart<T>(result: string[], path: string, codec: ValueCodec<T>, active: T, candidate: T): void {",
@@ -945,8 +1000,38 @@ function renderCodec(type: TypeDescriptor, context: string): string {
       return `codecs.fixedArray<${context}[number], ${type.length}, ${context}>(${renderCodec(type.element, `${context}[number]`)}, ${type.length})`;
     case "record":
       return `codecs.record<NonNullable<${context}>[string], NonNullable<${context}>>(${renderCodec(type.value, `NonNullable<${context}>[string]`)})`;
+    case "enumMap": {
+      const members = type.key.members.map((member) => {
+        const value =
+          type.key.kind === "string"
+            ? quote(member.value)
+            : type.key.representation === "bigint"
+              ? `${member.value}n`
+              : member.value;
+        return `[${quote(member.name)}, ${value}]`;
+      });
+      return `codecs.enumMap<MapKey<${context}>, MapValue<${context}>, NonNullable<${context}>>([${members.join(", ")}], ${renderCodec(type.value, `MapValue<${context}>`)})`;
+    }
     case "object":
       return renderObjectCodec(type.fields, context);
+  }
+}
+
+function containsEnumMap(type: TypeDescriptor): boolean {
+  switch (type.kind) {
+    case "enumMap":
+      return true;
+    case "nullable":
+      return containsEnumMap(type.value);
+    case "array":
+    case "fixedArray":
+      return containsEnumMap(type.element);
+    case "record":
+      return containsEnumMap(type.value);
+    case "object":
+      return type.fields.some((field) => containsEnumMap(field.type));
+    default:
+      return false;
   }
 }
 

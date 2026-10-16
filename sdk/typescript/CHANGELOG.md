@@ -40,6 +40,10 @@ a minor release may contain documented breaking changes.
 
 ### Added
 
+- Enum-keyed managed-configuration Maps through the `enumMap` descriptor and
+  `codecs.enumMap`, with canonical JSON names, typed numeric/string enum keys,
+  exact bigint keys, schema key validation, defaults exports, defensive
+  snapshots, and canonical object values in drift/applied reports.
 - `Secret.isSet` reports whether a secret holds a value: true for every secret
   resolved from KMS, including an empty (zero-byte) one now that KMS stores
   empty secrets, and for a locally constructed secret that carries bytes.

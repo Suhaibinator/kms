@@ -47,6 +47,14 @@ type defaultsEvaluator struct {
 	depth int
 }
 
+// mapDefaultEntry preserves a literal key until its enum codec is known.
+type mapDefaultEntry struct {
+	key   constDefault
+	value any
+}
+
+type mapDefault []mapDefaultEntry
+
 // constDefault is a compile-time constant with its Go type.
 type constDefault struct {
 	value constant.Value
@@ -284,17 +292,17 @@ func (ev *defaultsEvaluator) eval(expr ast.Expr) any {
 			}
 			return items
 		case *types.Map:
-			entries := make(map[string]any, len(value.Elts))
+			entries := make(mapDefault, 0, len(value.Elts))
 			for _, elt := range value.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
 					return unknownDefault{}
 				}
 				keyValue, ok := ev.eval(kv.Key).(constDefault)
-				if !ok || keyValue.value.Kind() != constant.String {
+				if !ok {
 					return unknownDefault{}
 				}
-				entries[constant.StringVal(keyValue.value)] = ev.eval(kv.Value)
+				entries = append(entries, mapDefaultEntry{key: keyValue, value: ev.eval(kv.Value)})
 			}
 			return entries
 		}
@@ -441,10 +449,21 @@ func schemaDefault(value *typeIR, raw any) (any, bool, error) {
 		if raw == nil {
 			return nil, true, nil
 		}
-		if entries, ok := raw.(map[string]any); ok {
+		if entries, ok := raw.(mapDefault); ok {
 			out := make(map[string]any, len(entries))
-			for key, item := range entries {
-				converted, known, err := schemaDefault(value.Elem, item)
+			for _, entry := range entries {
+				convertedKey, known, err := schemaDefault(value.Key, entry.key)
+				if err != nil || !known {
+					return nil, false, err
+				}
+				key, ok := convertedKey.(string)
+				if !ok {
+					return nil, false, fmt.Errorf("map default key must encode as a string")
+				}
+				if _, exists := out[key]; exists {
+					return nil, false, fmt.Errorf("duplicate canonical map default key")
+				}
+				converted, known, err := schemaDefault(value.Elem, entry.value)
 				if err != nil || !known {
 					return nil, false, err
 				}

@@ -85,6 +85,32 @@ wire format faithfully. Config generation also rejects decoded-byte length
 constraints, which JSON Schema cannot express for base64 strings without
 misstating their meaning.
 
+Maps may use `str` keys or native enum keys: `dict[Role, T]` and
+`Mapping[Role, T]` support integer-valued `Enum`/`IntEnum` and string-valued
+`Enum` classes. For example:
+
+```python
+from enum import IntEnum
+
+class Role(IntEnum):
+    UNSPECIFIED = 0
+    ADMIN = 3
+
+# A field on the configuration model:
+weights: Annotated[dict[Role, int], Parameter("runtime")] = {Role.UNSPECIFIED: 0}
+```
+
+The JSON representation is `{"weights":{"UNSPECIFIED":0}}`. Integer enum
+keys use member names; string enum keys use their exact declared string values.
+The first declaration of an aliased value supplies the canonical name, and
+declared zero members are valid keys. Unknown keys and integer spellings such
+as `"0"` are rejected for integer enums. Local configuration and defaults must
+use actual enum members as keys. Generated schemas constrain property names
+while retaining the value schema. `use_enum_values=True` is incompatible with
+enum-keyed maps because it discards their enum types. Flag enums and mixed,
+boolean, or float-valued enums are unsupported. Scalar enum fields remain
+outside the portable generator's supported types.
+
 `encode_defaults_artifact` and `export_defaults` produce parameter-only
 `kms-config-defaults/v1` artifacts. `verify_defaults` sends only canonical
 SHA-256 hashes to KMS and returns a value-free result suitable for CI logs.

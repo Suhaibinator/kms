@@ -670,6 +670,12 @@ apply independently—version 1 has no fleet-wide barrier. See
 For strict Pydantic v2 models, deterministic binding/schema/contract
 generation, atomic managed snapshots, defaults export and verification, use
 [`kms-config-gen-py` and the Python managed-configuration guide`](../sdk/python/MANAGED_CONFIG.md).
+
+Managed maps support `dict[EnumType, ValueType]` and `Mapping[EnumType, ValueType]`
+with homogeneous integer or string enums. Integer keys travel as canonical
+member names, string keys as their declared values; source defaults and local
+configuration use actual enum members. See the guide for alias and validation
+rules.
 The Python generator currently caps generated schemas at 256 KiB, below the
 server and Go generator's 1 MiB limit, and fails before writing any artifact.
 
