@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Mapping, cast
 
 import tests.fixtures.configgen.source as _source
+import tests.fixtures.configgen.enums as _enum_module_0
 from kms_paramstore import Secret
 from kms_paramstore.configstore import (
     AsyncManagedConfigManager, Callbacks, ConfigBinding, ConfigSnapshot,
@@ -19,7 +20,7 @@ from kms_paramstore.configstore import (
 
 _RootConfig = _source.ApplicationConfig
 
-SCHEMA_SHA256 = "8939f3781ba788cba2dcc326d04da080bb068b410d3b707e1d272a19ca86c462"
+SCHEMA_SHA256 = "a229675a589c78cdb6d8edb7f74bc501f1ff825866cd04749061d8d14c938957"
 CONTRACT = (
     ContractEntry('db_password', 'secret', ''),
     ContractEntry('runtime', 'parameter', 'json'),
@@ -38,6 +39,10 @@ class ServerConfigView(ConfigView):
     def port(self) -> int:
         return cast(int, ConfigView.get(self, 'port'))
 
+    @property
+    def weights(self) -> dict[_enum_module_0.Role, int]:
+        return cast(dict[_enum_module_0.Role, int], ConfigView.get(self, 'weights'))
+
 class Snapshot(ConfigSnapshot[_RootConfig]):
     @property
     def debug(self) -> bool:
@@ -51,8 +56,16 @@ class Snapshot(ConfigSnapshot[_RootConfig]):
     def port(self) -> int:
         return cast(int, ConfigSnapshot.get(self, 'port'))
 
+    @property
+    def transports(self) -> Mapping[_source.Transport, str] | None:
+        return cast(Mapping[_source.Transport, str] | None, ConfigSnapshot.get(self, 'transports'))
+
+    @property
+    def weights(self) -> dict[_enum_module_0.Role, int]:
+        return cast(dict[_enum_module_0.Role, int], ConfigSnapshot.get(self, 'weights'))
+
     def server(self) -> ServerConfigView:
-        return ServerConfigView(self, ('debug', 'password', 'port'))
+        return ServerConfigView(self, ('debug', 'password', 'port', 'weights'))
 
 class GeneratedConfigStore(ConfigBinding[_RootConfig]):
     def __init__(self, defaults: Mapping[str, Any] | _RootConfig) -> None:

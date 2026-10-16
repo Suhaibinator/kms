@@ -86,30 +86,39 @@ type Route struct {
 }
 
 type Config struct {
-	Tier     Tier               `json:"tier" kms:"group=plan,reload=hot" kms_views:"api"`
-	MinTier  *Tier              `json:"min_tier" kms:"group=plan,reload=hot" kms_views:"api"`
-	Interval Plan_Interval      `json:"interval" kms:"group=plan,reload=restart" kms_views:"api"`
-	Priority Priority           `json:"priority" kms:"group=plan,reload=hot" kms_views:"api"`
-	Weight   Weight             `json:"weight" kms:"group=plan,reload=hot" kms_views:"api"`
-	Label    Label              `json:"label" kms:"group=plan,reload=hot" kms_views:"api"`
-	Primary  Adapter            `json:"primary" kms:"group=routing,reload=hot" kms_views:"api"`
-	Sinks    []Sink             `json:"sinks" kms:"group=routing,reload=hot" kms_views:"api"`
-	Adapters map[string]Adapter `json:"adapters" kms:"group=routing,reload=hot" kms_views:"api"`
-	Routes   []Route            `json:"routes" kms:"group=routing,reload=hot" kms_views:"api"`
+	Tier          Tier                      `json:"tier" kms:"group=plan,reload=hot" kms_views:"api"`
+	MinTier       *Tier                     `json:"min_tier" kms:"group=plan,reload=hot" kms_views:"api"`
+	Interval      Plan_Interval             `json:"interval" kms:"group=plan,reload=restart" kms_views:"api"`
+	Priority      Priority                  `json:"priority" kms:"group=plan,reload=hot" kms_views:"api"`
+	Weight        Weight                    `json:"weight" kms:"group=plan,reload=hot" kms_views:"api"`
+	Label         Label                     `json:"label" kms:"group=plan,reload=hot" kms_views:"api"`
+	Primary       Adapter                   `json:"primary" kms:"group=routing,reload=hot" kms_views:"api"`
+	Sinks         []Sink                    `json:"sinks" kms:"group=routing,reload=hot" kms_views:"api"`
+	Adapters      map[string]Adapter        `json:"adapters" kms:"group=routing,reload=hot" kms_views:"api"`
+	TierRoutes    map[Tier]Route            `json:"tier_routes" kms:"group=routing,reload=hot" kms_views:"api"`
+	SinkLevels    map[Sink]Priority         `json:"sink_levels" kms:"group=routing,reload=hot" kms_views:"api"`
+	AdapterRoutes map[Adapter]Route         `json:"adapter_routes" kms:"group=routing,reload=hot" kms_views:"api"`
+	NestedMaps    map[string]map[Tier]Route `json:"nested_maps" kms:"group=routing,reload=hot" kms_views:"api"`
+	NestedRoutes  []map[Tier]Route          `json:"nested_routes" kms:"group=routing,reload=hot" kms_views:"api"`
+	Routes        []Route                   `json:"routes" kms:"group=routing,reload=hot" kms_views:"api"`
 }
 
 func (*Config) Validate() error { return nil }
 
 func Defaults() *Config {
 	return &Config{
-		Tier:     Tier_TIER_FREE,
-		MinTier:  new(Tier_TIER_PROFESSIONAL),
-		Interval: Plan_INTERVAL_MONTHLY,
-		Weight:   WeightHeavy,
-		Label:    "main",
-		Primary:  AdapterDefault,
-		Sinks:    []Sink{SinkStdout, SinkFile},
-		Adapters: map[string]Adapter{"primary": AdapterGRPC},
-		Routes:   []Route{{Adapter: AdapterHTTP}},
+		Tier:          Tier_TIER_FREE,
+		MinTier:       new(Tier_TIER_PROFESSIONAL),
+		Interval:      Plan_INTERVAL_MONTHLY,
+		Weight:        WeightHeavy,
+		Label:         "main",
+		Primary:       AdapterDefault,
+		Sinks:         []Sink{SinkStdout, SinkFile},
+		Adapters:      map[string]Adapter{"primary": AdapterGRPC},
+		Routes:        []Route{{Adapter: AdapterHTTP}},
+		TierRoutes:    map[Tier]Route{Tier_TIER_UNSPECIFIED: {Adapter: AdapterHTTP}, Tier_TIER_PROFESSIONAL: {Adapter: AdapterGRPC}},
+		SinkLevels:    map[Sink]Priority{SinkNone: PriorityNormal, SinkFile: PriorityLow},
+		AdapterRoutes: map[Adapter]Route{AdapterDefault: {Adapter: AdapterGRPC}},
+		NestedRoutes:  []map[Tier]Route{{Tier_TIER_FREE: {Adapter: AdapterHTTP}}},
 	}
 }

@@ -21,6 +21,26 @@
       "views": [
         "server"
       ]
+    },
+    {
+      "encoding": "nullable<enum-key-map>",
+      "group": "runtime",
+      "json_name": "transports",
+      "python_name": "transports",
+      "python_path": "transports",
+      "reload": "hot",
+      "views": []
+    },
+    {
+      "encoding": "enum-key-map",
+      "group": "runtime",
+      "json_name": "weights",
+      "python_name": "weights",
+      "python_path": "weights",
+      "reload": "hot",
+      "views": [
+        "server"
+      ]
     }
   ],
   "format": "kms-config-contract/v1",
@@ -30,12 +50,14 @@
       "content_type": "json",
       "fields": [
         "debug",
-        "port"
+        "port",
+        "transports",
+        "weights"
       ],
       "kind": "parameter"
     }
   ],
-  "schema_sha256": "8939f3781ba788cba2dcc326d04da080bb068b410d3b707e1d272a19ca86c462",
+  "schema_sha256": "a229675a589c78cdb6d8edb7f74bc501f1ff825866cd04749061d8d14c938957",
   "secrets": [
     {
       "alias": "db_password",
@@ -59,7 +81,8 @@
       "fields": [
         "db_password",
         "runtime.debug",
-        "runtime.port"
+        "runtime.port",
+        "runtime.weights"
       ],
       "method": "server",
       "name": "server"

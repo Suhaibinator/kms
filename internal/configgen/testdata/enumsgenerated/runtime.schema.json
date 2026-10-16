@@ -105,9 +105,24 @@
     "routing": {
       "additionalProperties": false,
       "default": {
+        "adapter_routes": {
+          "http": {
+            "adapter": "grpc",
+            "tier": null
+          }
+        },
         "adapters": {
           "primary": "grpc"
         },
+        "nested_maps": null,
+        "nested_routes": [
+          {
+            "TIER_FREE": {
+              "adapter": "http",
+              "tier": null
+            }
+          }
+        ],
         "primary": "http",
         "routes": [
           {
@@ -115,12 +130,86 @@
             "tier": null
           }
         ],
+        "sink_levels": {
+          "File": "Low",
+          "None": "Normal"
+        },
         "sinks": [
           "Stdout",
           "File"
-        ]
+        ],
+        "tier_routes": {
+          "TIER_PRO": {
+            "adapter": "grpc",
+            "tier": null
+          },
+          "TIER_UNSPECIFIED": {
+            "adapter": "http",
+            "tier": null
+          }
+        }
       },
       "properties": {
+        "adapter_routes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "adapter": {
+                    "enum": [
+                      "http",
+                      "grpc"
+                    ],
+                    "type": "string"
+                  },
+                  "tier": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "TIER_UNSPECIFIED",
+                          "TIER_FREE",
+                          "TIER_PRO"
+                        ],
+                        "type": "string",
+                        "x-kms-enum-numbers": {
+                          "TIER_FREE": 1,
+                          "TIER_PRO": 3,
+                          "TIER_UNSPECIFIED": 0
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "adapter",
+                  "tier"
+                ],
+                "type": "object"
+              },
+              "propertyNames": {
+                "enum": [
+                  "http",
+                  "grpc"
+                ],
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": {
+            "http": {
+              "adapter": "grpc",
+              "tier": null
+            }
+          }
+        },
         "adapters": {
           "anyOf": [
             {
@@ -140,6 +229,155 @@
           "default": {
             "primary": "grpc"
           }
+        },
+        "nested_maps": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapter": {
+                          "enum": [
+                            "http",
+                            "grpc"
+                          ],
+                          "type": "string"
+                        },
+                        "tier": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "TIER_UNSPECIFIED",
+                                "TIER_FREE",
+                                "TIER_PRO"
+                              ],
+                              "type": "string",
+                              "x-kms-enum-numbers": {
+                                "TIER_FREE": 1,
+                                "TIER_PRO": 3,
+                                "TIER_UNSPECIFIED": 0
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "adapter",
+                        "tier"
+                      ],
+                      "type": "object"
+                    },
+                    "propertyNames": {
+                      "enum": [
+                        "TIER_UNSPECIFIED",
+                        "TIER_FREE",
+                        "TIER_PRO"
+                      ],
+                      "type": "string",
+                      "x-kms-enum-numbers": {
+                        "TIER_FREE": 1,
+                        "TIER_PRO": 3,
+                        "TIER_UNSPECIFIED": 0
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "nested_routes": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "adapter": {
+                          "enum": [
+                            "http",
+                            "grpc"
+                          ],
+                          "type": "string"
+                        },
+                        "tier": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "TIER_UNSPECIFIED",
+                                "TIER_FREE",
+                                "TIER_PRO"
+                              ],
+                              "type": "string",
+                              "x-kms-enum-numbers": {
+                                "TIER_FREE": 1,
+                                "TIER_PRO": 3,
+                                "TIER_UNSPECIFIED": 0
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "adapter",
+                        "tier"
+                      ],
+                      "type": "object"
+                    },
+                    "propertyNames": {
+                      "enum": [
+                        "TIER_UNSPECIFIED",
+                        "TIER_FREE",
+                        "TIER_PRO"
+                      ],
+                      "type": "string",
+                      "x-kms-enum-numbers": {
+                        "TIER_FREE": 1,
+                        "TIER_PRO": 3,
+                        "TIER_UNSPECIFIED": 0
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": [
+            {
+              "TIER_FREE": {
+                "adapter": "http",
+                "tier": null
+              }
+            }
+          ]
         },
         "primary": {
           "default": "http",
@@ -202,6 +440,46 @@
             }
           ]
         },
+        "sink_levels": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "enum": [
+                  "Low",
+                  "Normal",
+                  "High"
+                ],
+                "type": "string",
+                "x-kms-enum-numbers": {
+                  "High": 10,
+                  "Low": -1,
+                  "Normal": 0
+                }
+              },
+              "propertyNames": {
+                "enum": [
+                  "None",
+                  "Stdout",
+                  "File"
+                ],
+                "type": "string",
+                "x-kms-enum-numbers": {
+                  "File": 2,
+                  "None": 0,
+                  "Stdout": 1
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": {
+            "File": "Low",
+            "None": "Normal"
+          }
+        },
         "sinks": {
           "anyOf": [
             {
@@ -228,13 +506,88 @@
             "Stdout",
             "File"
           ]
+        },
+        "tier_routes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "adapter": {
+                    "enum": [
+                      "http",
+                      "grpc"
+                    ],
+                    "type": "string"
+                  },
+                  "tier": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "TIER_UNSPECIFIED",
+                          "TIER_FREE",
+                          "TIER_PRO"
+                        ],
+                        "type": "string",
+                        "x-kms-enum-numbers": {
+                          "TIER_FREE": 1,
+                          "TIER_PRO": 3,
+                          "TIER_UNSPECIFIED": 0
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "adapter",
+                  "tier"
+                ],
+                "type": "object"
+              },
+              "propertyNames": {
+                "enum": [
+                  "TIER_UNSPECIFIED",
+                  "TIER_FREE",
+                  "TIER_PRO"
+                ],
+                "type": "string",
+                "x-kms-enum-numbers": {
+                  "TIER_FREE": 1,
+                  "TIER_PRO": 3,
+                  "TIER_UNSPECIFIED": 0
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": {
+            "TIER_PRO": {
+              "adapter": "grpc",
+              "tier": null
+            },
+            "TIER_UNSPECIFIED": {
+              "adapter": "http",
+              "tier": null
+            }
+          }
         }
       },
       "required": [
+        "adapter_routes",
         "adapters",
+        "nested_maps",
+        "nested_routes",
         "primary",
         "routes",
-        "sinks"
+        "sink_levels",
+        "sinks",
+        "tier_routes"
       ],
       "type": "object"
     }

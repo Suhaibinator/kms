@@ -12,10 +12,11 @@ import {
   itemAt,
   type JsonSchema,
   parseNumberDraft,
+  pathKey,
   setAt,
   validateValue,
 } from "@/lib/schema-form";
-import { chooseSelectOption } from "./select-test-utils";
+import { chooseSelectOption, visibleSelectOptions } from "./select-test-utils";
 
 // The editor remembers the last Form/JSON choice; each test starts without one.
 beforeEach(() => {
@@ -1139,5 +1140,172 @@ describe("generated enums", () => {
     expect(out()).toMatchObject({ role: "ROLE_11" });
     fireEvent.click(screen.getByRole("combobox", { name: "roles item 1" }));
     expect(await screen.findByRole("combobox", { name: "Filter options…" })).toBeVisible();
+  });
+});
+
+describe("enum-keyed maps", () => {
+  const names = ["USER", "ADMIN"];
+  const propertyNames = {
+    type: "string",
+    enum: names,
+    "x-kms-enum-numbers": { USER: 1, ADMIN: 2 },
+  };
+  const mapSchema = (additionalProperties: JsonSchema): JsonSchema => ({
+    type: "object",
+    propertyNames,
+    additionalProperties,
+  });
+  const keyed: JsonSchema = {
+    type: "object",
+    properties: {
+      weights: mapSchema({ type: "integer" }),
+      plans: {
+        anyOf: [
+          mapSchema({ type: "object", properties: { count: { type: "integer" } } }),
+          { type: "null" },
+        ],
+      },
+      roles: mapSchema({ type: "string", enum: ["READ", "WRITE"] }),
+    },
+  };
+
+  it("models key choices independently from scalar value choices and nullable structured values", () => {
+    const fields = buildForm(keyed)?.fields;
+    expect(fields?.[0]).toMatchObject({ kind: "map", keyEnumValues: names, item: "number" });
+    expect(fields?.[1]).toMatchObject({
+      kind: "map",
+      keyEnumValues: names,
+      item: "object",
+      nullable: true,
+    });
+    expect(fields?.[2]).toMatchObject({ keyEnumValues: names, enumValues: ["READ", "WRITE"] });
+    expect(fields?.[0].schema.propertyNames).toEqual(propertyNames);
+  });
+
+  it("keeps key pickers available when numeric key metadata exceeds JavaScript precision", async () => {
+    const schema = aliasSchema(
+      '{"properties":{"app":{"type":"object","properties":{"weights":{"type":"object","propertyNames":{"type":"string","enum":["USER","ADMIN"],"x-kms-enum-numbers":{"USER":9007199254740993,"ADMIN":2}},"additionalProperties":{"type":"integer"}}}}}}',
+      "app",
+    );
+    if (!schema) throw new Error("Expected alias schema");
+    render(<Harness schema={schema} initial='{"weights":{"user":3}}' />);
+    expect(screen.getByRole("button", { name: "Form" })).toBeEnabled();
+    await chooseSelectOption(screen.getByRole("combobox", { name: 'weights key "user"' }), "USER");
+    fireEvent.click(screen.getByRole("button", { name: "Add weights entry" }));
+    await chooseSelectOption(screen.getByRole("combobox", { name: "New weights key" }), "ADMIN");
+    fireEvent.click(screen.getByRole("button", { name: "Add new weights entry" }));
+    expect(out()).toEqual({ weights: { USER: 3, ADMIN: 0 } });
+  });
+
+  it("stages additions, excludes occupied names, and restores choices after removal", async () => {
+    render(<Harness schema={keyed} initial='{"weights":{"USER":4}}' />);
+    fireEvent.click(screen.getByRole("button", { name: "Add weights entry" }));
+    expect(screen.getByRole("button", { name: "Add new weights entry" })).toBeDisabled();
+    expect(
+      await visibleSelectOptions(screen.getByRole("combobox", { name: "New weights key" })),
+    ).toEqual(["ADMIN"]);
+    await chooseSelectOption(screen.getByRole("combobox", { name: "New weights key" }), "ADMIN");
+    expect(out()).toEqual({ weights: { USER: 4 } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(out()).toEqual({ weights: { USER: 4 } });
+    fireEvent.click(screen.getByRole("button", { name: "Add weights entry" }));
+    await chooseSelectOption(screen.getByRole("combobox", { name: "New weights key" }), "ADMIN");
+    fireEvent.click(screen.getByRole("button", { name: "Add new weights entry" }));
+    expect(out()).toEqual({ weights: { USER: 4, ADMIN: 0 } });
+    expect(screen.getByRole("button", { name: "Add weights entry" })).toBeDisabled();
+    expect(
+      await visibleSelectOptions(screen.getByRole("combobox", { name: 'weights key "USER"' })),
+    ).toEqual(["USER"]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove weights entry USER" }));
+    expect(screen.getByRole("button", { name: "Add weights entry" })).toBeEnabled();
+    expect(
+      await visibleSelectOptions(screen.getByRole("combobox", { name: 'weights key "ADMIN"' })),
+    ).toEqual(["USER", "ADMIN"]);
+  });
+
+  it("keeps invalid stored keys visible until an explicit repair and preserves scalar drafts", async () => {
+    render(<Harness schema={keyed} initial='{"weights":{"user":4}}' />);
+    const key = screen.getByRole("combobox", { name: 'weights key "user"' });
+    expect(key).toHaveTextContent('"user" (invalid)');
+    expect(key).toHaveAttribute("aria-invalid", "true");
+    expect(out()).toEqual({ weights: { user: 4 } });
+    fireEvent.change(screen.getByRole("textbox", { name: "weights entry user" }), {
+      target: { value: "4e" },
+    });
+    await chooseSelectOption(key, "ADMIN");
+    expect(out()).toEqual({ weights: { ADMIN: 4 } });
+    expect(screen.getByRole("textbox", { name: "weights entry ADMIN" })).toHaveValue("4e");
+    fireEvent.change(screen.getByRole("textbox", { name: "weights entry ADMIN" }), {
+      target: { value: "8" },
+    });
+    expect(out()).toEqual({ weights: { ADMIN: 8 } });
+  });
+
+  it("renames structured entries while retaining nested numeric drafts", async () => {
+    render(<Harness schema={keyed} initial='{"plans":{"USER":{"count":3}}}' />);
+    fireEvent.change(screen.getByRole("textbox", { name: "count" }), { target: { value: "3e" } });
+    await chooseSelectOption(screen.getByRole("combobox", { name: 'plans key "USER"' }), "ADMIN");
+    expect(out()).toEqual({ plans: { ADMIN: { count: 3 } } });
+    expect(screen.getByRole("textbox", { name: "count" })).toHaveValue("3e");
+    fireEvent.change(screen.getByRole("textbox", { name: "count" }), { target: { value: "9" } });
+    expect(out()).toEqual({ plans: { ADMIN: { count: 9 } } });
+  });
+
+  it("preserves exact empty, whitespace, and object-prototype-like canonical keys", async () => {
+    const exactNames = ["", " ", "__proto__", "constructor", "toString"];
+    const exactSchema: JsonSchema = {
+      type: "object",
+      properties: {
+        values: {
+          type: "object",
+          propertyNames: { enum: exactNames },
+          additionalProperties: { type: "integer" },
+        },
+      },
+    };
+    render(<Harness schema={exactSchema} initial='{"values":{}}' />);
+    for (const name of exactNames) {
+      fireEvent.click(screen.getByRole("button", { name: "Add values entry" }));
+      await chooseSelectOption(
+        screen.getByRole("combobox", { name: "New values key" }),
+        name.trim() ? name : JSON.stringify(name),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Add new values entry" }));
+      fireEvent.change(
+        screen.getByRole("textbox", {
+          name: `values entry ${name.trim() ? name : JSON.stringify(name)}`,
+        }),
+        {
+          target: { value: "7" },
+        },
+      );
+    }
+    expect(Object.keys((out() as { values: object }).values)).toEqual(exactNames);
+    expect(Object.values((out() as { values: object }).values)).toEqual([7, 7, 7, 7, 7]);
+    expect(validateValue(exactSchema, out())).toEqual([]);
+    expect(
+      new Set([
+        pathKey([]),
+        ...exactNames.map((name) => pathKey([name])),
+        pathKey(["a b"]),
+        pathKey(["a", "b"]),
+      ]).size,
+    ).toBe(8);
+    fireEvent.click(screen.getByRole("button", { name: "Remove values entry __proto__" }));
+    await chooseSelectOption(screen.getByRole("combobox", { name: 'values key ""' }), "__proto__");
+    expect(Object.hasOwn((out() as { values: object }).values, "")).toBe(false);
+    expect(Object.hasOwn((out() as { values: object }).values, "__proto__")).toBe(true);
+  });
+
+  it("validates keys separately from values in JSON mode without changing the stored names", () => {
+    render(<Harness schema={keyed} initial='{"weights":{"user":3,"1":4}}' />);
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    expect(screen.getByTestId("schema-form-summary")).toHaveTextContent("2 schema issues");
+    expect(validateValue(keyed, out())[0].message).toBe('key must be one of "USER", "ADMIN"');
+    expect(out()).toEqual({ weights: { user: 3, "1": 4 } });
+    expect(validateValue(keyed, { plans: null, weights: { USER: 1 } })).toEqual([]);
+    expect(validateValue(keyed, { weights: { USER: "bad" } })).toEqual([
+      { path: ["weights", "USER"], message: "must be integer, got string" },
+    ]);
   });
 });

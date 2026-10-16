@@ -52,8 +52,8 @@ try {
   await writeFile(
     resolve(temporaryDirectory, "consumer.ts"),
     `import { createClient, formatRevision, type WatchStatus } from "@suhaibinator/kms";
-import { codecs, LocalConfigManager, type ConfigManager, type ManagedConfigManager, type ValueCodec } from "@suhaibinator/kms/configstore";
-import { generate, type ConfigDescriptor } from "@suhaibinator/kms/configgen";
+import { codecs, LocalConfigManager, type ConfigManager, type EnumMapMember, type ManagedConfigManager, type ValueCodec } from "@suhaibinator/kms/configstore";
+import { generate, type ConfigDescriptor, type EnumMapKeyDescriptor } from "@suhaibinator/kms/configgen";
 import { createNextKms } from "@suhaibinator/kms/next/server";
 import { usePublicConfig } from "@suhaibinator/kms/next/client";
 
@@ -66,7 +66,14 @@ for (const lifecycle of lifecycles) {
 declare const status: WatchStatus;
 const revision: string = formatRevision(status.currentRevision);
 const bytes: ValueCodec<Uint8Array | null> = codecs.bytes;
-void [createClient, generate, createNextKms, usePublicConfig, revision, bytes];
+enum Role { Unspecified = 0, Admin = 3 }
+enum Protocol { Http = "http" }
+const members: readonly EnumMapMember<Role>[] = [["UNSPECIFIED", 0], ["ADMIN", 3]];
+const roleMap: ValueCodec<Map<Role, string> | null> = codecs.enumMap<Role, string>(members, codecs.string);
+const protocolMap: ValueCodec<ReadonlyMap<Protocol, string> | null> = codecs.enumMap<Protocol, string, ReadonlyMap<Protocol, string>>([["http", "http"]], codecs.string);
+const wideMap: ValueCodec<Map<9007199254740993n, string> | null> = codecs.enumMap<9007199254740993n, string>([["WIDE", 9007199254740993n]], codecs.string);
+const mapKey: EnumMapKeyDescriptor = { kind: "integer", bits: 64, unsigned: false, representation: "bigint", members: [{ name: "WIDE", value: "9007199254740993" }] };
+void [createClient, generate, createNextKms, usePublicConfig, revision, bytes, roleMap, protocolMap, wideMap, mapKey];
 const descriptor: ConfigDescriptor | undefined = undefined;
 void descriptor;
 `,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import keyword
+import collections.abc
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Mapping, get_args, get_origin
 
@@ -16,6 +17,7 @@ except ImportError as error:  # pragma: no cover - dependency guard for broken i
 
 from ..secret import Secret
 from .contract import ContractEntry
+from .enum_keys import enum_keys
 
 __all__ = [
     "ConfigSpec",
@@ -124,7 +126,9 @@ class ConfigSpec:
                 if field.default is PydanticUndefined and field.default_factory is None:
                     raise TypeError(f"configstore: non-secret field {property_name} must declare a source default")
                 annotation = _validation_annotation(field.annotation, field.metadata)
-                _validate_managed_annotation(annotation, property_name, set())
+                _validate_managed_annotation(
+                    annotation, property_name, set(), bool(config.get("use_enum_values")),
+                )
                 parameters.append(
                     ParameterField(
                         property_name, json_name, marker.group, marker.reload,
@@ -263,7 +267,9 @@ def _validate_validation_alias(alias: object, path: str) -> None:
         )
 
 
-def _validate_managed_annotation(annotation: Any, path: str, seen: set[type[BaseModel]]) -> None:
+def _validate_managed_annotation(
+    annotation: Any, path: str, seen: set[type[BaseModel]], use_enum_values: bool = False,
+) -> None:
     core = get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
     if core is dt.timedelta:
         raise TypeError(
@@ -272,9 +278,15 @@ def _validate_managed_annotation(annotation: Any, path: str, seen: set[type[Base
         )
     origin = get_origin(core)
     if origin is not None:
+        if origin in (dict, collections.abc.Mapping):
+            keys = enum_keys(get_args(core)[0])
+            if keys is not None and use_enum_values:
+                raise TypeError(
+                    f"configstore: field {path} enum map keys require use_enum_values=False"
+                )
         for item in get_args(core):
             if item is not type(None) and item is not Ellipsis:
-                _validate_managed_annotation(item, path, seen)
+                _validate_managed_annotation(item, path, seen, use_enum_values)
         return
     if isinstance(core, type) and issubclass(core, BaseModel):
         if core in seen:
@@ -284,7 +296,9 @@ def _validate_managed_annotation(annotation: Any, path: str, seen: set[type[Base
             nested_path = f"{path}.{name}"
             _validate_validation_alias(field.validation_alias, nested_path)
             nested = _validation_annotation(field.annotation, field.metadata)
-            _validate_managed_annotation(nested, nested_path, seen)
+            _validate_managed_annotation(
+                nested, nested_path, seen, bool(core.model_config.get("use_enum_values")),
+            )
 
 
 def _validation_annotation(annotation: Any, metadata: list[Any]) -> Any:

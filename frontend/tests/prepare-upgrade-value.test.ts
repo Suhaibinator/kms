@@ -332,3 +332,27 @@ describe("enum number conversion", () => {
     );
   });
 });
+
+it("preserves map keys during enum upgrades, including lowercase and numeric-looking names", () => {
+  const propertyNames = {
+    type: "string",
+    enum: ["USER", "ADMIN"],
+    "x-kms-enum-numbers": { USER: 1, ADMIN: 2 },
+  };
+  const schema = {
+    type: "object",
+    properties: {
+      weights: {
+        anyOf: [
+          { type: "object", propertyNames, additionalProperties: { type: "integer" } },
+          { type: "null" },
+        ],
+      },
+    },
+  };
+  const raw = '{"weights":{"user":9007199254740993,"1":2,"USER":3}}';
+  const prepared = prepareUpgradeValue(raw, schema);
+  expect(prepared.value).toBe(raw);
+  expect(prepared.enumConversions).toEqual([]);
+  expect(prepared.removed).toEqual([]);
+});

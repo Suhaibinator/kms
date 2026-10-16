@@ -14,8 +14,8 @@ import (
 	time "time"
 )
 
-const generatedSchemaSHA256 = "7a1168483190aded6c20e7f3cc86575abacf45d52899e80bcb70fcc93742c640"
-const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"plan\",\n    \"routing\"\n  ],\n  \"properties\": {\n    \"plan\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"interval\": \"INTERVAL_MONTHLY\",\n        \"label\": \"main\",\n        \"min_tier\": \"TIER_PRO\",\n        \"priority\": \"Normal\",\n        \"tier\": \"TIER_FREE\",\n        \"weight\": 9\n      },\n      \"properties\": {\n        \"interval\": {\n          \"default\": \"INTERVAL_MONTHLY\",\n          \"enum\": [\n            \"INTERVAL_UNSPECIFIED\",\n            \"INTERVAL_MONTHLY\",\n            \"INTERVAL_YEARLY\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"INTERVAL_MONTHLY\": 1,\n            \"INTERVAL_UNSPECIFIED\": 0,\n            \"INTERVAL_YEARLY\": 2\n          }\n        },\n        \"label\": {\n          \"default\": \"main\",\n          \"type\": \"string\"\n        },\n        \"min_tier\": {\n          \"anyOf\": [\n            {\n              \"enum\": [\n                \"TIER_UNSPECIFIED\",\n                \"TIER_FREE\",\n                \"TIER_PRO\"\n              ],\n              \"type\": \"string\",\n              \"x-kms-enum-numbers\": {\n                \"TIER_FREE\": 1,\n                \"TIER_PRO\": 3,\n                \"TIER_UNSPECIFIED\": 0\n              }\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": \"TIER_PRO\"\n        },\n        \"priority\": {\n          \"default\": \"Normal\",\n          \"enum\": [\n            \"Low\",\n            \"Normal\",\n            \"High\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"High\": 10,\n            \"Low\": -1,\n            \"Normal\": 0\n          }\n        },\n        \"tier\": {\n          \"default\": \"TIER_FREE\",\n          \"enum\": [\n            \"TIER_UNSPECIFIED\",\n            \"TIER_FREE\",\n            \"TIER_PRO\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"TIER_FREE\": 1,\n            \"TIER_PRO\": 3,\n            \"TIER_UNSPECIFIED\": 0\n          }\n        },\n        \"weight\": {\n          \"default\": 9,\n          \"maximum\": 32767,\n          \"minimum\": -32768,\n          \"type\": \"integer\"\n        }\n      },\n      \"required\": [\n        \"interval\",\n        \"label\",\n        \"min_tier\",\n        \"priority\",\n        \"tier\",\n        \"weight\"\n      ],\n      \"type\": \"object\"\n    },\n    \"routing\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"adapters\": {\n          \"primary\": \"grpc\"\n        },\n        \"primary\": \"http\",\n        \"routes\": [\n          {\n            \"adapter\": \"http\",\n            \"tier\": null\n          }\n        ],\n        \"sinks\": [\n          \"Stdout\",\n          \"File\"\n        ]\n      },\n      \"properties\": {\n        \"adapters\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"enum\": [\n                  \"http\",\n                  \"grpc\"\n                ],\n                \"type\": \"string\"\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": {\n            \"primary\": \"grpc\"\n          }\n        },\n        \"primary\": {\n          \"default\": \"http\",\n          \"enum\": [\n            \"http\",\n            \"grpc\"\n          ],\n          \"type\": \"string\"\n        },\n        \"routes\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"additionalProperties\": false,\n                \"properties\": {\n                  \"adapter\": {\n                    \"enum\": [\n                      \"http\",\n                      \"grpc\"\n                    ],\n                    \"type\": \"string\"\n                  },\n                  \"tier\": {\n                    \"anyOf\": [\n                      {\n                        \"enum\": [\n                          \"TIER_UNSPECIFIED\",\n                          \"TIER_FREE\",\n                          \"TIER_PRO\"\n                        ],\n                        \"type\": \"string\",\n                        \"x-kms-enum-numbers\": {\n                          \"TIER_FREE\": 1,\n                          \"TIER_PRO\": 3,\n                          \"TIER_UNSPECIFIED\": 0\n                        }\n                      },\n                      {\n                        \"type\": \"null\"\n                      }\n                    ]\n                  }\n                },\n                \"required\": [\n                  \"adapter\",\n                  \"tier\"\n                ],\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": [\n            {\n              \"adapter\": \"http\",\n              \"tier\": null\n            }\n          ]\n        },\n        \"sinks\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"enum\": [\n                  \"None\",\n                  \"Stdout\",\n                  \"File\"\n                ],\n                \"type\": \"string\",\n                \"x-kms-enum-numbers\": {\n                  \"File\": 2,\n                  \"None\": 0,\n                  \"Stdout\": 1\n                }\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": [\n            \"Stdout\",\n            \"File\"\n          ]\n        }\n      },\n      \"required\": [\n        \"adapters\",\n        \"primary\",\n        \"routes\",\n        \"sinks\"\n      ],\n      \"type\": \"object\"\n    }\n  },\n  \"x-kms-contract\": [\n    {\n      \"alias\": \"plan\",\n      \"kind\": \"parameter\",\n      \"content_type\": \"json\"\n    },\n    {\n      \"alias\": \"routing\",\n      \"kind\": \"parameter\",\n      \"content_type\": \"json\"\n    }\n  ]\n}\n"
+const generatedSchemaSHA256 = "6e798045196bb0527103037e3dc24ce61f770007a4f65161b3d716d46a13d0bf"
+const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"plan\",\n    \"routing\"\n  ],\n  \"properties\": {\n    \"plan\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"interval\": \"INTERVAL_MONTHLY\",\n        \"label\": \"main\",\n        \"min_tier\": \"TIER_PRO\",\n        \"priority\": \"Normal\",\n        \"tier\": \"TIER_FREE\",\n        \"weight\": 9\n      },\n      \"properties\": {\n        \"interval\": {\n          \"default\": \"INTERVAL_MONTHLY\",\n          \"enum\": [\n            \"INTERVAL_UNSPECIFIED\",\n            \"INTERVAL_MONTHLY\",\n            \"INTERVAL_YEARLY\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"INTERVAL_MONTHLY\": 1,\n            \"INTERVAL_UNSPECIFIED\": 0,\n            \"INTERVAL_YEARLY\": 2\n          }\n        },\n        \"label\": {\n          \"default\": \"main\",\n          \"type\": \"string\"\n        },\n        \"min_tier\": {\n          \"anyOf\": [\n            {\n              \"enum\": [\n                \"TIER_UNSPECIFIED\",\n                \"TIER_FREE\",\n                \"TIER_PRO\"\n              ],\n              \"type\": \"string\",\n              \"x-kms-enum-numbers\": {\n                \"TIER_FREE\": 1,\n                \"TIER_PRO\": 3,\n                \"TIER_UNSPECIFIED\": 0\n              }\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": \"TIER_PRO\"\n        },\n        \"priority\": {\n          \"default\": \"Normal\",\n          \"enum\": [\n            \"Low\",\n            \"Normal\",\n            \"High\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"High\": 10,\n            \"Low\": -1,\n            \"Normal\": 0\n          }\n        },\n        \"tier\": {\n          \"default\": \"TIER_FREE\",\n          \"enum\": [\n            \"TIER_UNSPECIFIED\",\n            \"TIER_FREE\",\n            \"TIER_PRO\"\n          ],\n          \"type\": \"string\",\n          \"x-kms-enum-numbers\": {\n            \"TIER_FREE\": 1,\n            \"TIER_PRO\": 3,\n            \"TIER_UNSPECIFIED\": 0\n          }\n        },\n        \"weight\": {\n          \"default\": 9,\n          \"maximum\": 32767,\n          \"minimum\": -32768,\n          \"type\": \"integer\"\n        }\n      },\n      \"required\": [\n        \"interval\",\n        \"label\",\n        \"min_tier\",\n        \"priority\",\n        \"tier\",\n        \"weight\"\n      ],\n      \"type\": \"object\"\n    },\n    \"routing\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"adapter_routes\": {\n          \"http\": {\n            \"adapter\": \"grpc\",\n            \"tier\": null\n          }\n        },\n        \"adapters\": {\n          \"primary\": \"grpc\"\n        },\n        \"nested_maps\": null,\n        \"nested_routes\": [\n          {\n            \"TIER_FREE\": {\n              \"adapter\": \"http\",\n              \"tier\": null\n            }\n          }\n        ],\n        \"primary\": \"http\",\n        \"routes\": [\n          {\n            \"adapter\": \"http\",\n            \"tier\": null\n          }\n        ],\n        \"sink_levels\": {\n          \"File\": \"Low\",\n          \"None\": \"Normal\"\n        },\n        \"sinks\": [\n          \"Stdout\",\n          \"File\"\n        ],\n        \"tier_routes\": {\n          \"TIER_PRO\": {\n            \"adapter\": \"grpc\",\n            \"tier\": null\n          },\n          \"TIER_UNSPECIFIED\": {\n            \"adapter\": \"http\",\n            \"tier\": null\n          }\n        }\n      },\n      \"properties\": {\n        \"adapter_routes\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"additionalProperties\": false,\n                \"properties\": {\n                  \"adapter\": {\n                    \"enum\": [\n                      \"http\",\n                      \"grpc\"\n                    ],\n                    \"type\": \"string\"\n                  },\n                  \"tier\": {\n                    \"anyOf\": [\n                      {\n                        \"enum\": [\n                          \"TIER_UNSPECIFIED\",\n                          \"TIER_FREE\",\n                          \"TIER_PRO\"\n                        ],\n                        \"type\": \"string\",\n                        \"x-kms-enum-numbers\": {\n                          \"TIER_FREE\": 1,\n                          \"TIER_PRO\": 3,\n                          \"TIER_UNSPECIFIED\": 0\n                        }\n                      },\n                      {\n                        \"type\": \"null\"\n                      }\n                    ]\n                  }\n                },\n                \"required\": [\n                  \"adapter\",\n                  \"tier\"\n                ],\n                \"type\": \"object\"\n              },\n              \"propertyNames\": {\n                \"enum\": [\n                  \"http\",\n                  \"grpc\"\n                ],\n                \"type\": \"string\"\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": {\n            \"http\": {\n              \"adapter\": \"grpc\",\n              \"tier\": null\n            }\n          }\n        },\n        \"adapters\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"enum\": [\n                  \"http\",\n                  \"grpc\"\n                ],\n                \"type\": \"string\"\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": {\n            \"primary\": \"grpc\"\n          }\n        },\n        \"nested_maps\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"anyOf\": [\n                  {\n                    \"additionalProperties\": {\n                      \"additionalProperties\": false,\n                      \"properties\": {\n                        \"adapter\": {\n                          \"enum\": [\n                            \"http\",\n                            \"grpc\"\n                          ],\n                          \"type\": \"string\"\n                        },\n                        \"tier\": {\n                          \"anyOf\": [\n                            {\n                              \"enum\": [\n                                \"TIER_UNSPECIFIED\",\n                                \"TIER_FREE\",\n                                \"TIER_PRO\"\n                              ],\n                              \"type\": \"string\",\n                              \"x-kms-enum-numbers\": {\n                                \"TIER_FREE\": 1,\n                                \"TIER_PRO\": 3,\n                                \"TIER_UNSPECIFIED\": 0\n                              }\n                            },\n                            {\n                              \"type\": \"null\"\n                            }\n                          ]\n                        }\n                      },\n                      \"required\": [\n                        \"adapter\",\n                        \"tier\"\n                      ],\n                      \"type\": \"object\"\n                    },\n                    \"propertyNames\": {\n                      \"enum\": [\n                        \"TIER_UNSPECIFIED\",\n                        \"TIER_FREE\",\n                        \"TIER_PRO\"\n                      ],\n                      \"type\": \"string\",\n                      \"x-kms-enum-numbers\": {\n                        \"TIER_FREE\": 1,\n                        \"TIER_PRO\": 3,\n                        \"TIER_UNSPECIFIED\": 0\n                      }\n                    },\n                    \"type\": \"object\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ]\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": null\n        },\n        \"nested_routes\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"anyOf\": [\n                  {\n                    \"additionalProperties\": {\n                      \"additionalProperties\": false,\n                      \"properties\": {\n                        \"adapter\": {\n                          \"enum\": [\n                            \"http\",\n                            \"grpc\"\n                          ],\n                          \"type\": \"string\"\n                        },\n                        \"tier\": {\n                          \"anyOf\": [\n                            {\n                              \"enum\": [\n                                \"TIER_UNSPECIFIED\",\n                                \"TIER_FREE\",\n                                \"TIER_PRO\"\n                              ],\n                              \"type\": \"string\",\n                              \"x-kms-enum-numbers\": {\n                                \"TIER_FREE\": 1,\n                                \"TIER_PRO\": 3,\n                                \"TIER_UNSPECIFIED\": 0\n                              }\n                            },\n                            {\n                              \"type\": \"null\"\n                            }\n                          ]\n                        }\n                      },\n                      \"required\": [\n                        \"adapter\",\n                        \"tier\"\n                      ],\n                      \"type\": \"object\"\n                    },\n                    \"propertyNames\": {\n                      \"enum\": [\n                        \"TIER_UNSPECIFIED\",\n                        \"TIER_FREE\",\n                        \"TIER_PRO\"\n                      ],\n                      \"type\": \"string\",\n                      \"x-kms-enum-numbers\": {\n                        \"TIER_FREE\": 1,\n                        \"TIER_PRO\": 3,\n                        \"TIER_UNSPECIFIED\": 0\n                      }\n                    },\n                    \"type\": \"object\"\n                  },\n                  {\n                    \"type\": \"null\"\n                  }\n                ]\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": [\n            {\n              \"TIER_FREE\": {\n                \"adapter\": \"http\",\n                \"tier\": null\n              }\n            }\n          ]\n        },\n        \"primary\": {\n          \"default\": \"http\",\n          \"enum\": [\n            \"http\",\n            \"grpc\"\n          ],\n          \"type\": \"string\"\n        },\n        \"routes\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"additionalProperties\": false,\n                \"properties\": {\n                  \"adapter\": {\n                    \"enum\": [\n                      \"http\",\n                      \"grpc\"\n                    ],\n                    \"type\": \"string\"\n                  },\n                  \"tier\": {\n                    \"anyOf\": [\n                      {\n                        \"enum\": [\n                          \"TIER_UNSPECIFIED\",\n                          \"TIER_FREE\",\n                          \"TIER_PRO\"\n                        ],\n                        \"type\": \"string\",\n                        \"x-kms-enum-numbers\": {\n                          \"TIER_FREE\": 1,\n                          \"TIER_PRO\": 3,\n                          \"TIER_UNSPECIFIED\": 0\n                        }\n                      },\n                      {\n                        \"type\": \"null\"\n                      }\n                    ]\n                  }\n                },\n                \"required\": [\n                  \"adapter\",\n                  \"tier\"\n                ],\n                \"type\": \"object\"\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": [\n            {\n              \"adapter\": \"http\",\n              \"tier\": null\n            }\n          ]\n        },\n        \"sink_levels\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"enum\": [\n                  \"Low\",\n                  \"Normal\",\n                  \"High\"\n                ],\n                \"type\": \"string\",\n                \"x-kms-enum-numbers\": {\n                  \"High\": 10,\n                  \"Low\": -1,\n                  \"Normal\": 0\n                }\n              },\n              \"propertyNames\": {\n                \"enum\": [\n                  \"None\",\n                  \"Stdout\",\n                  \"File\"\n                ],\n                \"type\": \"string\",\n                \"x-kms-enum-numbers\": {\n                  \"File\": 2,\n                  \"None\": 0,\n                  \"Stdout\": 1\n                }\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": {\n            \"File\": \"Low\",\n            \"None\": \"Normal\"\n          }\n        },\n        \"sinks\": {\n          \"anyOf\": [\n            {\n              \"items\": {\n                \"enum\": [\n                  \"None\",\n                  \"Stdout\",\n                  \"File\"\n                ],\n                \"type\": \"string\",\n                \"x-kms-enum-numbers\": {\n                  \"File\": 2,\n                  \"None\": 0,\n                  \"Stdout\": 1\n                }\n              },\n              \"type\": \"array\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": [\n            \"Stdout\",\n            \"File\"\n          ]\n        },\n        \"tier_routes\": {\n          \"anyOf\": [\n            {\n              \"additionalProperties\": {\n                \"additionalProperties\": false,\n                \"properties\": {\n                  \"adapter\": {\n                    \"enum\": [\n                      \"http\",\n                      \"grpc\"\n                    ],\n                    \"type\": \"string\"\n                  },\n                  \"tier\": {\n                    \"anyOf\": [\n                      {\n                        \"enum\": [\n                          \"TIER_UNSPECIFIED\",\n                          \"TIER_FREE\",\n                          \"TIER_PRO\"\n                        ],\n                        \"type\": \"string\",\n                        \"x-kms-enum-numbers\": {\n                          \"TIER_FREE\": 1,\n                          \"TIER_PRO\": 3,\n                          \"TIER_UNSPECIFIED\": 0\n                        }\n                      },\n                      {\n                        \"type\": \"null\"\n                      }\n                    ]\n                  }\n                },\n                \"required\": [\n                  \"adapter\",\n                  \"tier\"\n                ],\n                \"type\": \"object\"\n              },\n              \"propertyNames\": {\n                \"enum\": [\n                  \"TIER_UNSPECIFIED\",\n                  \"TIER_FREE\",\n                  \"TIER_PRO\"\n                ],\n                \"type\": \"string\",\n                \"x-kms-enum-numbers\": {\n                  \"TIER_FREE\": 1,\n                  \"TIER_PRO\": 3,\n                  \"TIER_UNSPECIFIED\": 0\n                }\n              },\n              \"type\": \"object\"\n            },\n            {\n              \"type\": \"null\"\n            }\n          ],\n          \"default\": {\n            \"TIER_PRO\": {\n              \"adapter\": \"grpc\",\n              \"tier\": null\n            },\n            \"TIER_UNSPECIFIED\": {\n              \"adapter\": \"http\",\n              \"tier\": null\n            }\n          }\n        }\n      },\n      \"required\": [\n        \"adapter_routes\",\n        \"adapters\",\n        \"nested_maps\",\n        \"nested_routes\",\n        \"primary\",\n        \"routes\",\n        \"sink_levels\",\n        \"sinks\",\n        \"tier_routes\"\n      ],\n      \"type\": \"object\"\n    }\n  },\n  \"x-kms-contract\": [\n    {\n      \"alias\": \"plan\",\n      \"kind\": \"parameter\",\n      \"content_type\": \"json\"\n    },\n    {\n      \"alias\": \"routing\",\n      \"kind\": \"parameter\",\n      \"content_type\": \"json\"\n    }\n  ]\n}\n"
 
 // GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.
 func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }
@@ -228,17 +228,32 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	if !equalValue5(effectiveDefaults.Weight, candidate.Weight) {
 		differences = append(differences, configstore.FieldDifference{Path: "plan.weight", Expected: reportValue5(effectiveDefaults.Weight), Actual: reportValue5(candidate.Weight)})
 	}
-	if !equalValue6(effectiveDefaults.Adapters, candidate.Adapters) {
-		differences = append(differences, configstore.FieldDifference{Path: "routing.adapters", Expected: reportValue6(effectiveDefaults.Adapters), Actual: reportValue6(candidate.Adapters)})
+	if !equalValue6(effectiveDefaults.AdapterRoutes, candidate.AdapterRoutes) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.adapter_routes", Expected: reportValue6(effectiveDefaults.AdapterRoutes), Actual: reportValue6(candidate.AdapterRoutes)})
+	}
+	if !equalValue10(effectiveDefaults.Adapters, candidate.Adapters) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.adapters", Expected: reportValue10(effectiveDefaults.Adapters), Actual: reportValue10(candidate.Adapters)})
+	}
+	if !equalValue11(effectiveDefaults.NestedMaps, candidate.NestedMaps) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.nested_maps", Expected: reportValue11(effectiveDefaults.NestedMaps), Actual: reportValue11(candidate.NestedMaps)})
+	}
+	if !equalValue13(effectiveDefaults.NestedRoutes, candidate.NestedRoutes) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.nested_routes", Expected: reportValue13(effectiveDefaults.NestedRoutes), Actual: reportValue13(candidate.NestedRoutes)})
 	}
 	if !equalValue7(effectiveDefaults.Primary, candidate.Primary) {
 		differences = append(differences, configstore.FieldDifference{Path: "routing.primary", Expected: reportValue7(effectiveDefaults.Primary), Actual: reportValue7(candidate.Primary)})
 	}
-	if !equalValue8(effectiveDefaults.Routes, candidate.Routes) {
-		differences = append(differences, configstore.FieldDifference{Path: "routing.routes", Expected: reportValue8(effectiveDefaults.Routes), Actual: reportValue8(candidate.Routes)})
+	if !equalValue15(effectiveDefaults.Routes, candidate.Routes) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.routes", Expected: reportValue15(effectiveDefaults.Routes), Actual: reportValue15(candidate.Routes)})
 	}
-	if !equalValue11(effectiveDefaults.Sinks, candidate.Sinks) {
-		differences = append(differences, configstore.FieldDifference{Path: "routing.sinks", Expected: reportValue11(effectiveDefaults.Sinks), Actual: reportValue11(candidate.Sinks)})
+	if !equalValue16(effectiveDefaults.SinkLevels, candidate.SinkLevels) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.sink_levels", Expected: reportValue16(effectiveDefaults.SinkLevels), Actual: reportValue16(candidate.SinkLevels)})
+	}
+	if !equalValue18(effectiveDefaults.Sinks, candidate.Sinks) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.sinks", Expected: reportValue18(effectiveDefaults.Sinks), Actual: reportValue18(candidate.Sinks)})
+	}
+	if !equalValue19(effectiveDefaults.TierRoutes, candidate.TierRoutes) {
+		differences = append(differences, configstore.FieldDifference{Path: "routing.tier_routes", Expected: reportValue19(effectiveDefaults.TierRoutes), Actual: reportValue19(candidate.TierRoutes)})
 	}
 	restartRequired := make([]string, 0)
 	changed := make([]configstore.FieldChange, 0)
@@ -266,17 +281,32 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		if !equalValue5(candidate.Weight, active.config.Weight) {
 			changed = append(changed, configstore.FieldChange{Path: "plan.weight", Previous: reportValue5(active.config.Weight), Current: reportValue5(candidate.Weight)})
 		}
-		if !equalValue6(candidate.Adapters, active.config.Adapters) {
-			changed = append(changed, configstore.FieldChange{Path: "routing.adapters", Previous: reportValue6(active.config.Adapters), Current: reportValue6(candidate.Adapters)})
+		if !equalValue6(candidate.AdapterRoutes, active.config.AdapterRoutes) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.adapter_routes", Previous: reportValue6(active.config.AdapterRoutes), Current: reportValue6(candidate.AdapterRoutes)})
+		}
+		if !equalValue10(candidate.Adapters, active.config.Adapters) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.adapters", Previous: reportValue10(active.config.Adapters), Current: reportValue10(candidate.Adapters)})
+		}
+		if !equalValue11(candidate.NestedMaps, active.config.NestedMaps) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.nested_maps", Previous: reportValue11(active.config.NestedMaps), Current: reportValue11(candidate.NestedMaps)})
+		}
+		if !equalValue13(candidate.NestedRoutes, active.config.NestedRoutes) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.nested_routes", Previous: reportValue13(active.config.NestedRoutes), Current: reportValue13(candidate.NestedRoutes)})
 		}
 		if !equalValue7(candidate.Primary, active.config.Primary) {
 			changed = append(changed, configstore.FieldChange{Path: "routing.primary", Previous: reportValue7(active.config.Primary), Current: reportValue7(candidate.Primary)})
 		}
-		if !equalValue8(candidate.Routes, active.config.Routes) {
-			changed = append(changed, configstore.FieldChange{Path: "routing.routes", Previous: reportValue8(active.config.Routes), Current: reportValue8(candidate.Routes)})
+		if !equalValue15(candidate.Routes, active.config.Routes) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.routes", Previous: reportValue15(active.config.Routes), Current: reportValue15(candidate.Routes)})
 		}
-		if !equalValue11(candidate.Sinks, active.config.Sinks) {
-			changed = append(changed, configstore.FieldChange{Path: "routing.sinks", Previous: reportValue11(active.config.Sinks), Current: reportValue11(candidate.Sinks)})
+		if !equalValue16(candidate.SinkLevels, active.config.SinkLevels) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.sink_levels", Previous: reportValue16(active.config.SinkLevels), Current: reportValue16(candidate.SinkLevels)})
+		}
+		if !equalValue18(candidate.Sinks, active.config.Sinks) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.sinks", Previous: reportValue18(active.config.Sinks), Current: reportValue18(candidate.Sinks)})
+		}
+		if !equalValue19(candidate.TierRoutes, active.config.TierRoutes) {
+			changed = append(changed, configstore.FieldChange{Path: "routing.tier_routes", Previous: reportValue19(active.config.TierRoutes), Current: reportValue19(candidate.TierRoutes)})
 		}
 	}
 	generation := &immutableGeneration{config: candidate, release: configstore.ReleaseIdentityFromSnapshot(snapshot)}
@@ -300,10 +330,15 @@ var groupFields0 = []configstore.FieldCodec{
 }
 
 var groupFields1 = []configstore.FieldCodec{
+	{JSONName: "adapter_routes", FieldIndex: []int{11}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Key: &configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}},
 	{JSONName: "adapters", FieldIndex: []int{8}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}},
+	{JSONName: "nested_maps", FieldIndex: []int{12}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecMap, Key: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}}},
+	{JSONName: "nested_routes", FieldIndex: []int{13}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecMap, Key: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}}},
 	{JSONName: "primary", FieldIndex: []int{6}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}},
-	{JSONName: "routes", FieldIndex: []int{9}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}},
+	{JSONName: "routes", FieldIndex: []int{14}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}},
+	{JSONName: "sink_levels", FieldIndex: []int{10}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Key: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 8, Enum: enumMembers4}, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers2}}},
 	{JSONName: "sinks", FieldIndex: []int{7}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 8, Enum: enumMembers4}}},
+	{JSONName: "tier_routes", FieldIndex: []int{9}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Key: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}, Element: &configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "adapter", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString, Enum: enumMembers3}}, {JSONName: "tier", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32, Enum: enumMembers1}}}}}}},
 }
 
 var enumMembers0 = []configstore.EnumMember{
@@ -361,12 +396,27 @@ func (v ApiView) MinTier() rootconfig.Tier {
 func (v ApiView) Priority() rootconfig.Priority { return v.generation.config.Priority }
 func (v ApiView) Tier() rootconfig.Tier         { return v.generation.config.Tier }
 func (v ApiView) Weight() rootconfig.Weight     { return v.generation.config.Weight }
+func (v ApiView) AdapterRoutes() map[rootconfig.Adapter]rootconfig.Route {
+	return cloneValue6(v.generation.config.AdapterRoutes)
+}
 func (v ApiView) Adapters() map[string]rootconfig.Adapter {
-	return cloneValue6(v.generation.config.Adapters)
+	return cloneValue10(v.generation.config.Adapters)
+}
+func (v ApiView) NestedMaps() map[string]map[rootconfig.Tier]rootconfig.Route {
+	return cloneValue11(v.generation.config.NestedMaps)
+}
+func (v ApiView) NestedRoutes() []map[rootconfig.Tier]rootconfig.Route {
+	return cloneValue13(v.generation.config.NestedRoutes)
 }
 func (v ApiView) Primary() rootconfig.Adapter { return v.generation.config.Primary }
-func (v ApiView) Routes() []rootconfig.Route  { return cloneValue8(v.generation.config.Routes) }
-func (v ApiView) Sinks() []rootconfig.Sink    { return cloneValue11(v.generation.config.Sinks) }
+func (v ApiView) Routes() []rootconfig.Route  { return cloneValue15(v.generation.config.Routes) }
+func (v ApiView) SinkLevels() map[rootconfig.Sink]rootconfig.Priority {
+	return cloneValue16(v.generation.config.SinkLevels)
+}
+func (v ApiView) Sinks() []rootconfig.Sink { return cloneValue18(v.generation.config.Sinks) }
+func (v ApiView) TierRoutes() map[rootconfig.Tier]rootconfig.Route {
+	return cloneValue19(v.generation.config.TierRoutes)
+}
 
 func cloneRoot(value *rootconfig.Config) *rootconfig.Config {
 	if value == nil {
@@ -490,32 +540,39 @@ func reportValue5(value rootconfig.Weight) any {
 	return value
 }
 
-func cloneValue6(value map[string]rootconfig.Adapter) map[string]rootconfig.Adapter {
+func cloneValue6(value map[rootconfig.Adapter]rootconfig.Route) map[rootconfig.Adapter]rootconfig.Route {
 	if value == nil {
 		return nil
 	}
-	out := make(map[string]rootconfig.Adapter, len(value))
+	out := make(map[rootconfig.Adapter]rootconfig.Route, len(value))
 	for key, item := range value {
-		out[key] = cloneValue7(item)
+		out[key] = cloneValue8(item)
 	}
 	return out
 }
 
-func equalValue6(left, right map[string]rootconfig.Adapter) bool {
+func equalValue6(left, right map[rootconfig.Adapter]rootconfig.Route) bool {
 	if (left == nil) != (right == nil) || len(left) != len(right) {
 		return false
 	}
 	for key, leftValue := range left {
 		rightValue, ok := right[key]
-		if !ok || !equalValue7(leftValue, rightValue) {
+		if !ok || !equalValue8(leftValue, rightValue) {
 			return false
 		}
 	}
 	return true
 }
 
-func reportValue6(value map[string]rootconfig.Adapter) any {
-	return cloneValue6(value)
+func reportValue6(value map[rootconfig.Adapter]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[string(key)] = reportValue8(item)
+	}
+	return out
 }
 
 func cloneValue7(value rootconfig.Adapter) rootconfig.Adapter {
@@ -530,61 +587,30 @@ func reportValue7(value rootconfig.Adapter) any {
 	return value
 }
 
-func cloneValue8(value []rootconfig.Route) []rootconfig.Route {
-	if value == nil {
-		return nil
-	}
-	out := make([]rootconfig.Route, len(value))
-	for i := range value {
-		out[i] = cloneValue9(value[i])
-	}
-	return out
-}
-
-func equalValue8(left, right []rootconfig.Route) bool {
-	if (left == nil) != (right == nil) || len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if !equalValue9(left[i], right[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func reportValue8(value []rootconfig.Route) any {
-	out := make([]any, len(value))
-	for i := range value {
-		out[i] = reportValue9(value[i])
-	}
-	return out
-}
-
-func cloneValue9(value rootconfig.Route) rootconfig.Route {
+func cloneValue8(value rootconfig.Route) rootconfig.Route {
 	out := value
-	out.Tier = cloneValue10(value.Tier)
+	out.Tier = cloneValue9(value.Tier)
 	return out
 }
 
-func equalValue9(left, right rootconfig.Route) bool {
+func equalValue8(left, right rootconfig.Route) bool {
 	if !equalValue7(left.Adapter, right.Adapter) {
 		return false
 	}
-	if !equalValue10(left.Tier, right.Tier) {
+	if !equalValue9(left.Tier, right.Tier) {
 		return false
 	}
 	return true
 }
 
-func reportValue9(value rootconfig.Route) any {
+func reportValue8(value rootconfig.Route) any {
 	return map[string]any{
 		"adapter": reportValue7(value.Adapter),
-		"tier":    reportValue10(value.Tier),
+		"tier":    reportValue9(value.Tier),
 	}
 }
 
-func cloneValue10(value *rootconfig.Tier) *rootconfig.Tier {
+func cloneValue9(value *rootconfig.Tier) *rootconfig.Tier {
 	if value == nil {
 		return nil
 	}
@@ -592,60 +618,265 @@ func cloneValue10(value *rootconfig.Tier) *rootconfig.Tier {
 	return (*rootconfig.Tier)(&cloned)
 }
 
-func equalValue10(left, right *rootconfig.Tier) bool {
+func equalValue9(left, right *rootconfig.Tier) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
 	return equalValue3(*left, *right)
 }
 
-func reportValue10(value *rootconfig.Tier) any {
+func reportValue9(value *rootconfig.Tier) any {
 	if value == nil {
 		return nil
 	}
 	return reportValue3(*value)
 }
 
-func cloneValue11(value []rootconfig.Sink) []rootconfig.Sink {
+func cloneValue10(value map[string]rootconfig.Adapter) map[string]rootconfig.Adapter {
 	if value == nil {
 		return nil
 	}
-	out := make([]rootconfig.Sink, len(value))
-	for i := range value {
-		out[i] = cloneValue12(value[i])
+	out := make(map[string]rootconfig.Adapter, len(value))
+	for key, item := range value {
+		out[key] = cloneValue7(item)
 	}
 	return out
 }
 
-func equalValue11(left, right []rootconfig.Sink) bool {
+func equalValue10(left, right map[string]rootconfig.Adapter) bool {
 	if (left == nil) != (right == nil) || len(left) != len(right) {
 		return false
 	}
-	for i := range left {
-		if !equalValue12(left[i], right[i]) {
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue7(leftValue, rightValue) {
 			return false
 		}
 	}
 	return true
 }
 
-func reportValue11(value []rootconfig.Sink) any {
-	out := make([]any, len(value))
-	for i := range value {
-		out[i] = reportValue12(value[i])
+func reportValue10(value map[string]rootconfig.Adapter) any {
+	return cloneValue10(value)
+}
+
+func cloneValue11(value map[string]map[rootconfig.Tier]rootconfig.Route) map[string]map[rootconfig.Tier]rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]map[rootconfig.Tier]rootconfig.Route, len(value))
+	for key, item := range value {
+		out[key] = cloneValue12(item)
 	}
 	return out
 }
 
-func cloneValue12(value rootconfig.Sink) rootconfig.Sink {
+func equalValue11(left, right map[string]map[rootconfig.Tier]rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue12(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue11(value map[string]map[rootconfig.Tier]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = reportValue12(item)
+	}
+	return out
+}
+
+func cloneValue12(value map[rootconfig.Tier]rootconfig.Route) map[rootconfig.Tier]rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make(map[rootconfig.Tier]rootconfig.Route, len(value))
+	for key, item := range value {
+		out[key] = cloneValue8(item)
+	}
+	return out
+}
+
+func equalValue12(left, right map[rootconfig.Tier]rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue8(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue12(value map[rootconfig.Tier]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[fmt.Sprint(reportValue3(key))] = reportValue8(item)
+	}
+	return out
+}
+
+func cloneValue13(value []map[rootconfig.Tier]rootconfig.Route) []map[rootconfig.Tier]rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make([]map[rootconfig.Tier]rootconfig.Route, len(value))
+	for i := range value {
+		out[i] = cloneValue14(value[i])
+	}
+	return out
+}
+
+func equalValue13(left, right []map[rootconfig.Tier]rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !equalValue14(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue13(value []map[rootconfig.Tier]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make([]any, len(value))
+	for i := range value {
+		out[i] = reportValue14(value[i])
+	}
+	return out
+}
+
+func cloneValue14(value map[rootconfig.Tier]rootconfig.Route) map[rootconfig.Tier]rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make(map[rootconfig.Tier]rootconfig.Route, len(value))
+	for key, item := range value {
+		out[key] = cloneValue8(item)
+	}
+	return out
+}
+
+func equalValue14(left, right map[rootconfig.Tier]rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue8(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue14(value map[rootconfig.Tier]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[fmt.Sprint(reportValue3(key))] = reportValue8(item)
+	}
+	return out
+}
+
+func cloneValue15(value []rootconfig.Route) []rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make([]rootconfig.Route, len(value))
+	for i := range value {
+		out[i] = cloneValue8(value[i])
+	}
+	return out
+}
+
+func equalValue15(left, right []rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !equalValue8(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue15(value []rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make([]any, len(value))
+	for i := range value {
+		out[i] = reportValue8(value[i])
+	}
+	return out
+}
+
+func cloneValue16(value map[rootconfig.Sink]rootconfig.Priority) map[rootconfig.Sink]rootconfig.Priority {
+	if value == nil {
+		return nil
+	}
+	out := make(map[rootconfig.Sink]rootconfig.Priority, len(value))
+	for key, item := range value {
+		out[key] = cloneValue4(item)
+	}
+	return out
+}
+
+func equalValue16(left, right map[rootconfig.Sink]rootconfig.Priority) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue4(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue16(value map[rootconfig.Sink]rootconfig.Priority) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[fmt.Sprint(reportValue17(key))] = reportValue4(item)
+	}
+	return out
+}
+
+func cloneValue17(value rootconfig.Sink) rootconfig.Sink {
 	return value
 }
 
-func equalValue12(left, right rootconfig.Sink) bool {
+func equalValue17(left, right rootconfig.Sink) bool {
 	return left == right
 }
 
-func reportValue12(value rootconfig.Sink) any {
+func reportValue17(value rootconfig.Sink) any {
 	switch value {
 	case 0:
 		return "None"
@@ -655,4 +886,73 @@ func reportValue12(value rootconfig.Sink) any {
 		return "File"
 	}
 	return value
+}
+
+func cloneValue18(value []rootconfig.Sink) []rootconfig.Sink {
+	if value == nil {
+		return nil
+	}
+	out := make([]rootconfig.Sink, len(value))
+	for i := range value {
+		out[i] = cloneValue17(value[i])
+	}
+	return out
+}
+
+func equalValue18(left, right []rootconfig.Sink) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !equalValue17(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue18(value []rootconfig.Sink) any {
+	if value == nil {
+		return nil
+	}
+	out := make([]any, len(value))
+	for i := range value {
+		out[i] = reportValue17(value[i])
+	}
+	return out
+}
+
+func cloneValue19(value map[rootconfig.Tier]rootconfig.Route) map[rootconfig.Tier]rootconfig.Route {
+	if value == nil {
+		return nil
+	}
+	out := make(map[rootconfig.Tier]rootconfig.Route, len(value))
+	for key, item := range value {
+		out[key] = cloneValue8(item)
+	}
+	return out
+}
+
+func equalValue19(left, right map[rootconfig.Tier]rootconfig.Route) bool {
+	if (left == nil) != (right == nil) || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !equalValue8(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue19(value map[rootconfig.Tier]rootconfig.Route) any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[fmt.Sprint(reportValue3(key))] = reportValue8(item)
+	}
+	return out
 }

@@ -75,7 +75,7 @@ def test_committed_generated_binding_is_a_typed_runtime_consumer() -> None:
     prepared = store.prepare(ReleaseSnapshot(
         namespace="prod/app", name="runtime", version=1, activation_revision=1,
         schema_version=1, digest="digest", metadata_json="{}",
-        entries=(), parameters={"runtime": '{"debug":true,"port":9000}'},
+        entries=(), parameters={"runtime": '{"debug":true,"port":9000,"weights":{"ADMIN":2},"transports":{"http":"endpoint"}}'},
         secrets={"db_password": Secret(b"canary", version=1)},
     ))
     prepared.commit()

@@ -502,6 +502,9 @@ func (r *bindingRenderer) codecLiteral(value *typeIR, indent string) string {
 		b.WriteString("}}")
 		return b.String()
 	}
+	if value.Kind == typeMap && value.Key != nil && len(value.Key.Enum) != 0 {
+		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Key: &%s, Element: &%s}", kind, r.codecLiteral(value.Key, indent+"\t"), r.codecLiteral(value.Elem, indent+"\t"))
+	}
 	if value.Kind == typePointer || value.Kind == typeArray || value.Kind == typeSlice || value.Kind == typeMap {
 		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Element: &%s}", kind, r.codecLiteral(value.Elem, indent+"\t"))
 	}
@@ -595,6 +598,9 @@ func (r *bindingRenderer) addHelper(value *typeIR) int {
 	r.helpers = append(r.helpers, value)
 	switch value.Kind {
 	case typePointer, typeArray, typeSlice, typeMap:
+		if value.Kind == typeMap && value.Key != nil && len(value.Key.Enum) != 0 {
+			r.addHelper(value.Key)
+		}
 		r.addHelper(value.Elem)
 	case typeStruct:
 		for _, field := range value.Fields {
@@ -610,7 +616,9 @@ func reportNeedsProjection(value *typeIR) bool {
 		return true
 	case typeInt, typeUint:
 		return len(value.Enum) != 0
-	case typePointer, typeArray, typeSlice, typeMap:
+	case typeMap:
+		return (value.Key != nil && len(value.Key.Enum) != 0) || reportNeedsProjection(value.Elem)
+	case typePointer, typeArray, typeSlice:
 		return reportNeedsProjection(value.Elem)
 	case typeStruct:
 		for _, field := range value.Fields {
@@ -760,12 +768,22 @@ func (r *bindingRenderer) renderReportHelper(index int, value *typeIR) {
 		r.line("\tif value == nil { return nil }")
 		r.line("\treturn reportValue%d(*value)", r.helperByType[value.Elem.GoType])
 	case typeArray, typeSlice:
+		if value.Kind == typeSlice {
+			r.line("\tif value == nil { return nil }")
+		}
 		r.line("\tout := make([]any, len(value))")
 		r.line("\tfor i := range value { out[i] = reportValue%d(value[i]) }", r.helperByType[value.Elem.GoType])
 		r.line("\treturn out")
 	case typeMap:
+		r.line("\tif value == nil { return nil }")
 		r.line("\tout := make(map[string]any, len(value))")
-		r.line("\tfor key, item := range value { out[key] = reportValue%d(item) }", r.helperByType[value.Elem.GoType])
+		if value.Key.Kind == typeInt || value.Key.Kind == typeUint {
+			r.line("\tfor key, item := range value { out[fmt.Sprint(reportValue%d(key))] = reportValue%d(item) }", r.helperByType[value.Key.GoType], r.helperByType[value.Elem.GoType])
+		} else if value.Key.Named {
+			r.line("\tfor key, item := range value { out[string(key)] = reportValue%d(item) }", r.helperByType[value.Elem.GoType])
+		} else {
+			r.line("\tfor key, item := range value { out[key] = reportValue%d(item) }", r.helperByType[value.Elem.GoType])
+		}
 		r.line("\treturn out")
 	case typeStruct:
 		r.line("\treturn map[string]any{")

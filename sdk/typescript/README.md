@@ -506,6 +506,57 @@ same command with `--check` (or `--verify`) in CI so the descriptor cannot drift
 from committed output. The library API for custom tooling is available at
 `@suhaibinator/kms/configgen`.
 
+### Enum-keyed maps
+
+Use an `enumMap` descriptor for sparse application-owned Maps with enum keys.
+For example, `Map<Role, string> | null` with numeric enum members `Unspecified = 0`
+and `Admin = 3` uses this field type:
+
+```json
+{
+  "kind": "enumMap",
+  "key": {
+    "kind": "integer",
+    "bits": 32,
+    "members": [
+      { "name": "UNSPECIFIED", "value": "0" },
+      { "name": "ADMIN", "value": "3" }
+    ]
+  },
+  "value": { "kind": "string" }
+}
+```
+
+The wire value `{"ADMIN":"enabled"}` becomes a Map containing `Role.Admin`.
+Only listed canonical names are accepted: numeric spellings such as `"3"`,
+unknown names, and alias names are rejected. The first member with an underlying
+value selects its canonical name. Members can be omitted from a map; `null`
+and an empty Map remain distinct. Existing `record` descriptors continue using
+string-keyed objects.
+
+Integer member values in descriptors are canonical decimal **strings** to
+preserve precision. Their values must fit the declared width/sign and signed
+int64. Integer keys wider than 53 bits use `"representation":"bigint"` and
+application bigint literal unions. Native numeric and string TypeScript enums
+are supported without importing their runtime enum objects into generated code.
+
+String enum keys use `"key":{"kind":"string","members":[{"name":"http","value":"http"}]}`.
+Names equal their values exactly, including empty strings and whitespace.
+Generated schema `propertyNames.enum` lists canonical names; numeric keys also
+carry `x-kms-enum-numbers` metadata. The contract encoding is
+`nullable-enum-key-map`.
+
+Snapshots and typed views return independent Map clones. Defaults exports use
+the same canonical wire names. Drift and applied reports project fields
+containing enum maps into their wire object form, so JSON and local logs retain
+the names and values. Map insertion order does not produce a change report or
+require a restart.
+
+For hand-written runtime bindings, use
+`codecs.enumMap<Role, string>([["UNSPECIFIED", 0], ["ADMIN", 3]], codecs.string)`.
+The optional third type parameter supports `ReadonlyMap<Role, string>` source
+fields; the decoder creates plain Maps.
+
 ## Package boundaries and support
 
 | Import | Supported runtime | Purpose |

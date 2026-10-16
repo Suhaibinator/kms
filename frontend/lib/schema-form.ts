@@ -27,6 +27,8 @@ export interface FormField {
   description?: string;
   /** Allowed values for enum-typed strings or numbers. */
   enumValues?: Array<string | number>;
+  /** Map fields: canonical property names, independent of value enums. */
+  keyEnumValues?: string[];
   /** Number fields: integers only. */
   integer?: boolean;
   /** Object fields: child fields in schema order. */
@@ -66,7 +68,10 @@ function isSchema(value: unknown): value is JsonSchema {
 }
 
 export function pathKey(path: string[]): string {
-  return path.join(" ");
+  // Preserve segment boundaries even for empty keys and keys containing spaces.
+  return path
+    .map((part) => part.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\0/g, "%00") || "%")
+    .join(" ");
 }
 
 // Object identity carries raw-schema provenance without adding JSON keywords or
@@ -78,15 +83,56 @@ export function schemaNeedsExactJson(schema: JsonSchema): boolean {
   return exactJsonSchemas.has(schema);
 }
 
-function retainNumberProvenance(parsed: unknown, rawNumbers: unknown): boolean {
+type ProvenanceContext = "schema" | "propertyNames" | "schemas" | "value";
+
+function retainNumberProvenance(
+  parsed: unknown,
+  rawNumbers: unknown,
+  context: ProvenanceContext = "schema",
+): boolean {
   if (typeof parsed === "number") return JSON.stringify(parsed) !== rawNumbers;
   if (parsed === null || typeof parsed !== "object") return false;
   let needsExact = false;
   for (const [key, child] of Object.entries(parsed)) {
+    // Enum key wire values are strings. Number metadata does not get written
+    // into the value by a key picker, even when the Go number exceeds 2^53.
+    if (context === "propertyNames" && key === "x-kms-enum-numbers") continue;
     const rawChild = (rawNumbers as Record<string, unknown>)[key];
+    let childContext: ProvenanceContext = context === "schemas" ? "schema" : "value";
+    if (context === "schema" || context === "propertyNames") {
+      if (key === "propertyNames") childContext = "propertyNames";
+      else if (
+        [
+          "properties",
+          "patternProperties",
+          "$defs",
+          "definitions",
+          "dependentSchemas",
+          "anyOf",
+          "allOf",
+          "oneOf",
+          "prefixItems",
+        ].includes(key)
+      ) {
+        childContext = "schemas";
+      } else if (
+        [
+          "items",
+          "additionalProperties",
+          "unevaluatedProperties",
+          "contains",
+          "not",
+          "if",
+          "then",
+          "else",
+        ].includes(key)
+      ) {
+        childContext = Array.isArray(child) ? "schemas" : "schema";
+      }
+    }
     // Visit every child, even after finding an unsafe number, to mark sibling
     // alias schemas independently for aliasSchema callers.
-    if (retainNumberProvenance(child, rawChild)) needsExact = true;
+    if (retainNumberProvenance(child, rawChild, childContext)) needsExact = true;
   }
   if (needsExact) exactJsonSchemas.add(parsed);
   return needsExact;
@@ -242,6 +288,11 @@ function buildField(
         // values as a keyed sub-form each.
         if (isSchema(schema.additionalProperties)) {
           const valueSchema = schema.additionalProperties;
+          const keyEnum = isSchema(schema.propertyNames) ? schema.propertyNames.enum : undefined;
+          const keyEnumValues =
+            Array.isArray(keyEnum) && keyEnum.every((key) => typeof key === "string")
+              ? [...new Set(keyEnum as string[])]
+              : undefined;
           const item = scalarItem(valueSchema);
           if (item) {
             const inner = unwrapNullable(valueSchema) ?? valueSchema;
@@ -251,6 +302,7 @@ function buildField(
               item,
               integer: typeOf(inner).type === "integer",
               enumValues: enumValues(inner),
+              keyEnumValues,
             };
           }
           // An entry exists by being present, so its key is never "required".
@@ -262,7 +314,7 @@ function buildField(
             depth + 1,
           );
           if (entryField.kind === "object") {
-            return { ...base, kind: "map", item: "object", itemField: entryField };
+            return { ...base, kind: "map", item: "object", itemField: entryField, keyEnumValues };
           }
         }
         return { ...base, reason: "has no declared properties" };
@@ -395,7 +447,13 @@ export function initialValue(field: FormField): unknown {
       for (const child of field.fields ?? []) {
         if (!child.required) continue;
         const value = initialValue(child);
-        if (value !== undefined) out[child.name] = value;
+        if (value !== undefined)
+          Object.defineProperty(out, child.name, {
+            value,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
       }
       return out;
     }
@@ -440,7 +498,7 @@ export function getAt(value: unknown, path: string[]): unknown {
     if (Array.isArray(cursor) && isIndex(key)) {
       cursor = cursor[Number(key)];
     } else if (isObject(cursor)) {
-      cursor = cursor[key];
+      cursor = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
     } else {
       return undefined;
     }
@@ -462,11 +520,16 @@ export function setAt(value: unknown, path: string[], next: unknown): unknown {
     return copy;
   }
   const base: JsonObject = isObject(value) ? { ...value } : {};
-  const child = setAt(base[head], rest, next);
+  const child = setAt(Object.hasOwn(base, head) ? base[head] : undefined, rest, next);
   if (child === undefined) {
     delete base[head];
   } else {
-    base[head] = child;
+    Object.defineProperty(base, head, {
+      value: child,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return base;
 }
@@ -617,10 +680,18 @@ export function validateValue(
       ? (schema.required as unknown[]).filter((item): item is string => typeof item === "string")
       : [];
     for (const key of required) {
-      if (!(key in value)) push("is required", [...path, key]);
+      if (!Object.hasOwn(value, key)) push("is required", [...path, key]);
     }
     for (const [key, child] of Object.entries(value)) {
-      const sub = properties[key];
+      if (isSchema(schema.propertyNames)) {
+        issues.push(
+          ...validateValue(schema.propertyNames, key, [...path, key], depth + 1).map((issue) => ({
+            ...issue,
+            message: `key ${issue.message}`,
+          })),
+        );
+      }
+      const sub = Object.hasOwn(properties, key) ? properties[key] : undefined;
       if (isSchema(sub)) {
         issues.push(...validateValue(sub, child, [...path, key], depth + 1));
       } else if (schema.additionalProperties === false) {

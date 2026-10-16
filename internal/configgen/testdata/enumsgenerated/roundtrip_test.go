@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultPlan    = `{"interval":"INTERVAL_MONTHLY","label":"main","min_tier":"TIER_PRO","priority":"Normal","tier":"TIER_FREE","weight":9}`
-	defaultRouting = `{"adapters":{"primary":"grpc"},"primary":"http","routes":[{"adapter":"http","tier":null}],"sinks":["Stdout","File"]}`
+	defaultRouting = `{"adapter_routes":{"http":{"adapter":"grpc","tier":null}},"adapters":{"primary":"grpc"},"nested_maps":null,"nested_routes":[{"TIER_FREE":{"adapter":"http","tier":null}}],"primary":"http","routes":[{"adapter":"http","tier":null}],"sink_levels":{"File":"Low","None":"Normal"},"sinks":["Stdout","File"],"tier_routes":{"TIER_PRO":{"adapter":"grpc","tier":null},"TIER_UNSPECIFIED":{"adapter":"http","tier":null}}}`
 )
 
 func TestEnumDefaultsRoundTripByName(t *testing.T) {
@@ -78,10 +78,14 @@ func TestEnumDecodeRejectsNumbersAndUnknownNames(t *testing.T) {
 		})
 	}
 	for _, tc := range []struct{ name, document, want string }{
+		{"unknown map key", strings.Replace(defaultRouting, `"TIER_UNSPECIFIED":`, `"PRIVATE_UNKNOWN_KEY":`, 1), "unknown enum value at $.tier_routes[*]"},
+		{"alias map key", strings.Replace(defaultRouting, `"TIER_PRO":`, `"TIER_PROFESSIONAL":`, 1), "unknown enum value at $.tier_routes[*]"},
+		{"number map key", strings.Replace(defaultRouting, `"TIER_UNSPECIFIED":`, `"0":`, 1), "unknown enum value at $.tier_routes[*]"},
+		{"unknown string map key", strings.Replace(defaultRouting, `"adapter_routes":{"http":`, `"adapter_routes":{"ftp":`, 1), "unknown enum value at $.adapter_routes[*]"},
 		{"unknown string enum value", strings.Replace(defaultRouting, `"primary":"http"`, `"primary":"ftp"`, 1), `unknown enum value at $.primary; allowed values are "http", "grpc"`},
 		{"unknown list element", strings.Replace(defaultRouting, `"Stdout"`, `"Syslog"`, 1), "unknown enum value at $.sinks[]"},
 		{"number list element", strings.Replace(defaultRouting, `"Stdout"`, `1`, 1), "expected enum name at $.sinks[]"},
-		{"unknown nested pointer", strings.Replace(defaultRouting, `"tier":null`, `"tier":"TIER_GOLD"`, 1), "unknown enum value at $.routes[].tier"},
+		{"unknown nested pointer", strings.Replace(defaultRouting, `"routes":[{"adapter":"http","tier":null}]`, `"routes":[{"adapter":"http","tier":"TIER_GOLD"}]`, 1), "unknown enum value at $.routes[].tier"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var decoded rootconfig.Config
@@ -99,6 +103,12 @@ func TestEnumEncodeRejectsUndeclaredValues(t *testing.T) {
 		mutate func(*rootconfig.Config)
 		want   string
 	}{
+		{"int map key", func(c *rootconfig.Config) {
+			c.TierRoutes = map[rootconfig.Tier]rootconfig.Route{7: {Adapter: rootconfig.AdapterHTTP}}
+		}, "invalid enum map key at $.tier_routes[*]"},
+		{"string map key", func(c *rootconfig.Config) {
+			c.AdapterRoutes = map[rootconfig.Adapter]rootconfig.Route{"ftp": {Adapter: rootconfig.AdapterHTTP}}
+		}, "invalid enum map key at $.adapter_routes[*]"},
 		{"int enum", func(c *rootconfig.Config) { c.Tier = 7 }, "value 7 at $.tier is not a declared enum number"},
 		{"uint enum element", func(c *rootconfig.Config) { c.Sinks = []rootconfig.Sink{9} }, "value 9 at $.sinks[] is not a declared enum number"},
 		{"string enum", func(c *rootconfig.Config) { c.Primary = "ftp" }, "value at $.primary is not a declared enum value"},
@@ -123,6 +133,9 @@ func TestEnumDefaultDifferencesReportNames(t *testing.T) {
 	t.Cleanup(server.Close)
 	plan := strings.Replace(defaultPlan, `"tier":"TIER_FREE"`, `"tier":"TIER_PRO"`, 1)
 	routing := strings.Replace(defaultRouting, `["Stdout","File"]`, `["None"]`, 1)
+	routing = strings.Replace(routing, `"nested_maps":null`, `"nested_maps":{}`, 1)
+	routing = strings.Replace(routing, `"nested_routes":[{"TIER_FREE":{"adapter":"http","tier":null}}]`, `"nested_routes":[]`, 1)
+	routing = strings.Replace(routing, `"TIER_PRO":{"adapter":"grpc","tier":null}`, `"TIER_PRO":{"adapter":"http","tier":null}`, 1)
 	server.SetParameterVersion(namespace, "groups/plan", plan, "json", 1)
 	server.SetParameterVersion(namespace, "groups/routing", routing, "json", 1)
 	if _, err := server.SetActiveRelease(kmsclienttest.ReleaseSpec{
@@ -147,7 +160,7 @@ func TestEnumDefaultDifferencesReportNames(t *testing.T) {
 	t.Cleanup(cancel)
 	reports := make(chan []configstore.FieldDifference, 1)
 	store, err := Start(ctx, client, Options{
-		Release: "runtime", Defaults: rootconfig.Defaults,
+		Release: "runtime", Defaults: func() *rootconfig.Config { c := rootconfig.Defaults(); c.NestedRoutes = nil; return c },
 		Callbacks: configstore.Callbacks{OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
 			select {
 			case reports <- report.Fields():
@@ -168,9 +181,18 @@ func TestEnumDefaultDifferencesReportNames(t *testing.T) {
 	if got := store.Current().Api().Tier(); got != rootconfig.Tier_TIER_PRO {
 		t.Fatalf("decoded tier = %v, want TIER_PRO", got)
 	}
+	view := store.Current().Api()
+	routes := view.TierRoutes()
+	delete(routes, rootconfig.Tier_TIER_UNSPECIFIED)
+	if _, ok := view.TierRoutes()[rootconfig.Tier_TIER_UNSPECIFIED]; !ok {
+		t.Fatal("mutating a returned map changed the snapshot")
+	}
 	want := []configstore.FieldDifference{
 		{Path: "plan.tier", Expected: "TIER_FREE", Actual: "TIER_PRO"},
+		{Path: "routing.nested_maps", Expected: nil, Actual: map[string]any{}},
+		{Path: "routing.nested_routes", Expected: nil, Actual: []any{}},
 		{Path: "routing.sinks", Expected: []any{"Stdout", "File"}, Actual: []any{"None"}},
+		{Path: "routing.tier_routes", Expected: map[string]any{"TIER_UNSPECIFIED": map[string]any{"adapter": rootconfig.AdapterHTTP, "tier": nil}, "TIER_PRO": map[string]any{"adapter": rootconfig.AdapterGRPC, "tier": nil}}, Actual: map[string]any{"TIER_UNSPECIFIED": map[string]any{"adapter": rootconfig.AdapterHTTP, "tier": nil}, "TIER_PRO": map[string]any{"adapter": rootconfig.AdapterHTTP, "tier": nil}}},
 	}
 	select {
 	case got := <-reports:
@@ -189,4 +211,68 @@ func canonicalJSON(t *testing.T, value string) string {
 		t.Fatal(err)
 	}
 	return string(canonical)
+}
+
+func TestEnumMapSchema(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal(GeneratedSchema(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	routing := schema["properties"].(map[string]any)["routing"].(map[string]any)["properties"].(map[string]any)
+	for field, names := range map[string][]any{"tier_routes": {"TIER_UNSPECIFIED", "TIER_FREE", "TIER_PRO"}, "sink_levels": {"None", "Stdout", "File"}, "adapter_routes": {"http", "grpc"}} {
+		object := routing[field].(map[string]any)["anyOf"].([]any)[0].(map[string]any)
+		keys := object["propertyNames"].(map[string]any)
+		if !reflect.DeepEqual(keys["enum"], names) {
+			t.Fatalf("%s key names = %#v, want %#v", field, keys["enum"], names)
+		}
+		if field != "adapter_routes" && keys["x-kms-enum-numbers"] == nil {
+			t.Fatalf("%s lacks enum numbers", field)
+		}
+		if object["additionalProperties"] == nil {
+			t.Fatalf("%s lacks value schema", field)
+		}
+	}
+}
+
+func TestEnumMapPresence(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		root := rootconfig.Defaults()
+		root.TierRoutes = nil
+		root.AdapterRoutes = nil
+		if empty {
+			root.TierRoutes = map[rootconfig.Tier]rootconfig.Route{}
+			root.AdapterRoutes = map[rootconfig.Adapter]rootconfig.Route{}
+		}
+		groups, err := EncodeParameterGroups(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded rootconfig.Config
+		if err := configstore.DecodeGroup(string(groups["routing"]), &decoded, groupFields1); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(root.TierRoutes, decoded.TierRoutes) || !reflect.DeepEqual(root.AdapterRoutes, decoded.AdapterRoutes) {
+			t.Fatal("map presence changed")
+		}
+	}
+}
+
+func TestEnumMapDefaultsArtifact(t *testing.T) {
+	data, err := EncodeDefaultsArtifact("test", rootconfig.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := configstore.ParseDefaultsArtifact(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, parameter := range artifact.Parameters {
+		if parameter.Alias == "routing" {
+			if got := canonicalJSON(t, parameter.Value); got != defaultRouting {
+				t.Fatalf("routing defaults = %s, want %s", got, defaultRouting)
+			}
+			return
+		}
+	}
+	t.Fatal("routing defaults missing")
 }

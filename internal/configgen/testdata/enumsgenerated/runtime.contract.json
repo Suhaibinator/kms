@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/enums",
     "type": "Config"
   },
-  "schema_sha256": "7a1168483190aded6c20e7f3cc86575abacf45d52899e80bcb70fcc93742c640",
+  "schema_sha256": "6e798045196bb0527103037e3dc24ce61f770007a4f65161b3d716d46a13d0bf",
   "groups": [
     {
       "alias": "plan",
@@ -24,10 +24,15 @@
       "kind": "parameter",
       "content_type": "json",
       "fields": [
+        "adapter_routes",
         "adapters",
+        "nested_maps",
+        "nested_routes",
         "primary",
         "routes",
-        "sinks"
+        "sink_levels",
+        "sinks",
+        "tier_routes"
       ]
     }
   ],
@@ -100,11 +105,44 @@
     },
     {
       "group": "routing",
+      "json_name": "adapter_routes",
+      "go_name": "AdapterRoutes",
+      "go_path": "AdapterRoutes",
+      "reload": "hot",
+      "encoding": "nullable-enum-key-map",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
       "json_name": "adapters",
       "go_name": "Adapters",
       "go_path": "Adapters",
       "reload": "hot",
       "encoding": "nullable-string-map",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "nested_maps",
+      "go_name": "NestedMaps",
+      "go_path": "NestedMaps",
+      "reload": "hot",
+      "encoding": "nullable-string-map",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "nested_routes",
+      "go_name": "NestedRoutes",
+      "go_path": "NestedRoutes",
+      "reload": "hot",
+      "encoding": "nullable-array",
       "views": [
         "api"
       ]
@@ -133,11 +171,33 @@
     },
     {
       "group": "routing",
+      "json_name": "sink_levels",
+      "go_name": "SinkLevels",
+      "go_path": "SinkLevels",
+      "reload": "hot",
+      "encoding": "nullable-enum-key-map",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
       "json_name": "sinks",
       "go_name": "Sinks",
       "go_path": "Sinks",
       "reload": "hot",
       "encoding": "nullable-array",
+      "views": [
+        "api"
+      ]
+    },
+    {
+      "group": "routing",
+      "json_name": "tier_routes",
+      "go_name": "TierRoutes",
+      "go_path": "TierRoutes",
+      "reload": "hot",
+      "encoding": "nullable-enum-key-map",
       "views": [
         "api"
       ]
@@ -155,10 +215,15 @@
         "plan.priority",
         "plan.tier",
         "plan.weight",
+        "routing.adapter_routes",
         "routing.adapters",
+        "routing.nested_maps",
+        "routing.nested_routes",
         "routing.primary",
         "routing.routes",
-        "routing.sinks"
+        "routing.sink_levels",
+        "routing.sinks",
+        "routing.tier_routes"
       ]
     }
   ]

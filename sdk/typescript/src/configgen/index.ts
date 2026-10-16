@@ -33,6 +33,8 @@ export {
   type ConfigDescriptor,
   DESCRIPTOR_FORMAT,
   DescriptorError,
+  type EnumMapKeyDescriptor,
+  type EnumMapKeyMember,
   type FieldDescriptor,
   type GroupDescriptor,
   MAX_RELEASE_ENTRIES,

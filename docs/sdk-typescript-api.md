@@ -321,8 +321,8 @@ The complete compile-checked integration is in the
 | Export | Kind and signature family | Purpose |
 |---|---|---|
 | `cloneConfig(value)` | Generic function `<T>(T) => T` | Secret-aware defensive deep clone used at managed ownership boundaries. |
-| `ValueCodec`, `FieldCodec`, `GroupCodec`, `IntegerCodecOptions`, `BigIntCodecOptions`, `FloatCodecOptions` | Types | Describe strict generated value/group codecs and numeric range policy. |
-| `codecs`, `field`, `group`, `decodeGroup`, `encodeGroup` | Values/functions | Compose boolean/string/integer/bigint/float/duration/bytes/object/array/fixed-array/record/nullable codecs and strictly decode or deterministically encode one whole group. |
+| `ValueCodec`, `FieldCodec`, `GroupCodec`, `IntegerCodecOptions`, `BigIntCodecOptions`, `FloatCodecOptions`, `EnumMapKey`, `EnumMapMember` | Types | Describe strict generated value/group codecs, numeric range policy, and canonical enum-map member tables. |
+| `codecs`, `field`, `group`, `decodeGroup`, `encodeGroup` | Values/functions | Compose boolean/string/integer/bigint/float/duration/bytes/object/array/fixed-array/record/enum-map/nullable codecs and strictly decode or deterministically encode one whole group. |
 | `ConfigDecodeError` | Error class | Value-free strict-decoding failure whose message contains only a generated canonical path and fixed diagnostic. |
 | `ContractKind`, `ContractEntry`, `validateContract`, `createManifestValidator` | Types/functions | Validate and copy an alias/content-type contract, then build its pre-fetch manifest hook. |
 | `REJECTION_CATEGORIES`, `RejectionCategory`, `CandidateError`, `reject`, `rejectDecode` | Readonly value, types, class, functions | Bounded managed-candidate classification; decode wrapping retains only safe generated paths. |
@@ -389,6 +389,16 @@ managed views favor defensive ownership, represent exact 64-bit
 integers/durations as `bigint`, and use explicit `null` where the generated
 contract permits absence.
 
+`codecs.enumMap<K, V, M = Map<K, V>>(members, valueCodec)` describes sparse
+`Map` or `ReadonlyMap` fields, returning a codec for `M | null`.
+`EnumMapKey` is `string | number | bigint`; `EnumMapMember<K>` pairs each
+canonical wire name with its exact application key value (string enums also
+accept their literal string values). Only the first name for an underlying
+value is accepted and emitted. Numeric values must be exact signed int64
+members; bigint keeps wide keys precise. Generated fields containing enum maps
+use wire object values in mismatch/applied reports while snapshots retain typed
+Maps. Legacy `codecs.record` continues describing string-keyed objects.
+
 ### TypeScript-native generator
 
 `@suhaibinator/kms/configgen` exports the following complete stable library
@@ -397,7 +407,7 @@ surface (the `kms-config-gen-ts` executable is the corresponding CLI):
 | Export | Kind and signature family | Purpose |
 |---|---|---|
 | `DESCRIPTOR_FORMAT`, `MAX_RELEASE_ENTRIES` | Constants | Required `kms-config-descriptor/v1` discriminator and 256-entry structural bound. |
-| `ReloadPolicy`, `TypeDescriptor`, `NestedFieldDescriptor`, `FieldDescriptor`, `GroupDescriptor`, `SecretDescriptor`, `ConfigDescriptor` | Types | Complete versioned descriptor model for source type, parameter encodings, reload policy, views, and secret aliases. |
+| `ReloadPolicy`, `TypeDescriptor`, `EnumMapKeyDescriptor`, `EnumMapKeyMember`, `NestedFieldDescriptor`, `FieldDescriptor`, `GroupDescriptor`, `SecretDescriptor`, `ConfigDescriptor` | Types | Complete versioned descriptor model for source type, parameter encodings, reload policy, views, and secret aliases. Enum-map integer member values are canonical decimal strings; string member names equal their exact values. |
 | `parseDescriptor(document)`, `normalizeDescriptor(value)` | Functions | Duplicate-aware JSON parsing or unknown-value validation followed by deterministic sorting and deep freezing. |
 | `DescriptorError` | Error class | Descriptor syntax, shape, naming, collision, nesting, and range failure. |
 | `CONTRACT_FORMAT`, `MAX_SCHEMA_BYTES` | Constants | Generated machine-contract discriminator and 256 KiB generated-schema bound. The server and Go generator accept up to 1 MiB. |

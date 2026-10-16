@@ -265,3 +265,36 @@ describe("matchProblemPath", () => {
     expect(matchProblemPath(problem({ schema_pointer: "" }), issues)).toBeNull();
   });
 });
+
+it("reports invalid enum-map keys for readiness and matches propertyNames preview errors", () => {
+  const schema = target({
+    database: {
+      type: "object",
+      properties: {
+        weights: {
+          type: "object",
+          propertyNames: { enum: ["USER"] },
+          additionalProperties: { type: "integer" },
+        },
+      },
+    },
+  });
+  const readiness = fieldReadiness(field({ value: '{"weights":{"user":3}}' }), schema, []);
+  expect(readiness.status).toBe("fails_schema");
+  expect(readiness.issues).toEqual([
+    { path: ["weights", "user"], message: 'key must be one of "USER"', cause: "unchanged_rule" },
+  ]);
+  expect(
+    matchProblemPath(
+      {
+        alias: "database",
+        schema_pointer: "/properties/database/properties/weights/propertyNames/enum",
+        message: "invalid key",
+      } as ReleaseValidationError,
+      readiness.issues,
+    ),
+  ).toEqual(["weights", "user"]);
+  expect(fieldReadiness(field({ value: '{"weights":{"USER":3}}' }), schema, []).status).toBe(
+    "ready",
+  );
+});

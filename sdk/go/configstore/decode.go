@@ -43,6 +43,9 @@ type ValueCodec struct {
 	Bits    int
 	Element *ValueCodec
 	Fields  []FieldCodec
+	// Key restricts map property names to declared enum members. Nil retains
+	// unrestricted string keys. Only string, int, and uint enum codecs are valid.
+	Key *ValueCodec
 	// Enum, when non-empty, restricts a CodecInt, CodecUint, or CodecString
 	// value to the listed members. Int and uint enums travel as the member
 	// name and decode to its number; string enums travel unchanged and must
@@ -302,8 +305,8 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 				return descriptorError(path, "slice descriptor does not match destination")
 			}
 		case CodecMap:
-			if destination.Kind() != reflect.Map || destination.Type().Key().Kind() != reflect.String || codec.Element == nil {
-				return descriptorError(path, "map descriptor does not match destination")
+			if err := validateMapCodec(destination.Type(), codec, path); err != nil {
+				return err
 			}
 		case CodecBytes:
 			if destination.Kind() != reflect.Slice || destination.Type().Elem().Kind() != reflect.Uint8 {
@@ -476,8 +479,8 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if node.kind != nodeObject {
 			return decodeTypeError(path, "object")
 		}
-		if destination.Kind() != reflect.Map || destination.Type().Key().Kind() != reflect.String || codec.Element == nil {
-			return descriptorError(path, "map descriptor does not match destination")
+		if err := validateMapCodec(destination.Type(), codec, path); err != nil {
+			return err
 		}
 		items := reflect.MakeMapWithSize(destination.Type(), len(node.properties))
 		seen := make(map[string]struct{}, len(node.properties))
@@ -487,7 +490,14 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 			}
 			seen[property.name] = struct{}{}
 			key := reflect.New(destination.Type().Key()).Elem()
-			key.SetString(property.name)
+			if codec.Key == nil {
+				key.SetString(property.name)
+			} else if err := decodeValue(jsonNode{kind: nodeString, text: property.name}, key, *codec.Key, path+"[*]"); err != nil {
+				return err
+			}
+			if items.MapIndex(key).IsValid() {
+				return decodeDiagnostic(path, fmt.Errorf("configstore: duplicate map key at %s", path))
+			}
 			item := reflect.New(destination.Type().Elem()).Elem()
 			if err := decodeValue(property.value, item, *codec.Element, path+"[*]"); err != nil {
 				return err
@@ -730,4 +740,39 @@ func decodeRangeError(path, expected string) error {
 
 func descriptorError(path, problem string) error {
 	return decodeDiagnostic(path, fmt.Errorf("configstore: invalid codec descriptor at %s (%s)", path, problem))
+}
+
+// validateMapCodec also runs for nil and empty maps so malformed key descriptors
+// cannot become accepted only because a collection currently has no entries.
+func validateMapCodec(typ reflect.Type, codec ValueCodec, path string) error {
+	if typ.Kind() != reflect.Map || codec.Element == nil {
+		return descriptorError(path, "map descriptor does not match value")
+	}
+	if codec.Key == nil {
+		if typ.Key().Kind() != reflect.String {
+			return descriptorError(path, "map without a key descriptor requires string keys")
+		}
+		return nil
+	}
+	key := *codec.Key
+	kind := typ.Key().Kind()
+	matchingKind := (key.Kind == CodecString && kind == reflect.String) ||
+		(key.Kind == CodecInt && isSignedInteger(kind)) ||
+		(key.Kind == CodecUint && isUnsignedInteger(kind))
+	if len(key.Enum) == 0 || !matchingKind {
+		return descriptorError(path, "map key descriptor must match a string or integer enum")
+	}
+	names := make(map[string]bool, len(key.Enum))
+	numbers := make(map[int64]bool, len(key.Enum))
+	for _, member := range key.Enum {
+		if names[member.Name] || (key.Kind != CodecString && numbers[member.Number]) {
+			return descriptorError(path, "map key enum members must have unique names and values")
+		}
+		names[member.Name] = true
+		numbers[member.Number] = true
+		if err := decodeValue(jsonNode{kind: nodeString, text: member.Name}, reflect.New(typ.Key()).Elem(), key, path+"[*]"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

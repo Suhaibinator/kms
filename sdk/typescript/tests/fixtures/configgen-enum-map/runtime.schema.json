@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-kms-contract": [
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json"
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runtime"
+  ],
+  "properties": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nested",
+        "protocols",
+        "roles",
+        "wide"
+      ],
+      "properties": {
+        "nested": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maps"
+          ],
+          "properties": {
+            "maps": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "enum": [
+                            "LOW",
+                            "UNSPECIFIED",
+                            "ADMIN"
+                          ],
+                          "x-kms-enum-numbers": {
+                            "LOW": -1,
+                            "UNSPECIFIED": 0,
+                            "ADMIN": 3
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "protocols": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "http",
+                  "__proto__",
+                  "",
+                  " "
+                ]
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roles": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "LOW",
+                  "UNSPECIFIED",
+                  "ADMIN"
+                ],
+                "x-kms-enum-numbers": {
+                  "LOW": -1,
+                  "UNSPECIFIED": 0,
+                  "ADMIN": 3
+                }
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "enabled"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wide": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "WIDE",
+                  "MAX"
+                ],
+                "x-kms-enum-numbers": {
+                  "WIDE": 9007199254740993,
+                  "MAX": 9223372036854775807
+                }
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
