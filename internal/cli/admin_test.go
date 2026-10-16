@@ -45,7 +45,8 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 
 	// import (real run): write secrets and a token report.
 	src := filepath.Join(dir, "export.json")
-	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x","TWILIO_SID":"AC123"}`)
+	// An empty string and a JSON null both import as zero-byte secrets.
+	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x","TWILIO_SID":"AC123","EMPTY_KEY":"","NULL_KEY":null}`)
 	report := filepath.Join(dir, "report.txt")
 	c3 := newTestCLI()
 	code := c3.cmdImport([]string{
@@ -81,6 +82,16 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 	}
 	if string(val.Value) != "sk_live_x" {
 		t.Fatalf("imported secret value = %q, want sk_live_x", val.Value)
+	}
+	for _, key := range []string{"empty-key", "null-key"} {
+		ref := domain.Ref{NS: stripeRef.NS, Key: key}
+		val, err := svc.RevealSecret(context.Background(), pr, ref, 0, "", "")
+		if err != nil {
+			t.Fatalf("reveal imported %s: %v", key, err)
+		}
+		if val.Value == nil || len(val.Value) != 0 {
+			t.Fatalf("imported %s value = %#v, want non-nil empty", key, val.Value)
+		}
 	}
 }
 

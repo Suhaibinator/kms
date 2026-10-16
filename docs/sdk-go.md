@@ -152,6 +152,14 @@ managed configuration: `Clone` preserves it while building declarations, but
 generated stores extract and clear it before retaining defaults or publishing
 snapshots. A `Secret` returned by `GetSecret` always has an empty `BindKey`.
 
+KMS stores empty (zero-byte) secrets, so check a required secret with
+`IsSet()`, not `IsZero()`. `IsZero()` means "no plaintext bytes" and is true
+for a resolved empty secret. `IsSet()` is true for every secret resolved from
+KMS (it records the store path and version), including an empty one; a
+`Secret` built with `NewSecret` has no store provenance and is set only when it
+carries bytes, so `NewSecret([]byte(os.Getenv("X")))` with `X` unset still reads
+as missing. An empty secret's `Value()` is a non-nil empty slice.
+
 `Secret.BindKey` and `SecretValue.BindKey` have type `kmsclient.BindingKey`.
 Construct credentials with `kmsclient.NewBindingKey(os.Getenv("KMS_BIND_KEY"))`.
 Use `IsSet()` to check presence and `kmsclient.BindingKey{}` to clear one copy.

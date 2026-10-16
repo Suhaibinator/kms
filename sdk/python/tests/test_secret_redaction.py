@@ -30,6 +30,29 @@ def test_plaintext_accessors():
     assert len(s) == 7
 
 
+@pytest.mark.parametrize(
+    ("secret", "is_set", "is_empty"),
+    [
+        (Secret(), False, True),
+        (Secret(bind_key="declaration-binding-key-0123456789"), False, True),
+        (Secret(b""), False, True),
+        (Secret(b"v"), True, False),
+        (Secret(b"", key="k"), False, True),
+        (Secret(b"", env="prod", app="app", key="k", version=1), True, True),
+        (Secret(b"v", env="prod", app="app", key="k", version=2), True, False),
+    ],
+    ids=[
+        "zero", "declaration", "local-empty", "local-value",
+        "key-without-version", "resolved-empty", "resolved-value",
+    ],
+)
+def test_is_set_distinguishes_resolved_from_empty(secret, is_set, is_empty):
+    assert secret.is_set() is is_set
+    assert secret.is_empty() is is_empty
+    assert bool(secret) is not is_empty
+    assert secret.clone().is_set() is is_set
+
+
 def test_metadata_exposed_not_value():
     s = Secret(b"x", env="prod", app="svc", key="a/b", version=7, content_type="text/plain")
     assert s.path == "/prod/svc/a/b"

@@ -59,7 +59,7 @@ func (c *Config) Validate() error {
 	if c.RequestLimit < 1 || c.RequestLimit > 10_000 {
 		return errors.New("request limit must be between 1 and 10000")
 	}
-	if c.APIKey.IsZero() {
+	if !c.APIKey.IsSet() {
 		return errors.New("API key is required")
 	}
 	return nil

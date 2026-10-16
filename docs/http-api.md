@@ -1157,6 +1157,11 @@ Listing is always namespace-scoped: `env` and `app` are required.
     "expires_at_unix_ms": 0 }
   ```
   → `{"version": 1, "revision": 7}`
+  An empty or absent `value_base64` stores a zero-byte secret, unless the
+  content type (default `application/octet-stream`) is `application/json` or a
+  `+json` type, ignoring parameters such as `charset`: zero bytes are not JSON,
+  so that write fails with `invalid_argument`. A zero-byte secret reveals as
+  `"value_base64": ""`.
   A non-empty `binding_key` creates a bound version; empty
   creates an unbound version, independent of the preceding version. A non-empty
   key must be opaque valid UTF-8 containing 32 to 1024 bytes. Set `create_only`

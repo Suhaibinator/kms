@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QuickSecretModal } from "@/components/applications/QuickSecretModal";
 import { missingContractSecrets } from "@/components/secrets/MissingContractSecrets";
 import {
   ApiError,
@@ -9,6 +10,12 @@ import {
   SECRET_ALREADY_EXISTS_MESSAGE,
   SECRET_OPERATION_FAILED_MESSAGE,
 } from "@/lib/api";
+import {
+  EMPTY_JSON_SECRET_MESSAGE,
+  isJsonContentType,
+  SECRET_VALUE_REQUIRED_MESSAGE,
+  validateSecretValue,
+} from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import { rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { ApplicationOverview, Identity, Namespace, SecretMetadata } from "@/lib/types";
@@ -387,7 +394,7 @@ describe("new secret validation", () => {
     expect(screen.getByText("Choose an application.")).toBeVisible();
     expect(screen.getByText("Choose an environment.")).toBeVisible();
     expect(screen.getByText("Key is required.")).toBeVisible();
-    expect(screen.getByText("A secret value is required.")).toBeVisible();
+    expect(screen.getByText(SECRET_VALUE_REQUIRED_MESSAGE)).toBeVisible();
   });
 
   it("blocks an expiry that is already in the past", async () => {
@@ -1730,5 +1737,215 @@ describe("missing contract secrets", () => {
       "href",
       `/secrets/new?env=${NAMESPACE.env}&app=${NAMESPACE.app}&key=stripe%2Fwebhook`,
     );
+  });
+});
+
+describe("empty secret values", () => {
+  /** The value field and every tool that could put bytes into it. */
+  function expectValueToolsDisabled(scope: HTMLElement): void {
+    const value = within(scope).getByRole("textbox", { name: /value/i });
+    expect(value).toBeDisabled();
+    expect(value).toHaveValue("");
+    expect(within(scope).getByRole("button", { name: "Generate…" })).toBeDisabled();
+    // Base UI checkboxes are spans, disabled through aria-disabled.
+    expect(
+      within(scope).getByRole("checkbox", { name: "Value is already base64" }),
+    ).toHaveAttribute("aria-disabled", "true");
+  }
+
+  it("validates an empty value only as a deliberate, non-JSON choice", () => {
+    const base = { value: "", alreadyBase64: false, contentType: "text/plain" };
+    expect(validateSecretValue({ ...base, storeEmpty: false })).toBe(SECRET_VALUE_REQUIRED_MESSAGE);
+    expect(validateSecretValue({ ...base, storeEmpty: true })).toBeNull();
+    // A blank content type is sent as text/plain.
+    expect(validateSecretValue({ ...base, storeEmpty: true, contentType: " " })).toBeNull();
+    for (const contentType of [
+      "application/json",
+      "Application/JSON",
+      "application/json; charset=utf-8",
+      "application/vnd.foo+json",
+    ]) {
+      expect(isJsonContentType(contentType)).toBe(true);
+      expect(validateSecretValue({ ...base, storeEmpty: true, contentType })).toBe(
+        EMPTY_JSON_SECRET_MESSAGE,
+      );
+    }
+    for (const contentType of ["text/plain", "application/jsonl", "application/json-seq", ""]) {
+      expect(isJsonContentType(contentType)).toBe(false);
+    }
+  });
+
+  describe("new secret page", () => {
+    async function renderReadyForm(): Promise<void> {
+      render(<NewSecretPage />);
+      await chooseNamespace();
+      fireEvent.change(screen.getByLabelText("Key"), { target: { value: "api-key" } });
+    }
+
+    it("refuses a blank value until the operator ticks Store an empty value", async () => {
+      const createSecret = vi
+        .spyOn(api, "createSecret")
+        .mockResolvedValue({ version: 1, revision: 1 });
+      await renderReadyForm();
+      const form = screen
+        .getByRole("button", { name: "Create secret" })
+        .closest("form") as HTMLFormElement;
+
+      fireEvent.submit(form);
+      expect(createSecret).not.toHaveBeenCalled();
+      expect(screen.getByText(SECRET_VALUE_REQUIRED_MESSAGE)).toBeVisible();
+
+      // Typed text and the base64 pass-through are discarded by the choice.
+      const value = screen.getByRole("textbox", { name: "Value" });
+      fireEvent.change(value, { target: { value: "typed then abandoned" } });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Value is already base64" }));
+      const storeEmpty = screen.getByRole("checkbox", { name: "Store an empty value" });
+      fireEvent.click(storeEmpty);
+      expect(storeEmpty).toBeChecked();
+      expectValueToolsDisabled(document.body);
+      expect(screen.getByRole("checkbox", { name: "Value is already base64" })).not.toBeChecked();
+      expect(screen.queryByText(SECRET_VALUE_REQUIRED_MESSAGE)).not.toBeInTheDocument();
+
+      fireEvent.submit(form);
+      await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+      expect(createSecret.mock.calls[0][0]).toMatchObject({
+        value_base64: "",
+        content_type: "text/plain",
+      });
+    });
+
+    it("shows the JSON error inline and blocks the create", async () => {
+      const createSecret = vi.spyOn(api, "createSecret");
+      await renderReadyForm();
+      await chooseSelectOption(
+        screen.getByRole("combobox", { name: "Content type" }),
+        "application/json",
+      );
+      fireEvent.click(screen.getByRole("checkbox", { name: "Store an empty value" }));
+
+      expect(screen.getByText(EMPTY_JSON_SECRET_MESSAGE)).toBeVisible();
+      expect(screen.getByRole("button", { name: "Create secret" })).toBeDisabled();
+      fireEvent.submit(
+        screen.getByRole("button", { name: "Create secret" }).closest("form") as HTMLFormElement,
+      );
+      expect(createSecret).not.toHaveBeenCalled();
+
+      // A non-JSON type clears the problem without unticking.
+      await chooseSelectOption(
+        screen.getByRole("combobox", { name: "Content type" }),
+        "application/octet-stream",
+      );
+      expect(screen.queryByText(EMPTY_JSON_SECRET_MESSAGE)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create secret" })).toBeEnabled();
+    });
+
+    it("restores the value tools when the choice is cleared", async () => {
+      await renderReadyForm();
+      const storeEmpty = screen.getByRole("checkbox", { name: "Store an empty value" });
+      fireEvent.click(storeEmpty);
+      fireEvent.click(storeEmpty);
+      expect(screen.getByRole("textbox", { name: "Value" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Generate…" })).toBeEnabled();
+      expect(screen.getByRole("checkbox", { name: "Value is already base64" })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    });
+  });
+
+  describe("quick secret modal", () => {
+    function renderModal(contentType?: string) {
+      const onSave = vi.fn(async () => ({ version: 1, revision: 1 }));
+      render(
+        <QuickSecretModal
+          app="billing"
+          environments={["prod"]}
+          seed={{ environment: "prod", key: "api-key", contentType }}
+          saving={false}
+          onClose={vi.fn()}
+          onSave={onSave}
+          onCreated={vi.fn()}
+        />,
+      );
+      return { modal: screen.getByRole("dialog", { name: "New secret" }), onSave };
+    }
+
+    it("sends an empty value only once the box is ticked", async () => {
+      const { modal, onSave } = renderModal();
+      fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+      expect(onSave).not.toHaveBeenCalled();
+      expect(within(modal).getByText(SECRET_VALUE_REQUIRED_MESSAGE)).toBeVisible();
+
+      fireEvent.click(within(modal).getByRole("checkbox", { name: "Store an empty value" }));
+      expectValueToolsDisabled(modal);
+      fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0]).toEqual([
+        expect.objectContaining({ valueBase64: "", contentType: "text/plain" }),
+      ]);
+    });
+
+    it("refuses an empty value for a JSON content type", () => {
+      const { modal, onSave } = renderModal("application/vnd.foo+json");
+      fireEvent.click(within(modal).getByRole("checkbox", { name: "Store an empty value" }));
+      expect(within(modal).getByText(EMPTY_JSON_SECRET_MESSAGE)).toBeVisible();
+      expect(within(modal).getByRole("button", { name: "Create secret" })).toBeDisabled();
+      expect(onSave).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("new version dialog", () => {
+    it("sends an empty value only once the box is ticked", async () => {
+      const createSecret = vi
+        .spyOn(api, "createSecret")
+        .mockResolvedValue({ version: 2, revision: 3 });
+      const dialog = await openNewVersion();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save new version" }));
+      expect(createSecret).not.toHaveBeenCalled();
+      expect(within(dialog).getByText(SECRET_VALUE_REQUIRED_MESSAGE)).toBeVisible();
+
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Store an empty value" }));
+      expectValueToolsDisabled(dialog);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save new version" }));
+      await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+      expect(createSecret.mock.calls[0][0]).toMatchObject({ value_base64: "" });
+    });
+
+    it("refuses an empty value when the secret's content type is JSON", async () => {
+      const createSecret = vi.spyOn(api, "createSecret");
+      const dialog = await openNewVersion({
+        ...SECRET,
+        content_type: "application/json; charset=utf-8",
+      });
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: "Store an empty value" }));
+      expect(within(dialog).getByText(EMPTY_JSON_SECRET_MESSAGE)).toBeVisible();
+      expect(within(dialog).getByRole("button", { name: "Save new version" })).toBeDisabled();
+      expect(createSecret).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reveals an empty value as (empty) instead of a blank box", async () => {
+    mocks.router.query = { env: SECRET.env, app: SECRET.app, key: SECRET.key };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+    vi.spyOn(api, "revealSecret").mockResolvedValue({
+      env: SECRET.env,
+      app: SECRET.app,
+      key: SECRET.key,
+      version: 1,
+      value_base64: "",
+      content_type: "text/plain",
+    });
+
+    render(<SecretDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reveal" }));
+    // A fresh reveal is shown at once.
+    expect(await screen.findByRole("button", { name: "Hide value" })).toBeVisible();
+
+    const shown = document.getElementById("revealed-secret-value") as HTMLElement;
+    expect(shown).toHaveTextContent("(empty)");
+    expect(within(shown).getByTitle("Empty string")).toBeVisible();
+    // Copying still works; its label says the clipboard will be emptied.
+    expect(screen.getByRole("button", { name: "Copy empty value" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Copy value" })).not.toBeInTheDocument();
   });
 });

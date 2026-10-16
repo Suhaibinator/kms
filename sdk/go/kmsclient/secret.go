@@ -30,7 +30,9 @@ type Secret struct {
 }
 
 // NewSecret wraps plaintext in a Secret. It is mainly useful in tests and
-// tooling; normal code obtains Secrets from Client.GetSecret.
+// tooling; normal code obtains Secrets from Client.GetSecret. A Secret built
+// here was not resolved from KMS, so IsSet reports true only when value is
+// non-empty.
 func NewSecret(value []byte) Secret { return Secret{value: value} }
 
 // Value returns the raw secret plaintext. This is the only way to read it.
@@ -70,8 +72,27 @@ func (s Secret) Clone() Secret {
 	return s
 }
 
-// IsZero reports whether the Secret carries no plaintext.
+// IsZero reports whether the Secret carries no plaintext bytes. KMS stores
+// empty (zero-byte) secrets, so a Secret resolved from the store can be zero:
+// use IsSet, not IsZero, to check that a required secret was resolved.
 func (s Secret) IsZero() bool { return len(s.value) == 0 }
+
+// IsSet reports whether the Secret holds a value: it was resolved from KMS (as
+// by Client.GetSecret or a managed configuration release, which record the
+// store path and version read), or it carries plaintext bytes. A resolved empty
+// secret is set even though IsZero is also true; this is the check for a
+// required secret.
+//
+// A Secret built with NewSecret (local configuration, tests, tooling) has no
+// store provenance, so it is set only when non-empty: there,
+// NewSecret([]byte(os.Getenv("X"))) with X unset reads as missing, exactly as
+// IsZero did. The zero Secret, including a declaration that carries only a
+// BindKey, is never set.
+func (s Secret) IsSet() bool { return s.resolved() || len(s.value) > 0 }
+
+// resolved reports whether the Secret records the store path and version it
+// was read from.
+func (s Secret) resolved() bool { return s.path != "" && s.version != 0 }
 
 // String implements fmt.Stringer and always redacts.
 func (s Secret) String() string { return redactedText }

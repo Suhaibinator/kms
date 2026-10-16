@@ -487,6 +487,12 @@ errors, release snapshots, status, metrics, and logs reveal neither plaintext
 nor the key. This defensive-copy behavior is deliberately stronger than the
 Go SDK's mutable `Value()` slice.
 
+KMS stores empty (zero-byte) secrets. `isEmpty` means "no plaintext bytes" and
+is true for a resolved empty secret; `isSet` is true for every secret resolved
+from KMS (it records the store path and a non-zero version), including an empty
+one. A locally constructed `Secret` has no store version, so it is set only
+when it carries bytes. Check required secrets with `isSet`, not `isEmpty`.
+
 ## Stability, versioning, and deprecation
 
 The public exports documented here follow semantic versioning. Before `1.0.0`,

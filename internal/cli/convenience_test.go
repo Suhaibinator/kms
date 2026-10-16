@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 // --- shared JSON assertions ------------------------------------------------
@@ -497,6 +498,49 @@ func TestPutSecretRejectsRemovedProtectionFlags(t *testing.T) {
 			}
 			if secrets.putReq != nil {
 				t.Fatal("PutSecret ran with a removed flag")
+			}
+		})
+	}
+}
+
+// An empty stdin or value file stores a zero-byte secret.
+func TestPutSecretStoresEmptyValue(t *testing.T) {
+	emptyFile := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string][]string{"stdin": nil, "value-file": {"--value-file", emptyFile}} {
+		t.Run(name, func(t *testing.T) {
+			secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 1, Revision: 1}}
+			c := newConvenienceCLI(t, &parameterStub{}, secrets)
+			c.Stdin = openPromptInput(t, "")
+			args := append([]string{"put-secret", "/prod/gradethis/empty", "--insecure", "--token", "t"}, source...)
+			if code := c.Run(args); code != exitOK {
+				t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+			}
+			if secrets.putReq == nil || len(secrets.putReq.GetValue()) != 0 || secrets.putReq.GetContentType() != "text/plain" {
+				t.Fatalf("put request = %+v, want an empty text/plain value", secrets.putReq)
+			}
+		})
+	}
+}
+
+// The server rejects an empty JSON value, but secret RPC errors are redacted,
+// so put-secret explains the rule itself before dialing.
+func TestPutSecretRejectsEmptyJSONValueLocally(t *testing.T) {
+	for _, contentType := range []string{"application/json", "application/json; charset=utf-8", "application/vnd.foo+json"} {
+		t.Run(contentType, func(t *testing.T) {
+			secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 1}}
+			c := newConvenienceCLI(t, &parameterStub{}, secrets)
+			c.Stdin = openPromptInput(t, "")
+			if code := c.Run([]string{"put-secret", "/prod/gradethis/empty", "--content-type", contentType, "--insecure", "--token", "t"}); code != exitUsage {
+				t.Fatalf("exit = %d, want %d; stderr=%s", code, exitUsage, c.stderr())
+			}
+			if secrets.putReq != nil {
+				t.Fatal("PutSecret ran for an empty JSON value")
+			}
+			if !strings.Contains(c.stderr(), domain.EmptyJSONSecretMessage) {
+				t.Fatalf("stderr = %q, want the empty-JSON explanation", c.stderr())
 			}
 		})
 	}

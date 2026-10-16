@@ -160,9 +160,6 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if err := validateRef(in.Ref); err != nil {
 		return PutSecretResult{}, err
 	}
-	if len(in.Value) == 0 {
-		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument, "secret value must not be empty")
-	}
 	if len(in.Value) > maxValueBytes {
 		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument, "value exceeds %d bytes", maxValueBytes)
 	}
@@ -173,6 +170,12 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	}
 	if in.ContentType == "" {
 		in.ContentType = "application/octet-stream"
+	}
+	// An empty (zero-byte) value is a legitimate secret, except under a JSON
+	// content type: zero bytes are not a JSON document, so consumers that
+	// decode by content type would fail on every read.
+	if len(in.Value) == 0 && domain.IsJSONMediaType(in.ContentType) {
+		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument, "%s", domain.EmptyJSONSecretMessage)
 	}
 	metadata, err := validateMetadataJSON(in.Metadata)
 	if err != nil {
@@ -862,6 +865,11 @@ func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretReco
 		// indistinguishable to the caller.
 		s.m().DecryptFailed()
 		return nil, domain.ErrDecryptFailed
+	}
+	if pt == nil {
+		// AES-GCM opens an empty plaintext as nil. Return a non-nil empty slice
+		// so an empty secret is the same value on every read path.
+		pt = []byte{}
 	}
 	return pt, nil
 }

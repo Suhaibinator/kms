@@ -9,7 +9,7 @@ import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import type { ResourceRef } from "@/lib/api";
-import { secretValueBase64, validateSecretValue } from "@/lib/encoding";
+import { secretWriteValueBase64, validateSecretValue } from "@/lib/encoding";
 import { datetimeLocalToUnixMs, isEmptyJson } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
@@ -69,6 +69,7 @@ export function QuickSecretModal({
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [alreadyBase64, setAlreadyBase64] = useState(false);
+  const [storeEmpty, setStoreEmpty] = useState(false);
   const [contentType, setContentType] = useState("text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
@@ -101,6 +102,7 @@ export function QuickSecretModal({
     setKey(seedKey);
     setValue("");
     setAlreadyBase64(false);
+    setStoreEmpty(false);
     setContentType(seedContentType);
     setMetadataJson("{}");
     setExpires("");
@@ -118,7 +120,7 @@ export function QuickSecretModal({
 
   const environmentProblem = environment ? null : "Choose an environment.";
   const keyProblem = validateKey(key.trim());
-  const valueProblem = validateSecretValue(value, alreadyBase64);
+  const valueProblem = validateSecretValue({ value, alreadyBase64, storeEmpty, contentType });
   const metadataProblem = validateMetadataJson(metadataJson);
   const expiresProblem =
     expires && (datetimeLocalToUnixMs(expires) ?? 0) <= Date.now()
@@ -127,7 +129,9 @@ export function QuickSecretModal({
   const bindingKeyProblem = bindVersion ? validateBindingKey(bindingKey) : null;
   const shownEnvironmentProblem = errors.shown("environment", environmentProblem);
   const shownKeyProblem = errors.shown("key", keyProblem);
-  const shownValueProblem = errors.shown("value", valueProblem);
+  // A deliberate empty value can only be wrong one way (JSON refuses it), and
+  // its textarea is disabled so it never blurs: show that verdict at once.
+  const shownValueProblem = storeEmpty ? valueProblem : errors.shown("value", valueProblem);
   const shownMetadataProblem = errors.shown("metadata", metadataProblem);
   const shownExpiresProblem = errors.shown("expires", expiresProblem);
   const shownBindingKeyProblem = errors.shown("bindingKey", bindingKeyProblem);
@@ -157,6 +161,7 @@ export function QuickSecretModal({
     key !== seeded.key ||
     environment !== seeded.environment ||
     alreadyBase64 ||
+    storeEmpty ||
     contentType !== seedContentType ||
     !isEmptyJson(metadataJson) ||
     expires !== "" ||
@@ -181,7 +186,7 @@ export function QuickSecretModal({
       await onSave({
         environment,
         key: ref.key,
-        valueBase64: secretValueBase64(value, alreadyBase64),
+        valueBase64: secretWriteValueBase64({ value, alreadyBase64, storeEmpty }),
         contentType: contentType.trim() || "text/plain",
         metadataJson: metadataJson.trim() || "{}",
         expiresAtUnixMs: datetimeLocalToUnixMs(expires) ?? 0,
@@ -274,6 +279,8 @@ export function QuickSecretModal({
             onChange={setValue}
             base64={alreadyBase64}
             onBase64Change={setAlreadyBase64}
+            storeEmpty={storeEmpty}
+            onStoreEmptyChange={setStoreEmpty}
             inputRef={valueRef}
             onBlur={() => errors.touch("value")}
           />

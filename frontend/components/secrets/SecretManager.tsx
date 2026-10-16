@@ -2,6 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { EmptyValue } from "@/components/EmptyValue";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal, type ModalHandle } from "@/components/Modal";
@@ -38,7 +39,7 @@ import {
   base64ByteLength,
   base64ToUtf8,
   looksLikeText,
-  secretValueBase64,
+  secretWriteValueBase64,
   validateSecretValue,
 } from "@/lib/encoding";
 import {
@@ -746,7 +747,8 @@ export default function SecretManager({
               <>
                 {valueVisible ? (
                   <CopyButton
-                    label="Copy value"
+                    // Copying an empty secret empties the clipboard; say so.
+                    label={revealed.valueBase64 === "" ? "Copy empty value" : "Copy value"}
                     value={() =>
                       revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
                     }
@@ -775,7 +777,12 @@ export default function SecretManager({
             }
           />
           {valueVisible ? (
-            revealed.isText ? (
+            revealed.valueBase64 === "" ? (
+              // A zero-byte secret: say so rather than show a blank box.
+              <div id="revealed-secret-value" className="reveal-value">
+                <EmptyValue />
+              </div>
+            ) : revealed.isText ? (
               <div id="revealed-secret-value" className="reveal-value">
                 {base64ToUtf8(revealed.valueBase64)}
               </div>
@@ -1232,6 +1239,7 @@ function NewVersionModal({
       : secret.bound;
   const [value, setValue] = useState("");
   const [alreadyBase64, setAlreadyBase64] = useState(false);
+  const [storeEmpty, setStoreEmpty] = useState(false);
   const [contentType, setContentType] = useState(secret.content_type || "text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
@@ -1250,6 +1258,7 @@ function NewVersionModal({
     if (open) {
       setValue("");
       setAlreadyBase64(false);
+      setStoreEmpty(false);
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
       setExpires("");
@@ -1270,16 +1279,18 @@ function NewVersionModal({
   }, [open, secret.content_type, currentVersionBound, resetErrors]);
 
   // A secret value has no parse rule server-side — only the size cap (and the
-  // base64 alphabet when passed through) — and the message reports the size
-  // alone, never the value.
-  const valueError = validateSecretValue(value, alreadyBase64);
+  // base64 alphabet when passed through), plus no empty value under a JSON
+  // content type — and the message never quotes the value.
+  const valueError = validateSecretValue({ value, alreadyBase64, storeEmpty, contentType });
   const metadataError = validateMetadataJson(metadataJson);
   const expiresError =
     expires && (datetimeLocalToUnixMs(expires) ?? 0) <= Date.now()
       ? "Expiry must be in the future."
       : null;
   const bindingKeyError = bindVersion ? validateBindingKey(bindingKey) : null;
-  const shownValueError = errors.shown("value", valueError);
+  // A deliberate empty value can only be wrong one way (JSON refuses it), and
+  // its textarea is disabled so it never blurs: show that verdict at once.
+  const shownValueError = storeEmpty ? valueError : errors.shown("value", valueError);
   const shownMetadataError = errors.shown("metadata", metadataError);
   const shownExpiresError = errors.shown("expires", expiresError);
   const shownBindingKeyError = errors.shown("bindingKey", bindingKeyError);
@@ -1292,6 +1303,7 @@ function NewVersionModal({
   const advancedHasError = !!(shownMetadataError || shownExpiresError || shownBindingKeyError);
   const dirty =
     value !== "" ||
+    storeEmpty ||
     bindVersion !== currentVersionBound ||
     bindingKey !== "" ||
     !isEmptyJson(metadataJson) ||
@@ -1325,7 +1337,7 @@ function NewVersionModal({
         env: secret.env,
         app: secret.app,
         key: secret.key,
-        value_base64: secretValueBase64(value, alreadyBase64),
+        value_base64: secretWriteValueBase64({ value, alreadyBase64, storeEmpty }),
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
         ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
@@ -1392,6 +1404,8 @@ function NewVersionModal({
             onChange={setValue}
             base64={alreadyBase64}
             onBase64Change={setAlreadyBase64}
+            storeEmpty={storeEmpty}
+            onStoreEmptyChange={setStoreEmpty}
             inputRef={valueRef}
             onBlur={() => errors.touch("value")}
           />

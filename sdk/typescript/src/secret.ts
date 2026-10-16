@@ -73,8 +73,29 @@ export class Secret {
     return this.#value.byteLength;
   }
 
+  /**
+   * True when the secret carries no plaintext bytes. KMS stores empty
+   * (zero-byte) secrets, so a secret resolved from the store can be empty:
+   * check {@link isSet}, not `isEmpty`, when a secret is required.
+   */
   get isEmpty(): boolean {
     return this.#value.byteLength === 0;
+  }
+
+  /**
+   * True when the secret holds a value: it was resolved from KMS (by
+   * `getSecret` or a managed configuration release, which record the store
+   * path and version read), or it carries plaintext bytes. A resolved empty
+   * secret is set even though {@link isEmpty} is also true.
+   *
+   * A secret constructed locally (local configuration, `SecretValue` env or
+   * default fallbacks, tests) has no store version, so it is set only when
+   * non-empty: `new Secret(process.env.X ?? "")` with `X` unset reads as
+   * missing. The zero `Secret`, including a declaration carrying only a
+   * `bindKey`, is never set.
+   */
+  get isSet(): boolean {
+    return (this.#path !== "" && this.#version > 0n) || this.#value.byteLength > 0;
   }
 
   clone(): Secret {

@@ -2510,6 +2510,11 @@
   .value-secret-tools .checkbox-row {
     align-items: center;
   }
+  /* Side by side in a wrapping tool row, not stacked: the stacking gap from
+     `.checkbox-row + .checkbox-row` dropped the second box below the first. */
+  .value-secret-tools .checkbox-row + .checkbox-row {
+    margin-top: 0;
+  }
   .value-restore-note {
     display: flex;
     align-items: center;

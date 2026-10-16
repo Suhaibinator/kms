@@ -282,6 +282,26 @@ describe("KmsClient", () => {
     await client.close();
   });
 
+  it("resolves an empty secret as set but empty", async () => {
+    const transport = new FakeTransport(() => ({
+      ref: { namespace: { env: "prod", app: "api" }, key: "empty" },
+      version: 3n,
+      value: new Uint8Array(),
+      contentType: "application/octet-stream",
+      metadataJson: "{}",
+      createdAtUnixMs: 0n,
+    }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    const secret = await client.getSecret("empty");
+    expect(secret.isEmpty).toBe(true);
+    expect(secret.isSet).toBe(true);
+    expect(secret.length).toBe(0);
+    expect(secret.text()).toBe("");
+    expect(secret.clone().isSet).toBe(true);
+    await client.close();
+  });
+
   it("preserves secret RPC error codes while discarding reflected values and credentials", async () => {
     const plaintext = "plaintext-reflection-canary";
     const secretToken = "access-token-reflection-canary";

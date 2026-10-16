@@ -40,6 +40,10 @@ a minor release may contain documented breaking changes.
 
 ### Added
 
+- `Secret.isSet` reports whether a secret holds a value: true for every secret
+  resolved from KMS, including an empty (zero-byte) one now that KMS stores
+  empty secrets, and for a locally constructed secret that carries bytes.
+  `isEmpty` keeps meaning "no bytes"; check required secrets with `isSet`.
 - `PurgeCleanupPendingError` distinguishes the fail-closed case where a secret
   cohort or unbound-version purge committed but active database artifact
   cleanup remains pending. This outcome returns no mutation result and is not

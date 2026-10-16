@@ -103,7 +103,28 @@ class Secret:
         return self._bind_key
 
     def is_empty(self) -> bool:
+        """Whether the secret carries no plaintext bytes.
+
+        KMS stores empty (zero-byte) secrets, so a secret resolved from the
+        store can be empty: check :meth:`is_set`, not ``is_empty()`` or
+        truthiness, when a secret is required.
+        """
         return len(self._value) == 0
+
+    def is_set(self) -> bool:
+        """Whether the secret holds a value.
+
+        True when it was resolved from KMS (by ``get_secret`` or a managed
+        configuration release, which record the key and version read), even
+        if it is empty, or when it carries plaintext bytes.
+
+        A secret constructed locally (local configuration, ``SecretValue`` env
+        or default fallbacks, tests) has no store version, so it is set only
+        when non-empty: ``Secret(os.environ.get("X", "").encode())`` with ``X``
+        unset reads as missing. The zero ``Secret``, including a declaration
+        carrying only ``bind_key``, is never set.
+        """
+        return (bool(self._key) and self._version > 0) or len(self._value) > 0
 
     def clone(self) -> "Secret":
         """Return an independent wrapper with copied plaintext bytes."""
@@ -125,6 +146,10 @@ class Secret:
         return len(self._value)
 
     def __bool__(self) -> bool:
+        """Truthiness means "has plaintext bytes"; an empty but set secret is falsy.
+
+        Use :meth:`is_set` to check that a required secret was resolved.
+        """
         return len(self._value) > 0
 
     # --- redaction ----------------------------------------------------------
