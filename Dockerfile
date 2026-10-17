@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.27.0
 
-FROM node:26.10.0-alpine AS frontend
+FROM node:26.11.1-alpine AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
