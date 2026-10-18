@@ -125,7 +125,7 @@ export default function ReleasesPage() {
   const [linkedSummary, setLinkedSummary] = useState<ReleaseSummary | null>(null);
   const [deepLink, setDeepLink] = useState<ReturnType<typeof parseReleaseKey>>(null);
   // The workspace tab a deep link asked for; cleared with the workspace.
-  const [linkedSection, setLinkedSection] = useState<"compare" | null>(null);
+  const [linkedSection, setLinkedSection] = useState<"values" | "compare" | null>(null);
   const [linkedCompareKey, setLinkedCompareKey] = useState("");
   const [linkedComparison, setLinkedComparison] = useState<ReleaseSummary | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
@@ -268,7 +268,9 @@ export default function ReleasesPage() {
     if (linked && queryApp && queryEnv) {
       setDeepLink(linked);
       setSelectedReleaseKey(releaseKey(linked));
-      setLinkedSection(querySection === "compare" ? "compare" : null);
+      setLinkedSection(
+        querySection === "compare" || querySection === "values" ? querySection : null,
+      );
       const comparison = parseReleaseKey(queryCompare);
       setLinkedCompareKey(comparison?.name === linked.name ? releaseKey(comparison) : "");
     } else {

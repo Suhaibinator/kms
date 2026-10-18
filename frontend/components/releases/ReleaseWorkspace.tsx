@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { NamespaceIdent, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
-import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { SectionHeader } from "@/components/SectionHeader";
+import { RolloutPanel } from "@/components/ship/RolloutPanel";
 import { Badge, Button, Field, JsonView } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { ButtonLink } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
 import type { ConfigurationRelease, ReleaseSummary } from "@/lib/types";
 import { ReleaseDiffView } from "./diff/ReleaseDiffView";
+import { ReleaseValues } from "./ReleaseValues";
 import { refText, releaseKey } from "./utils";
 import {
   type ActivationFailure,
@@ -39,7 +40,7 @@ export function ReleaseWorkspace({
 }: {
   summary: ReleaseSummary | null;
   /** The tab a deep link asked for; the workspace returns to it for each new release identity. */
-  initialSection?: "overview" | "compare";
+  initialSection?: "overview" | "values" | "compare";
   initialCompareKey?: string;
   comparisonLoading?: boolean;
   comparisonError?: string | null;
@@ -134,6 +135,7 @@ export function ReleaseWorkspace({
             title={
               <TabsList variant="line" aria-label="Release details">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="values">Values</TabsTrigger>
                 <TabsTrigger value="entries">Entries</TabsTrigger>
                 <TabsTrigger value="compare">Compare</TabsTrigger>
                 <TabsTrigger value="rollout">Rollout status</TabsTrigger>
@@ -233,6 +235,12 @@ export function ReleaseWorkspace({
                 <JsonView raw={release.metadata_json || "{}"} />
               </dd>
             </dl>
+          </TabsContent>
+
+          <TabsContent value="values">
+            {section === "values" ? (
+              <ReleaseValues key={JSON.stringify([release.namespace, key])} release={release} />
+            ) : null}
           </TabsContent>
 
           <TabsContent value="entries">

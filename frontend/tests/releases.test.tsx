@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   releaseDiff: vi.fn(),
   applicationOverview: vi.fn(),
   parameterMetadata: vi.fn(),
+  getParameter: vi.fn(),
   secretMetadata: vi.fn(),
   createRelease: vi.fn(),
   listApplications: vi.fn(),
@@ -101,6 +102,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       releaseDiff: mocks.releaseDiff,
       applicationOverview: mocks.applicationOverview,
       parameterMetadata: mocks.parameterMetadata,
+      getParameter: mocks.getParameter,
       secretMetadata: mocks.secretMetadata,
       createRelease: mocks.createRelease,
       listApplications: mocks.listApplications,
@@ -876,6 +878,37 @@ describe("ReleasesPage", () => {
     expect(within(dialog).getByRole("combobox", { name: "Compare with" })).toHaveTextContent(
       "runtime@1",
     );
+  });
+
+  it("opens a historical release directly on Values without requiring a comparison", async () => {
+    mocks.query = {
+      app: "payments",
+      env: "prod",
+      name: "runtime",
+      release: "runtime@1:1",
+      section: "values",
+    };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV1, current: false, previous: false, activation_revision: 0 }],
+      next_page_token: "",
+    });
+    mocks.getParameter.mockResolvedValue({ parameter: { value: '{"historical":true}' } });
+    render(<ReleasesPage />);
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@1 · schema v1" });
+    expect(within(dialog).getByRole("tab", { name: "Values" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "View runtime value" }));
+    await within(dialog).findByRole("button", { name: "Copy runtime value" });
+    expect(dialog).toHaveTextContent("historical");
+    expect(mocks.getParameter).toHaveBeenCalledWith(
+      { env: "prod", app: "payments", key: "runtime" },
+      1,
+      undefined,
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(mocks.releaseDiff).not.toHaveBeenCalled();
   });
 
   it("keeps the Rollout tab selected when an activation refreshes the list", async () => {
