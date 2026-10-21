@@ -215,7 +215,7 @@ describe("SchemaForm", () => {
     fireEvent.click(within(rows[0]).getByText("Item 1"));
     expect(out()).toEqual({ flags: [true, false, true, true] });
     expect(within(rows[0]).getByText("true")).toBeVisible();
-    expect(within(rows[0]).getByRole("checkbox", { name: /Item 1/ })).toBeChecked();
+    expect(within(rows[0]).getByRole("checkbox", { name: "flags item 1" })).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove flags item 2" }));
     expect(out()).toEqual({ flags: [true, true, true] });
