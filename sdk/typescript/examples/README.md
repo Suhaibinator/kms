@@ -3,7 +3,6 @@
 These examples are compile-checked by `npm run test:types` and the repository
 TypeScript CI job. They expect an existing KMS namespace, identity, and active
 release; they do not provision server resources.
-
 - [`basic.ts`](basic.ts) demonstrates an mTLS client, explicit secret access,
   and declarative hot-reloaded parameters.
 - [`release.ts`](release.ts) demonstrates atomic preparation and commit of an
