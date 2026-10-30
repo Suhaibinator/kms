@@ -213,7 +213,7 @@ export function lineCount(text: string): number {
 
 type Expect = "value" | "key" | "colon" | "more" | "end";
 
-function describe(text: string, token: Token): string {
+function describeToken(text: string, token: Token): string {
   if (token.kind === "error") {
     const raw = text.slice(token.start, token.end);
     if (raw.startsWith('"'))
@@ -250,7 +250,7 @@ export function checkJson(text: string): JsonProblem | null {
     if (expect === "end") {
       return problem(token.start, "Unexpected content after the JSON value");
     }
-    if (token.kind === "error") return problem(token.start, describe(text, token));
+    if (token.kind === "error") return problem(token.start, describeToken(text, token));
     switch (expect) {
       case "value": {
         if (token.kind === "punct") {
@@ -317,7 +317,7 @@ export function checkJson(text: string): JsonProblem | null {
         }
         return problem(
           token.start,
-          `Expected "," or "${top === "object" ? "}" : "]"}", got ${describe(text, token).replace(/^Unexpected /, "")}`,
+          `Expected "," or "${top === "object" ? "}" : "]"}", got ${describeToken(text, token).replace(/^Unexpected /, "")}`,
         );
       }
     }

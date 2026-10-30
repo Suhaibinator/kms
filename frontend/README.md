@@ -46,7 +46,6 @@ links.
 
 Every list page composes the same three pieces, so a new one does not invent
 its own:
-
 - **Sorting** — declare the columns once as a module-level `SortColumn[]`
   (`lib/sort.ts`), then `useSort(pathname, COLUMNS)` and `<SortHeaderRow>` from
   `components/SortableTable.tsx`. The state lives in `?sort=&dir=`, so a sorted
@@ -79,8 +78,10 @@ npm run check
 ```
 
 This runs generated route types, TypeScript, Biome lint/format checks, Vitest,
-and the static export. Browser tests are separate because they require
-Chromium:
+and the static export. Biome's `noComponentHookFactories` rule stays enabled
+for application code, but is disabled in component tests: their local harnesses
+are declared once before rendering, rather than recreated during a render.
+Browser tests are separate because they require Chromium:
 
 ```bash
 npx playwright install chromium # first run only
