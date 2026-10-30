@@ -245,7 +245,6 @@ Backend validation remains authoritative, and a stale browser receives a
 structured `policy_changed` result containing the current public projection.
 
 The optional adapters are split by trust boundary:
-
 - `@suhaibinator/kms/next/server` requires the Next.js Node runtime and owns
   process-local lifecycle, server reads, validation, and the public Route
   Handler.
@@ -372,21 +371,18 @@ const store = new Store(
   },
 );
 
-const manager = await store.start(
-  client,
-  {
-    release: "runtime",
-    onDefaultMismatch(report) {
-      // The report is secret-aware and path-bounded. Forward it to local telemetry.
-      console.error(String(report));
-    },
-    onApplied(report) {
-      // Fires after every published generation: startup (with the canonical
-      // non-secret group documents) and each reload (with the changed fields).
-      console.info(String(report), report.phase === "runtime" ? report.changed() : report.groups());
-    },
+const manager = await store.start(client, {
+  release: "runtime",
+  onDefaultMismatch(report) {
+    // The report is secret-aware and path-bounded. Forward it to local telemetry.
+    console.error(String(report));
   },
-);
+  onApplied(report) {
+    // Fires after every published generation: startup (with the canonical
+    // non-secret group documents) and each reload (with the changed fields).
+    console.info(String(report), report.phase === "runtime" ? report.changed() : report.groups());
+  },
+});
 
 const active = store.current();
 console.info(active.worker().requestTimeoutMs, active.release.version);
@@ -518,10 +514,7 @@ and `Admin = 3` uses this field type:
   "key": {
     "kind": "integer",
     "bits": 32,
-    "members": [
-      { "name": "UNSPECIFIED", "value": "0" },
-      { "name": "ADMIN", "value": "3" }
-    ]
+    "members": [{ "name": "UNSPECIFIED", "value": "0" }, { "name": "ADMIN", "value": "3" }]
   },
   "value": { "kind": "string" }
 }
@@ -559,13 +552,13 @@ fields; the decoder creates plain Maps.
 
 ## Package boundaries and support
 
-| Import | Supported runtime | Purpose |
-|---|---|---|
-| `@suhaibinator/kms` | Node.js 22+ | Core client, values, watches, releases, publishing |
-| `@suhaibinator/kms/configstore` | Node.js 22+ | Optional generated managed-configuration runtime |
-| `@suhaibinator/kms/configgen` | Node.js 22+ | Descriptor parser and deterministic artifact generator |
-| `@suhaibinator/kms/next/server` | Next.js Node runtime | Server-only lifecycle and Route Handlers |
-| `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery |
+| Import                          | Supported runtime    | Purpose                                                |
+| ------------------------------- | -------------------- | ------------------------------------------------------ |
+| `@suhaibinator/kms`             | Node.js 22+          | Core client, values, watches, releases, publishing     |
+| `@suhaibinator/kms/configstore` | Node.js 22+          | Optional generated managed-configuration runtime       |
+| `@suhaibinator/kms/configgen`   | Node.js 22+          | Descriptor parser and deterministic artifact generator |
+| `@suhaibinator/kms/next/server` | Next.js Node runtime | Server-only lifecycle and Route Handlers               |
+| `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery               |
 
 The package is ESM-only. Next.js 16 and React 19 are the optional peer ranges.
 CI builds an isolated, exact Next.js 16/React 19 tuple. Generated protobuf modules

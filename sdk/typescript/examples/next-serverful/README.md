@@ -7,7 +7,6 @@ from `policy_changed` without a page reload.
 
 Copy the files into a serverful Next.js application, adjust the aliases and
 validation for the application's release, and set:
-
 - `KMS_ENDPOINT`
 - `KMS_CLIENT_CERT_FILE`
 - `KMS_CLIENT_KEY_FILE`
