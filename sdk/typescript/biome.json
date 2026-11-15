@@ -30,6 +30,11 @@
       }
     }
   },
+  "markdown": {
+    "formatter": {
+      "enabled": false
+    }
+  },
   "javascript": {
     "formatter": {
       "quoteStyle": "double",
