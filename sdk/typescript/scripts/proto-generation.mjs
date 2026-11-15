@@ -7,9 +7,6 @@ import { fileURLToPath } from "node:url";
 export const sdkDirectory = fileURLToPath(new URL("..", import.meta.url));
 export const protoDirectory = fileURLToPath(new URL("../../../proto/kms/v1", import.meta.url));
 export const protoFile = fileURLToPath(new URL("../../../proto/kms/v1/kms.proto", import.meta.url));
-export const trackedGeneratedFile = fileURLToPath(
-  new URL("../src/generated/kms.ts", import.meta.url),
-);
 
 const protocLauncher = fileURLToPath(new URL("../node_modules/protoc/protoc.cjs", import.meta.url));
 const protocPackage = fileURLToPath(
