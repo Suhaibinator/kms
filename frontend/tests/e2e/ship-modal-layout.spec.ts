@@ -122,6 +122,7 @@ test("ship environment summary is anchored independently of field content", asyn
   const environment = row.getByRole("combobox", { name: "Environment" });
   const summary = row.locator(".ship-env-summary");
   await expect(summary).toBeVisible();
+  await settledBox(summary);
 
   const layout = await row.evaluate((element) => {
     const fieldElement = element.querySelector(".ship-env-field");
@@ -136,7 +137,12 @@ test("ship environment summary is anchored independently of field content", asyn
     return {
       field: { left: field.left, right: field.right, top: field.top, bottom: field.bottom },
       control: { top: control.top },
-      summary: { left: summary.left, right: summary.right, top: summary.top },
+      summary: {
+        left: summary.left,
+        right: summary.right,
+        top: summary.top,
+        height: summary.height,
+      },
       viewportWidth: window.innerWidth,
     };
   });
@@ -174,6 +180,7 @@ test("ship environment summary is anchored independently of field content", asyn
   } else {
     const control = await settledBox(environment);
     expect(expandedSummary.y).toBeCloseTo(control.y, 0);
+    expect(expandedSummary.height).toBeCloseTo(layout.summary.height, 0);
   }
 
   // Keep the locators live through the assertions so failures report the
