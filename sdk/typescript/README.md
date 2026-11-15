@@ -245,6 +245,7 @@ Backend validation remains authoritative, and a stale browser receives a
 structured `policy_changed` result containing the current public projection.
 
 The optional adapters are split by trust boundary:
+
 - `@suhaibinator/kms/next/server` requires the Next.js Node runtime and owns
   process-local lifecycle, server reads, validation, and the public Route
   Handler.
