@@ -18,5 +18,7 @@ Python application SDK.
 | Managed Pydantic configuration and generation | yes | yes | `tests/test_configstore_*.py`, `tests/test_configgen.py` |
 
 `scripts/check_protocol_coverage.py` fails when a new RPC is neither implemented
-nor explicitly classified. `gen.sh --check` fails when committed protobuf files
-do not match deterministic regeneration from `proto/kms/v1/kms.proto`.
+nor explicitly classified. Package builds generate protobuf bindings from
+`proto/kms/v1/kms.proto`. `scripts/check_distribution.py` verifies standalone
+source/wheel builds and imports the generated bindings with the minimum declared
+runtime versions, including a strict editable install.

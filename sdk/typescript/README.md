@@ -590,8 +590,12 @@ npm ci
 npm run check
 ```
 
-`npm run check` hermetically regenerates and byte-compares the generated
-protobuf binding, then verifies types, lint, formatting, tests, consumer type
+`npm ci`, builds, type-checks, and tests generate the protobuf binding using
+the compiler and plugin pinned in `package-lock.json`. The generated source is
+ignored by Git; published packages contain its compiled JavaScript and types,
+so consumers do not need the schema or generators.
+
+`npm run check` verifies types, lint, formatting, tests, consumer type
 contracts, the distributable build, a real Next.js trust-boundary build, and
 the publishable package manifest. The repository Makefile also exposes
 `typescript`, `test-typescript`, and `check-typescript` targets.

@@ -35,9 +35,11 @@ python -m pip install \
   https://github.com/Suhaibinator/kms/releases/download/v0.3.0/kms_paramstore-0.3.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.85.0`, `protobuf>=7.35.1,<8`, and
-`pydantic>=2.13,<3`. The gRPC stubs are vendored under
-`kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
+Runtime dependencies are `grpcio`, `protobuf`, and `pydantic>=2.13,<3`.
+The build derives the gRPC/protobuf minimum versions from the generated stubs.
+Wheels include those stubs under `kms_paramstore/_gen/`; using a wheel does not
+require a compiler. Source and editable installs automatically install the
+pinned generator in an isolated build environment.
 
 ## Quick start
 
@@ -295,5 +297,11 @@ cd sdk/python
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest        # runs the suite against an in-process fake server
 .venv/bin/mypy          # type-checks kms_paramstore (config in pyproject.toml)
-./gen.sh                # regenerate the vendored gRPC stubs from proto/kms/v1/kms.proto
+.venv/bin/python scripts/check_distribution.py  # standalone packaging and minimum-runtime checks
 ```
+
+Protobuf bindings are build output and are not committed. After editing
+`proto/kms/v1/kms.proto`, rerun the editable install to regenerate them.
+`grpcio-tools` is pinned in `[build-system].requires`; updating it also updates
+the generated runtime minimums in package metadata. Source distributions carry
+the schema and build hooks, so they can build wheels outside this repository.

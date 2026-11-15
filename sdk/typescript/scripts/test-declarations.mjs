@@ -109,6 +109,13 @@ void descriptor;
     "false",
   ]);
   if (compile.code !== 0) fail("TypeScript 7 rejected the packed declarations", compile.output);
+  const runtime = await command(process.execPath, [
+    "--input-type=module",
+    "-e",
+    'import { KmsClient } from "@suhaibinator/kms"; if (typeof KmsClient !== "function") throw new Error("SDK export missing");',
+  ]);
+  if (runtime.code !== 0)
+    fail("Packed SDK failed to import its generated bindings", runtime.output);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

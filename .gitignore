@@ -71,3 +71,6 @@ sdk/typescript/.next/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# TypeScript protobuf build output
+sdk/typescript/src/generated/kms.ts
