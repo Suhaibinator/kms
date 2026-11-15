@@ -27,7 +27,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       - name: golangci-lint
@@ -45,7 +47,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       - name: Verify go.mod / go.sum are tidy
@@ -74,7 +78,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       - name: Unit tests with race detector and coverage
@@ -111,7 +117,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: false
       - name: Download shard coverage
         uses: actions/download-artifact@v8
@@ -153,7 +161,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       - name: Download Go modules
@@ -180,7 +190,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       - name: Run native permission and ACL tests
@@ -220,7 +232,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
           cache-dependency-path: go.sum
       # Run the official tool directly rather than golang/govulncheck-action,
@@ -284,7 +298,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # Track security patches; review Go release-series upgrades explicitly.
+          go-version: '1.27.x'
+          check-latest: true
           cache: true
       - uses: actions/setup-node@v7
         with:
