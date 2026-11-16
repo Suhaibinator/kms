@@ -46,6 +46,7 @@ links.
 
 Every list page composes the same three pieces, so a new one does not invent
 its own:
+
 - **Sorting** — declare the columns once as a module-level `SortColumn[]`
   (`lib/sort.ts`), then `useSort(pathname, COLUMNS)` and `<SortHeaderRow>` from
   `components/SortableTable.tsx`. The state lives in `?sort=&dir=`, so a sorted

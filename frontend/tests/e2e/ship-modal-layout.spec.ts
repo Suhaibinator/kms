@@ -122,6 +122,7 @@ test("ship environment summary is anchored independently of field content", asyn
   const environment = row.getByRole("combobox", { name: "Environment" });
   const summary = row.locator(".ship-env-summary");
   await expect(summary).toBeVisible();
+  await settledBox(summary);
 
   const layout = await row.evaluate((element) => {
     const fieldElement = element.querySelector(".ship-env-field");
@@ -133,30 +134,53 @@ test("ship environment summary is anchored independently of field content", asyn
     const field = fieldElement.getBoundingClientRect();
     const control = controlElement.getBoundingClientRect();
     const summary = summaryElement.getBoundingClientRect();
-    const style = getComputedStyle(element);
     return {
-      alignItems: style.alignItems,
       field: { left: field.left, right: field.right, top: field.top, bottom: field.bottom },
       control: { top: control.top },
-      summary: { left: summary.left, right: summary.right, top: summary.top },
+      summary: {
+        left: summary.left,
+        right: summary.right,
+        top: summary.top,
+        height: summary.height,
+      },
       viewportWidth: window.innerWidth,
     };
   });
-  // ship.css's mobile block is `width < 768px`, matching the mobile-fullscreen
-  // chrome and Tailwind's `md`: 768 is the first desktop width.
-  expect(layout.alignItems).toBe(
-    (page.viewportSize()?.width ?? 1280) < 768 ? "stretch" : "flex-start",
-  );
   expect(layout.field.left).toBeGreaterThanOrEqual(0);
   expect(layout.field.right).toBeLessThanOrEqual(layout.viewportWidth);
   expect(layout.summary.left).toBeGreaterThanOrEqual(0);
   expect(layout.summary.right).toBeLessThanOrEqual(layout.viewportWidth);
 
-  if ((page.viewportSize()?.width ?? 1280) < 768) {
+  // Check the rendered alignment rather than getComputedStyle's spelling of
+  // flex-start, which newer Chromium versions serialize as flow-start.
+  // The mobile layout stacks below 768px; 768 is the first desktop width.
+  const mobile = layout.viewportWidth < 768;
+  if (mobile) {
     expect(layout.summary.top).toBeGreaterThanOrEqual(layout.field.bottom);
     expect(layout.summary.top - layout.field.bottom).toBeLessThanOrEqual(32);
   } else {
     expect(layout.summary.top).toBeCloseTo(layout.control.top, 0);
+  }
+
+  // Help or validation content must not pull the desktop summary down with
+  // the field. On mobile, the summary must follow the expanded field.
+  await field.evaluate((element) => {
+    const help = document.createElement("div");
+    help.textContent = "Additional environment guidance";
+    help.style.minHeight = "80px";
+    element.append(help);
+  });
+  const expandedField = await settledBox(field);
+  const expandedSummary = await settledBox(summary);
+  const expandedBottom = expandedField.y + expandedField.height;
+  expect(expandedField.height).toBeGreaterThan(layout.field.bottom - layout.field.top);
+  if (mobile) {
+    expect(expandedSummary.y).toBeGreaterThanOrEqual(expandedBottom);
+    expect(expandedSummary.y - expandedBottom).toBeLessThanOrEqual(32);
+  } else {
+    const control = await settledBox(environment);
+    expect(expandedSummary.y).toBeCloseTo(control.y, 0);
+    expect(expandedSummary.height).toBeCloseTo(layout.summary.height, 0);
   }
 
   // Keep the locators live through the assertions so failures report the
