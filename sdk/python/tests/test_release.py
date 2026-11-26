@@ -387,14 +387,19 @@ def test_digest_selector_resolves_once_and_pins_every_transport(monkeypatch):
         monkeypatch, _release(1, 10), schema_version=None, schema_sha256="a" * 64
     )
     thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: _Prepared())
-    assert wait_until(lambda: loader.status().state == "applied")
-    loader.stop()
-    thread.join(timeout=2)
+    try:
+        assert wait_until(lambda: loader.status().state == "applied")
+        assert wait_until(lambda: bool(stub.registrations))
+        assert wait_until(
+            lambda: any(ack.state == "applied" for ack in stub.acknowledgements)
+        )
+    finally:
+        loader.stop()
+        thread.join(timeout=2)
     assert not raised
     assert len(stub.resolve_requests) == 1
     assert stub.resolve_requests[0].schema_sha256 == "a" * 64
     assert all(request.schema_version == 1 for request in stub.active_requests)
-    assert wait_until(lambda: bool(stub.registrations and stub.acknowledgements))
     assert all(request.schema_version == 1 for request in stub.registrations)
     assert all(request.schema_version == 1 for request in stub.acknowledgements)
 
